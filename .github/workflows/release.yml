@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_body: ${{ steps.git-cliff.outputs.content }}
+      is_prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if prerelease
+        id: check-prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" == *"-beta"* ]] || [[ "${{ github.ref_name }}" == *"-alpha"* ]] || [[ "${{ github.ref_name }}" == *"-rc"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+  build-windows:
+    name: Build Windows
+    needs: changelog
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Windows
+        run: bun run build:win
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            dist/*.exe
+            dist/*.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux
+    needs: changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Linux
+        run: bun run build:linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: [changelog, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-builds
+          path: dist/
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-builds
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ needs.changelog.outputs.release_body }}
+          prerelease: ${{ needs.changelog.outputs.is_prerelease == 'true' }}
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
