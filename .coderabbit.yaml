@@ -1,0 +1,93 @@
+# CodeRabbit Configuration
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+
+language: en-US
+
+reviews:
+  # Enable auto-review on PRs
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - dev
+
+  # Review profile - assertive for thorough reviews
+  profile: assertive
+
+  # Request changes instead of just commenting
+  request_changes_workflow: true
+
+  # High-level summary at the top of review
+  high_level_summary: true
+
+  # Include poem in summary (fun touch)
+  poem: false
+
+  # Review path filters
+  path_filters:
+    # Always review
+    - "src/**"
+    - ".github/**"
+    - "package.json"
+    - "tsconfig*.json"
+    - "electron.vite.config.ts"
+    - "vitest.config.ts"
+
+  # Path instructions for specific areas
+  path_instructions:
+    - path: "src/main/**"
+      instructions: |
+        This is the Electron main process. Review for:
+        - Security: No nodeIntegration enabled, proper IPC validation
+        - Memory leaks in PTY processes
+        - Proper error handling for file system operations
+        - No blocking operations on main thread
+
+    - path: "src/renderer/**"
+      instructions: |
+        This is the React renderer process. Review for:
+        - No Node.js APIs (must use IPC via window.api)
+        - React best practices (hooks at top, no class components)
+        - Zustand usage (not Redux)
+        - Performance in terminal components (React.memo)
+        - Single quotes, no semicolons (Prettier config)
+
+    - path: "src/preload/**"
+      instructions: |
+        This is the Electron preload script. Review for:
+        - Only context bridge exposure
+        - Typed IPC channels
+        - No direct Node.js API exposure to renderer
+
+    - path: "**/*.test.{ts,tsx}"
+      instructions: |
+        Review test files for:
+        - Proper mocking of Electron APIs
+        - Testing user behavior, not implementation
+        - Good test coverage of edge cases
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Review GitHub Actions workflows for:
+        - Security best practices
+        - Proper secret handling
+        - Timeout limits on jobs
+        - Caching opportunities
+
+# Chat settings for CodeRabbit bot interactions
+chat:
+  auto_reply: true
+
+# Early access features
+early_access: false
+
+# Tone of reviews
+tone_instructions: |
+  Be direct and technical. Focus on security, performance, and maintainability.
+  This is an Electron app with React renderer - pay special attention to
+  process separation and IPC security. The project uses:
+  - TypeScript strict mode
+  - Zustand for state (not Redux)
+  - Bun as package manager
+  - Single quotes, no semicolons
+  - Function components only

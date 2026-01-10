@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Background layers */
+    --background: 0 0% 12%; /* #1E1E1E */
+    --foreground: 0 0% 90%;
+
+    /* Surface colors for layered UI */
+    --card: 0 0% 14%; /* #252526 */
+    --card-foreground: 0 0% 90%;
+
+    --popover: 0 0% 14%;
+    --popover-foreground: 0 0% 90%;
+
+    /* Primary - IDE Blue */
+    --primary: 217 91% 60%; /* #3B82F6 */
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - Muted surface */
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 70%;
+
+    /* Muted elements */
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 50%;
+
+    /* Accent for highlights */
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Status colors */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders */
+    --border: 240 4% 26%; /* #3F3F46 zinc-700 */
+    --input: 240 4% 26%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.25rem;
+
+    /* Terminal-specific */
+    --terminal-bg: 0 0% 7%; /* #121212 */
+    --terminal-fg: 0 0% 85%;
+
+    /* Surface layers */
+    --surface-dark: 0 0% 14%; /* #252526 */
+    --surface-darker: 0 0% 10%;
+
+    /* Status bar (VS Code style) */
+    --status-bar: 217 91% 40%; /* #007acc */
+
+    /* Project colors */
+    --project-blue: 217 91% 60%;
+    --project-purple: 271 81% 56%;
+    --project-green: 142 71% 45%;
+    --project-yellow: 45 93% 47%;
+    --project-red: 0 84% 60%;
+    --project-cyan: 187 85% 53%;
+    --project-pink: 330 81% 60%;
+    --project-orange: 25 95% 53%;
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 14%;
+    --sidebar-foreground: 0 0% 70%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 18%;
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: 240 4% 26%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(0 0% 35%);
+    border-radius: 5px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(0 0% 45%);
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer utilities {
+  /* Terminal text styling */
+  .terminal-text {
+    @apply font-mono text-sm leading-relaxed;
+  }
+
+  /* Blinking cursor */
+  .terminal-cursor {
+    @apply inline-block w-2.5 h-5 bg-muted-foreground animate-pulse;
+  }
+
+  /* Glass effect for modals */
+  .glass-panel {
+    background: hsla(0, 0%, 14%, 0.95);
+    backdrop-filter: blur(12px);
+  }
+
+  /* Project color dot glow */
+  .project-dot-glow {
+    box-shadow: 0 0 8px currentColor;
+  }
+
+  /* Snapshot thumbnail lines */
+  .snapshot-line {
+    height: 2px;
+    border-radius: 1px;
+    margin-bottom: 2px;
+  }
+}

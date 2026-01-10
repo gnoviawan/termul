@@ -1,0 +1,414 @@
+import { useEffect, useRef, memo, useCallback, useMemo, useImperativeHandle } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
+import '@xterm/xterm/css/xterm.css'
+import type { TerminalSpawnOptions } from '../../../shared/types/ipc.types'
+import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from './terminal-config'
+import {
+  registerTerminal,
+  unregisterTerminal,
+  restoreScrollback
+} from '../../utils/terminal-registry'
+import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
+
+export interface TerminalSearchHandle {
+  findNext: (term: string) => boolean
+  findPrevious: (term: string) => boolean
+  clearDecorations: () => void
+  writeText: (text: string) => void
+}
+
+export interface ConnectedTerminalProps {
+  terminalId?: string
+  spawnOptions?: TerminalSpawnOptions
+  onSpawned?: (terminalId: string) => void
+  onExit?: (exitCode: number, signal?: number) => void
+  onError?: (error: string) => void
+  onCommand?: (command: string) => void
+  className?: string
+  autoFocus?: boolean
+  initialScrollback?: string[] // Scrollback to restore on mount
+  searchRef?: React.Ref<TerminalSearchHandle>
+  isVisible?: boolean // Whether this terminal is currently visible (for fit triggering)
+}
+
+function ConnectedTerminalComponent({
+  terminalId: externalTerminalId,
+  spawnOptions,
+  onSpawned,
+  onExit,
+  onError,
+  onCommand,
+  className = '',
+  autoFocus = true,
+  initialScrollback,
+  searchRef,
+  isVisible = true
+}: ConnectedTerminalProps): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const searchAddonRef = useRef<SearchAddon | null>(null)
+
+  // Get font settings from app settings store
+  const fontFamily = useTerminalFontFamily()
+  const fontSize = useTerminalFontSize()
+  const bufferSize = useTerminalBufferSize()
+  const cleanupDataListenerRef = useRef<(() => void) | null>(null)
+  const cleanupExitListenerRef = useRef<(() => void) | null>(null)
+  // Use ref to track current PTY ID for listener callbacks to avoid stale closures
+  const ptyIdRef = useRef<string | null>(null)
+  // Use refs for callbacks to avoid dependency changes
+  const onExitRef = useRef(onExit)
+  onExitRef.current = onExit
+  const onCommandRef = useRef(onCommand)
+  onCommandRef.current = onCommand
+  // Track current input line for command history
+  const currentLineRef = useRef<string>('')
+  // Resize debounce timer ref
+  const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Sync ptyIdRef with external terminal ID when provided
+  useEffect(() => {
+    if (externalTerminalId) {
+      ptyIdRef.current = externalTerminalId
+    }
+  }, [externalTerminalId])
+
+  // Memoize spawn options to prevent unnecessary re-spawns
+  const memoizedSpawnOptions = useMemo(
+    () => spawnOptions,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      spawnOptions?.shell,
+      spawnOptions?.cwd,
+      spawnOptions?.cols,
+      spawnOptions?.rows,
+      spawnOptions?.env
+    ]
+  )
+
+  // Handle input from xterm to PTY
+  const handleTerminalData = useCallback(
+    async (data: string): Promise<void> => {
+      const ptyId = ptyIdRef.current
+      if (!ptyId) return
+
+      // Track command input for history
+      if (data === '\r' || data === '\n') {
+        // Enter pressed - capture command
+        const command = currentLineRef.current
+        currentLineRef.current = ''
+        if (command && onCommandRef.current) {
+          onCommandRef.current(command)
+        }
+      } else if (data === '\x7f' || data === '\b') {
+        // Backspace
+        currentLineRef.current = currentLineRef.current.slice(0, -1)
+      } else if (data === '\x03') {
+        // Ctrl+C - clear current line
+        currentLineRef.current = ''
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        // Printable character
+        currentLineRef.current += data
+      } else if (data.length > 1) {
+        // Pasted text
+        currentLineRef.current += data
+      }
+
+      try {
+        const result = await window.api.terminal.write(ptyId, data)
+        if (!result.success && onError) {
+          onError(result.error)
+        }
+      } catch (err) {
+        if (onError) {
+          onError(err instanceof Error ? err.message : 'Write failed')
+        }
+      }
+    },
+    [onError]
+  )
+
+  // Handle resize events with debouncing to prevent IPC flooding
+  const handleResize = useCallback(async (cols: number, rows: number): Promise<void> => {
+    const ptyId = ptyIdRef.current
+    if (!ptyId) return
+
+    // Clear existing timeout
+    if (resizeTimeoutRef.current) {
+      clearTimeout(resizeTimeoutRef.current)
+    }
+
+    // Debounce resize IPC calls - re-read ptyId inside timeout to avoid stale closure
+    resizeTimeoutRef.current = setTimeout(async () => {
+      const currentPtyId = ptyIdRef.current
+      if (!currentPtyId) return
+
+      try {
+        await window.api.terminal.resize(currentPtyId, cols, rows)
+      } catch {
+        // Ignore resize errors during rapid resize
+      }
+    }, RESIZE_DEBOUNCE_MS)
+  }, [])
+
+  // Expose search methods via ref
+  useImperativeHandle(
+    searchRef,
+    () => ({
+      findNext: (term: string) => {
+        if (!searchAddonRef.current) return false
+        return searchAddonRef.current.findNext(term, {
+          decorations: {
+            matchBackground: '#444444',
+            matchBorder: '#888888',
+            matchOverviewRuler: '#888888',
+            activeMatchBackground: '#FFFF00',
+            activeMatchBorder: '#FFFF00',
+            activeMatchColorOverviewRuler: '#FFFF00'
+          }
+        })
+      },
+      findPrevious: (term: string) => {
+        if (!searchAddonRef.current) return false
+        return searchAddonRef.current.findPrevious(term, {
+          decorations: {
+            matchBackground: '#444444',
+            matchBorder: '#888888',
+            matchOverviewRuler: '#888888',
+            activeMatchBackground: '#FFFF00',
+            activeMatchBorder: '#FFFF00',
+            activeMatchColorOverviewRuler: '#FFFF00'
+          }
+        })
+      },
+      clearDecorations: () => {
+        if (searchAddonRef.current) {
+          searchAddonRef.current.clearDecorations()
+        }
+      },
+      writeText: (text: string) => {
+        const ptyId = ptyIdRef.current
+        if (!ptyId) return
+        window.api.terminal.write(ptyId, text)
+      }
+    }),
+    []
+  )
+
+  // Initialize terminal, set up IPC listeners, and spawn PTY
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    // Merge platform-aware options with dynamic app settings
+    const terminalOptions = {
+      ...getTerminalOptions(navigator.platform),
+      fontFamily,
+      fontSize,
+      scrollback: bufferSize
+    }
+    const terminal = new Terminal(terminalOptions)
+    terminalRef.current = terminal
+
+    const fitAddon = new FitAddon()
+    fitAddonRef.current = fitAddon
+    terminal.loadAddon(fitAddon)
+
+    const webLinksAddon = new WebLinksAddon()
+    terminal.loadAddon(webLinksAddon)
+
+    // Load search addon
+    const searchAddon = new SearchAddon()
+    searchAddonRef.current = searchAddon
+    terminal.loadAddon(searchAddon)
+
+    terminal.open(containerRef.current)
+
+    try {
+      const webglAddon = new WebglAddon()
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose()
+      })
+      terminal.loadAddon(webglAddon)
+    } catch {
+      console.warn('WebGL addon failed to load, falling back to canvas renderer')
+    }
+
+    fitAddon.fit()
+
+    if (autoFocus) {
+      terminal.focus()
+    }
+
+    // Set up resize observer
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        if (fitAddonRef.current && terminalRef.current) {
+          try {
+            fitAddonRef.current.fit()
+          } catch {
+            // Ignore fit errors during rapid resize
+          }
+        }
+      })
+    })
+    resizeObserver.observe(containerRef.current)
+
+    // Listen for input from xterm
+    const dataDisposable = terminal.onData(handleTerminalData)
+    const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+      handleResize(cols, rows)
+    })
+
+    // Set up IPC listeners BEFORE spawning to avoid missing data
+    cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
+      if (id === ptyIdRef.current && terminalRef.current) {
+        terminalRef.current.write(data)
+      }
+    })
+
+    cleanupExitListenerRef.current = window.api.terminal.onExit(
+      (id: string, exitCode: number, signal?: number) => {
+        if (id === ptyIdRef.current && onExitRef.current) {
+          onExitRef.current(exitCode, signal)
+        }
+      }
+    )
+
+    // Spawn terminal if no external ID provided
+    const initTerminal = async (): Promise<void> => {
+      // Fit to get real dimensions BEFORE spawning
+      try {
+        fitAddon.fit()
+      } catch {
+        // Ignore fit errors if container not properly laid out yet
+      }
+      const spawnCols = terminal.cols
+      const spawnRows = terminal.rows
+
+      if (!externalTerminalId) {
+        try {
+          const result = await window.api.terminal.spawn({
+            ...memoizedSpawnOptions,
+            cols: spawnCols,
+            rows: spawnRows
+          })
+          if (result.success) {
+            // Update ref immediately so listener can start processing data
+            ptyIdRef.current = result.data.id
+            // Register terminal for scrollback persistence
+            registerTerminal(result.data.id, terminal)
+            // Restore scrollback if provided
+            if (initialScrollback && initialScrollback.length > 0) {
+              restoreScrollback(terminal, initialScrollback)
+            }
+            if (onSpawned) {
+              onSpawned(result.data.id)
+            }
+          } else if (onError) {
+            onError(result.error)
+          }
+        } catch (err) {
+          if (onError) {
+            onError(err instanceof Error ? err.message : 'Spawn failed')
+          }
+        }
+      } else {
+        // External terminal ID provided - register and restore scrollback
+        registerTerminal(externalTerminalId, terminal)
+        if (initialScrollback && initialScrollback.length > 0) {
+          restoreScrollback(terminal, initialScrollback)
+        }
+      }
+    }
+
+    initTerminal()
+
+    return () => {
+      // Unregister terminal from registry
+      if (ptyIdRef.current) {
+        unregisterTerminal(ptyIdRef.current)
+      } else if (externalTerminalId) {
+        unregisterTerminal(externalTerminalId)
+      }
+      // Kill PTY process on unmount to prevent orphaned shell processes
+      if (ptyIdRef.current) {
+        const killPromise = window.api.terminal.kill(ptyIdRef.current)
+        if (killPromise && typeof killPromise.catch === 'function') {
+          killPromise.catch(() => {
+            // Ignore kill errors during cleanup
+          })
+        }
+      }
+      resizeObserver.disconnect()
+      dataDisposable.dispose()
+      resizeDisposable.dispose()
+      if (cleanupDataListenerRef.current) {
+        cleanupDataListenerRef.current()
+        cleanupDataListenerRef.current = null
+      }
+      if (cleanupExitListenerRef.current) {
+        cleanupExitListenerRef.current()
+        cleanupExitListenerRef.current = null
+      }
+      // Clean up resize debounce timer
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
+      }
+      terminal.dispose()
+      terminalRef.current = null
+      fitAddonRef.current = null
+      searchAddonRef.current = null
+      ptyIdRef.current = null
+    }
+  }, [
+    externalTerminalId,
+    memoizedSpawnOptions,
+    onSpawned,
+    onError,
+    autoFocus,
+    handleTerminalData,
+    handleResize,
+    initialScrollback
+  ])
+
+  // Update terminal font settings when app settings change (without recreating terminal)
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.fontFamily = fontFamily
+      terminalRef.current.options.fontSize = fontSize
+      // Re-fit terminal after font change
+      if (fitAddonRef.current) {
+        try {
+          fitAddonRef.current.fit()
+        } catch {
+          // Ignore fit errors
+        }
+      }
+    }
+  }, [fontFamily, fontSize])
+
+  // Trigger fit when terminal becomes visible
+  useEffect(() => {
+    if (isVisible && fitAddonRef.current && terminalRef.current) {
+      // Use requestAnimationFrame to ensure container dimensions are updated
+      requestAnimationFrame(() => {
+        try {
+          fitAddonRef.current?.fit()
+        } catch {
+          // Ignore fit errors
+        }
+      })
+    }
+  }, [isVisible])
+
+  return (
+    <div ref={containerRef} className={`w-full h-full ${className}`} style={{ padding: '8px' }} />
+  )
+}
+
+export const ConnectedTerminal = memo(ConnectedTerminalComponent)
