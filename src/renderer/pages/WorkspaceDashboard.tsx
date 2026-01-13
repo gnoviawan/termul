@@ -76,7 +76,7 @@ export default function WorkspaceDashboard(): React.JSX.Element {
   const allTerminals = useAllTerminals()
   const activeTerminal = useActiveTerminal()
   const activeTerminalId = useActiveTerminalId()
-  const { selectTerminal, addTerminal, closeTerminal, renameTerminal, reorderTerminals } =
+  const { selectTerminal, addTerminal, closeTerminal, renameTerminal, reorderTerminals, setTerminalPtyId } =
     useTerminalActions()
 
   // Load snapshots when project changes
@@ -332,6 +332,34 @@ export default function WorkspaceDashboard(): React.JSX.Element {
     []
   )
 
+  // Create stable callback factory for terminal spawn handling
+  // Use ref to store handlers so they're stable across renders (prevents ConnectedTerminal re-mount)
+  const spawnedHandlersRef = useRef<Map<string, (ptyId: string) => Promise<void>>>(new Map())
+  const setTerminalPtyIdRef = useRef(setTerminalPtyId)
+  setTerminalPtyIdRef.current = setTerminalPtyId
+
+  // Get or create a stable handler for a terminal
+  const getTerminalSpawnedHandler = useCallback((terminalStoreId: string) => {
+    let handler = spawnedHandlersRef.current.get(terminalStoreId)
+    if (!handler) {
+      handler = async (ptyId: string) => {
+        // Sync PTY ID to store
+        setTerminalPtyIdRef.current(terminalStoreId, ptyId)
+        // Re-fetch git state to eliminate race condition gap
+        try {
+          await Promise.all([
+            window.api.terminal.getGitBranch(ptyId),
+            window.api.terminal.getGitStatus(ptyId)
+          ])
+        } catch {
+          // Ignore errors - git data will be populated by polling
+        }
+      }
+      spawnedHandlersRef.current.set(terminalStoreId, handler)
+    }
+    return handler
+  }, [])
+
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
 
   // Memoize project env vars to avoid unnecessary re-renders
@@ -418,6 +446,7 @@ export default function WorkspaceDashboard(): React.JSX.Element {
                   className="w-full h-full"
                   searchRef={isActiveTerminal ? terminalSearchRef : undefined}
                   onCommand={isActiveTerminal ? handleCommand : undefined}
+                  onSpawned={getTerminalSpawnedHandler(terminal.id)}
                   isVisible={isActiveTerminal}
                 />
               </div>
