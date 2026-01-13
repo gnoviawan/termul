@@ -18,6 +18,17 @@ vi.mock('./shell-detect', () => ({
     name: 'powershell',
     displayName: 'PowerShell'
   })),
+  getShellByName: vi.fn((name: string) => {
+    const shells: Record<string, { path: string; name: string; displayName: string }> = {
+      'powershell': { path: 'powershell.exe', name: 'powershell', displayName: 'PowerShell' },
+      'cmd': { path: 'cmd.exe', name: 'cmd', displayName: 'Command Prompt' },
+      'pwsh': { path: 'pwsh.exe', name: 'pwsh', displayName: 'PowerShell Core' },
+      'bash': { path: 'bash.exe', name: 'bash', displayName: 'Bash' },
+      'zsh': { path: 'zsh.exe', name: 'zsh', displayName: 'Zsh' }
+    }
+    // Return null for unknown shells so the fallback in pty-manager.ts uses the input directly
+    return shells[name] || null
+  }),
   getHomeDirectory: vi.fn(() => 'C:\\Users\\TestUser'),
   getCurrentPlatform: vi.fn(() => 'win32')
 }))

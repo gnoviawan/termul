@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 
+// Mock window.api before any imports that use it
+Object.defineProperty(window, 'api', {
+  value: {
+    persistence: {
+      read: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+      write: vi.fn(() => Promise.resolve({ success: true }))
+    }
+  } as unknown as Window['api'],
+  writable: true
+})
+
 const mockSelectProject = vi.fn()
 const mockAddProject = vi.fn()
 const mockSelectTerminal = vi.fn()
@@ -21,6 +32,7 @@ let terminalsData = { terminals: mockTerminals, activeTerminal: mockTerminals[0]
 
 // Mock project store
 vi.mock('@/stores/project-store', () => ({
+  useProjectsLoaded: () => true,
   useProjects: () => projectsData.projects,
   useActiveProject: () => projectsData.activeProject,
   useActiveProjectId: () => projectsData.activeProjectId,
@@ -39,6 +51,7 @@ vi.mock('@/stores/project-store', () => ({
 
 // Mock terminal store
 vi.mock('@/stores/terminal-store', () => ({
+  useAllTerminals: () => terminalsData.terminals,
   useTerminals: () => terminalsData.terminals,
   useActiveTerminal: () => terminalsData.activeTerminal,
   useActiveTerminalId: () => terminalsData.activeTerminal?.id || '',
@@ -132,12 +145,15 @@ const mockAppSettings = {
   terminalFontSize: 14,
   defaultShell: '',
   terminalBufferSize: 5000,
-  defaultProjectColor: 'blue'
+  defaultProjectColor: 'blue',
+  maxTerminalsPerProject: 10
 }
 
 vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useDefaultShell: () => '',
+  useMaxTerminalsPerProject: () => 10,
+  useUpdateAppSetting: () => vi.fn(),
   useAppSettingsStore: Object.assign(
     (selector: (state: { settings: typeof mockAppSettings }) => unknown) =>
       selector({ settings: mockAppSettings }),
