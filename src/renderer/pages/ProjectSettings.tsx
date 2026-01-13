@@ -198,28 +198,26 @@ export default function ProjectSettings() {
                     <label className="block text-sm font-medium text-secondary-foreground mb-3">
                       Color & Appearance
                     </label>
-                    <div className="flex gap-4 items-center">
-                      <div className="flex gap-2 p-1 bg-secondary/50 rounded-full border border-border">
-                        {availableColors.slice(0, 5).map((color) => {
-                          const colors = getColorClasses(color)
-                          return (
-                            <button
-                              key={color}
-                              onClick={() => {
-                                setSelectedColor(color)
-                                setHasChanges(true)
-                              }}
-                              className={cn(
-                                'w-7 h-7 rounded-full transition-all',
-                                colors.bg,
-                                selectedColor === color
-                                  ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
-                                  : 'border-2 border-transparent hover:opacity-80'
-                              )}
-                            />
-                          )
-                        })}
-                      </div>
+                    <div className="flex gap-2 flex-wrap">
+                      {availableColors.map((color) => {
+                        const colors = getColorClasses(color)
+                        return (
+                          <button
+                            key={color}
+                            onClick={() => {
+                              setSelectedColor(color)
+                              setHasChanges(true)
+                            }}
+                            className={cn(
+                              'w-8 h-8 rounded-full transition-all',
+                              colors.bg,
+                              selectedColor === color
+                                ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
+                                : 'border-2 border-transparent hover:opacity-80'
+                            )}
+                          />
+                        )
+                      })}
                     </div>
                   </div>
                 </div>

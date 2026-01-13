@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, ArrowLeft, RotateCcw, Keyboard } from 'lucide-react'
+import { RotateCcw, Keyboard } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import {
   useTerminalFontFamily,
@@ -9,6 +9,7 @@ import {
   useDefaultProjectColor,
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
+import { useProjects, useActiveProjectId, useProjectActions } from '@/stores/project-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
 import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS } from '@/types/settings'
 import type { ShellInfo } from '@shared/types/ipc.types'
@@ -17,6 +18,7 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
+import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import {
   useUpdateShortcut,
@@ -32,6 +34,19 @@ export default function AppPreferences(): React.JSX.Element {
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
+
+  // Project store hooks for ProjectSidebar
+  const projects = useProjects()
+  const activeProjectId = useActiveProjectId()
+  const {
+    selectProject,
+    addProject,
+    updateProject,
+    deleteProject,
+    archiveProject,
+    restoreProject,
+    reorderProjects
+  } = useProjectActions()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -97,20 +112,22 @@ export default function AppPreferences(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background">
-      {/* Header */}
-      <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/')}
-            className="p-2 hover:bg-secondary rounded transition-colors"
-            title="Back to Dashboard"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div className="p-2 bg-primary/10 rounded text-primary">
-            <Settings size={20} />
-          </div>
+    <div className="h-screen flex overflow-hidden bg-background">
+      <ProjectSidebar
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={selectProject}
+        onNewProject={() => navigate('/')}
+        onUpdateProject={updateProject}
+        onDeleteProject={deleteProject}
+        onArchiveProject={archiveProject}
+        onRestoreProject={restoreProject}
+        onReorderProjects={reorderProjects}
+      />
+
+      <main className="flex-1 flex flex-col min-w-0 h-full relative">
+        {/* Header */}
+        <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
           <div>
             <h1 className="text-xl font-semibold text-foreground leading-tight">
               Application Preferences
@@ -120,11 +137,10 @@ export default function AppPreferences(): React.JSX.Element {
             </p>
           </div>
         </div>
-      </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-8 pb-32">
-        <div className="max-w-4xl mx-auto space-y-12">
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-8 pb-32">
+          <div className="max-w-4xl mx-auto space-y-12">
           {/* Terminal Appearance Section */}
           <section>
             <div className="flex items-start gap-6 border-b border-border pb-8">
@@ -374,6 +390,7 @@ export default function AppPreferences(): React.JSX.Element {
           </section>
         </div>
       </div>
+      </main>
 
       {/* Reset Confirmation Dialog */}
       <ConfirmDialog
