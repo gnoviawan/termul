@@ -373,7 +373,10 @@ function ConnectedTerminalComponent({
     autoFocus,
     handleTerminalData,
     handleResize,
-    initialScrollback
+    initialScrollback,
+    bufferSize,
+    fontFamily,
+    fontSize
   ])
 
   // Update terminal font settings when app settings change (without recreating terminal)

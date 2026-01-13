@@ -136,6 +136,7 @@ function XTerminalComponent({
 
 export const XTerminal = memo(XTerminalComponent)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTerminalRef(): {
   terminalRef: React.RefObject<Terminal | null>
   write: (data: string) => void

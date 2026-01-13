@@ -12,7 +12,7 @@ export function useCommandHistoryLoader(projectId: string | null): void {
 
     async function load(): Promise<void> {
       const result = await window.api.persistence.read<CommandHistoryEntry[]>(
-        COMMAND_HISTORY_KEY(projectId)
+        COMMAND_HISTORY_KEY(projectId!) // projectId is guaranteed non-null here due to early return
       )
       if (result.success && result.data) {
         // Merge with existing entries from other projects

@@ -6,8 +6,11 @@ const mockTerminalConstructor = vi.fn()
 const mockTerminalInstance = {
   loadAddon: vi.fn(),
   open: vi.fn(),
-  onData: vi.fn(() => ({ dispose: vi.fn() })),
-  onResize: vi.fn(() => ({ dispose: vi.fn() })),
+  onData: vi.fn<(_cb: (data: string) => void) => { dispose: () => void }>((_cb) => ({ dispose: vi.fn() })),
+  onResize: vi.fn<(_cb: (dims: { cols: number; rows: number }) => void) => { dispose: () => void }>((cb) => {
+    capturedResizeCallback = cb
+    return { dispose: vi.fn() }
+  }),
   write: vi.fn(),
   clear: vi.fn(),
   focus: vi.fn(),
@@ -16,6 +19,8 @@ const mockTerminalInstance = {
   rows: 24,
   options: {} as Record<string, unknown>
 }
+
+let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
 
 const mockFitAddonInstance = {
   fit: vi.fn(),
@@ -70,18 +75,38 @@ vi.mock('@xterm/addon-web-links', () => ({
   }
 }))
 
-// Mock window.api
+// Mock window.api with proper typing for mocks
 const mockTerminalApi = {
-  spawn: vi.fn(),
-  write: vi.fn(),
-  resize: vi.fn(),
-  kill: vi.fn(() => Promise.resolve({ success: true })),
-  onData: vi.fn(() => vi.fn()),
-  onExit: vi.fn(() => vi.fn())
+  spawn: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  write: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  resize: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  kill: vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve({ success: true })),
+  onData: vi.fn<(cb: (id: string, data: string) => void) => () => void>((cb) => {
+    capturedDataCallback = cb
+    return vi.fn()
+  }),
+  onExit: vi.fn<(cb: (id: string, exitCode: number, signal?: number) => void) => () => void>((cb) => {
+    capturedExitCallback = cb
+    return vi.fn()
+  })
+}
+
+let capturedDataCallback: ((id: string, data: string) => void) | null = null
+let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
+
+// Cast to any to allow mock methods in tests
+const mockTerminalApiWithMocks = mockTerminalApi as unknown as typeof mockTerminalApi & {
+  spawn: { mockResolvedValue: (v: unknown) => void }
+  write: { mockResolvedValue: (v: unknown) => void }
+  resize: { mockResolvedValue: (v: unknown) => void }
+  onData: { mockReturnValue: (v: unknown) => void }
+  onExit: { mockReturnValue: (v: unknown) => void }
 }
 
 Object.defineProperty(window, 'api', {
-  value: { terminal: mockTerminalApi },
+  value: {
+    terminal: mockTerminalApiWithMocks
+  } as unknown as Window['api'],
   writable: true
 })
 
@@ -97,12 +122,12 @@ describe('ConnectedTerminal', () => {
       disconnect = vi.fn()
     } as unknown as typeof ResizeObserver
 
-    mockTerminalApi.spawn.mockResolvedValue({
+    mockTerminalApiWithMocks.spawn.mockResolvedValue({
       success: true,
       data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
     })
-    mockTerminalApi.write.mockResolvedValue({ success: true, data: undefined })
-    mockTerminalApi.resize.mockResolvedValue({ success: true, data: undefined })
+    mockTerminalApiWithMocks.write.mockResolvedValue({ success: true, data: undefined })
+    mockTerminalApiWithMocks.resize.mockResolvedValue({ success: true, data: undefined })
   })
 
   afterEach(() => {
@@ -144,11 +169,11 @@ describe('ConnectedTerminal', () => {
   it('should set up data listener BEFORE spawn to avoid race condition', async () => {
     // Track the order of calls
     const callOrder: string[] = []
-    mockTerminalApi.onData.mockImplementation(() => {
+    ;(mockTerminalApi.onData as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
       callOrder.push('onData')
       return vi.fn()
     })
-    mockTerminalApi.spawn.mockImplementation(async () => {
+    ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -170,11 +195,11 @@ describe('ConnectedTerminal', () => {
 
   it('should set up exit listener BEFORE spawn to avoid race condition', async () => {
     const callOrder: string[] = []
-    mockTerminalApi.onExit.mockImplementation(() => {
+    ;(mockTerminalApi.onExit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
       callOrder.push('onExit')
       return vi.fn()
     })
-    mockTerminalApi.spawn.mockImplementation(async () => {
+    ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -246,12 +271,6 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should write PTY data to terminal when ID matches', async () => {
-    let capturedDataCallback: ((id: string, data: string) => void) | null = null
-    mockTerminalApi.onData.mockImplementation((cb) => {
-      capturedDataCallback = cb
-      return vi.fn()
-    })
-
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
@@ -269,12 +288,6 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should NOT write PTY data when ID does not match', async () => {
-    let capturedDataCallback: ((id: string, data: string) => void) | null = null
-    mockTerminalApi.onData.mockImplementation((cb) => {
-      capturedDataCallback = cb
-      return vi.fn()
-    })
-
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
@@ -294,7 +307,7 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup data listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    mockTerminalApi.onData.mockReturnValue(cleanupFn)
+    ;(mockTerminalApiWithMocks.onData as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -309,7 +322,7 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup exit listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    mockTerminalApi.onExit.mockReturnValue(cleanupFn)
+    ;(mockTerminalApiWithMocks.onExit as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -323,12 +336,6 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should call resize API when terminal resizes', async () => {
-    let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
-    mockTerminalInstance.onResize.mockImplementation((cb) => {
-      capturedResizeCallback = cb
-      return { dispose: vi.fn() }
-    })
-
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
@@ -440,10 +447,8 @@ describe('ConnectedTerminal', () => {
     it('should debounce resize IPC calls', async () => {
       vi.useFakeTimers()
 
-      let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
-      mockTerminalInstance.onResize.mockImplementation((cb) => {
+      ;(mockTerminalInstance.onResize as unknown as { mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => void }).mockImplementation((cb) => {
         capturedResizeCallback = cb
-        return { dispose: vi.fn() }
       })
 
       render(<ConnectedTerminal />)
@@ -475,10 +480,8 @@ describe('ConnectedTerminal', () => {
     it('should not call resize after unmount due to cleanup', async () => {
       vi.useFakeTimers()
 
-      let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
-      mockTerminalInstance.onResize.mockImplementation((cb) => {
+      ;(mockTerminalInstance.onResize as unknown as { mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => void }).mockImplementation((cb) => {
         capturedResizeCallback = cb
-        return { dispose: vi.fn() }
       })
 
       const { unmount } = render(<ConnectedTerminal />)
@@ -525,11 +528,11 @@ describe('ConnectedTerminal', () => {
     it('should call fit before spawn to get real dimensions', async () => {
       const callOrder: string[] = []
 
-      mockFitAddonInstance.fit.mockImplementation(() => {
+      ;(mockFitAddonInstance.fit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
         callOrder.push('fit')
       })
 
-      mockTerminalApi.spawn.mockImplementation(async () => {
+      ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
         callOrder.push('spawn')
         return {
           success: true,
