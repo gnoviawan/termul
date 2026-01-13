@@ -40,7 +40,6 @@ export default function AppPreferences(): React.JSX.Element {
   const activeProjectId = useActiveProjectId()
   const {
     selectProject,
-    addProject,
     updateProject,
     deleteProject,
     archiveProject,
