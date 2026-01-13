@@ -32,6 +32,7 @@ export default function ProjectSettings() {
 
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
+  const [rootPath, setRootPath] = useState(activeProject?.path || '')
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
   const [startupCommand, setStartupCommand] = useState('')
@@ -65,6 +66,7 @@ export default function ProjectSettings() {
     if (activeProject) {
       setProjectName(activeProject.name)
       setSelectedColor(activeProject.color)
+      setRootPath(activeProject.path || '')
       setEnvVars(activeProject.envVars || [])
       setShell(activeProject.defaultShell || availableShells?.default?.name || fallbackShell)
       setHasChanges(false)
@@ -76,6 +78,7 @@ export default function ProjectSettings() {
       updateProject(activeProject.id, {
         name: projectName,
         color: selectedColor,
+        path: rootPath,
         envVars: envVars.filter((v) => v.key.trim() !== ''),
         defaultShell: shell
       })
@@ -166,14 +169,29 @@ export default function ProjectSettings() {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        value={activeProject?.path || ''}
-                        readOnly
-                        className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-muted-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
+                        value={rootPath}
+                        onChange={(e) => {
+                          setRootPath(e.target.value)
+                          setHasChanges(true)
+                        }}
+                        className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
                       />
-                      <button className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm">
+                      <button
+                        onClick={async () => {
+                          const result = await window.api.dialog.selectDirectory()
+                          if (result.success) {
+                            setRootPath(result.data)
+                            setHasChanges(true)
+                          }
+                        }}
+                        className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm"
+                      >
                         Browse
                       </button>
                     </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Changing the root directory only affects new terminals.
+                    </p>
                   </div>
 
                   <div>
