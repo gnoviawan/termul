@@ -63,6 +63,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Set version from tag
+        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
+
       - name: Build Windows
         run: bun run build:win
 
@@ -97,6 +100,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Set version from tag
+        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
 
       - name: Build Linux
         run: bun run build:linux
