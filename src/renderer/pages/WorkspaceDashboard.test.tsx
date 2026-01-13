@@ -62,7 +62,8 @@ vi.mock('@/stores/terminal-store', () => ({
     addTerminal: mockAddTerminal,
     closeTerminal: mockCloseTerminal,
     renameTerminal: mockRenameTerminal,
-    reorderTerminals: vi.fn()
+    reorderTerminals: vi.fn(),
+    setTerminalPtyId: vi.fn()
   })
 }))
 

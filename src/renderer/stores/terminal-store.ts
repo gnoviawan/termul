@@ -21,6 +21,8 @@ export interface TerminalState {
   renameTerminal: (id: string, name: string) => void
   reorderTerminals: (projectId: string, orderedIds: string[]) => void
   setTerminals: (terminals: Terminal[]) => void
+  setTerminalPtyId: (id: string, ptyId: string) => void
+  findTerminalByPtyId: (ptyId: string) => Terminal | undefined
   updateTerminalCwd: (id: string, cwd: string) => void
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
@@ -100,6 +102,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ terminals })
   },
 
+  setTerminalPtyId: (id: string, ptyId: string): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t))
+    }))
+  },
+
+  findTerminalByPtyId: (ptyId: string): Terminal | undefined => {
+    return get().terminals.find((t) => t.ptyId === ptyId)
+  },
+
   updateTerminalCwd: (id: string, cwd: string): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, cwd } : t))
@@ -155,7 +167,7 @@ export function useActiveTerminalId(): string {
 
 export function useTerminalActions(): Pick<
   TerminalState,
-  'selectTerminal' | 'addTerminal' | 'closeTerminal' | 'renameTerminal' | 'reorderTerminals' | 'updateTerminalCwd'
+  'selectTerminal' | 'addTerminal' | 'closeTerminal' | 'renameTerminal' | 'reorderTerminals' | 'updateTerminalCwd' | 'setTerminalPtyId'
 > {
   return useTerminalStore(
     useShallow((state) => ({
@@ -164,7 +176,8 @@ export function useTerminalActions(): Pick<
       closeTerminal: state.closeTerminal,
       renameTerminal: state.renameTerminal,
       reorderTerminals: state.reorderTerminals,
-      updateTerminalCwd: state.updateTerminalCwd
+      updateTerminalCwd: state.updateTerminalCwd,
+      setTerminalPtyId: state.setTerminalPtyId
     }))
   )
 }

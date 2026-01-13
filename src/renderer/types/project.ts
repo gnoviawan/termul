@@ -31,6 +31,7 @@ export interface GitStatus {
 
 export interface Terminal {
   id: string
+  ptyId?: string
   name: string
   projectId: string
   shell: string
