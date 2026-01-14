@@ -48,6 +48,11 @@ export function registerTerminalIpc(ptyManager?: PtyManager): void {
     ): Promise<IpcResult<TerminalInfo>> => {
       try {
         const terminalId = manager.spawn(options || {})
+
+        if (terminalId === null) {
+          return createErrorResult('Terminal limit reached (max 30 terminals)', IpcErrorCodes.SPAWN_FAILED)
+        }
+
         const instance = manager.get(terminalId)
 
         if (!instance) {

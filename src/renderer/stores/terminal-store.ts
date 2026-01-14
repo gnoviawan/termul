@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Terminal, GitStatus } from '@/types/project'
+import type { Terminal, GitStatus, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
+
+const GLOBAL_TERMINAL_LIMIT = 30
+const HIDDEN_BUFFER_TRUNCATION_DELAY = 5 * 60 * 1000 // 5 minutes
+const TRUNCATED_BUFFER_SIZE = 1000
 
 export interface TerminalState {
   // State
@@ -27,6 +31,11 @@ export interface TerminalState {
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
+  setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
+  setTerminalHidden: (id: string, isHidden: boolean) => void
+  truncateHiddenTerminalBuffers: () => void
+  getTerminalCount: () => number
+  isTerminalLimitReached: () => boolean
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -47,6 +56,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     cwd?: string,
     pendingScrollback?: string[]
   ): Terminal => {
+    // Check global terminal limit
+    const { terminals } = get()
+    if (terminals.length >= GLOBAL_TERMINAL_LIMIT) {
+      throw new Error(`Maximum ${GLOBAL_TERMINAL_LIMIT} terminals allowed across all projects`)
+    }
+
     const newTerminal: Terminal = {
       id: Date.now().toString(),
       name,
@@ -54,7 +69,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       shell,
       cwd,
       output: [],
-      pendingScrollback
+      pendingScrollback,
+      healthStatus: 'running',
+      isHidden: false
     }
     set((state) => ({
       terminals: [...state.terminals, newTerminal],
@@ -134,6 +151,58 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastExitCode: exitCode } : t))
     }))
+  },
+
+  setTerminalHealthStatus: (id: string, status: TerminalHealthStatus): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, healthStatus: status } : t))
+    }))
+  },
+
+  setTerminalHidden: (id: string, isHidden: boolean): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => {
+        if (t.id === id) {
+          return {
+            ...t,
+            isHidden,
+            hiddenSince: isHidden ? Date.now() : undefined
+          }
+        }
+        return t
+      })
+    }))
+  },
+
+  truncateHiddenTerminalBuffers: (): void => {
+    const now = Date.now()
+    set((state) => ({
+      terminals: state.terminals.map((t) => {
+        // Only truncate hidden terminals that have been hidden for longer than the delay
+        if (
+          t.isHidden &&
+          t.hiddenSince &&
+          (now - t.hiddenSince) > HIDDEN_BUFFER_TRUNCATION_DELAY &&
+          t.pendingScrollback &&
+          t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
+        ) {
+          // Keep the last TRUNCATED_BUFFER_SIZE lines
+          return {
+            ...t,
+            pendingScrollback: t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
+          }
+        }
+        return t
+      })
+    }))
+  },
+
+  getTerminalCount: (): number => {
+    return get().terminals.length
+  },
+
+  isTerminalLimitReached: (): boolean => {
+    return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
   }
 }))
 

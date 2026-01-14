@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Settings, Save, Info, Plus, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
   useProjects,
@@ -17,17 +16,11 @@ import { cn } from '@/lib/utils'
 export default function ProjectSettings() {
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
-  const projects = useProjects()
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
   const {
-    selectProject,
     addProject,
-    updateProject,
-    deleteProject,
-    archiveProject,
-    restoreProject,
-    reorderProjects
+    updateProject
   } = useProjectActions()
 
   const [projectName, setProjectName] = useState(activeProject?.name || '')
@@ -97,22 +90,7 @@ export default function ProjectSettings() {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-background">
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={(id) => {
-          selectProject(id)
-          navigate('/')
-        }}
-        onNewProject={() => setIsNewProjectModalOpen(true)}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-
+    <>
       <main className="flex-1 flex flex-col min-w-0 h-full relative">
         {/* Header */}
         <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
@@ -397,6 +375,6 @@ export default function ProjectSettings() {
         onClose={() => setIsNewProjectModalOpen(false)}
         onCreateProject={addProject}
       />
-    </div>
+    </>
   )
 }

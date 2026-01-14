@@ -3,6 +3,7 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import WorkspaceLayout from './layouts/WorkspaceLayout'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import ProjectSettings from './pages/ProjectSettings'
 import AppPreferences from './pages/AppPreferences'
@@ -39,10 +40,16 @@ function AppEffects(): null {
 
 const router = createHashRouter(
   [
-    { path: '/', element: <WorkspaceDashboard /> },
-    { path: '/settings', element: <ProjectSettings /> },
-    { path: '/preferences', element: <AppPreferences /> },
-    { path: '/snapshots', element: <WorkspaceSnapshots /> },
+    {
+      path: '/',
+      element: <WorkspaceLayout />,
+      children: [
+        { index: true, element: <WorkspaceDashboard /> },
+        { path: 'snapshots', element: <WorkspaceSnapshots /> },
+        { path: 'settings', element: <ProjectSettings /> },
+        { path: 'preferences', element: <AppPreferences /> }
+      ]
+    },
     { path: '*', element: <NotFound /> }
   ],
   {
