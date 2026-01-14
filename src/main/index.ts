@@ -49,11 +49,27 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
   // Intercept Ctrl+Tab and Ctrl+Shift+Tab before Chromium handles them
   // These are reserved browser shortcuts that don't reach JavaScript keydown handlers
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || input.key !== 'Tab' || !input.control || input.alt) return
+    if (input.type !== 'keyDown' || !input.control || input.alt) return
 
-    event.preventDefault()
-    const shortcut = input.shift ? 'prevTerminal' : 'nextTerminal'
-    mainWindow.webContents.send('keyboard:shortcut', shortcut)
+    // Handle Ctrl+Tab / Ctrl+Shift+Tab
+    if (input.key === 'Tab') {
+      event.preventDefault()
+      const shortcut = input.shift ? 'prevTerminal' : 'nextTerminal'
+      mainWindow.webContents.send('keyboard:shortcut', shortcut)
+      return
+    }
+
+    // Handle zoom shortcuts (Ctrl+-, Ctrl+=, Ctrl+0)
+    // These are browser zoom shortcuts that Chromium blocks
+    if (input.key === '-' || input.key === '=' || input.key === '0') {
+      event.preventDefault()
+      let shortcut = ''
+      if (input.key === '-') shortcut = 'zoomOut'
+      else if (input.key === '=') shortcut = 'zoomIn'
+      else if (input.key === '0') shortcut = 'zoomReset'
+      mainWindow.webContents.send('keyboard:shortcut', shortcut)
+      return
+    }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

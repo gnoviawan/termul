@@ -301,7 +301,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     cycleTerminal
   ])
 
-  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab)
+  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
   // These are intercepted at the Electron level because Chromium reserves them
   useEffect(() => {
     return window.api.keyboard.onShortcut((shortcut) => {
@@ -312,9 +312,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
         case 'prevTerminal':
           cycleTerminal('prev')
           break
+        case 'zoomIn': {
+          const newSize = Math.min(fontSize + 1, 24)
+          if (newSize !== fontSize) {
+            updateAppSetting('terminalFontSize', newSize)
+          }
+          break
+        }
+        case 'zoomOut': {
+          const newSize = Math.max(fontSize - 1, 10)
+          if (newSize !== fontSize) {
+            updateAppSetting('terminalFontSize', newSize)
+          }
+          break
+        }
+        case 'zoomReset':
+          if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
+            updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
+          }
+          break
       }
     })
-  }, [cycleTerminal])
+  }, [cycleTerminal, fontSize, updateAppSetting])
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {
