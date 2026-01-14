@@ -35,3 +35,7 @@ nul
 /_bmad-output
 /_bmad
 /.github/agents
+
+# Auto Claude data directory
+.auto-claude/
+/.opencode

@@ -421,17 +421,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
         ) : (
           <>
             {/* Tab Bar */}
-            <TerminalTabBar
-              terminals={terminals}
-              activeTerminalId={activeTerminalId}
-              onSelectTerminal={selectTerminal}
-              onCloseTerminal={handleCloseTerminal}
-              onNewTerminal={handleNewTerminal}
-              onNewTerminalWithShell={handleNewTerminalWithShell}
-              onRenameTerminal={renameTerminal}
-              onReorderTerminals={(orderedIds) => reorderTerminals(activeProjectId, orderedIds)}
-              defaultShell={activeProject?.defaultShell}
-            />
+            {isWorkspaceRoute && (
+              <TerminalTabBar
+                terminals={terminals}
+                activeTerminalId={activeTerminalId}
+                onSelectTerminal={selectTerminal}
+                onCloseTerminal={handleCloseTerminal}
+                onNewTerminal={handleNewTerminal}
+                onNewTerminalWithShell={handleNewTerminalWithShell}
+                onRenameTerminal={renameTerminal}
+                onReorderTerminals={(orderedIds) => reorderTerminals(activeProjectId, orderedIds)}
+                defaultShell={activeProject?.defaultShell}
+              />
+            )}
 
             {/* Terminal Area / Route Content */}
             <div className="flex-1 overflow-hidden bg-terminal-bg relative">
