@@ -40,5 +40,8 @@ nul
 .auto-claude/
 /.opencode
 
+# Claude Code temp directories
+tmpclaude-*/
+
 # ADR documentation
 docs/adr/

@@ -372,8 +372,8 @@ export class UpdaterService {
 
       const errorMsg = error instanceof Error ? error.message : String(error)
       this.setError(errorMsg)
-      // Send error as object with code and message
-      this.sendEvent('error', { code: 'UPDATE_ERROR', message: errorMsg })
+      // Send error as object with code and message - use valid error code from shared types
+      this.sendEvent('error', { code: 'UNKNOWN_ERROR', message: errorMsg })
     })
   }
 
