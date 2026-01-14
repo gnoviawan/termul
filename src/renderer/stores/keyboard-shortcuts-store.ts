@@ -98,8 +98,6 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
   if (key === '-' || key === '–' || key === '—' || key === '_') key = '-'
   // Plus/equal keys (often on same key)
   if (key === '=' || key === '+') key = '='
-  // Number row (when shift is not held)
-  if (/^[0-9]$/.test(key)) key = key
 
   // Skip if only modifier was pressed
   if (['control', 'alt', 'shift', 'meta'].includes(key)) {

@@ -138,10 +138,4 @@
     border-radius: 1px;
     margin-bottom: 2px;
   }
-
-  /* Hide default browser menubar that appears on Alt key */
-  menubar {
-    display: none !important;
-    pointer-events: none !important;
-  }
 }
