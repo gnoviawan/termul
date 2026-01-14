@@ -119,8 +119,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [shortcuts]
   )
 
-  // Determine if we should show the terminal area (hide on settings/preferences pages)
-  const isWorkspaceRoute = location.pathname === '/' || location.pathname === '/snapshots'
+  // Determine if we should show the terminal area (only on workspace dashboard)
+  const isWorkspaceRoute = location.pathname === '/'
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -453,7 +453,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <ConnectedTerminal
                       spawnOptions={{
                         shell: terminal.shell,
-                        cwd: terminal.cwd
+                        cwd: terminal.cwd,
+                        env: projectEnv
                       }}
                       initialScrollback={terminal.pendingScrollback}
                       className="w-full h-full"

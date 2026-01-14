@@ -26,15 +26,25 @@ const GLOBAL_TERMINAL_LIMIT = 30
 const ORPHAN_DETECTION_INTERVAL = 30000 // 30 seconds
 const ORPHAN_TIMEOUT = 60000 // 1 minute without activity = potential orphan
 
+// Options for PtyManager constructor
+export interface PtyManagerOptions {
+  /** Disable orphan detection (useful for tests) */
+  disableOrphanDetection?: boolean
+}
+
 export class PtyManager {
   private terminals: Map<string, TerminalInstance> = new Map()
   private dataCallbacks: Set<DataCallback> = new Set()
   private exitCallbacks: Set<ExitCallback> = new Set()
   private idCounter = 0
   private orphanDetectionTimer: NodeJS.Timeout | null = null
+  private readonly options: PtyManagerOptions
 
-  constructor() {
-    this.startOrphanDetection()
+  constructor(options: PtyManagerOptions = {}) {
+    this.options = options
+    if (!this.options.disableOrphanDetection) {
+      this.startOrphanDetection()
+    }
   }
 
   private generateId(): string {
@@ -197,10 +207,9 @@ export class PtyManager {
     const orphans: string[] = []
 
     Array.from(this.terminals.entries()).forEach(([id, instance]) => {
-      // A terminal is considered orphaned if:
-      // 1. It has no renderer references AND
-      // 2. It's been inactive for longer than the timeout
-      if (instance.rendererRefs.size === 0 && (now - instance.lastActivity) > ORPHAN_TIMEOUT) {
+      // A terminal is considered orphaned if it's been inactive for longer than the timeout
+      // (Inactivity-based detection - terminals that haven't received data/writes/resize recently)
+      if ((now - instance.lastActivity) > ORPHAN_TIMEOUT) {
         orphans.push(id)
       }
     })
@@ -263,7 +272,7 @@ export function getDefaultPtyManager(): PtyManager {
 
 export function resetDefaultPtyManager(): void {
   if (defaultManager) {
-    defaultManager.killAll()
+    defaultManager.destroy()
     defaultManager = null
   }
 }

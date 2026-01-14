@@ -50,11 +50,12 @@ describe('PtyManager', () => {
     vi.clearAllMocks()
     mockPtyProcess.onData.mockImplementation(() => {})
     mockPtyProcess.onExit.mockImplementation(() => {})
-    manager = new PtyManager()
+    // Disable orphan detection in tests to avoid timer leaks
+    manager = new PtyManager({ disableOrphanDetection: true })
   })
 
   afterEach(() => {
-    manager.killAll()
+    manager.destroy()
   })
 
   describe('spawn', () => {
