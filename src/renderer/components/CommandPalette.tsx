@@ -124,19 +124,20 @@ export function CommandPalette({
     [saveRecentCommand, onSwitchProject, onNewTerminal, onSaveSnapshot, onClose]
   )
 
-  // Handle Escape key
+  // Handle Escape key - use capture phase to intercept before cmdk handles it
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         onClose()
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
   }, [isOpen, onClose])
 
   return (

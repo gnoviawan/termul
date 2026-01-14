@@ -93,6 +93,12 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
   if (key === ' ') key = 'space'
   if (key === 'escape') key = 'esc'
 
+  // Normalize key values for common keys that might have variations
+  // Minus/hyphen keys
+  if (key === '-' || key === '–' || key === '—' || key === '_') key = '-'
+  // Plus/equal keys (often on same key)
+  if (key === '=' || key === '+') key = '='
+
   // Skip if only modifier was pressed
   if (['control', 'alt', 'shift', 'meta'].includes(key)) {
     return parts.join('+')

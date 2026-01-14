@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -20,10 +21,38 @@ import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
 
+// Hook to prevent Alt key from showing the default browser menu bar
+function usePreventAltMenu(): void {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Alt') {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent): void => {
+      if (e.key === 'Alt') {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    window.addEventListener('keyup', handleKeyUp, { capture: true })
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true })
+      window.removeEventListener('keyup', handleKeyUp, { capture: true })
+    }
+  }, [])
+}
+
 const queryClient = new QueryClient()
 
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
+  usePreventAltMenu()
   useTerminalAutoSave()
   useTerminalRestore()
   useCwd()

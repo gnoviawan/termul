@@ -14,6 +14,7 @@ const mockTerminalInstance = {
     capturedResizeCallback = cb
     return { dispose: vi.fn() }
   }),
+  attachCustomKeyEventHandler: vi.fn(),
   write: vi.fn(),
   clear: vi.fn(),
   focus: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('@xterm/xterm', () => ({
     open = mockTerminalInstance.open
     onData = mockTerminalInstance.onData
     onResize = mockTerminalInstance.onResize
+    attachCustomKeyEventHandler = mockTerminalInstance.attachCustomKeyEventHandler
     write = mockTerminalInstance.write
     clear = mockTerminalInstance.clear
     focus = mockTerminalInstance.focus

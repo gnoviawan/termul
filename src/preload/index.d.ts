@@ -4,7 +4,8 @@ import type {
   ShellApi,
   PersistenceApi,
   DialogApi,
-  SystemApi
+  SystemApi,
+  KeyboardApi
 } from '@shared/types/ipc.types'
 
 declare global {
@@ -16,6 +17,7 @@ declare global {
       persistence: PersistenceApi
       dialog: DialogApi
       system: SystemApi
+      keyboard: KeyboardApi
     }
   }
 }

@@ -17,7 +17,9 @@ import type {
   ShellApi,
   DetectedShells,
   PersistenceApi,
-  SystemApi
+  SystemApi,
+  KeyboardApi,
+  KeyboardShortcutCallback
 } from '../shared/types/ipc.types'
 
 // Terminal API for renderer
@@ -180,13 +182,30 @@ const systemApi: SystemApi = {
   }
 }
 
+// Keyboard API for renderer - handles shortcuts intercepted at main process level
+const keyboardApi: KeyboardApi = {
+  onShortcut: (callback: KeyboardShortcutCallback): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset'
+    ): void => {
+      callback(shortcut)
+    }
+    ipcRenderer.on('keyboard:shortcut', listener)
+    return () => {
+      ipcRenderer.off('keyboard:shortcut', listener)
+    }
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
   dialog: dialogApi,
   shell: shellApi,
   persistence: persistenceApi,
-  system: systemApi
+  system: systemApi,
+  keyboard: keyboardApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

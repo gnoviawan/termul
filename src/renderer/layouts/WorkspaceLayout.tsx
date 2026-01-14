@@ -28,12 +28,17 @@ import {
 } from '@/stores/terminal-store'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
-import { useCommandHistoryLoader, useAddCommand, useCommandHistory } from '@/hooks/use-command-history'
 import {
-  useKeyboardShortcutsStore,
-  matchesShortcut
-} from '@/stores/keyboard-shortcuts-store'
-import { useTerminalFontSize, useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
+  useCommandHistoryLoader,
+  useAddCommand,
+  useCommandHistory
+} from '@/hooks/use-command-history'
+import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import {
+  useTerminalFontSize,
+  useDefaultShell,
+  useMaxTerminalsPerProject
+} from '@/stores/app-settings-store'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
@@ -78,8 +83,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const allTerminals = useAllTerminals()
   const activeTerminal = useActiveTerminal()
   const activeTerminalId = useActiveTerminalId()
-  const { selectTerminal, addTerminal, closeTerminal, renameTerminal, reorderTerminals, setTerminalPtyId } =
-    useTerminalActions()
+  const {
+    selectTerminal,
+    addTerminal,
+    closeTerminal,
+    renameTerminal,
+    reorderTerminals,
+    setTerminalPtyId
+  } = useTerminalActions()
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -122,11 +133,38 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Determine if we should show the terminal area (only on workspace dashboard)
   const isWorkspaceRoute = location.pathname === '/'
 
+  // Shared terminal cycling logic used by both keydown handler and IPC listener
+  const cycleTerminal = useCallback(
+    (direction: 'next' | 'prev') => {
+      if (!isWorkspaceRoute || terminals.length <= 1 || !activeTerminalId) return
+
+      const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
+      if (currentIndex === -1) return
+
+      const offset = direction === 'next' ? 1 : -1
+      const nextIndex = (currentIndex + offset + terminals.length) % terminals.length
+      selectTerminal(terminals[nextIndex].id)
+    },
+    [isWorkspaceRoute, terminals, activeTerminalId, selectTerminal]
+  )
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in an input/textarea/editable element
+      const target = e.target as HTMLElement
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]')
+      ) {
+        return
+      }
+
       // Command palette (Ctrl+K)
       if (matchesShortcut(e, getActiveKey('commandPalette'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsCommandPaletteOpen(true)
         return
       }
@@ -134,6 +172,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Command palette alt (Ctrl+Shift+P)
       if (matchesShortcut(e, getActiveKey('commandPaletteAlt'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsCommandPaletteOpen(true)
         return
       }
@@ -142,6 +181,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('terminalSearch'))) {
         if (isWorkspaceRoute) {
           e.preventDefault()
+          e.stopPropagation()
           if (activeTerminal) {
             setIsTerminalSearchOpen(true)
           }
@@ -152,6 +192,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Command history (Ctrl+R)
       if (matchesShortcut(e, getActiveKey('commandHistory'))) {
         e.preventDefault()
+        e.stopPropagation()
         if (activeProjectId) {
           setIsCommandHistoryOpen(true)
         }
@@ -161,6 +202,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // New project (Ctrl+N)
       if (matchesShortcut(e, getActiveKey('newProject'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsNewProjectModalOpen(true)
         return
       }
@@ -169,6 +211,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('newTerminal'))) {
         if (!isWorkspaceRoute) return
         e.preventDefault()
+        e.stopPropagation()
         if (terminals.length >= maxTerminals) {
           toast.error(`Maximum ${maxTerminals} terminals per project`)
           return
@@ -181,31 +224,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       // Next terminal (Ctrl+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
-        if (!isWorkspaceRoute) return
         e.preventDefault()
-        if (terminals.length > 1 && activeTerminalId) {
-          const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
-          const nextIndex = (currentIndex + 1) % terminals.length
-          selectTerminal(terminals[nextIndex].id)
-        }
+        e.stopPropagation()
+        cycleTerminal('next')
         return
       }
 
       // Previous terminal (Ctrl+Shift+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
-        if (!isWorkspaceRoute) return
         e.preventDefault()
-        if (terminals.length > 1 && activeTerminalId) {
-          const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
-          const prevIndex = (currentIndex - 1 + terminals.length) % terminals.length
-          selectTerminal(terminals[prevIndex].id)
-        }
+        e.stopPropagation()
+        cycleTerminal('prev')
         return
       }
 
       // Zoom in (Ctrl+=)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
+        e.stopPropagation()
         const newSize = Math.min(fontSize + 1, 24)
         if (newSize !== fontSize) {
           updateAppSetting('terminalFontSize', newSize)
@@ -216,6 +252,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Zoom out (Ctrl+-)
       if (matchesShortcut(e, getActiveKey('zoomOut'))) {
         e.preventDefault()
+        e.stopPropagation()
         const newSize = Math.max(fontSize - 1, 10)
         if (newSize !== fontSize) {
           updateAppSetting('terminalFontSize', newSize)
@@ -226,6 +263,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Zoom reset (Ctrl+0)
       if (matchesShortcut(e, getActiveKey('zoomReset'))) {
         e.preventDefault()
+        e.stopPropagation()
         if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
           updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
         }
@@ -259,8 +297,43 @@ export default function WorkspaceLayout(): React.JSX.Element {
     updateAppSetting,
     appDefaultShell,
     maxTerminals,
-    isWorkspaceRoute
+    isWorkspaceRoute,
+    cycleTerminal
   ])
+
+  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
+  // These are intercepted at the Electron level because Chromium reserves them
+  useEffect(() => {
+    return window.api.keyboard.onShortcut((shortcut) => {
+      switch (shortcut) {
+        case 'nextTerminal':
+          cycleTerminal('next')
+          break
+        case 'prevTerminal':
+          cycleTerminal('prev')
+          break
+        case 'zoomIn': {
+          const newSize = Math.min(fontSize + 1, 24)
+          if (newSize !== fontSize) {
+            updateAppSetting('terminalFontSize', newSize)
+          }
+          break
+        }
+        case 'zoomOut': {
+          const newSize = Math.max(fontSize - 1, 10)
+          if (newSize !== fontSize) {
+            updateAppSetting('terminalFontSize', newSize)
+          }
+          break
+        }
+        case 'zoomReset':
+          if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
+            updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
+          }
+          break
+      }
+    })
+  }, [cycleTerminal, fontSize, updateAppSetting])
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {
@@ -284,13 +357,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [addTerminal, terminals.length, activeProjectId, activeProject, maxTerminals]
   )
 
-  const handleCloseTerminal = useCallback(
-    (id: string) => {
-      // Show confirmation dialog - terminal always has a running shell process
-      setCloseConfirmTerminalId(id)
-    },
-    []
-  )
+  const handleCloseTerminal = useCallback((id: string) => {
+    // Show confirmation dialog - terminal always has a running shell process
+    setCloseConfirmTerminalId(id)
+  }, [])
 
   const handleConfirmCloseTerminal = useCallback(() => {
     if (closeConfirmTerminalId) {
@@ -308,19 +378,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsTerminalSearchOpen(false)
   }, [])
 
-  const handleTerminalFindNext = useCallback(
-    (term: string) => {
-      return terminalSearchRef.current?.findNext(term) ?? false
-    },
-    []
-  )
+  const handleTerminalFindNext = useCallback((term: string) => {
+    return terminalSearchRef.current?.findNext(term) ?? false
+  }, [])
 
-  const handleTerminalFindPrevious = useCallback(
-    (term: string) => {
-      return terminalSearchRef.current?.findPrevious(term) ?? false
-    },
-    []
-  )
+  const handleTerminalFindPrevious = useCallback((term: string) => {
+    return terminalSearchRef.current?.findPrevious(term) ?? false
+  }, [])
 
   const handleTerminalClearDecorations = useCallback(() => {
     terminalSearchRef.current?.clearDecorations()
@@ -336,12 +400,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [addCommand, activeTerminal, activeProjectId]
   )
 
-  const handleInsertCommand = useCallback(
-    (command: string) => {
-      terminalSearchRef.current?.writeText(command)
-    },
-    []
-  )
+  const handleInsertCommand = useCallback((command: string) => {
+    terminalSearchRef.current?.writeText(command)
+  }, [])
 
   // Create stable callback factory for terminal spawn handling
   // Use ref to store handlers so they're stable across renders (prevents ConnectedTerminal re-mount)
@@ -447,9 +508,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   <div
                     key={terminal.id}
                     className={
-                      isVisible
-                        ? 'w-full h-full'
-                        : 'w-full h-full absolute inset-0 invisible'
+                      isVisible ? 'w-full h-full' : 'w-full h-full absolute inset-0 invisible'
                     }
                   >
                     <ConnectedTerminal
@@ -485,7 +544,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
               )}
 
               {/* Render child routes (Settings, Preferences, Snapshots) in an overlay */}
-              <div className={isWorkspaceRoute ? 'hidden' : 'w-full h-full absolute inset-0 bg-background'}>
+              <div
+                className={
+                  isWorkspaceRoute ? 'hidden' : 'w-full h-full absolute inset-0 bg-background'
+                }
+              >
                 <Outlet />
               </div>
 
@@ -540,7 +603,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <ConfirmDialog
         isOpen={closeConfirmTerminalId !== null}
         title="Close Terminal"
-        message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'}"? Any running processes will be terminated.`}
+        message={`Are you sure you want to close "${
+          terminalToClose?.name || 'this terminal'
+        }"? Any running processes will be terminated.`}
         confirmLabel="Close"
         cancelLabel="Cancel"
         variant="danger"
