@@ -185,11 +185,9 @@ export function useUpdateToast(): void {
     if (isDownloading && version) {
       showDownloadProgressToast(version, downloadProgress)
 
-      // Clean up progress toast when download completes
+      // Clean up progress toast when download completes or effect re-runs
       return () => {
-        if (!isDownloading) {
-          dismissDownloadProgressToast(version)
-        }
+        dismissDownloadProgressToast(version)
       }
     }
   }, [isDownloading, downloadProgress, version])

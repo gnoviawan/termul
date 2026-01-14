@@ -82,6 +82,7 @@ function terminalInstanceToSession(instance: TerminalInstance): TerminalSession 
 class SessionPersistenceService {
   private autoSaveTimeout: NodeJS.Timeout | null = null
   private lastSaveTimestamp: string = ''
+  private pendingAutoSaveData: SessionData | null = null
 
   /**
    * Save complete session data manually
@@ -98,12 +99,13 @@ class SessionPersistenceService {
         }
       }
 
-      // Update timestamp
-      sessionData.timestamp = new Date().toISOString()
-      this.lastSaveTimestamp = sessionData.timestamp
+      // Create a shallow clone to avoid mutating the input
+      const timestamp = new Date().toISOString()
+      const sessionDataClone = { ...sessionData, timestamp }
+      this.lastSaveTimestamp = timestamp
 
       // Use persistence-service for atomic write
-      const result = await write(AUTO_SAVE_KEY, sessionData)
+      const result = await write(AUTO_SAVE_KEY, sessionDataClone)
 
       if (!result.success) {
         return {
@@ -191,6 +193,9 @@ class SessionPersistenceService {
    * Use this for automatic saves triggered by terminal state changes
    */
   autoSave(sessionData: SessionData): void {
+    // Store pending data for flush
+    this.pendingAutoSaveData = sessionData
+
     // Clear any pending auto-save
     if (this.autoSaveTimeout) {
       clearTimeout(this.autoSaveTimeout)
@@ -203,6 +208,8 @@ class SessionPersistenceService {
       if (!result.success) {
         console.error('Auto-save failed:', result.error)
       }
+      // Clear pending data after save
+      this.pendingAutoSaveData = null
     }, AUTO_SAVE_DEBOUNCE_MS)
   }
 
@@ -276,14 +283,21 @@ class SessionPersistenceService {
   /**
    * Flush any pending auto-save operations
    * Call this before app quit to ensure data is saved
+   * Forces an immediate save if there's pending data
    */
   async flushPendingAutoSave(): Promise<void> {
     if (this.autoSaveTimeout) {
       clearTimeout(this.autoSaveTimeout)
       this.autoSaveTimeout = null
-      // Note: The actual save would have been triggered by the timeout
-      // This just clears the pending timeout. If you need to force save,
-      // call saveSession() directly before app quit.
+
+      // If there's pending data, save it immediately
+      if (this.pendingAutoSaveData) {
+        const result = await this.saveSession(this.pendingAutoSaveData)
+        if (!result.success) {
+          console.error('Flush auto-save failed:', result.error)
+        }
+        this.pendingAutoSaveData = null
+      }
     }
   }
 

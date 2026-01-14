@@ -288,12 +288,13 @@ export function initRegisterUpdaterIpc(): void {
 /**
  * Set the main window reference for the updater service
  * Call this when creating new windows (e.g., on macOS activate)
+ * Must be awaited to ensure initialization completes
  */
-export function setUpdaterWindow(window: BrowserWindow): void {
+export async function setUpdaterWindow(window: BrowserWindow): Promise<void> {
   if (!updaterService) {
     updaterService = getUpdaterService()
   }
-  updaterService.initialize(window)
+  await updaterService.initialize(window)
 }
 
 /**
@@ -315,4 +316,5 @@ export function unregisterUpdaterIpc(): void {
   ipcMain.removeHandler('updater:getState')
   ipcMain.removeHandler('updater:setAutoUpdateEnabled')
   ipcMain.removeHandler('updater:getAutoUpdateEnabled')
+  handlersRegistered = false
 }

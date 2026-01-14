@@ -109,13 +109,13 @@ export function initializeApp(): void {
     const mainWindow = createWindow(windowState)
 
     // Set updater window reference
-    setUpdaterWindow(mainWindow)
+    await setUpdaterWindow(mainWindow)
 
     app.on('activate', async function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         const state = await loadWindowState()
         const mainWindow = createWindow(state)
-        setUpdaterWindow(mainWindow) // Only update window reference, don't re-register handlers
+        await setUpdaterWindow(mainWindow) // Only update window reference, don't re-register handlers
       }
     })
   })

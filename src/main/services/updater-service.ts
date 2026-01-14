@@ -1,5 +1,6 @@
 import { BrowserWindow, app } from 'electron'
 import { autoUpdater, UpdateInfo } from 'electron-updater'
+import type { ProgressInfo } from 'electron-updater'
 import type { IpcResult } from '../../shared/types/ipc.types'
 import { read, write } from './persistence-service'
 
@@ -13,7 +14,8 @@ export const UpdaterErrorCodes = {
   UNSAFE_TO_UPDATE: 'UNSAFE_TO_UPDATE',
   INCOMPATIBLE_VERSION: 'INCOMPATIBLE_VERSION',
   BACKUP_FAILED: 'BACKUP_FAILED',
-  ALREADY_RUNNING: 'ALREADY_RUNNING'
+  ALREADY_RUNNING: 'ALREADY_RUNNING',
+  WRITE_FAILED: 'WRITE_FAILED'
 } as const
 
 export type UpdaterErrorCode =
@@ -52,7 +54,7 @@ const UPDATE_CHECK_INTERVAL_KEY = 'updater/last-check-time'
 
 // Constants
 const BASE_CHECK_INTERVAL = 12 * 60 * 60 * 1000 // 12 hours
-const STAGGER_RANGE = 2 * 60 * 60 * 1000 // ±2 hours
+const STAGGER_RANGE = 2 * 60 * 60 * 1000 // ±1 hour (with Math.random() * STAGGER_RANGE - STAGGER_RANGE / 2)
 const MAX_RETRY_ATTEMPTS = 3
 const RETRY_DELAYS = [5000, 30000, 300000] // 5s, 30s, 5min
 
@@ -89,8 +91,9 @@ export class UpdaterService {
 
   /**
    * Initialize the updater service with a window reference
+   * Must be awaited to ensure skipped version is loaded before checkForUpdates
    */
-  initialize(mainWindow: BrowserWindow): void {
+  async initialize(mainWindow: BrowserWindow): Promise<void> {
     if (this.isInitialized) {
       console.warn('UpdaterService already initialized')
       return
@@ -98,7 +101,7 @@ export class UpdaterService {
 
     this.mainWindow = mainWindow
     this.isInitialized = true
-    this.loadSkippedVersion()
+    await this.loadSkippedVersion()
     this.startPeriodicChecks()
   }
 
@@ -263,7 +266,7 @@ export class UpdaterService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to skip version',
-        code: UpdaterErrorCodes.NOT_INITIALIZED
+        code: UpdaterErrorCodes.WRITE_FAILED
       }
     }
   }
@@ -311,7 +314,7 @@ export class UpdaterService {
     autoUpdater.autoInstallOnAppQuit = false
 
     // Event handlers
-    autoUpdater.on('update-available', (info) => {
+    autoUpdater.on('update-available', (info: UpdateInfo) => {
       console.log('Update available:', info.version)
       this.currentUpdateInfo = info
 
@@ -333,12 +336,12 @@ export class UpdaterService {
       this.sendEvent('update-available', info)
     })
 
-    autoUpdater.on('update-not-available', (info) => {
+    autoUpdater.on('update-not-available', (info: UpdateInfo) => {
       console.log('Update not available, current version:', info.version)
       this.setState('idle')
     })
 
-    autoUpdater.on('download-progress', (progress) => {
+    autoUpdater.on('download-progress', (progress: ProgressInfo) => {
       this.currentDownloadProgress = {
         bytesPerSecond: progress.bytesPerSecond,
         percent: progress.percent,
@@ -348,7 +351,7 @@ export class UpdaterService {
       this.sendEvent('download-progress', this.currentDownloadProgress)
     })
 
-    autoUpdater.on('update-downloaded', (info) => {
+    autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
       console.log('Update downloaded:', info.version)
       this.isDownloading = false
       this.currentUpdateInfo = info
@@ -356,7 +359,7 @@ export class UpdaterService {
       this.sendEvent('update-downloaded', info)
     })
 
-    autoUpdater.on('error', (error) => {
+    autoUpdater.on('error', (error: Error) => {
       console.error('Updater error:', error)
       this.isDownloading = false
 

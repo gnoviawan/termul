@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { join, dirname } from 'path'
+import { join, dirname, normalize } from 'path'
 import {
   mkdir,
   readdir,
@@ -7,7 +7,8 @@ import {
   writeFile,
   cp,
   rm,
-  stat
+  stat,
+  rename
 } from 'fs/promises'
 import type { IpcResult } from '../../shared/types/ipc.types'
 
@@ -61,10 +62,34 @@ function getBackupsDir(): string {
 }
 
 /**
+ * Validate backup ID to prevent path traversal attacks
+ * Only allows alphanumeric characters, dots, hyphens, and underscores
+ */
+function validateBackupId(backupId: string): boolean {
+  // Allow alphanumeric, dots, hyphens, and underscores (timestamp-based IDs)
+  const validIdPattern = /^[A-Za-z0-9._-]+$/
+  return validIdPattern.test(backupId)
+}
+
+/**
  * Get the path to a specific backup directory
+ * Validates backupId to prevent path traversal
  */
 function getBackupPath(backupId: string): string {
-  return join(getBackupsDir(), backupId)
+  if (!validateBackupId(backupId)) {
+    throw new Error(`Invalid backup ID: ${backupId}`)
+  }
+
+  const backupsDir = getBackupsDir()
+  const backupPath = join(backupsDir, backupId)
+
+  // Ensure the resolved path is within the backups directory
+  const normalizedPath = normalize(backupPath)
+  if (!normalizedPath.startsWith(normalize(backupsDir))) {
+    throw new Error(`Backup path traversal detected: ${backupId}`)
+  }
+
+  return backupPath
 }
 
 /**
@@ -316,10 +341,13 @@ export async function listBackups(): Promise<IpcResult<BackupInfo[]>> {
 
 /**
  * Restore from a backup
- * Copies all files from backup directory to userData
+ * Copies all files from backup directory to userData atomically
  * Overwrites existing files
  */
 export async function restoreBackup(backupId: string): Promise<IpcResult<void>> {
+  let tempRestorePath: string | null = null
+  let oldUserDataPath: string | null = null
+
   try {
     const backupPath = getBackupPath(backupId)
     const infoPath = getBackupInfoPath(backupId)
@@ -336,28 +364,61 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
       }
     }
 
-    // Copy files from backup to userData
-    const entries = await readdir(backupPath, { withFileTypes: true })
+    // Create unique paths for atomic restore
+    const timestamp = Date.now()
+    const randomSuffix = Math.random().toString(36).substring(2, 9)
+    tempRestorePath = join(userDataPath, '..', `temp-restore-${timestamp}-${randomSuffix}`)
+    oldUserDataPath = join(userDataPath, '..', `old-userdata-${timestamp}-${randomSuffix}`)
 
-    for (const entry of entries) {
-      // Skip backup-info.json when restoring
-      if (entry.name === 'backup-info.json') {
-        continue
-      }
+    // Copy backup to temp directory
+    await copyDirectory(backupPath, tempRestorePath)
 
-      const srcPath = join(backupPath, entry.name)
-      const destPath = join(userDataPath, entry.name)
+    // Remove backup-info.json from temp restore
+    const tempInfoPath = join(tempRestorePath, 'backup-info.json')
+    try {
+      await rm(tempInfoPath, { force: true })
+    } catch {
+      // Ignore if file doesn't exist
+    }
 
-      if (entry.isDirectory()) {
-        await copyDirectory(srcPath, destPath)
-      } else if (entry.isFile()) {
-        await cp(srcPath, destPath)
-      }
+    // Atomic rename: userData -> old, temp -> userData
+    await rename(userDataPath, oldUserDataPath)
+    await rename(tempRestorePath, userDataPath)
+
+    // Clean up old userData directory
+    try {
+      await rm(oldUserDataPath, { recursive: true, force: true })
+    } catch {
+      // Log but don't fail if cleanup fails
+      console.warn(`Failed to clean up old userData: ${oldUserDataPath}`)
     }
 
     return { success: true, data: undefined }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+
+    // Attempt rollback: restore old userData if it exists
+    if (oldUserDataPath && tempRestorePath) {
+      try {
+        const userDataPath = getUserDataDir()
+        // If temp was already renamed to userData, try to restore old
+        if (tempRestorePath !== userDataPath) {
+          await rename(tempRestorePath, userDataPath)
+        }
+        await rm(oldUserDataPath, { recursive: true, force: true })
+      } catch (rollbackError) {
+        console.error('Failed to rollback restore operation:', rollbackError)
+      }
+    }
+
+    // Clean up temp directory if it still exists
+    if (tempRestorePath) {
+      try {
+        await rm(tempRestorePath, { recursive: true, force: true })
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
 
     if (
       errorMessage.includes('ENOSPC') ||

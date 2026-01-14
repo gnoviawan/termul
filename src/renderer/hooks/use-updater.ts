@@ -134,7 +134,10 @@ export function useUpdateCheck(autoCheck = true) {
         // Get auto-update enabled setting
         const autoUpdateResult = await window.api.updater?.getAutoUpdateEnabled()
         if (autoUpdateResult?.success) {
-          useUpdaterStore.setState({ autoUpdateEnabled: autoUpdateResult.data })
+          // Only update if data is a boolean, otherwise preserve default (true)
+          if (typeof autoUpdateResult.data === 'boolean') {
+            useUpdaterStore.setState({ autoUpdateEnabled: autoUpdateResult.data })
+          }
         }
       } catch (err) {
         console.error('Failed to initialize updater state:', err)
