@@ -15,23 +15,39 @@ export interface TerminalInstance {
   pty: IPty
   shell: string
   cwd: string
+  lastActivity: number
+  rendererRefs: Set<string>
 }
 
 export type DataCallback = (terminalId: string, data: string) => void
 export type ExitCallback = (terminalId: string, exitCode: number, signal?: number) => void
+
+const GLOBAL_TERMINAL_LIMIT = 30
+const ORPHAN_DETECTION_INTERVAL = 30000 // 30 seconds
+const ORPHAN_TIMEOUT = 60000 // 1 minute without activity = potential orphan
 
 export class PtyManager {
   private terminals: Map<string, TerminalInstance> = new Map()
   private dataCallbacks: Set<DataCallback> = new Set()
   private exitCallbacks: Set<ExitCallback> = new Set()
   private idCounter = 0
+  private orphanDetectionTimer: NodeJS.Timeout | null = null
+
+  constructor() {
+    this.startOrphanDetection()
+  }
 
   private generateId(): string {
     this.idCounter += 1
     return `terminal-${Date.now()}-${this.idCounter}`
   }
 
-  spawn(options: SpawnOptions = {}): string {
+  spawn(options: SpawnOptions = {}): string | null {
+    // Enforce global terminal limit
+    if (this.terminals.size >= GLOBAL_TERMINAL_LIMIT) {
+      return null
+    }
+
     const id = this.generateId()
     const currentPlatform = getCurrentPlatform()
 
@@ -62,12 +78,16 @@ export class PtyManager {
       id,
       pty: ptyProcess,
       shell,
-      cwd
+      cwd,
+      lastActivity: Date.now(),
+      rendererRefs: new Set()
     }
 
     this.terminals.set(id, instance)
 
     ptyProcess.onData((data: string) => {
+      // Update activity timestamp
+      instance.lastActivity = Date.now()
       this.dataCallbacks.forEach((callback) => callback(id, data))
     })
 
@@ -84,6 +104,7 @@ export class PtyManager {
     if (!instance) {
       return false
     }
+    instance.lastActivity = Date.now()
     instance.pty.write(data)
     return true
   }
@@ -93,6 +114,7 @@ export class PtyManager {
     if (!instance) {
       return false
     }
+    instance.lastActivity = Date.now()
     instance.pty.resize(cols, rows)
     return true
   }
@@ -119,6 +141,32 @@ export class PtyManager {
     return Array.from(this.terminals.keys())
   }
 
+  // Register a renderer reference for a terminal (used to track orphans)
+  addRendererRef(terminalId: string, rendererId: string): void {
+    const instance = this.terminals.get(terminalId)
+    if (instance) {
+      instance.rendererRefs.add(rendererId)
+    }
+  }
+
+  // Remove a renderer reference for a terminal
+  removeRendererRef(terminalId: string, rendererId: string): void {
+    const instance = this.terminals.get(terminalId)
+    if (instance) {
+      instance.rendererRefs.delete(rendererId)
+    }
+  }
+
+  // Get current terminal count
+  getTerminalCount(): number {
+    return this.terminals.size
+  }
+
+  // Check if terminal limit is reached
+  isTerminalLimitReached(): boolean {
+    return this.terminals.size >= GLOBAL_TERMINAL_LIMIT
+  }
+
   onData(callback: DataCallback): () => void {
     this.dataCallbacks.add(callback)
     return () => this.dataCallbacks.delete(callback)
@@ -134,6 +182,43 @@ export class PtyManager {
     for (const id of ids) {
       this.kill(id)
     }
+  }
+
+  // Start orphan detection - periodically checks for terminals without renderer references
+  private startOrphanDetection(): void {
+    this.orphanDetectionTimer = setInterval(() => {
+      this.detectOrphans()
+    }, ORPHAN_DETECTION_INTERVAL)
+  }
+
+  // Detect and clean up orphaned terminals
+  private detectOrphans(): void {
+    const now = Date.now()
+    const orphans: string[] = []
+
+    Array.from(this.terminals.entries()).forEach(([id, instance]) => {
+      // A terminal is considered orphaned if:
+      // 1. It has no renderer references AND
+      // 2. It's been inactive for longer than the timeout
+      if (instance.rendererRefs.size === 0 && (now - instance.lastActivity) > ORPHAN_TIMEOUT) {
+        orphans.push(id)
+      }
+    })
+
+    // Clean up orphans
+    for (const id of orphans) {
+      console.log(`Cleaning up orphaned terminal: ${id}`)
+      this.kill(id)
+    }
+  }
+
+  // Clean up timer on destruction
+  destroy(): void {
+    if (this.orphanDetectionTimer) {
+      clearInterval(this.orphanDetectionTimer)
+      this.orphanDetectionTimer = null
+    }
+    this.killAll()
   }
 
   private mergeEnvironment(customEnv?: Record<string, string>): Record<string, string> {
