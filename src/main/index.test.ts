@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock instances for verification
 const mockWebContents = {
-  setWindowOpenHandler: vi.fn()
+  setWindowOpenHandler: vi.fn(),
+  on: vi.fn(),
+  send: vi.fn()
 }
 
 const mockWindowInstance = {
