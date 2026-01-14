@@ -118,7 +118,11 @@
     "appId": "com.termul-manager.app",
     "productName": "Termul Manager",
     "npmRebuild": false,
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "PecutAPP",
+      "repo": "termul"
+    },
     "directories": {
       "output": "dist"
     },

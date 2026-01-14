@@ -1,9 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react-swc'
-
-// Force legacy ESM shim (fileURLToPath) for better asar archive compatibility
-process.env.ELECTRON_MAJOR_VER = '29'
+import pkg from './package.json' assert { type: 'json' }
 
 export default defineConfig({
   main: {
@@ -19,6 +17,9 @@ export default defineConfig({
         '@': resolve('src/renderer')
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    define: {
+      'import.meta.env.PACKAGE_VERSION': JSON.stringify(pkg.version)
+    }
   }
 })

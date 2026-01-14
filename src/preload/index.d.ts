@@ -7,6 +7,7 @@ import type {
   SystemApi,
   KeyboardApi
 } from '@shared/types/ipc.types'
+import type { UpdaterApi } from '@shared/types/updater.types'
 
 declare global {
   interface Window {
@@ -18,6 +19,7 @@ declare global {
       dialog: DialogApi
       system: SystemApi
       keyboard: KeyboardApi
+      updater: UpdaterApi
     }
   }
 }

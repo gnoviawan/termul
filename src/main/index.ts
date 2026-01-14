@@ -6,10 +6,12 @@ import { registerDialogIpc } from './ipc/dialog.ipc'
 import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
+import { registerUpdaterIpc } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
 import type { WindowState } from '../shared/types/persistence.types'
 import { loadWindowState, trackWindowState } from './services/window-state'
+import { setupMenu, setMainWindow } from './menu'
 
 export function createWindow(windowState?: WindowState): BrowserWindow {
   const mainWindow = new BrowserWindow({
@@ -20,7 +22,6 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
     minWidth: 800,
     minHeight: 600,
     show: false,
-    autoHideMenuBar: true,
     backgroundColor: '#0f0f0f',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -29,6 +30,9 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
       nodeIntegration: false
     }
   })
+
+  // Set main window reference for menu
+  setMainWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     // Restore maximized state if saved
@@ -89,7 +93,10 @@ export function initializeApp(): void {
       optimizer.watchWindowShortcuts(window)
     })
 
-    // Register IPC handlers before creating window
+    // Setup application menu
+    setupMenu()
+
+    // Register IPC handlers
     registerTerminalIpc()
     registerDialogIpc()
     registerShellIpc()
@@ -98,12 +105,16 @@ export function initializeApp(): void {
 
     // Load persisted window state and create window
     const windowState = await loadWindowState()
-    createWindow(windowState)
+    const mainWindow = createWindow(windowState)
+
+    // Register updater IPC with main window
+    registerUpdaterIpc(mainWindow)
 
     app.on('activate', async function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         const state = await loadWindowState()
-        createWindow(state)
+        const mainWindow = createWindow(state)
+        registerUpdaterIpc(mainWindow)
       }
     })
   })

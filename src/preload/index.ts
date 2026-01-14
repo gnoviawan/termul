@@ -21,6 +21,16 @@ import type {
   KeyboardApi,
   KeyboardShortcutCallback
 } from '../shared/types/ipc.types'
+import type {
+  UpdateInfo,
+  UpdateState,
+  DownloadProgress,
+  UpdaterApi,
+  UpdateAvailableCallback,
+  UpdateDownloadedCallback,
+  DownloadProgressCallback,
+  UpdaterErrorCallback
+} from '../shared/types/updater.types'
 
 // Terminal API for renderer
 const terminalApi: TerminalApi = {
@@ -198,6 +208,68 @@ const keyboardApi: KeyboardApi = {
   }
 }
 
+// Updater API for renderer
+const updaterApi: UpdaterApi = {
+  checkForUpdates: (): Promise<IpcResult<UpdateInfo | null>> => {
+    return ipcRenderer.invoke('updater:checkForUpdates')
+  },
+  downloadUpdate: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:downloadUpdate')
+  },
+  installAndRestart: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:installAndRestart')
+  },
+  skipVersion: (version: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:skipVersion', version)
+  },
+  getState: (): Promise<IpcResult<UpdateState>> => {
+    return ipcRenderer.invoke('updater:getState')
+  },
+  setAutoUpdateEnabled: (enabled: boolean): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:setAutoUpdateEnabled', enabled)
+  },
+  getAutoUpdateEnabled: (): Promise<IpcResult<boolean>> => {
+    return ipcRenderer.invoke('updater:getAutoUpdateEnabled')
+  },
+  onUpdateAvailable: (callback: UpdateAvailableCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, info: UpdateInfo): void => {
+      callback(info)
+    }
+    ipcRenderer.on('updater:update-available', listener)
+    return () => {
+      ipcRenderer.off('updater:update-available', listener)
+    }
+  },
+  onUpdateDownloaded: (callback: UpdateDownloadedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, info: UpdateInfo): void => {
+      callback(info)
+    }
+    ipcRenderer.on('updater:update-downloaded', listener)
+    return () => {
+      ipcRenderer.off('updater:update-downloaded', listener)
+    }
+  },
+  onDownloadProgress: (callback: DownloadProgressCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, progress: DownloadProgress): void => {
+      callback(progress)
+    }
+    ipcRenderer.on('updater:download-progress', listener)
+    return () => {
+      ipcRenderer.off('updater:download-progress', listener)
+    }
+  },
+  onError: (callback: UpdaterErrorCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, error: { code: string; message: string }): void => {
+      // Note: IPC sends { code, message } but callback expects (error: string, code: UpdaterErrorCode)
+      callback(error.message, error.code as any)
+    }
+    ipcRenderer.on('updater:error', listener)
+    return () => {
+      ipcRenderer.off('updater:error', listener)
+    }
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -205,7 +277,8 @@ const api = {
   shell: shellApi,
   persistence: persistenceApi,
   system: systemApi,
-  keyboard: keyboardApi
+  keyboard: keyboardApi,
+  updater: updaterApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
