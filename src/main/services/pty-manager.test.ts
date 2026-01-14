@@ -5,7 +5,8 @@ const mockPtyProcess = {
   onExit: vi.fn(),
   write: vi.fn(),
   resize: vi.fn(),
-  kill: vi.fn()
+  kill: vi.fn(),
+  pid: 12345 // Mock PID for the kill() safeguard check
 }
 
 vi.mock('node-pty', () => ({

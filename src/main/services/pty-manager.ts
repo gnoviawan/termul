@@ -24,7 +24,7 @@ export type ExitCallback = (terminalId: string, exitCode: number, signal?: numbe
 
 const GLOBAL_TERMINAL_LIMIT = 30
 const ORPHAN_DETECTION_INTERVAL = 30000 // 30 seconds
-const ORPHAN_TIMEOUT = 60000 // 1 minute without activity = potential orphan
+const ORPHAN_TIMEOUT = 300000 // 5 minutes without activity = potential orphan (increased from 1 min to avoid killing idle sessions)
 
 // Options for PtyManager constructor
 export interface PtyManagerOptions {
@@ -134,7 +134,19 @@ export class PtyManager {
     if (!instance) {
       return false
     }
-    instance.pty.kill()
+    // Safeguard: Check if PTY process is still valid before killing
+    // The onExit handler removes terminals from the map, but we add an extra
+    // check here to avoid force-killing already dead processes
+    try {
+      // Check if the PTY's process is still alive by checking the pid
+      // If the process has already exited, pid will be undefined or the process won't exist
+      if (instance.pty.pid) {
+        instance.pty.kill()
+      }
+    } catch (error) {
+      // Process may have already exited, log and continue
+      console.warn(`Attempted to kill already exited terminal ${terminalId}:`, error)
+    }
     this.terminals.delete(terminalId)
     return true
   }
