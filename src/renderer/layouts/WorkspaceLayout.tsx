@@ -28,12 +28,17 @@ import {
 } from '@/stores/terminal-store'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
-import { useCommandHistoryLoader, useAddCommand, useCommandHistory } from '@/hooks/use-command-history'
 import {
-  useKeyboardShortcutsStore,
-  matchesShortcut
-} from '@/stores/keyboard-shortcuts-store'
-import { useTerminalFontSize, useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
+  useCommandHistoryLoader,
+  useAddCommand,
+  useCommandHistory
+} from '@/hooks/use-command-history'
+import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import {
+  useTerminalFontSize,
+  useDefaultShell,
+  useMaxTerminalsPerProject
+} from '@/stores/app-settings-store'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
@@ -78,8 +83,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const allTerminals = useAllTerminals()
   const activeTerminal = useActiveTerminal()
   const activeTerminalId = useActiveTerminalId()
-  const { selectTerminal, addTerminal, closeTerminal, renameTerminal, reorderTerminals, setTerminalPtyId } =
-    useTerminalActions()
+  const {
+    selectTerminal,
+    addTerminal,
+    closeTerminal,
+    renameTerminal,
+    reorderTerminals,
+    setTerminalPtyId
+  } = useTerminalActions()
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -121,6 +132,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Determine if we should show the terminal area (only on workspace dashboard)
   const isWorkspaceRoute = location.pathname === '/'
+
+  // Shared terminal cycling logic used by both keydown handler and IPC listener
+  const cycleTerminal = useCallback(
+    (direction: 'next' | 'prev') => {
+      if (!isWorkspaceRoute || terminals.length <= 1 || !activeTerminalId) return
+
+      const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
+      if (currentIndex === -1) return
+
+      const offset = direction === 'next' ? 1 : -1
+      const nextIndex = (currentIndex + offset + terminals.length) % terminals.length
+      selectTerminal(terminals[nextIndex].id)
+    },
+    [isWorkspaceRoute, terminals, activeTerminalId, selectTerminal]
+  )
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -181,25 +207,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       // Next terminal (Ctrl+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
-        if (!isWorkspaceRoute) return
         e.preventDefault()
-        if (terminals.length > 1 && activeTerminalId) {
-          const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
-          const nextIndex = (currentIndex + 1) % terminals.length
-          selectTerminal(terminals[nextIndex].id)
-        }
+        cycleTerminal('next')
         return
       }
 
       // Previous terminal (Ctrl+Shift+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
-        if (!isWorkspaceRoute) return
         e.preventDefault()
-        if (terminals.length > 1 && activeTerminalId) {
-          const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
-          const prevIndex = (currentIndex - 1 + terminals.length) % terminals.length
-          selectTerminal(terminals[prevIndex].id)
-        }
+        cycleTerminal('prev')
         return
       }
 
@@ -259,8 +275,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
     updateAppSetting,
     appDefaultShell,
     maxTerminals,
-    isWorkspaceRoute
+    isWorkspaceRoute,
+    cycleTerminal
   ])
+
+  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab)
+  // These are intercepted at the Electron level because Chromium reserves them
+  useEffect(() => {
+    return window.api.keyboard.onShortcut((shortcut) => {
+      switch (shortcut) {
+        case 'nextTerminal':
+          cycleTerminal('next')
+          break
+        case 'prevTerminal':
+          cycleTerminal('prev')
+          break
+      }
+    })
+  }, [cycleTerminal])
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {
@@ -284,13 +316,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [addTerminal, terminals.length, activeProjectId, activeProject, maxTerminals]
   )
 
-  const handleCloseTerminal = useCallback(
-    (id: string) => {
-      // Show confirmation dialog - terminal always has a running shell process
-      setCloseConfirmTerminalId(id)
-    },
-    []
-  )
+  const handleCloseTerminal = useCallback((id: string) => {
+    // Show confirmation dialog - terminal always has a running shell process
+    setCloseConfirmTerminalId(id)
+  }, [])
 
   const handleConfirmCloseTerminal = useCallback(() => {
     if (closeConfirmTerminalId) {
@@ -308,19 +337,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsTerminalSearchOpen(false)
   }, [])
 
-  const handleTerminalFindNext = useCallback(
-    (term: string) => {
-      return terminalSearchRef.current?.findNext(term) ?? false
-    },
-    []
-  )
+  const handleTerminalFindNext = useCallback((term: string) => {
+    return terminalSearchRef.current?.findNext(term) ?? false
+  }, [])
 
-  const handleTerminalFindPrevious = useCallback(
-    (term: string) => {
-      return terminalSearchRef.current?.findPrevious(term) ?? false
-    },
-    []
-  )
+  const handleTerminalFindPrevious = useCallback((term: string) => {
+    return terminalSearchRef.current?.findPrevious(term) ?? false
+  }, [])
 
   const handleTerminalClearDecorations = useCallback(() => {
     terminalSearchRef.current?.clearDecorations()
@@ -336,12 +359,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [addCommand, activeTerminal, activeProjectId]
   )
 
-  const handleInsertCommand = useCallback(
-    (command: string) => {
-      terminalSearchRef.current?.writeText(command)
-    },
-    []
-  )
+  const handleInsertCommand = useCallback((command: string) => {
+    terminalSearchRef.current?.writeText(command)
+  }, [])
 
   // Create stable callback factory for terminal spawn handling
   // Use ref to store handlers so they're stable across renders (prevents ConnectedTerminal re-mount)
@@ -447,9 +467,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   <div
                     key={terminal.id}
                     className={
-                      isVisible
-                        ? 'w-full h-full'
-                        : 'w-full h-full absolute inset-0 invisible'
+                      isVisible ? 'w-full h-full' : 'w-full h-full absolute inset-0 invisible'
                     }
                   >
                     <ConnectedTerminal
@@ -485,7 +503,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
               )}
 
               {/* Render child routes (Settings, Preferences, Snapshots) in an overlay */}
-              <div className={isWorkspaceRoute ? 'hidden' : 'w-full h-full absolute inset-0 bg-background'}>
+              <div
+                className={
+                  isWorkspaceRoute ? 'hidden' : 'w-full h-full absolute inset-0 bg-background'
+                }
+              >
                 <Outlet />
               </div>
 
@@ -540,7 +562,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <ConfirmDialog
         isOpen={closeConfirmTerminalId !== null}
         title="Close Terminal"
-        message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'}"? Any running processes will be terminated.`}
+        message={`Are you sure you want to close "${
+          terminalToClose?.name || 'this terminal'
+        }"? Any running processes will be terminated.`}
         confirmLabel="Close"
         cancelLabel="Cancel"
         variant="danger"

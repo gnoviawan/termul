@@ -46,6 +46,16 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Intercept Ctrl+Tab and Ctrl+Shift+Tab before Chromium handles them
+  // These are reserved browser shortcuts that don't reach JavaScript keydown handlers
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'Tab' || !input.control || input.alt) return
+
+    event.preventDefault()
+    const shortcut = input.shift ? 'prevTerminal' : 'nextTerminal'
+    mainWindow.webContents.send('keyboard:shortcut', shortcut)
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {

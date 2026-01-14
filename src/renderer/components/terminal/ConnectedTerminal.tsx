@@ -13,6 +13,10 @@ import {
   restoreScrollback
 } from '../../utils/terminal-registry'
 import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
+import {
+  useKeyboardShortcutsStore,
+  normalizeKeyEvent
+} from '@/stores/keyboard-shortcuts-store'
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -57,6 +61,12 @@ function ConnectedTerminalComponent({
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
+
+  // Get keyboard shortcuts to intercept app shortcuts before xterm handles them
+  const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
+  // Use ref to avoid stale closure in attachCustomKeyEventHandler
+  const shortcutsRef = useRef(shortcuts)
+  shortcutsRef.current = shortcuts
   const cleanupDataListenerRef = useRef<(() => void) | null>(null)
   const cleanupExitListenerRef = useRef<(() => void) | null>(null)
   // Use ref to track current PTY ID for listener callbacks to avoid stale closures
@@ -227,6 +237,26 @@ function ConnectedTerminalComponent({
     terminal.loadAddon(searchAddon)
 
     terminal.open(containerRef.current)
+
+    // Intercept keyboard shortcuts before xterm processes them
+    // Return false to prevent xterm from handling, true to let xterm handle
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type !== 'keydown') return true
+
+      const normalized = normalizeKeyEvent(event)
+      const shortcuts = shortcutsRef.current
+
+      // Check if this key matches any app shortcut
+      for (const shortcut of Object.values(shortcuts)) {
+        const activeKey = shortcut.customKey ?? shortcut.defaultKey
+        if (normalized === activeKey) {
+          // Let the event bubble up to the app's global handler
+          return false
+        }
+      }
+
+      return true
+    })
 
     try {
       const webglAddon = new WebglAddon()

@@ -108,3 +108,11 @@ export interface PersistenceApi {
 export interface SystemApi {
   getHomeDirectory: () => Promise<IpcResult<string>>
 }
+
+// Keyboard shortcut callback for main -> renderer communication
+export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal') => void
+
+// Keyboard API for renderer
+export interface KeyboardApi {
+  onShortcut: (callback: KeyboardShortcutCallback) => () => void
+}
