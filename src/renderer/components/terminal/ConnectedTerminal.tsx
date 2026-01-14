@@ -250,8 +250,7 @@ function ConnectedTerminalComponent({
       for (const shortcut of Object.values(shortcuts)) {
         const activeKey = shortcut.customKey ?? shortcut.defaultKey
         if (normalized === activeKey) {
-          // Stop propagation to prevent terminal from processing this event
-          event.stopPropagation()
+          // Don't call stopPropagation() - let event bubble to window handler
           // Return false to prevent xterm from handling the event
           return false
         }
@@ -406,9 +405,8 @@ function ConnectedTerminalComponent({
     handleTerminalData,
     handleResize,
     initialScrollback,
-    bufferSize,
-    fontFamily,
-    fontSize
+    bufferSize
+    // fontFamily and fontSize intentionally excluded - handled by separate effect below
   ])
 
   // Update terminal font settings when app settings change (without recreating terminal)
