@@ -1,6 +1,6 @@
 echo "🔍 Running TypeScript typecheck..."
-npm run typecheck
+bun run typecheck
 echo "✅ TypeScript check passed!"
 echo ""
 echo "🔍 Running ESLint on staged files..."
-npx lint-staged
+bunx lint-staged
