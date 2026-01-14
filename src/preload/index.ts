@@ -29,7 +29,8 @@ import type {
   UpdateAvailableCallback,
   UpdateDownloadedCallback,
   DownloadProgressCallback,
-  UpdaterErrorCallback
+  UpdaterErrorCallback,
+  UpdaterErrorCode
 } from '../shared/types/updater.types'
 
 // Terminal API for renderer
@@ -261,7 +262,7 @@ const updaterApi: UpdaterApi = {
   onError: (callback: UpdaterErrorCallback): (() => void) => {
     const listener = (_event: IpcRendererEvent, error: { code: string; message: string }): void => {
       // Note: IPC sends { code, message } but callback expects (error: string, code: UpdaterErrorCode)
-      callback(error.message, error.code as any)
+      callback(error.message, error.code as UpdaterErrorCode)
     }
     ipcRenderer.on('updater:error', listener)
     return () => {

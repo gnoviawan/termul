@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, Menu, MenuItemConstructorOptions, shell } from 'electron'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -105,7 +105,6 @@ export function buildMenu(): Menu {
       {
         label: 'Learn More',
         click: async () => {
-          const { shell } = require('electron')
           await shell.openExternal('https://github.com/PecutAPP/termul')
         }
       }
