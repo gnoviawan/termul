@@ -6,7 +6,8 @@ import {
   readFile,
   writeFile,
   cp,
-  rm
+  rm,
+  stat
 } from 'fs/promises'
 import type { IpcResult } from '../../shared/types/ipc.types'
 
@@ -81,17 +82,11 @@ function generateBackupId(): string {
 }
 
 /**
- * Get app version from package.json
+ * Get app version from Electron app
  */
 async function getAppVersion(): Promise<string> {
-  try {
-    const packagePath = join(process.cwd(), 'package.json')
-    const content = await readFile(packagePath, 'utf-8')
-    const pkg = JSON.parse(content)
-    return pkg.version || 'unknown'
-  } catch {
-    return 'unknown'
-  }
+  const version = app.getVersion()
+  return version || 'unknown'
 }
 
 /**
@@ -99,7 +94,6 @@ async function getAppVersion(): Promise<string> {
  */
 async function getDirectorySize(dirPath: string): Promise<number> {
   let totalSize = 0
-  let fileCount = 0
 
   async function traverse(currentPath: string): Promise<void> {
     try {
@@ -112,9 +106,8 @@ async function getDirectorySize(dirPath: string): Promise<number> {
           await traverse(fullPath)
         } else if (entry.isFile()) {
           try {
-            const stats = await readFile(fullPath, 'utf-8') // Just to check if readable
-            totalSize += Buffer.byteLength(stats, 'utf-8')
-            fileCount++
+            const stats = await stat(fullPath)
+            totalSize += stats.size
           } catch {
             // Skip files that can't be read
           }

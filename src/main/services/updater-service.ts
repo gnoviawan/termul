@@ -190,7 +190,20 @@ export class UpdaterService {
     this.isDownloading = true
     this.setState('downloading')
 
-    return { success: true, data: undefined }
+    try {
+      // Actually trigger the download with electron-updater
+      await autoUpdater.downloadUpdate()
+      return { success: true, data: undefined }
+    } catch (error) {
+      this.isDownloading = false
+      const errorMsg = error instanceof Error ? error.message : 'Failed to download update'
+      this.setError(errorMsg)
+      return {
+        success: false,
+        error: errorMsg,
+        code: UpdaterErrorCodes.DOWNLOAD_FAILED
+      }
+    }
   }
 
   /**
@@ -356,7 +369,8 @@ export class UpdaterService {
 
       const errorMsg = error instanceof Error ? error.message : String(error)
       this.setError(errorMsg)
-      this.sendEvent('error', errorMsg)
+      // Send error as object with code and message
+      this.sendEvent('error', { code: 'UPDATE_ERROR', message: errorMsg })
     })
   }
 

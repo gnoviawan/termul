@@ -39,3 +39,6 @@ nul
 # Auto Claude data directory
 .auto-claude/
 /.opencode
+
+# ADR documentation
+docs/adr/

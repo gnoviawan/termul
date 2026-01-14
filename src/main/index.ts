@@ -6,7 +6,7 @@ import { registerDialogIpc } from './ipc/dialog.ipc'
 import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
-import { registerUpdaterIpc } from './ipc/updater.ipc'
+import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
 import type { WindowState } from '../shared/types/persistence.types'
@@ -102,19 +102,20 @@ export function initializeApp(): void {
     registerShellIpc()
     registerPersistenceIpc()
     registerSystemIpc()
+    initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window
     const windowState = await loadWindowState()
     const mainWindow = createWindow(windowState)
 
-    // Register updater IPC with main window
-    registerUpdaterIpc(mainWindow)
+    // Set updater window reference
+    setUpdaterWindow(mainWindow)
 
     app.on('activate', async function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         const state = await loadWindowState()
         const mainWindow = createWindow(state)
-        registerUpdaterIpc(mainWindow)
+        setUpdaterWindow(mainWindow) // Only update window reference, don't re-register handlers
       }
     })
   })

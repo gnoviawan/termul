@@ -19,6 +19,7 @@ function createErrorResult(code: string, message: string): IpcResult<never> {
 }
 
 let updaterService: UpdaterService | null = null
+let handlersRegistered = false
 
 // Convert electron-updater UpdateInfo to shared UpdateInfo type
 function toSharedUpdateInfo(electronInfo: ElectronUpdateInfo | null): SharedUpdateInfo | null {
@@ -127,14 +128,9 @@ function toSharedUpdateState(internalState: ReturnType<UpdaterService['getState'
   return stateMapping[internalState.state] || stateMapping.idle
 }
 
-export function registerUpdaterIpc(window?: BrowserWindow): void {
-  if (!updaterService) {
-    updaterService = getUpdaterService()
-  }
-
-  if (window) {
-    updaterService.initialize(window)
-  }
+function registerHandlers(): void {
+  if (handlersRegistered) return
+  handlersRegistered = true
 
   // updater:checkForUpdates - Check for available updates
   ipcMain.handle('updater:checkForUpdates', async (): Promise<IpcResult<SharedUpdateInfo | null>> => {
@@ -277,6 +273,38 @@ export function registerUpdaterIpc(window?: BrowserWindow): void {
       )
     }
   })
+}
+
+/**
+ * Register IPC handlers (call once during app initialization)
+ */
+export function initRegisterUpdaterIpc(): void {
+  if (!updaterService) {
+    updaterService = getUpdaterService()
+  }
+  registerHandlers()
+}
+
+/**
+ * Set the main window reference for the updater service
+ * Call this when creating new windows (e.g., on macOS activate)
+ */
+export function setUpdaterWindow(window: BrowserWindow): void {
+  if (!updaterService) {
+    updaterService = getUpdaterService()
+  }
+  updaterService.initialize(window)
+}
+
+/**
+ * Register updater IPC (legacy function - calls both init and set window)
+ * @deprecated Use initRegisterUpdaterIpc() once and setUpdaterWindow() per window
+ */
+export function registerUpdaterIpc(window?: BrowserWindow): void {
+  initRegisterUpdaterIpc()
+  if (window) {
+    setUpdaterWindow(window)
+  }
 }
 
 export function unregisterUpdaterIpc(): void {

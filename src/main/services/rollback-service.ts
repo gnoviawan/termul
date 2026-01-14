@@ -79,6 +79,39 @@ async function getVersionDir(version: string): Promise<string> {
 }
 
 /**
+ * Calculate directory size recursively
+ */
+async function getDirectorySize(dirPath: string): Promise<number> {
+  let totalSize = 0
+
+  async function traverse(currentPath: string): Promise<void> {
+    try {
+      const entries = await readdir(currentPath, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const fullPath = join(currentPath, entry.name)
+
+        if (entry.isDirectory()) {
+          await traverse(fullPath)
+        } else if (entry.isFile()) {
+          try {
+            const stats = await stat(fullPath)
+            totalSize += stats.size
+          } catch {
+            // Skip files that can't be read
+          }
+        }
+      }
+    } catch {
+      // Skip directories that can't be read
+    }
+  }
+
+  await traverse(dirPath)
+  return totalSize
+}
+
+/**
  * Validate version string to prevent path traversal
  * Versions should be semver-like: v1.2.3 or just 1.2.3
  */
@@ -286,9 +319,8 @@ export async function keepPreviousVersion(
 
     await writeFile(markerPath, markerContent, 'utf-8')
 
-    // Get directory size
-    const stats = await stat(versionDir)
-    const size = stats.size
+    // Get directory size (recursively calculate total size of contents)
+    const size = await getDirectorySize(versionDir)
 
     // Update metadata
     const metadataResult = await readMetadata()

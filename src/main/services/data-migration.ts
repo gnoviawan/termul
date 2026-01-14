@@ -45,6 +45,11 @@ export interface MigrationResult {
   duration: number
 }
 
+// Migration run result (can include partial results on failure)
+export type MigrationRunResult = IpcResult<MigrationResult[]> & {
+  data?: MigrationResult[]
+}
+
 // Schema version info
 export interface SchemaVersion {
   current: string
@@ -81,9 +86,26 @@ export class DataMigrationService {
   private migrations: Map<string, MigrationEntry> = new Map()
   private history: MigrationRecord[] = []
   private isRunning = false
+  private initialized = false
 
   constructor() {
-    this.loadHistory()
+    // Load history asynchronously - initialization completes in the background
+    this.initialize().catch((error) => {
+      console.warn('Failed to initialize migration service:', error)
+    })
+  }
+
+  /**
+   * Initialize the service by loading migration history
+   * Called automatically in constructor, but can be called explicitly
+   * to ensure initialization is complete before operations.
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) {
+      return
+    }
+    await this.loadHistory()
+    this.initialized = true
   }
 
   /**
@@ -217,9 +239,9 @@ export class DataMigrationService {
    * Run all pending migrations
    * Migrates from current version to the latest registered version
    *
-   * @returns Result with array of migration results
+   * @returns Result with array of migration results (may include partial results on failure)
    */
-  async runMigrations(): Promise<IpcResult<MigrationResult[]>> {
+  async runMigrations(): Promise<MigrationRunResult> {
     if (this.isRunning) {
       return {
         success: false,
@@ -307,7 +329,6 @@ export class DataMigrationService {
             success: false,
             error: `Migration ${entry.version} failed: ${errorResult.error}`,
             code: MigrationErrorCodes.MIGRATION_FAILED,
-            // @ts-ignore - returning partial results
             data: results
           }
         }
@@ -395,7 +416,15 @@ export class DataMigrationService {
       previousVersion = sortedMigrations[versionIndex - 1].version
     }
 
-    await this.setSchemaVersion(previousVersion)
+    const setVersionResult = await this.setSchemaVersion(previousVersion)
+    if (!setVersionResult.success) {
+      const errorResult = setVersionResult as { success: false; error: string; code: string }
+      return {
+        success: false,
+        error: `Failed to revert schema version: ${errorResult.error}`,
+        code: MigrationErrorCodes.VERSION_WRITE_FAILED
+      }
+    }
 
     console.log(`Rolled back to version ${previousVersion}`)
 
@@ -502,19 +531,33 @@ export class DataMigrationService {
   /**
    * Compare two version strings
    * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+   *
+   * Handles numeric version parts (e.g., "1.2.3") and treats non-numeric
+   * parts (e.g., "beta", "rc") as less than numeric parts.
    */
   private compareVersions(v1: string, v2: string): number {
-    const parts1 = v1.split('.').map(Number)
-    const parts2 = v2.split('.').map(Number)
+    const parts1 = v1.split('.')
+    const parts2 = v2.split('.')
 
     const maxLength = Math.max(parts1.length, parts2.length)
 
     for (let i = 0; i < maxLength; i++) {
-      const part1 = parts1[i] ?? 0
-      const part2 = parts2[i] ?? 0
+      const part1 = parts1[i] ?? '0'
+      const part2 = parts2[i] ?? '0'
 
-      if (part1 < part2) return -1
-      if (part1 > part2) return 1
+      const num1 = parseInt(part1, 10)
+      const num2 = parseInt(part2, 10)
+
+      // If both parts are numeric, compare numerically
+      if (!isNaN(num1) && !isNaN(num2)) {
+        if (num1 < num2) return -1
+        if (num1 > num2) return 1
+      } else {
+        // If either part is non-numeric, compare as strings
+        // Non-numeric parts (e.g., "beta", "rc") are considered less than numeric
+        const strCmp = part1.localeCompare(part2)
+        if (strCmp !== 0) return strCmp
+      }
     }
 
     return 0
