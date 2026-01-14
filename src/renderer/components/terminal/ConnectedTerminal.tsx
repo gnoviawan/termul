@@ -250,7 +250,9 @@ function ConnectedTerminalComponent({
       for (const shortcut of Object.values(shortcuts)) {
         const activeKey = shortcut.customKey ?? shortcut.defaultKey
         if (normalized === activeKey) {
-          // Let the event bubble up to the app's global handler
+          // Stop propagation to prevent terminal from processing this event
+          event.stopPropagation()
+          // Return false to prevent xterm from handling the event
           return false
         }
       }

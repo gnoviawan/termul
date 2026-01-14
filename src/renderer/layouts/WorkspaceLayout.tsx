@@ -150,9 +150,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in an input/textarea/editable element
+      const target = e.target as HTMLElement
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]')
+      ) {
+        return
+      }
+
       // Command palette (Ctrl+K)
       if (matchesShortcut(e, getActiveKey('commandPalette'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsCommandPaletteOpen(true)
         return
       }
@@ -160,6 +172,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Command palette alt (Ctrl+Shift+P)
       if (matchesShortcut(e, getActiveKey('commandPaletteAlt'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsCommandPaletteOpen(true)
         return
       }
@@ -168,6 +181,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('terminalSearch'))) {
         if (isWorkspaceRoute) {
           e.preventDefault()
+          e.stopPropagation()
           if (activeTerminal) {
             setIsTerminalSearchOpen(true)
           }
@@ -178,6 +192,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Command history (Ctrl+R)
       if (matchesShortcut(e, getActiveKey('commandHistory'))) {
         e.preventDefault()
+        e.stopPropagation()
         if (activeProjectId) {
           setIsCommandHistoryOpen(true)
         }
@@ -187,6 +202,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // New project (Ctrl+N)
       if (matchesShortcut(e, getActiveKey('newProject'))) {
         e.preventDefault()
+        e.stopPropagation()
         setIsNewProjectModalOpen(true)
         return
       }
@@ -195,6 +211,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('newTerminal'))) {
         if (!isWorkspaceRoute) return
         e.preventDefault()
+        e.stopPropagation()
         if (terminals.length >= maxTerminals) {
           toast.error(`Maximum ${maxTerminals} terminals per project`)
           return
@@ -208,6 +225,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Next terminal (Ctrl+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
         e.preventDefault()
+        e.stopPropagation()
         cycleTerminal('next')
         return
       }
@@ -215,6 +233,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Previous terminal (Ctrl+Shift+Tab) - only on workspace routes
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
         e.preventDefault()
+        e.stopPropagation()
         cycleTerminal('prev')
         return
       }
@@ -222,6 +241,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Zoom in (Ctrl+=)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
+        e.stopPropagation()
         const newSize = Math.min(fontSize + 1, 24)
         if (newSize !== fontSize) {
           updateAppSetting('terminalFontSize', newSize)
