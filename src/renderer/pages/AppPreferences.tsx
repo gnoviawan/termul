@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { RotateCcw, Keyboard } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import {
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -9,7 +8,6 @@ import {
   useDefaultProjectColor,
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
-import { useProjects, useActiveProjectId, useProjectActions } from '@/stores/project-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
 import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS } from '@/types/settings'
 import type { ShellInfo } from '@shared/types/ipc.types'
@@ -18,7 +16,6 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
-import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import {
   useUpdateShortcut,
@@ -27,25 +24,12 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 
 export default function AppPreferences(): React.JSX.Element {
-  const navigate = useNavigate()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
-
-  // Project store hooks for ProjectSidebar
-  const projects = useProjects()
-  const activeProjectId = useActiveProjectId()
-  const {
-    selectProject,
-    updateProject,
-    deleteProject,
-    archiveProject,
-    restoreProject,
-    reorderProjects
-  } = useProjectActions()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -111,19 +95,7 @@ export default function AppPreferences(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-background">
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={selectProject}
-        onNewProject={() => navigate('/')}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-
+    <>
       <main className="flex-1 flex flex-col min-w-0 h-full relative">
         {/* Header */}
         <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
@@ -414,6 +386,6 @@ export default function AppPreferences(): React.JSX.Element {
         onConfirm={handleResetShortcutsConfirm}
         onCancel={() => setIsResetShortcutsDialogOpen(false)}
       />
-    </div>
+    </>
   )
 }

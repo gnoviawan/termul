@@ -5,7 +5,8 @@ const mockPtyProcess = {
   onExit: vi.fn(),
   write: vi.fn(),
   resize: vi.fn(),
-  kill: vi.fn()
+  kill: vi.fn(),
+  pid: 12345 // Mock PID for the kill() safeguard check
 }
 
 vi.mock('node-pty', () => ({
@@ -36,6 +37,13 @@ vi.mock('./shell-detect', () => ({
 import * as pty from 'node-pty'
 import { PtyManager, getDefaultPtyManager, resetDefaultPtyManager } from './pty-manager'
 
+// Helper to spawn and assert success
+function spawnHelper(manager: PtyManager, options?: Parameters<PtyManager['spawn']>[0]): string {
+  const id = manager.spawn(options)
+  expect(id).not.toBeNull()
+  return id!
+}
+
 describe('PtyManager', () => {
   let manager: PtyManager
 
@@ -43,16 +51,17 @@ describe('PtyManager', () => {
     vi.clearAllMocks()
     mockPtyProcess.onData.mockImplementation(() => {})
     mockPtyProcess.onExit.mockImplementation(() => {})
-    manager = new PtyManager()
+    // Disable orphan detection in tests to avoid timer leaks
+    manager = new PtyManager({ disableOrphanDetection: true })
   })
 
   afterEach(() => {
-    manager.killAll()
+    manager.destroy()
   })
 
   describe('spawn', () => {
     it('should spawn a new PTY instance and return terminal ID', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       expect(id).toMatch(/^terminal-\d+-\d+$/)
       expect(pty.spawn).toHaveBeenCalledWith(
@@ -68,7 +77,7 @@ describe('PtyManager', () => {
     })
 
     it('should use custom shell when provided', () => {
-      manager.spawn({ shell: 'cmd.exe' })
+      spawnHelper(manager, { shell: 'cmd.exe' })
 
       expect(pty.spawn).toHaveBeenCalledWith(
         'cmd.exe',
@@ -80,7 +89,7 @@ describe('PtyManager', () => {
     })
 
     it('should use custom cwd when provided', () => {
-      manager.spawn({ cwd: 'C:\\Projects' })
+      spawnHelper(manager, { cwd: 'C:\\Projects' })
 
       expect(pty.spawn).toHaveBeenCalledWith(
         'powershell.exe',
@@ -92,7 +101,7 @@ describe('PtyManager', () => {
     })
 
     it('should use custom dimensions when provided', () => {
-      manager.spawn({ cols: 120, rows: 40 })
+      spawnHelper(manager, { cols: 120, rows: 40 })
 
       expect(pty.spawn).toHaveBeenCalledWith(
         'powershell.exe',
@@ -105,7 +114,7 @@ describe('PtyManager', () => {
     })
 
     it('should merge custom environment variables', () => {
-      manager.spawn({ env: { CUSTOM_VAR: 'value' } })
+      spawnHelper(manager, { env: { CUSTOM_VAR: 'value' } })
 
       expect(pty.spawn).toHaveBeenCalledWith(
         'powershell.exe',
@@ -119,9 +128,9 @@ describe('PtyManager', () => {
     })
 
     it('should generate unique IDs for each terminal', () => {
-      const id1 = manager.spawn()
-      const id2 = manager.spawn()
-      const id3 = manager.spawn()
+      const id1 = spawnHelper(manager)
+      const id2 = spawnHelper(manager)
+      const id3 = spawnHelper(manager)
 
       expect(id1).not.toBe(id2)
       expect(id2).not.toBe(id3)
@@ -131,7 +140,7 @@ describe('PtyManager', () => {
 
   describe('write', () => {
     it('should write data to the PTY process', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       const result = manager.write(id, 'test input')
 
@@ -147,7 +156,7 @@ describe('PtyManager', () => {
     })
 
     it('should forward Ctrl+C signal (0x03)', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       manager.write(id, '\x03')
 
@@ -155,7 +164,7 @@ describe('PtyManager', () => {
     })
 
     it('should forward Ctrl+D signal (0x04)', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       manager.write(id, '\x04')
 
@@ -163,7 +172,7 @@ describe('PtyManager', () => {
     })
 
     it('should forward Ctrl+Z signal (0x1a)', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       manager.write(id, '\x1a')
 
@@ -173,7 +182,7 @@ describe('PtyManager', () => {
 
   describe('resize', () => {
     it('should resize the PTY process', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       const result = manager.resize(id, 100, 50)
 
@@ -191,7 +200,7 @@ describe('PtyManager', () => {
 
   describe('kill', () => {
     it('should kill the PTY process', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       const result = manager.kill(id)
 
@@ -200,7 +209,7 @@ describe('PtyManager', () => {
     })
 
     it('should remove terminal from active terminals', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       manager.kill(id)
 
@@ -216,7 +225,7 @@ describe('PtyManager', () => {
 
   describe('get', () => {
     it('should return terminal instance when exists', () => {
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       const instance = manager.get(id)
 
@@ -235,8 +244,8 @@ describe('PtyManager', () => {
 
   describe('getAll', () => {
     it('should return all active terminal instances', () => {
-      const id1 = manager.spawn()
-      const id2 = manager.spawn()
+      const id1 = spawnHelper(manager)
+      const id2 = spawnHelper(manager)
 
       const all = manager.getAll()
 
@@ -254,8 +263,8 @@ describe('PtyManager', () => {
 
   describe('getAllIds', () => {
     it('should return all active terminal IDs', () => {
-      const id1 = manager.spawn()
-      const id2 = manager.spawn()
+      const id1 = spawnHelper(manager)
+      const id2 = spawnHelper(manager)
 
       const ids = manager.getAllIds()
 
@@ -275,7 +284,7 @@ describe('PtyManager', () => {
       })
 
       manager.onData(callback)
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       if (capturedDataHandler) {
         ;(capturedDataHandler as (data: string) => void)('test output')
@@ -317,7 +326,7 @@ describe('PtyManager', () => {
       )
 
       manager.onExit(callback)
-      const id = manager.spawn()
+      const id = spawnHelper(manager)
 
       if (capturedExitHandler) {
         ;(capturedExitHandler as (data: { exitCode: number; signal?: number }) => void)({
@@ -345,8 +354,8 @@ describe('PtyManager', () => {
 
   describe('multiple simultaneous terminals', () => {
     it('should handle multiple terminals independently', () => {
-      const id1 = manager.spawn({ shell: 'cmd.exe' })
-      const id2 = manager.spawn({ shell: 'powershell.exe' })
+      const id1 = spawnHelper(manager, { shell: 'cmd.exe' })
+      const id2 = spawnHelper(manager, { shell: 'powershell.exe' })
 
       expect(manager.getAll()).toHaveLength(2)
 
@@ -398,7 +407,7 @@ describe('resetDefaultPtyManager', () => {
 
   it('should reset the default manager', () => {
     const manager1 = getDefaultPtyManager()
-    manager1.spawn()
+    spawnHelper(manager1)
 
     resetDefaultPtyManager()
 
