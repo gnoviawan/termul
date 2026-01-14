@@ -252,6 +252,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Zoom out (Ctrl+-)
       if (matchesShortcut(e, getActiveKey('zoomOut'))) {
         e.preventDefault()
+        e.stopPropagation()
         const newSize = Math.max(fontSize - 1, 10)
         if (newSize !== fontSize) {
           updateAppSetting('terminalFontSize', newSize)
@@ -262,6 +263,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Zoom reset (Ctrl+0)
       if (matchesShortcut(e, getActiveKey('zoomReset'))) {
         e.preventDefault()
+        e.stopPropagation()
         if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
           updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
         }
