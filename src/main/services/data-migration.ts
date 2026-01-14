@@ -87,20 +87,29 @@ export class DataMigrationService {
   private history: MigrationRecord[] = []
   private isRunning = false
   private initialized = false
+  private initPromise: Promise<void> | null = null
 
   constructor() {
-    // Load history asynchronously - initialization completes in the background
-    this.initialize().catch((error) => {
-      console.warn('Failed to initialize migration service:', error)
-    })
+    // Don't call async initialization in constructor
+    // Users should call ensureInitialized() before operations
+  }
+
+  /**
+   * Ensure the service is initialized before operations
+   * Call this before any operation that depends on history being loaded
+   */
+  async ensureInitialized(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.initialize()
+    }
+    await this.initPromise
   }
 
   /**
    * Initialize the service by loading migration history
-   * Called automatically in constructor, but can be called explicitly
-   * to ensure initialization is complete before operations.
+   * Called automatically by ensureInitialized()
    */
-  async initialize(): Promise<void> {
+  private async initialize(): Promise<void> {
     if (this.initialized) {
       return
     }
@@ -242,6 +251,9 @@ export class DataMigrationService {
    * @returns Result with array of migration results (may include partial results on failure)
    */
   async runMigrations(): Promise<MigrationRunResult> {
+    // Ensure history is loaded
+    await this.ensureInitialized()
+
     if (this.isRunning) {
       return {
         success: false,
@@ -329,7 +341,7 @@ export class DataMigrationService {
             success: false,
             error: `Migration ${entry.version} failed: ${errorResult.error}`,
             code: MigrationErrorCodes.MIGRATION_FAILED,
-            data: results
+            partialResults: results
           }
         }
 
@@ -436,6 +448,8 @@ export class DataMigrationService {
    */
   async getMigrationHistory(): Promise<IpcResult<MigrationRecord[]>> {
     try {
+      // Ensure history is loaded
+      await this.ensureInitialized()
       // Reload history from storage to get latest
       await this.loadHistory()
       return { success: true, data: [...this.history] }
