@@ -187,7 +187,7 @@ const keyboardApi: KeyboardApi = {
   onShortcut: (callback: KeyboardShortcutCallback): (() => void) => {
     const listener = (
       _event: IpcRendererEvent,
-      shortcut: 'nextTerminal' | 'prevTerminal'
+      shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset'
     ): void => {
       callback(shortcut)
     }

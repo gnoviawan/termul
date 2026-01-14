@@ -110,7 +110,7 @@ export interface SystemApi {
 }
 
 // Keyboard shortcut callback for main -> renderer communication
-export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal') => void
+export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset') => void
 
 // Keyboard API for renderer
 export interface KeyboardApi {
