@@ -6,10 +6,12 @@ import {
   useTerminalBufferSize,
   useDefaultShell,
   useDefaultProjectColor,
-  useMaxTerminalsPerProject
+  useMaxTerminalsPerProject,
+  useOrphanDetectionEnabled,
+  useOrphanDetectionTimeout
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
-import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS } from '@/types/settings'
+import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -32,6 +34,8 @@ export default function AppPreferences(): React.JSX.Element {
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
+  const orphanDetectionEnabled = useOrphanDetectionEnabled()
+  const orphanDetectionTimeout = useOrphanDetectionTimeout()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -88,6 +92,26 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleMaxTerminalsChange = (value: number) => {
     updateSetting('maxTerminalsPerProject', value)
+  }
+
+  const handleOrphanDetectionToggle = async (enabled: boolean) => {
+    await updateSetting('orphanDetectionEnabled', enabled)
+    // Apply to PtyManager immediately
+    try {
+      await window.api.terminal.updateOrphanDetection(enabled, orphanDetectionTimeout)
+    } catch (error) {
+      console.error('Failed to update orphan detection:', error)
+    }
+  }
+
+  const handleOrphanTimeoutChange = async (value: number | null) => {
+    await updateSetting('orphanDetectionTimeout', value)
+    // Apply to PtyManager immediately
+    try {
+      await window.api.terminal.updateOrphanDetection(orphanDetectionEnabled, value)
+    } catch (error) {
+      console.error('Failed to update orphan detection timeout:', error)
+    }
   }
 
   const handleResetConfirm = async () => {
@@ -278,6 +302,70 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     This can be overridden per-project in project settings.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Terminal Behavior Section */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Configure how inactive terminals are managed.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-6">
+                {/* Orphan Detection Toggle */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Orphan Detection
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Enable orphan detection</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Automatically clean up terminals that have been inactive
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        orphanDetectionEnabled ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Timeout Dropdown */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Timeout Before Cleanup
+                  </label>
+                  <select
+                    value={orphanDetectionTimeout ?? 600000}
+                    onChange={(e) => handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value) : null)}
+                    disabled={!orphanDetectionEnabled}
+                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Terminals inactive for this duration will be cleaned up (only if not displayed).
                   </p>
                 </div>
               </div>
