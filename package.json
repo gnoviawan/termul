@@ -1,6 +1,6 @@
 {
   "name": "termul-manager",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "main": "./out/main/index.js",
   "author": {

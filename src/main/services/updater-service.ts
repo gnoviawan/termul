@@ -1,8 +1,31 @@
 import { BrowserWindow, app } from 'electron'
-import { autoUpdater, UpdateInfo } from 'electron-updater'
-import type { ProgressInfo } from 'electron-updater'
+import { createRequire } from 'node:module'
+import type { ProgressInfo, UpdateInfo as ElectronUpdateInfo } from 'electron-updater'
 import type { IpcResult } from '../../shared/types/ipc.types'
 import { read, write } from './persistence-service'
+
+// Lazy load electron-updater with error handling
+// This prevents app crash if electron-updater fails to load
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let autoUpdater: any = null
+let electronUpdaterLoaded = false
+
+function getAutoUpdater() {
+  if (!electronUpdaterLoaded) {
+    try {
+      const require = createRequire(import.meta.url)
+      const electronUpdater = require('electron-updater')
+      autoUpdater = electronUpdater.autoUpdater
+      electronUpdaterLoaded = true
+      console.log('electron-updater loaded successfully')
+    } catch (error) {
+      console.error('Failed to load electron-updater:', error)
+      autoUpdater = null
+      electronUpdaterLoaded = true
+    }
+  }
+  return autoUpdater
+}
 
 // Updater error codes
 export const UpdaterErrorCodes = {
@@ -42,7 +65,7 @@ export interface DownloadProgress {
 // Full updater state
 export interface UpdaterState {
   state: UpdateState
-  updateInfo: UpdateInfo | null
+  updateInfo: ElectronUpdateInfo | null
   downloadProgress: DownloadProgress | null
   error: string | null
   skippedVersion: string | null
@@ -76,7 +99,7 @@ let updaterServiceInstance: UpdaterService | null = null
 export class UpdaterService {
   private mainWindow: BrowserWindow | null = null
   private currentState: UpdateState = 'idle'
-  private currentUpdateInfo: UpdateInfo | null = null
+  private currentUpdateInfo: ElectronUpdateInfo | null = null
   private currentDownloadProgress: DownloadProgress | null = null
   private currentError: string | null = null
   private skippedVersion: string | null = null
@@ -128,7 +151,7 @@ export class UpdaterService {
   /**
    * Check for updates manually
    */
-  async checkForUpdates(): Promise<IpcResult<UpdateInfo>> {
+  async checkForUpdates(): Promise<IpcResult<ElectronUpdateInfo>> {
     if (!this.isInitialized) {
       return {
         success: false,
@@ -195,7 +218,11 @@ export class UpdaterService {
 
     try {
       // Actually trigger the download with electron-updater
-      await autoUpdater.downloadUpdate()
+      const updater = getAutoUpdater()
+      if (!updater) {
+        throw new Error('electron-updater not available')
+      }
+      await updater.downloadUpdate()
       return { success: true, data: undefined }
     } catch (error) {
       this.isDownloading = false
@@ -236,7 +263,11 @@ export class UpdaterService {
       await this.performBackup()
 
       // Set autoInstallOnAppQuit to trigger install on restart
-      autoUpdater.autoInstallOnAppQuit = true
+      const updater = getAutoUpdater()
+      if (!updater) {
+        throw new Error('electron-updater not available')
+      }
+      updater.autoInstallOnAppQuit = true
 
       // Restart the app to apply update
       app.relaunch()
@@ -300,21 +331,27 @@ export class UpdaterService {
    * Setup electron-updater configuration and event handlers
    */
   private setupAutoUpdater(): void {
+    const updater = getAutoUpdater()
+    if (!updater) {
+      console.warn('electron-updater not available, auto-update will not work')
+      return
+    }
+
     // Configure for GitHub Releases
-    autoUpdater.setFeedURL({
+    updater.setFeedURL({
       provider: 'github',
       owner: 'PecutAPP',
       repo: 'termul'
     })
 
     // Disable auto-download (we'll handle it manually)
-    autoUpdater.autoDownload = false
+    updater.autoDownload = false
 
     // Disable auto-install on quit (we'll control when to install)
-    autoUpdater.autoInstallOnAppQuit = false
+    updater.autoInstallOnAppQuit = false
 
     // Event handlers
-    autoUpdater.on('update-available', (info: UpdateInfo) => {
+    updater.on('update-available', (info: ElectronUpdateInfo) => {
       console.log('Update available:', info.version)
       this.currentUpdateInfo = info
 
@@ -336,12 +373,12 @@ export class UpdaterService {
       this.sendEvent('update-available', info)
     })
 
-    autoUpdater.on('update-not-available', (info: UpdateInfo) => {
+    updater.on('update-not-available', (info: ElectronUpdateInfo) => {
       console.log('Update not available, current version:', info.version)
       this.setState('idle')
     })
 
-    autoUpdater.on('download-progress', (progress: ProgressInfo) => {
+    updater.on('download-progress', (progress: ProgressInfo) => {
       this.currentDownloadProgress = {
         bytesPerSecond: progress.bytesPerSecond,
         percent: progress.percent,
@@ -351,7 +388,7 @@ export class UpdaterService {
       this.sendEvent('download-progress', this.currentDownloadProgress)
     })
 
-    autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+    updater.on('update-downloaded', (info: ElectronUpdateInfo) => {
       console.log('Update downloaded:', info.version)
       this.isDownloading = false
       this.currentUpdateInfo = info
@@ -359,7 +396,7 @@ export class UpdaterService {
       this.sendEvent('update-downloaded', info)
     })
 
-    autoUpdater.on('error', (error: Error) => {
+    updater.on('error', (error: Error) => {
       console.error('Updater error:', error)
       this.isDownloading = false
 
@@ -380,11 +417,16 @@ export class UpdaterService {
   /**
    * Check for updates with retry logic
    */
-  private async checkWithRetry(): Promise<UpdateInfo> {
+  private async checkWithRetry(): Promise<ElectronUpdateInfo> {
+    const updater = getAutoUpdater()
+    if (!updater) {
+      throw new Error('electron-updater not available')
+    }
+
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
       try {
         this.retryCount = attempt
-        const result = await autoUpdater.checkForUpdates()
+        const result = await updater.checkForUpdates()
 
         if (!result) {
           throw new Error('No update information available')
@@ -459,7 +501,7 @@ export class UpdaterService {
   /**
    * Check if version is compatible with current version
    */
-  private isVersionCompatible(updateInfo: UpdateInfo): boolean {
+  private isVersionCompatible(updateInfo: ElectronUpdateInfo): boolean {
     // Basic compatibility check - can be enhanced
     // For now, just check if version is present
     return Boolean(updateInfo.version)
