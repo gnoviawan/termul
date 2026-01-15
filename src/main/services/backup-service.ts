@@ -397,26 +397,32 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error'
 
-    // Attempt rollback: restore old userData if it exists
+    // Attempt rollback: detect actual state and restore original data
     if (oldUserDataPath && tempRestorePath) {
       try {
         const userDataPath = getUserDataDir()
-        // If temp was already renamed to userData, try to restore old
-        if (tempRestorePath !== userDataPath) {
-          await rename(tempRestorePath, userDataPath)
+
+        // Check what actually exists to determine rollback strategy
+        const oldExists = await stat(oldUserDataPath).then(() => true).catch(() => false)
+        const tempExists = await stat(tempRestorePath).then(() => true).catch(() => false)
+        const currentExists = await stat(userDataPath).then(() => true).catch(() => false)
+
+        // If old userData backup exists, restore it
+        if (oldExists) {
+          // If current userData exists (possibly temp), remove it first
+          if (currentExists) {
+            await rm(userDataPath, { recursive: true, force: true })
+          }
+          // Rename old userData back to userDataPath
+          await rename(oldUserDataPath, userDataPath)
         }
-        await rm(oldUserDataPath, { recursive: true, force: true })
+
+        // Clean up temp restore path if it still exists
+        if (tempExists) {
+          await rm(tempRestorePath, { recursive: true, force: true })
+        }
       } catch (rollbackError) {
         console.error('Failed to rollback restore operation:', rollbackError)
-      }
-    }
-
-    // Clean up temp directory if it still exists
-    if (tempRestorePath) {
-      try {
-        await rm(tempRestorePath, { recursive: true, force: true })
-      } catch {
-        // Ignore cleanup errors
       }
     }
 

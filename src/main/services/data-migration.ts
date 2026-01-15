@@ -46,9 +46,9 @@ export interface MigrationResult {
 }
 
 // Migration run result (can include partial results on failure)
-export type MigrationRunResult = IpcResult<MigrationResult[]> & {
-  data?: MigrationResult[]
-}
+export type MigrationRunResult =
+  | { success: true; data: MigrationResult[] }
+  | { success: false; error: string; code: string; partialResults?: MigrationResult[] }
 
 // Schema version info
 export interface SchemaVersion {
