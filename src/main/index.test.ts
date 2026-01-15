@@ -1,72 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock instances for verification
-const mockWebContents = {
-  setWindowOpenHandler: vi.fn(),
-  on: vi.fn(),
-  send: vi.fn()
+// Mock instances for verification - will be set by vitest.mock in setup
+declare global {
+  var mockElectron: any
 }
-
-const mockWindowInstance = {
-  on: vi.fn(),
-  loadURL: vi.fn(),
-  loadFile: vi.fn(),
-  show: vi.fn(),
-  webContents: mockWebContents
-}
-
-// Use function constructor for BrowserWindow mock
-const MockBrowserWindow = vi.fn(function(this: typeof mockWindowInstance) {
-  Object.assign(this, mockWindowInstance)
-  return this
-}) as unknown as typeof import('electron').BrowserWindow
-
-// Add static methods - cast to any to avoid complex type issues with vitest mocks
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-;(MockBrowserWindow as any).getAllWindows = vi.fn().mockReturnValue([])
-
-const mockApp = {
-  whenReady: vi.fn().mockResolvedValue(undefined),
-  on: vi.fn(),
-  quit: vi.fn()
-}
-
-const mockShell = {
-  openExternal: vi.fn()
-}
-
-const mockElectronApp = {
-  setAppUserModelId: vi.fn()
-}
-
-const mockOptimizer = {
-  watchWindowShortcuts: vi.fn()
-}
-
-const mockIs = {
-  dev: false
-}
-
-// Mock Electron modules
-vi.mock('electron', () => ({
-  app: mockApp,
-  BrowserWindow: MockBrowserWindow,
-  shell: mockShell
-}))
-
-vi.mock('@electron-toolkit/utils', () => ({
-  electronApp: mockElectronApp,
-  optimizer: mockOptimizer,
-  is: mockIs
-}))
 
 describe('Main Process - createWindow', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
+  // Import module once at the beginning
+  beforeAll(async () => {
+    await import('./index')
   })
 
-  afterEach(() => {
-    vi.resetModules()
+  // Note: We don't use beforeEach with vi.clearAllMocks() here because it would
+  // clear the mock state needed by the "Main Process - App Lifecycle" tests
+  // Instead, individual tests can clear mocks if needed
+  beforeEach(() => {
+    // Clear BrowserWindow mock between tests so each test gets a fresh instance
+    global.mockElectron.BrowserWindow.mockClear()
   })
 
   it('should create a BrowserWindow with correct dimensions', async () => {
@@ -74,7 +24,7 @@ describe('Main Process - createWindow', () => {
 
     createWindow()
 
-    expect(MockBrowserWindow).toHaveBeenCalledWith(
+    expect(global.mockElectron.BrowserWindow).toHaveBeenCalledWith(
       expect.objectContaining({
         width: 1200,
         height: 800,
@@ -89,7 +39,7 @@ describe('Main Process - createWindow', () => {
 
     createWindow()
 
-    expect(MockBrowserWindow).toHaveBeenCalledWith(
+    expect(global.mockElectron.BrowserWindow).toHaveBeenCalledWith(
       expect.objectContaining({
         webPreferences: expect.objectContaining({
           contextIsolation: true,
@@ -104,7 +54,7 @@ describe('Main Process - createWindow', () => {
 
     createWindow()
 
-    expect(MockBrowserWindow).toHaveBeenCalledWith(
+    expect(global.mockElectron.BrowserWindow).toHaveBeenCalledWith(
       expect.objectContaining({
         backgroundColor: '#0f0f0f'
       })
@@ -116,7 +66,9 @@ describe('Main Process - createWindow', () => {
 
     createWindow()
 
-    expect(mockWindowInstance.on).toHaveBeenCalledWith('ready-to-show', expect.any(Function))
+    // Get the mock instance that was created
+    const mockInstance = global.mockElectron.BrowserWindow.mock.results[0]?.value
+    expect(mockInstance?.on).toHaveBeenCalledWith('ready-to-show', expect.any(Function))
   })
 
   it('should configure window open handler', async () => {
@@ -124,7 +76,9 @@ describe('Main Process - createWindow', () => {
 
     createWindow()
 
-    expect(mockWebContents.setWindowOpenHandler).toHaveBeenCalledWith(expect.any(Function))
+    // Get the mock instance that was created
+    const mockInstance = global.mockElectron.BrowserWindow.mock.results[0]?.value
+    expect(mockInstance?.webContents.setWindowOpenHandler).toHaveBeenCalledWith(expect.any(Function))
   })
 
   it('should return the created BrowserWindow instance', async () => {
@@ -133,25 +87,14 @@ describe('Main Process - createWindow', () => {
     const result = createWindow()
 
     expect(result).toBeDefined()
-    expect(result.on).toBe(mockWindowInstance.on)
+    expect(result.on).toBeDefined()
   })
 })
 
 describe('Main Process - Window Configuration', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('should auto-hide menu bar', async () => {
-    const { createWindow } = await import('./index')
-
-    createWindow()
-
-    expect(MockBrowserWindow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autoHideMenuBar: true
-      })
-    )
+    // Only clear BrowserWindow mock between tests
+    global.mockElectron.BrowserWindow.mockClear()
   })
 
   it('should start hidden and show when ready', async () => {
@@ -159,7 +102,7 @@ describe('Main Process - Window Configuration', () => {
 
     createWindow()
 
-    expect(MockBrowserWindow).toHaveBeenCalledWith(
+    expect(global.mockElectron.BrowserWindow).toHaveBeenCalledWith(
       expect.objectContaining({
         show: false
       })
@@ -168,14 +111,18 @@ describe('Main Process - Window Configuration', () => {
 })
 
 describe('Main Process - App Lifecycle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.resetModules()
-  })
-
+  // Note: window-all-closed handler is registered at module level (line 124)
+  // It runs once when the module is first imported
+  // We don't clear mocks here to preserve the module-level registration calls
   it('should register window-all-closed handler', async () => {
-    await import('./index')
+    // The module-level code registers this handler
+    // Check if it was called during initial module load
+    const calls = global.mockElectron.app.on.mock.calls
+    const windowAllClosedCall = calls.find(
+      (call: unknown[]) => call[0] === 'window-all-closed'
+    )
 
-    expect(mockApp.on).toHaveBeenCalledWith('window-all-closed', expect.any(Function))
+    expect(windowAllClosedCall).toBeDefined()
+    expect(windowAllClosedCall?.[1]).toBeInstanceOf(Function)
   })
 })

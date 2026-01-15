@@ -1,77 +1,76 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock context bridge
-const mockExposeInMainWorld = vi.fn()
+// Create mock objects
+const mockContextBridge = {
+  exposeInMainWorld: vi.fn()
+}
 
+const mockIpcRenderer = {
+  on: vi.fn(),
+  removeListener: vi.fn(),
+  send: vi.fn(),
+  invoke: vi.fn()
+}
+
+// Mock electron before importing the actual module
 vi.mock('electron', () => ({
-  contextBridge: {
-    exposeInMainWorld: mockExposeInMainWorld
+  contextBridge: mockContextBridge,
+  ipcRenderer: mockIpcRenderer,
+  default: {
+    contextBridge: mockContextBridge,
+    ipcRenderer: mockIpcRenderer
   }
 }))
 
+// Mock @electron-toolkit/preload
 vi.mock('@electron-toolkit/preload', () => ({
-  electronAPI: { ipcRenderer: { on: vi.fn(), send: vi.fn() } }
+  electronAPI: {
+    platforms: {
+      isWindows: true,
+      isMac: false,
+      isLinux: false
+    }
+  }
 }))
 
+// Set up context isolation before all tests
+beforeAll(() => {
+  Object.defineProperty(process, 'contextIsolated', {
+    value: true,
+    writable: true
+  })
+})
+
+// Import the preload module once before running tests
+beforeAll(async () => {
+  await import('./index')
+})
+
 describe('Preload Script', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    // Simulate context isolation enabled
-    Object.defineProperty(process, 'contextIsolated', {
-      value: true,
-      writable: true
-    })
-  })
-
-  afterEach(() => {
-    vi.resetModules()
-  })
-
-  it('should expose electron API to renderer', async () => {
-    await import('./index')
-
-    expect(mockExposeInMainWorld).toHaveBeenCalledWith(
+  it('should expose electron API to renderer', () => {
+    expect(mockContextBridge.exposeInMainWorld).toHaveBeenCalledWith(
       'electron',
       expect.any(Object)
     )
   })
 
-  it('should expose custom api object to renderer', async () => {
-    await import('./index')
-
-    expect(mockExposeInMainWorld).toHaveBeenCalledWith(
+  it('should expose custom api object to renderer', () => {
+    expect(mockContextBridge.exposeInMainWorld).toHaveBeenCalledWith(
       'api',
       expect.any(Object)
     )
   })
 
-  it('should use contextBridge when context is isolated', async () => {
-    await import('./index')
-
-    expect(mockExposeInMainWorld).toHaveBeenCalled()
+  it('should use contextBridge when context is isolated', () => {
+    expect(mockContextBridge.exposeInMainWorld).toHaveBeenCalled()
   })
 })
 
 describe('Preload API Structure', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    Object.defineProperty(process, 'contextIsolated', {
-      value: true,
-      writable: true
-    })
-  })
-
-  afterEach(() => {
-    vi.resetModules()
-  })
-
-  it('should expose api with terminal object to exposeInMainWorld', async () => {
-    await import('./index')
-
+  it('should expose api with terminal object to exposeInMainWorld', () => {
     // Find the call that exposes 'api'
-    const apiCall = mockExposeInMainWorld.mock.calls.find(
-      (call: unknown[]) => call[0] === 'api'
-    )
+    const calls = mockContextBridge.exposeInMainWorld.mock.calls
+    const apiCall = calls.find((call: unknown[]) => call[0] === 'api')
 
     expect(apiCall).toBeDefined()
     expect(apiCall![1]).toHaveProperty('terminal')
@@ -83,11 +82,9 @@ describe('Preload API Structure', () => {
     expect(apiCall![1].terminal).toHaveProperty('onExit')
   })
 
-  it('should not expose Node.js require directly', async () => {
-    await import('./index')
-
+  it('should not expose Node.js require directly', () => {
     // Verify we're not exposing dangerous APIs
-    const calls = mockExposeInMainWorld.mock.calls
+    const calls = mockContextBridge.exposeInMainWorld.mock.calls
     const exposedAPIs = calls.map((call: unknown[]) => call[0])
 
     expect(exposedAPIs).not.toContain('require')
