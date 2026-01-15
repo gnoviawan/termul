@@ -340,7 +340,7 @@ export class UpdaterService {
     // Configure for GitHub Releases
     updater.setFeedURL({
       provider: 'github',
-      owner: 'PecutAPP',
+      owner: 'gnoviawan',
       repo: 'termul'
     })
 

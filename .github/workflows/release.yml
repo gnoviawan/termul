@@ -76,6 +76,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
+            dist/*.yml
           retention-days: 1
           if-no-files-found: error
 
@@ -114,6 +115,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
+            dist/*.yml
           retention-days: 1
           if-no-files-found: error
 
@@ -151,6 +153,7 @@ jobs:
           name: macos-builds
           path: |
             dist/*.dmg
+            dist/*.yml
           retention-days: 1
           if-no-files-found: error
 
