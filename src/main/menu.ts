@@ -105,7 +105,7 @@ export function buildMenu(): Menu {
       {
         label: 'Learn More',
         click: async () => {
-          await shell.openExternal('https://github.com/PecutAPP/termul')
+          await shell.openExternal('https://github.com/gnoviawan/termul')
         }
       }
     ]

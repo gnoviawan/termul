@@ -121,7 +121,7 @@
     "npmRebuild": false,
     "publish": {
       "provider": "github",
-      "owner": "PecutAPP",
+      "owner": "gnoviawan",
       "repo": "termul"
     },
     "directories": {
