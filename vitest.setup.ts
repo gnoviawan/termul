@@ -1,9 +1,44 @@
 import '@testing-library/jest-dom'
-import { vi } from 'vitest'
+import { vi, type Mock } from 'vitest'
+
+// Type definition for mock electron object
+export interface MockElectron {
+  app: {
+    whenReady: Mock
+    on: Mock
+    quit: Mock
+    getPath: Mock
+    getVersion: Mock
+  }
+  BrowserWindow: Mock & { getAllWindows: Mock; mockClear: () => void }
+  shell: {
+    openExternal: Mock
+  }
+  ipcMain: {
+    handle: Mock
+    on: Mock
+    removeHandler: Mock
+  }
+  contextBridge: {
+    exposeInMainWorld: Mock
+  }
+  ipcRenderer: {
+    on: Mock
+    removeListener: Mock
+    send: Mock
+    invoke: Mock
+  }
+  webUtils: Record<string, unknown>
+}
+
+// Extend global type
+declare global {
+  var mockElectron: MockElectron
+}
 
 // Mock Electron modules FIRST - before any other code that might import electron
 // Create BrowserWindow mock constructor
-const MockBrowserWindowConstructor = vi.fn(function(this: any) {
+const MockBrowserWindowConstructor = vi.fn(function() {
   return {
     on: vi.fn(),
     loadURL: vi.fn(),
@@ -15,7 +50,7 @@ const MockBrowserWindowConstructor = vi.fn(function(this: any) {
       send: vi.fn()
     }
   }
-})
+}) as unknown as Mock & { getAllWindows: Mock }
 
 // Mock getAllWindows static method
 MockBrowserWindowConstructor.getAllWindows = vi.fn().mockReturnValue([])

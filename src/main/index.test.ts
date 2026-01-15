@@ -1,9 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 
-// Mock instances for verification - will be set by vitest.mock in setup
-declare global {
-  var mockElectron: any
-}
+// MockElectron type is declared globally in vitest.setup.ts
 
 describe('Main Process - createWindow', () => {
   // Import module once at the beginning
