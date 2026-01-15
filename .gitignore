@@ -42,6 +42,7 @@ nul
 
 # Claude Code temp directories
 tmpclaude-*/
+tmpclaude-*
 
 # ADR documentation
 docs/adr/
