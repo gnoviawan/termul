@@ -117,9 +117,46 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  build-macos:
+    name: Build macOS
+    needs: changelog
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Set version from tag
+        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
+
+      - name: Build macOS
+        run: bun run build:mac
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-builds
+          path: |
+            dist/*.dmg
+          retention-days: 1
+          if-no-files-found: error
+
   publish:
     name: Publish Release
-    needs: [changelog, build-windows, build-linux]
+    needs: [changelog, build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -133,6 +170,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linux-builds
+          path: dist/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-builds
           path: dist/
 
       - name: Create GitHub Release
