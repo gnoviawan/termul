@@ -15,8 +15,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      '@': resolve('src/renderer'),
       '@renderer': resolve('src/renderer'),
-      '@': resolve('src/renderer')
+      '@/types': resolve('src/renderer/types'),
+      '@shared': resolve('src/shared')
     }
   }
 })

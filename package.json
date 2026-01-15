@@ -65,6 +65,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "electron-updater": "^6.7.3",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.25.0",
     "input-otp": "^1.4.2",
@@ -118,7 +119,11 @@
     "appId": "com.termul-manager.app",
     "productName": "Termul Manager",
     "npmRebuild": false,
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "PecutAPP",
+      "repo": "termul"
+    },
     "directories": {
       "output": "dist"
     },

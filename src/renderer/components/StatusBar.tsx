@@ -1,4 +1,4 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion } from 'lucide-react'
+import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ import {
   useShowWorkingDirectory,
   useShowExitCode
 } from '@/stores/context-bar-settings-store'
+import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
 
 interface StatusBarProps {
   project: Project | undefined
@@ -27,6 +28,10 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const showGitStatus = useShowGitStatus()
   const showWorkingDirectory = useShowWorkingDirectory()
   const showExitCode = useShowExitCode()
+
+  // Updater state
+  const updateDownloaded = useUpdateDownloaded()
+  const updateVersion = useUpdateVersion()
 
   // Display terminal CWD if available, otherwise fall back to project path
   const displayPath = activeTerminal?.cwd || project?.path
@@ -118,6 +123,19 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
               {lastExitCode === 0
                 ? 'Last command succeeded'
                 : `Last command failed with exit code ${lastExitCode}`}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {updateDownloaded && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center">
+                <StatusItem icon={<Download size={14} />} className="text-green-400" />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Update ready to install (version {updateVersion})
             </TooltipContent>
           </Tooltip>
         )}

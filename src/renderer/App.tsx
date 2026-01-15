@@ -20,6 +20,7 @@ import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
+import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 
 // Hook to prevent Alt key from showing the default browser menu bar
 function usePreventAltMenu(): void {
@@ -64,6 +65,7 @@ function AppEffects(): null {
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
+  useMenuUpdaterListener()
   return null
 }
 
