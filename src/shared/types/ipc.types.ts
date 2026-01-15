@@ -59,6 +59,7 @@ export interface TerminalApi {
   getGitStatus: (terminalId: string) => Promise<IpcResult<GitStatus | null>>
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
+  updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
 }
 
 // Error codes

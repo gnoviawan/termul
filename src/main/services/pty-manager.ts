@@ -30,6 +30,10 @@ const ORPHAN_TIMEOUT = 300000 // 5 minutes without activity = potential orphan (
 export interface PtyManagerOptions {
   /** Disable orphan detection (useful for tests) */
   disableOrphanDetection?: boolean
+  /** Enable orphan detection (default: true) */
+  orphanDetectionEnabled?: boolean
+  /** Orphan detection timeout in milliseconds (null = disabled) */
+  orphanDetectionTimeout?: number | null
 }
 
 export class PtyManager {
@@ -42,7 +46,11 @@ export class PtyManager {
 
   constructor(options: PtyManagerOptions = {}) {
     this.options = options
-    if (!this.options.disableOrphanDetection) {
+    // Start orphan detection if enabled and not explicitly disabled
+    if (
+      this.options.orphanDetectionEnabled !== false &&
+      !this.options.disableOrphanDetection
+    ) {
       this.startOrphanDetection()
     }
   }
@@ -216,12 +224,17 @@ export class PtyManager {
   // Detect and clean up orphaned terminals
   private detectOrphans(): void {
     const now = Date.now()
+    // Use configurable timeout or fall back to default
+    const timeout = this.options.orphanDetectionTimeout ?? ORPHAN_TIMEOUT
     const orphans: string[] = []
 
     Array.from(this.terminals.entries()).forEach(([id, instance]) => {
-      // A terminal is considered orphaned if it's been inactive for longer than the timeout
-      // (Inactivity-based detection - terminals that haven't received data/writes/resize recently)
-      if ((now - instance.lastActivity) > ORPHAN_TIMEOUT) {
+      // Only kill if: no renderer references AND inactive for timeout period
+      // This prevents killing idle terminals that are still displayed in the UI
+      if (
+        instance.rendererRefs.size === 0 &&
+        now - instance.lastActivity > timeout
+      ) {
         orphans.push(id)
       }
     })
@@ -230,6 +243,23 @@ export class PtyManager {
     for (const id of orphans) {
       console.log(`Cleaning up orphaned terminal: ${id}`)
       this.kill(id)
+    }
+  }
+
+  // Update orphan detection settings at runtime
+  updateOrphanDetectionSettings(enabled: boolean, timeout: number | null): void {
+    this.options.orphanDetectionEnabled = enabled
+    this.options.orphanDetectionTimeout = timeout
+
+    // Restart detection timer with new settings
+    if (this.orphanDetectionTimer) {
+      clearInterval(this.orphanDetectionTimer)
+      this.orphanDetectionTimer = null
+    }
+
+    // Start detection if enabled and timeout is set
+    if (enabled && timeout !== null) {
+      this.startOrphanDetection()
     }
   }
 

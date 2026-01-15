@@ -150,6 +150,10 @@ const terminalApi: TerminalApi = {
 
   getExitCode: (terminalId: string): Promise<IpcResult<number | null>> => {
     return ipcRenderer.invoke('terminal:getExitCode', terminalId)
+  },
+
+  updateOrphanDetection: (enabled: boolean, timeout: number | null): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('terminal:updateOrphanDetection', enabled, timeout)
   }
 }
 
