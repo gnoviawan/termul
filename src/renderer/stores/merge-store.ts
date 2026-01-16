@@ -302,6 +302,7 @@ export const useSourceBranch = () => useMergeStore((state) => state.sourceBranch
 export const useTargetBranch = () => useMergeStore((state) => state.targetBranch)
 export const useIsMerging = () => useMergeStore((state) => state.isMerging)
 export const useMergeError = () => useMergeStore((state) => state.mergeError)
+export const useMergeResult = () => useMergeStore((state) => state.mergeResult)
 
 // Combined selectors
 export const useDetectionState = () => useMergeStore((state) => ({

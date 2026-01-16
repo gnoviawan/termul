@@ -11,7 +11,7 @@
  */
 
 import { memo, useState, useEffect } from 'react'
-import { CheckCircle2, AlertTriangle, Info, HardDrive, Activity, GitCommit, GitPull } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, Info, HardDrive, Activity, GitCommit, GitPullRequest } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
@@ -91,7 +91,7 @@ export const MergeValidationStep = memo(({
         {
           id: 'source-behind',
           type: 'warning',
-          icon: GitPull,
+          icon: GitPullRequest,
           title: 'Branch Behind',
           message: 'Source branch may be behind target. Consider syncing before merging.',
           canProceed: true

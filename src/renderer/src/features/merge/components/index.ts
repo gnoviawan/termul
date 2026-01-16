@@ -33,3 +33,9 @@ export type { BranchSelectionStepProps } from './BranchSelectionStep'
 
 export { MergeValidationStep } from './MergeValidationStep'
 export type { MergeValidationStepProps } from './MergeValidationStep'
+
+export { SyncWorkflowManager } from './SyncWorkflowManager'
+export type { SyncWorkflowManagerProps } from './SyncWorkflowManager'
+
+export { SyncConfirmationStep } from './SyncConfirmationStep'
+export type { SyncConfirmationStepProps } from './SyncConfirmationStep'

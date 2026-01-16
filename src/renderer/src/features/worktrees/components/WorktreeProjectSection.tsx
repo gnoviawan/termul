@@ -20,6 +20,7 @@ import { WorktreeSearchBar } from './WorktreeSearchBar'
 import { WorktreeFilterBar, type WorktreeStatusFilter } from './WorktreeFilterBar'
 import { useWorktrees, useWorktreeCount, useProjectExpanded, useSelectedWorktreeId, useWorktreeActions } from '@/stores/worktree-store'
 import type { WorktreeMetadata } from '../../worktree.types'
+import { MergeWorkflowManager, SyncWorkflowManager } from '../../merge/components'
 
 /**
  * Check if branch is main/master (requires extra confirmation)
@@ -87,6 +88,14 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [selectedWorktreeForDialog, setSelectedWorktreeForDialog] = useState<WorktreeMetadata | null>(null)
+
+  // Merge workflow states (Story 2.4)
+  const [mergeWorkflowOpen, setMergeWorkflowOpen] = useState(false)
+  const [mergeWorktree, setMergeWorktree] = useState<WorktreeMetadata | null>(null)
+
+  // Sync workflow states (Story 2.5)
+  const [syncWorkflowOpen, setSyncWorkflowOpen] = useState(false)
+  const [syncWorktree, setSyncWorktree] = useState<WorktreeMetadata | null>(null)
 
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('')
@@ -191,6 +200,24 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
     // TODO: Implement show in explorer via IPC
     console.log('Show in explorer:', worktreeId)
   }, [])
+
+  // Merge to main handler (Story 2.4)
+  const handleMergeToMain = useCallback((worktreeId: string) => {
+    const worktree = worktrees.find(w => w.id === worktreeId)
+    if (worktree) {
+      setMergeWorktree(worktree)
+      setMergeWorkflowOpen(true)
+    }
+  }, [worktrees])
+
+  // Sync upstream handler (Story 2.5)
+  const handleSyncUpstream = useCallback((worktreeId: string) => {
+    const worktree = worktrees.find(w => w.id === worktreeId)
+    if (worktree) {
+      setSyncWorktree(worktree)
+      setSyncWorkflowOpen(true)
+    }
+  }, [worktrees])
 
   // Dialog handlers
   const handleArchiveConfirm = useCallback(async () => {
@@ -378,6 +405,8 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
           onArchive={handleArchive}
           onDelete={handleDelete}
           onShowInExplorer={handleShowInExplorer}
+          onMergeToMain={handleMergeToMain}
+          onSyncUpstream={handleSyncUpstream}
         />
       )}
 
@@ -399,6 +428,30 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
         onConfirm={handleDeleteConfirm}
         onCancel={handleDeleteCancel}
       />
+
+      {/* Merge Workflow Dialog (Story 2.4) */}
+      {mergeWorktree && (
+        <MergeWorkflowManager
+          isOpen={mergeWorkflowOpen}
+          worktreeId={mergeWorktree.id}
+          featureBranch={mergeWorktree.branchName}
+          projectId={projectId}
+          onCancel={() => setMergeWorkflowOpen(false)}
+          onComplete={() => setMergeWorkflowOpen(false)}
+        />
+      )}
+
+      {/* Sync Workflow Dialog (Story 2.5) */}
+      {syncWorktree && (
+        <SyncWorkflowManager
+          isOpen={syncWorkflowOpen}
+          worktreeId={syncWorktree.id}
+          featureBranch={syncWorktree.branchName}
+          projectId={projectId}
+          onCancel={() => setSyncWorkflowOpen(false)}
+          onComplete={() => setSyncWorkflowOpen(false)}
+        />
+      )}
     </div>
   )
 })

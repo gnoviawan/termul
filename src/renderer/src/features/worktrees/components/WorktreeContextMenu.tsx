@@ -4,10 +4,11 @@
  * Context menu for worktree actions: Open Terminal, Archive, Delete, Show in Explorer.
  * Source: Story 1.5 - Task 7: Add Worktree Actions Menu
  * Story 2.4 - Task 1: Added "Merge to main" option
+ * Story 2.5 - Task 1: Added "Sync upstream" option
  */
 
 import { memo } from 'react'
-import { Terminal, Archive, Trash2, FolderOpen, ExternalLink, GitMerge } from 'lucide-react'
+import { Terminal, Archive, Trash2, FolderOpen, ExternalLink, GitMerge, GitPullRequest } from 'lucide-react'
 import { ContextMenu } from '@/components/ContextMenu'
 import type { ContextMenuItem } from '@/components/ContextMenu'
 import type { WorktreeMetadata } from '../../worktree.types'
@@ -23,6 +24,7 @@ export interface WorktreeContextMenuProps {
   onDelete?: (worktreeId: string) => void
   onShowInExplorer?: (worktreeId: string) => void
   onMergeToMain?: (worktreeId: string) => void  // Story 2.4
+  onSyncUpstream?: (worktreeId: string) => void  // Story 2.5
 }
 
 /**
@@ -47,7 +49,8 @@ export const WorktreeContextMenu = memo(({
   onArchive,
   onDelete,
   onShowInExplorer,
-  onMergeToMain  // Story 2.4
+  onMergeToMain,  // Story 2.4
+  onSyncUpstream  // Story 2.5
 }: WorktreeContextMenuProps) => {
   console.log('[WorktreeContextMenu] Rendered with isOpen:', isOpen, 'worktree:', worktree.branchName, 'position:', { x, y })
 
@@ -80,6 +83,18 @@ export const WorktreeContextMenu = memo(({
     {
       type: 'separator'
     },
+    // Story 2.5: Sync upstream option
+    ...(onSyncUpstream ? [{
+      label: 'Sync upstream (merge main into worktree)',
+      icon: <GitPullRequest size={14} />,
+      onClick: () => {
+        onSyncUpstream(worktree.id)
+        onClose()
+      },
+      shortcut: 'Ctrl+Shift+U',
+      disabled: worktree.hasUncommittedChanges,
+      tooltip: worktree.hasUncommittedChanges ? 'Cannot sync worktree with uncommitted changes' : undefined
+    } as ContextMenuItem] : []),
     // Story 2.4: Merge to main option
     ...(onMergeToMain ? [{
       label: 'Merge to main',
@@ -92,7 +107,7 @@ export const WorktreeContextMenu = memo(({
       disabled: worktree.hasUncommittedChanges,
       tooltip: worktree.hasUncommittedChanges ? 'Cannot merge worktree with uncommitted changes' : undefined
     } as ContextMenuItem] : []),
-    ...(onMergeToMain ? [{ type: 'separator' as const }] : []),
+    ...(onMergeToMain || onSyncUpstream ? [{ type: 'separator' as const }] : []),
     {
       label: 'Archive',
       icon: <Archive size={14} />,
