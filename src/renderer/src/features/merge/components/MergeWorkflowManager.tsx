@@ -10,15 +10,19 @@
  * Source: Story 2.4 - Merge Workflow: Worktree to Main
  */
 
-import { memo, useEffect, useCallback } from 'react'
-import { X, Loader2, CheckCircle2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { memo, useEffect, useCallback, useState } from 'react'
+import { X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import { useMergeStore, useWorkflowState, useSourceBranch, useTargetBranch, useIsMerging, useMergeError, useMergeResult, useDetectionResult, useMergePreview, useMergeActions } from '@/stores/merge-store'
+import { useMergeStore, useWorkflowState, useSourceBranch, useTargetBranch, useIsMerging, useMergeError, useMergeResult, useDetectionResult, useMergePreview, useMergeProgress, useMergeStep, useMergeActions } from '@/stores/merge-store'
 import { BranchSelectionStep } from './BranchSelectionStep'
 import { MergeDialog } from './MergeDialog'
 import { MergePreviewDialog } from './MergePreviewDialog'
 import { MergeValidationStep } from './MergeValidationStep'
+import { MergeConfirmationDialog } from './MergeConfirmationDialog'
+import { MergeProgressDialog } from './MergeProgressDialog'
+import { MergeSuccessDialog } from './MergeSuccessDialog'
+import { MergeErrorDialog } from './MergeErrorDialog'
 import type { WorkflowState } from '@/stores/merge-store'
 
 export interface MergeWorkflowManagerProps {
@@ -94,6 +98,13 @@ export const MergeWorkflowManager = memo(({
   const mergeResult = useMergeResult()
   const detectionResult = useDetectionResult()
   const mergePreview = useMergePreview()
+  const mergeProgress = useMergeProgress()
+  const mergeStep = useMergeStep()
+
+  // Local state for dialogs (Story 2.6)
+  const [showConfirmation, setShowConfirmation] = useState(false)
+  const [showSuccess, setShowSuccess] = useState(false)
+  const [showError, setShowError] = useState(false)
 
   const {
     setWorkflowState,
@@ -103,7 +114,9 @@ export const MergeWorkflowManager = memo(({
     getMergePreview,
     executeMerge,
     resetWorkflow,
-    clearError
+    clearError,
+    setMergeProgress,
+    setMergeStep
   } = useMergeActions()
 
   // Initialize workflow on mount
@@ -155,15 +168,80 @@ export const MergeWorkflowManager = memo(({
         setWorkflowState('validate')
         break
       case 'validate':
-        setWorkflowState('execute')
-        await executeMerge()
+        // Show confirmation dialog before execute (Story 2.6)
+        setShowConfirmation(true)
         break
       case 'execute':
       case 'complete':
         // Already at end
         break
     }
-  }, [workflowState, sourceBranch, targetBranch, projectId, detectConflicts, getMergePreview, executeMerge, setWorkflowState])
+  }, [workflowState, sourceBranch, targetBranch, projectId, detectConflicts, getMergePreview, setWorkflowState])
+
+  // Handle confirmation dialog confirm (Story 2.6)
+  const handleConfirmMerge = useCallback(async () => {
+    setShowConfirmation(false)
+    setWorkflowState('execute')
+
+    // Progress tracking (Story 2.6)
+    setMergeStep('preparing')
+    setMergeProgress(10)
+
+    await new Promise(resolve => setTimeout(resolve, 500))
+    setMergeStep('merging')
+    setMergeProgress(30)
+
+    await executeMerge()
+
+    setMergeStep('finalizing')
+    setMergeProgress(90)
+  }, [setWorkflowState, setMergeStep, setMergeProgress, executeMerge])
+
+  // Handle confirmation dialog cancel
+  const handleConfirmCancel = useCallback(() => {
+    setShowConfirmation(false)
+  }, [])
+
+  // Handle success dialog close
+  const handleSuccessClose = useCallback(() => {
+    setShowSuccess(false)
+    handleComplete()
+  }, [handleComplete])
+
+  // Handle error dialog close
+  const handleErrorClose = useCallback(() => {
+    setShowError(false)
+    clearError()
+  }, [clearError])
+
+  // Handle error retry
+  const handleErrorRetry = useCallback(() => {
+    setShowError(false)
+    clearError()
+    executeMerge()
+  }, [clearError, executeMerge])
+
+  // Watch for merge completion to show success/error dialogs (Story 2.6)
+  useEffect(() => {
+    if (workflowState === 'execute' && !isMerging) {
+      setMergeProgress(100)
+      setMergeStep('complete')
+
+      if (mergeResult?.success) {
+        setShowSuccess(true)
+      } else if (mergeError) {
+        setShowError(true)
+      }
+    }
+  }, [workflowState, isMerging, mergeResult, mergeError, setMergeProgress, setMergeStep])
+
+  // Watch for merge start to show progress dialog
+  useEffect(() => {
+    if (workflowState === 'execute' && isMerging) {
+      setMergeStep('merging')
+      setMergeProgress(50)
+    }
+  }, [workflowState, isMerging, setMergeStep, setMergeProgress])
 
   // Handle Back button
   const handleBack = useCallback(() => {
@@ -305,47 +383,9 @@ export const MergeWorkflowManager = memo(({
 
               {workflowState === 'execute' && (
                 <div className="flex flex-col items-center justify-center py-12">
-                  {isMerging && (
-                    <>
-                      <Loader2 className="w-12 h-12 animate-spin text-blue-500 mb-4" />
-                      <p className="text-sm text-muted-foreground">
-                        Executing merge...
-                      </p>
-                    </>
-                  )}
-
-                  {mergeError && !isMerging && (
-                    <div className="text-center max-w-md">
-                      <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-                      <p className="text-sm text-red-500 mb-4">
-                        {mergeError}
-                      </p>
-                      <button
-                        onClick={handleRetry}
-                        className="px-4 py-2 rounded-md text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {workflowState === 'complete' && mergeResult?.success && (
-                <div className="text-center py-12">
-                  <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-4" />
-                  <p className="text-lg font-medium text-foreground mb-2">
-                    Successfully merged!
+                  <p className="text-sm text-muted-foreground">
+                    Executing merge... See progress dialog for details.
                   </p>
-                  <p className="text-sm text-muted-foreground mb-6">
-                    {sourceBranch} → {targetBranch}
-                  </p>
-                  <button
-                    onClick={handleComplete}
-                    className="px-6 py-2 rounded-md text-sm font-medium bg-green-500 text-white hover:bg-green-600 transition-colors"
-                  >
-                    Done
-                  </button>
                 </div>
               )}
             </div>
@@ -392,6 +432,40 @@ export const MergeWorkflowManager = memo(({
               </div>
             </div>
           </motion.div>
+
+          {/* Story 2.6: Merge validation dialogs */}
+          <MergeConfirmationDialog
+            isOpen={showConfirmation}
+            sourceBranch={sourceBranch}
+            targetBranch={targetBranch}
+            fileCount={mergePreview?.fileCount || 0}
+            commitCount={mergePreview?.commitCount || 0}
+            conflictCount={detectionResult?.conflictCount || 0}
+            onConfirm={handleConfirmMerge}
+            onCancel={handleConfirmCancel}
+          />
+
+          <MergeProgressDialog
+            isOpen={workflowState === 'execute' && isMerging}
+            currentStep={mergeStep}
+            progress={mergeProgress}
+          />
+
+          <MergeSuccessDialog
+            isOpen={showSuccess}
+            sourceBranch={sourceBranch}
+            targetBranch={targetBranch}
+            onClose={handleSuccessClose}
+          />
+
+          <MergeErrorDialog
+            isOpen={showError}
+            error={mergeError || 'Merge failed'}
+            errorDetails={mergeResult?.errorDetails}
+            logs={mergeResult?.logs}
+            onClose={handleErrorClose}
+            onRetry={handleErrorRetry}
+          />
         </motion.div>
       )}
     </AnimatePresence>

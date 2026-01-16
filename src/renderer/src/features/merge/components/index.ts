@@ -39,3 +39,15 @@ export type { SyncWorkflowManagerProps } from './SyncWorkflowManager'
 
 export { SyncConfirmationStep } from './SyncConfirmationStep'
 export type { SyncConfirmationStepProps } from './SyncConfirmationStep'
+
+export { MergeConfirmationDialog } from './MergeConfirmationDialog'
+export type { MergeConfirmationDialogProps } from './MergeConfirmationDialog'
+
+export { MergeProgressDialog } from './MergeProgressDialog'
+export type { MergeProgressDialogProps } from './MergeProgressDialog'
+
+export { MergeSuccessDialog } from './MergeSuccessDialog'
+export type { MergeSuccessDialogProps } from './MergeSuccessDialog'
+
+export { MergeErrorDialog } from './MergeErrorDialog'
+export type { MergeErrorDialogProps } from './MergeErrorDialog'

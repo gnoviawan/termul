@@ -23,6 +23,11 @@ import type {
 export type WorkflowState = 'idle' | 'select-branch' | 'detect-conflicts' | 'preview' | 'validate' | 'execute' | 'complete'
 
 /**
+ * Merge execution step for progress tracking (Story 2.6)
+ */
+export type MergeStep = 'idle' | 'preparing' | 'merging' | 'finalizing' | 'complete' | 'error'
+
+/**
  * Merge store state and actions
  */
 interface MergeStore {
@@ -51,6 +56,10 @@ interface MergeStore {
   worktreeId: string | null
   projectId: string | null
 
+  // Merge progress state (Story 2.6)
+  mergeProgress: number
+  mergeStep: MergeStep
+
   // Actions
   setDetectionMode: (mode: DetectionMode) => void
   detectConflicts: (projectId: string, sourceBranch: string, targetBranch: string) => Promise<void>
@@ -73,6 +82,10 @@ interface MergeStore {
   setWorktreeContext: (worktreeId: string, projectId: string) => void
   executeMerge: () => Promise<void>
   resetWorkflow: () => void
+
+  // Merge progress actions (Story 2.6)
+  setMergeProgress: (progress: number) => void
+  setMergeStep: (step: MergeStep) => void
 }
 
 /**
@@ -104,6 +117,10 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   mergeError: null,
   worktreeId: null,
   projectId: null,
+
+  // Merge progress initial state (Story 2.6)
+  mergeProgress: 0,
+  mergeStep: 'idle',
 
   // Set detection mode
   setDetectionMode: (mode: DetectionMode) => {
@@ -276,8 +293,20 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
       isMerging: false,
       mergeError: null,
       worktreeId: null,
-      projectId: null
+      projectId: null,
+      mergeProgress: 0,
+      mergeStep: 'idle'
     })
+  },
+
+  // Set merge progress (Story 2.6)
+  setMergeProgress: (progress: number) => {
+    set({ mergeProgress: Math.max(0, Math.min(100, progress)) })
+  },
+
+  // Set merge step (Story 2.6)
+  setMergeStep: (step: MergeStep) => {
+    set({ mergeStep: step })
   }
 }))
 
@@ -304,6 +333,10 @@ export const useIsMerging = () => useMergeStore((state) => state.isMerging)
 export const useMergeError = () => useMergeStore((state) => state.mergeError)
 export const useMergeResult = () => useMergeStore((state) => state.mergeResult)
 
+// Merge progress selectors (Story 2.6)
+export const useMergeProgress = () => useMergeStore((state) => state.mergeProgress)
+export const useMergeStep = () => useMergeStore((state) => state.mergeStep)
+
 // Combined selectors
 export const useDetectionState = () => useMergeStore((state) => ({
   isDetecting: state.isDetecting,
@@ -328,5 +361,7 @@ export const useMergeActions = () => useMergeStore((state) => ({
   setBranches: state.setBranches,
   setWorktreeContext: state.setWorktreeContext,
   executeMerge: state.executeMerge,
-  resetWorkflow: state.resetWorkflow
+  resetWorkflow: state.resetWorkflow,
+  setMergeProgress: state.setMergeProgress,
+  setMergeStep: state.setMergeStep
 }))
