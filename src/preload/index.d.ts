@@ -6,7 +6,9 @@ import type {
   DialogApi,
   SystemApi,
   KeyboardApi,
-  WorktreeApi
+  WorktreeApi,
+  MergeApi,
+  AIPromptApi
 } from '@shared/types/ipc.types'
 import type { UpdaterApi } from '@shared/types/updater.types'
 
@@ -22,6 +24,8 @@ declare global {
       keyboard: KeyboardApi
       updater: UpdaterApi
       worktree: WorktreeApi
+      merge: MergeApi
+      aiPrompt: AIPromptApi
     }
   }
 }
