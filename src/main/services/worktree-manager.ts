@@ -30,6 +30,8 @@ export type WorktreeErrorCode =
   | 'ARCHIVE_NOT_FOUND'
   | 'UNPUSHED_COMMITS_WARNING'
   | 'MAIN_BRANCH_DELETE_WARNING'
+  | 'GITIGNORE_PARSE_FAILED'
+  | 'FILE_COPY_FAILED'
 
 /**
  * Worktree-specific error class
@@ -337,6 +339,129 @@ export class WorktreeManager {
         `Failed to get worktree status: ${error instanceof Error ? error.message : 'Unknown error'}`
       )
     }
+  }
+
+  /**
+   * Copy .gitignore files to worktree
+   *
+   * Implements Story 1.4 Task 2.2: Copy selected patterns to new worktree
+   *
+   * @param worktreePath - Path to the new worktree
+   * @param patterns - Patterns from .gitignore to copy
+   * @throws WorktreeError if file copy fails
+   */
+  async copyGitignoreFiles(worktreePath: string, patterns: string[]): Promise<void> {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    for (const pattern of patterns) {
+      try {
+        // Use micromatch for pattern matching (already in project from Story 1.1)
+        const { glob } = await import('glob')
+
+        // Convert .gitignore pattern to glob pattern
+        const globPattern = pattern.endsWith('/') ? `${pattern}**` : pattern
+
+        // Find matching files in project root
+        const files = await glob(globPattern, {
+          cwd: this.projectRoot,
+          dot: true,
+          absolute: false,
+          nodir: true
+        })
+
+        // Copy each matched file to worktree
+        for (const file of files) {
+          const sourcePath = path.join(this.projectRoot, file)
+          const targetPath = path.join(worktreePath, file)
+
+          // Create target directory if it doesn't exist
+          await fs.mkdir(path.dirname(targetPath), { recursive: true })
+
+          // Copy file
+          await fs.copyFile(sourcePath, targetPath)
+        }
+      } catch (error) {
+        throw new WorktreeError(
+          'FILE_COPY_FAILED',
+          `Failed to copy files matching pattern "${pattern}"`,
+          'Check file permissions and disk space'
+        )
+      }
+    }
+  }
+
+  /**
+   * Validate disk space before worktree creation
+   *
+   * Implements Story 1.4 Task 2.3: Check available disk space
+   *
+   * @param requiredSpace - Required space in bytes
+   * @param buffer - Additional buffer in bytes (default: 500MB)
+   * @throws WorktreeError if insufficient disk space
+   */
+  async validateDiskSpace(requiredSpace: number, buffer: number = 500 * 1024 * 1024): Promise<void> {
+    const fs = await import('node:fs/promises')
+
+    try {
+      const stats = await fs.statfs(this.projectRoot)
+      const availableSpace = stats.bavail * stats.bsize
+
+      if (availableSpace < requiredSpace + buffer) {
+        const requiredMB = Math.ceil((requiredSpace + buffer) / (1024 * 1024))
+        const availableMB = Math.ceil(availableSpace / (1024 * 1024))
+
+        throw new WorktreeError(
+          'INSUFFICIENT_DISK_SPACE',
+          `Insufficient disk space. Required: ${requiredMB}MB, Available: ${availableMB}MB`,
+          'Free up disk space or choose a different location'
+        )
+      }
+    } catch (error) {
+      if (error instanceof WorktreeError) {
+        throw error
+      }
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        'Failed to check disk space',
+        'Ensure filesystem is accessible'
+      )
+    }
+  }
+
+  /**
+   * Calculate project size for disk space estimation
+   *
+   * @returns Project size in bytes
+   */
+  async calculateProjectSize(): Promise<number> {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    let totalSize = 0
+
+    async function calculateDirSize(dirPath: string): Promise<void> {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name)
+
+        // Skip .git directory and worktrees
+        if (entry.name === '.git' || entry.name === '.termul') {
+          continue
+        }
+
+        if (entry.isDirectory()) {
+          await calculateDirSize(fullPath)
+        } else if (entry.isFile()) {
+          const stats = await fs.stat(fullPath)
+          totalSize += stats.size
+        }
+      }
+    }
+
+    await calculateDirSize(this.projectRoot)
+    return totalSize
   }
 
   /**

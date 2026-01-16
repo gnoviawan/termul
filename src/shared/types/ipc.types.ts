@@ -200,3 +200,71 @@ export interface WorktreeApi {
   onCreated: (callback: WorktreeCreatedCallback) => Unsubscribe
   onDeleted: (callback: WorktreeDeletedCallback) => Unsubscribe
 }
+
+// ============================================================================
+// Gitignore Types (Story 1.4)
+// ============================================================================
+
+// Pattern category for .gitignore patterns
+export type PatternCategory = 'dependencies' | 'build' | 'env' | 'cache' | 'ide' | 'test' | 'other'
+
+// Parsed .gitignore pattern with metadata
+export interface ParsedPattern {
+  pattern: string
+  category: PatternCategory
+  isSecuritySensitive: boolean
+  relatedPatterns: string[]
+}
+
+// Result of parsing .gitignore file
+export interface GitignoreParseResult {
+  patterns: ParsedPattern[]
+  groupedPatterns: Map<PatternCategory, ParsedPattern[]>
+  securityPatterns: ParsedPattern[]
+}
+
+// Gitignore profile for saved pattern selections
+export interface GitignoreProfile {
+  name: string
+  patterns: string[]
+  createdAt: string
+}
+
+// DTOs for gitignore operations
+export interface ParseGitignoreDto {
+  projectRoot: string
+}
+
+export interface SaveProfileDto {
+  projectRoot: string
+  name: string
+  patterns: string[]
+}
+
+export interface DeleteProfileDto {
+  projectRoot: string
+  name: string
+}
+
+export interface LoadProfilesDto {
+  projectRoot: string
+}
+
+// Gitignore error codes
+export const GitignoreErrorCode = {
+  GITIGNORE_PARSE_FAILED: 'GITIGNORE_PARSE_FAILED',
+  FILE_COPY_FAILED: 'FILE_COPY_FAILED',
+  PROFILE_NOT_FOUND: 'PROFILE_NOT_FOUND',
+  PROFILE_ALREADY_EXISTS: 'PROFILE_ALREADY_EXISTS',
+  INVALID_PROFILE_DATA: 'INVALID_PROFILE_DATA'
+} as const
+
+export type GitignoreErrorCodeType = (typeof GitignoreErrorCode)[keyof typeof GitignoreErrorCode]
+
+// Gitignore API exposed via preload
+export interface GitignoreApi {
+  parse: (dto: ParseGitignoreDto) => Promise<IpcResult<GitignoreParseResult>>
+  saveProfile: (dto: SaveProfileDto) => Promise<IpcResult<void>>
+  deleteProfile: (dto: DeleteProfileDto) => Promise<IpcResult<void>>
+  loadProfiles: (dto: LoadProfilesDto) => Promise<IpcResult<GitignoreProfile[]>>
+}

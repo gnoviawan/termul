@@ -33,6 +33,28 @@ vi.mock('simple-git', () => ({
   }),
 }))
 
+// Mock glob module
+vi.mock('glob', () => ({
+  glob: vi.fn(),
+}))
+
+// Mock node:fs/promises
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+  writeFile: vi.fn(),
+  mkdir: vi.fn(),
+  copyFile: vi.fn(),
+  stat: vi.fn(),
+  statfs: vi.fn(),
+  readdir: vi.fn(),
+}))
+
+// Mock node:path
+vi.mock('node:path', () => ({
+  join: vi.fn((...args: string[]) => args.join('/')),
+  dirname: vi.fn((p: string) => p.split('/').slice(0, -1).join('/')),
+}))
+
 describe('WorktreeManager', () => {
   let worktreeManager: WorktreeManager
   let mockGit: any
@@ -298,6 +320,149 @@ describe('WorktreeManager', () => {
       const result = await worktreeManager.getStatus(worktreeId)
 
       expect(result.dirty).toBe(true)
+    })
+  })
+
+  describe('copyGitignoreFiles', () => {
+    it('should copy files matching .gitignore patterns to worktree', async () => {
+      const { glob } = await import('glob')
+      const fs = await import('node:fs/promises')
+
+      const worktreePath = '/Users/test/my-project/.termul/worktrees/test'
+      const patterns = ['node_modules/', '.env']
+
+      // Mock glob to return matching files
+      vi.mocked(glob).mockResolvedValue(['package.json', 'package-lock.json'])
+
+      // Mock fs operations
+      vi.mocked(fs.mkdir).mockResolvedValue(undefined)
+      vi.mocked(fs.copyFile).mockResolvedValue(undefined)
+
+      await worktreeManager.copyGitignoreFiles(worktreePath, patterns)
+
+      expect(glob).toHaveBeenCalledTimes(2) // Once per pattern
+      expect(fs.copyFile).toHaveBeenCalled()
+    })
+
+    it('should throw WorktreeError with FILE_COPY_FAILED code on error', async () => {
+      const { glob } = await import('glob')
+
+      const worktreePath = '/Users/test/my-project/.termul/worktrees/test'
+      const patterns = ['node_modules/']
+
+      // Mock glob to throw error
+      vi.mocked(glob).mockRejectedValue(new Error('Permission denied'))
+
+      try {
+        await worktreeManager.copyGitignoreFiles(worktreePath, patterns)
+        expect.fail('Should have thrown WorktreeError')
+      } catch (error) {
+        expect(error).toHaveProperty('code', 'FILE_COPY_FAILED')
+      }
+    })
+  })
+
+  describe('validateDiskSpace', () => {
+    it('should pass when sufficient disk space available', async () => {
+      const fs = await import('node:fs/promises')
+
+      // Mock statfs to return 1GB available
+      vi.mocked(fs.statfs).mockResolvedValue({
+        bavail: 1000000,
+        bsize: 1024,
+      } as any)
+
+      const requiredSpace = 100 * 1024 * 1024 // 100MB
+
+      await expect(worktreeManager.validateDiskSpace(requiredSpace)).resolves.not.toThrow()
+      expect(fs.statfs).toHaveBeenCalledWith(mockProjectRoot)
+    })
+
+    it('should throw INSUFFICIENT_DISK_SPACE when not enough space', async () => {
+      const fs = await import('node:fs/promises')
+
+      // Mock statfs to return only 100MB available
+      vi.mocked(fs.statfs).mockResolvedValue({
+        bavail: 100000,
+        bsize: 1024,
+      } as any)
+
+      const requiredSpace = 500 * 1024 * 1024 // 500MB
+
+      try {
+        await worktreeManager.validateDiskSpace(requiredSpace)
+        expect.fail('Should have thrown WorktreeError')
+      } catch (error) {
+        expect(error).toHaveProperty('code', 'INSUFFICIENT_DISK_SPACE')
+      }
+    })
+
+    it('should use custom buffer when provided', async () => {
+      const fs = await import('node:fs/promises')
+
+      // Mock statfs to return 800MB available (enough for 100MB required + 500MB buffer)
+      vi.mocked(fs.statfs).mockResolvedValue({
+        bavail: 800000,
+        bsize: 1024,
+      } as any)
+
+      const requiredSpace = 100 * 1024 * 1024 // 100MB
+      const customBuffer = 500 * 1024 * 1024 // 500MB buffer
+
+      await expect(worktreeManager.validateDiskSpace(requiredSpace, customBuffer)).resolves.not.toThrow()
+    })
+  })
+
+  describe('calculateProjectSize', () => {
+    it('should calculate total project size excluding .git and .termul', async () => {
+      const fs = await import('node:fs/promises')
+
+      // Create a mock Dirent factory
+      const createMockDirent = (name: string, isDir: boolean) => ({
+        name,
+        isDirectory: () => isDir,
+        isFile: () => !isDir,
+      })
+
+      // Mock readdir to return directory entries
+      vi.mocked(fs.readdir).mockImplementation(async (dirPath: string, options?: any) => {
+        if (dirPath === mockProjectRoot) {
+          return [
+            createMockDirent('.git', true),
+            createMockDirent('.termul', true),
+            createMockDirent('src', true),
+            createMockDirent('package.json', false),
+          ] as any
+        }
+        if (String(dirPath).endsWith('src')) {
+          return [
+            createMockDirent('index.ts', false),
+            createMockDirent('utils.ts', false),
+          ] as any
+        }
+        return [] as any
+      })
+
+      // Mock stat to return file sizes
+      vi.mocked(fs.stat).mockImplementation(async (filePath: string) => {
+        if (String(filePath).endsWith('package.json')) {
+          return { size: 1024 } as any
+        }
+        if (String(filePath).endsWith('index.ts')) {
+          return { size: 2048 } as any
+        }
+        if (String(filePath).endsWith('utils.ts')) {
+          return { size: 512 } as any
+        }
+        return { size: 0 } as any
+      })
+
+      const size = await worktreeManager.calculateProjectSize()
+
+      // Should include package.json (1024) + index.ts (2048) + utils.ts (512) = 3584
+      // Should exclude .git and .termul directories
+      expect(size).toBe(3584)
+      expect(fs.readdir).toHaveBeenCalled()
     })
   })
 })
