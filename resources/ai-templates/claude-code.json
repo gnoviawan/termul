@@ -1,0 +1,31 @@
+{
+  "id": "claude-code-conflict-resolution",
+  "name": "Claude Code Conflict Resolution",
+  "description": "Generate prompt for Claude Code to resolve merge conflicts",
+  "tool": "claude-code",
+  "isDefault": true,
+  "promptTemplate": "I need help resolving a Git merge conflict using Claude Code CLI.\n\n**Context:**\n- Branch: {{branchName}}\n{{#if targetBranch}}\n- Target branch: {{targetBranch}}\n{{/if}}\n{{#if conflictedFiles}}\n- Conflicted files:\n{{#each conflictedFiles}}\n  - {{this}}\n{{/each}}\n{{/if}}\n{{#if projectPath}}\n- Project path: {{projectPath}}\n{{/if}}\n\n**Claude Code Instructions:**\nPlease help me resolve these conflicts by:\n1. Reading the conflicted files\n2. Understanding both sides of each conflict\n3. Explaining what each side is trying to achieve\n4. Suggesting a resolution that preserves both intents\n5. Providing the exact code to replace the conflict markers\n\nClaude Code CLI features to use:\n- Use :read command to view conflicted files\n- Use :write command to apply resolutions\n- Use :diff to see changes\n- Use !git commands for git operations\n\nPlease provide clear, actionable steps that work with Claude Code's terminal-based interface.",
+  "variables": [
+    {
+      "name": "branchName",
+      "description": "Current branch name",
+      "required": true
+    },
+    {
+      "name": "targetBranch",
+      "description": "Target branch for merge",
+      "required": false
+    },
+    {
+      "name": "conflictedFiles",
+      "description": "List of conflicted file paths",
+      "required": false
+    },
+    {
+      "name": "projectPath",
+      "description": "Project root directory path",
+      "required": false
+    }
+  ],
+  "requiredVars": ["branchName"]
+}

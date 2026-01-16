@@ -29,7 +29,8 @@ import type {
   StatusChangedCallback,
   WorktreeCreatedCallback,
   WorktreeDeletedCallback,
-  MergeApi
+  MergeApi,
+  AIPromptApi
 } from '../shared/types/ipc.types'
 import type {
   ConflictDetectionResult,
@@ -54,6 +55,14 @@ import type {
   UpdaterErrorCallback,
   UpdaterErrorCode
 } from '../shared/types/updater.types'
+import type {
+  GeneratedPrompt,
+  AIToolTemplate,
+  ValidationResult,
+  GeneratePromptDto,
+  RegisterTemplateDto,
+  ValidateTemplateDto
+} from '../shared/types/ai-prompt.types'
 
 // Terminal API for renderer
 const terminalApi: TerminalApi = {
@@ -399,6 +408,26 @@ const mergeApi: MergeApi = {
   }
 }
 
+// AI Prompt API for renderer
+// Story 3.1 - Task 5: Extend Preload API
+const aiPromptApi: AIPromptApi = {
+  generate: (dto: GeneratePromptDto): Promise<IpcResult<GeneratedPrompt>> => {
+    return ipcRenderer.invoke('ai-prompt:generate', dto)
+  },
+
+  listTemplates: (): Promise<IpcResult<AIToolTemplate[]>> => {
+    return ipcRenderer.invoke('ai-prompt:list-templates')
+  },
+
+  registerTemplate: (dto: RegisterTemplateDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('ai-prompt:register-template', dto)
+  },
+
+  validateTemplate: (dto: ValidateTemplateDto): Promise<IpcResult<ValidationResult>> => {
+    return ipcRenderer.invoke('ai-prompt:validate-template', dto)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -409,7 +438,8 @@ const api = {
   keyboard: keyboardApi,
   updater: updaterApi,
   worktree: worktreeApi,
-  merge: mergeApi
+  merge: mergeApi,
+  aiPrompt: aiPromptApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

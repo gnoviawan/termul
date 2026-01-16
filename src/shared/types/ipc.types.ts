@@ -304,3 +304,29 @@ export interface MergeApi {
   getPreference: () => Promise<IpcResult<MergePreference>>
   setPreference: (pref: MergePreference) => Promise<IpcResult<void>>
 }
+
+// ============================================================================
+// AI Prompt Types (Story 3.1)
+// ============================================================================
+
+// Import AI prompt types from ai-prompt.types.ts
+export type {
+  AIToolType,
+  PromptContext,
+  GeneratedPrompt,
+  AIToolTemplate,
+  TemplateVariable,
+  ValidationResult,
+  GeneratePromptDto,
+  RegisterTemplateDto,
+  ValidateTemplateDto
+} from './ai-prompt.types'
+
+// AI Prompt API exposed via preload
+// Story 3.1 - Task 5: Extend Preload API
+export interface AIPromptApi {
+  generate: (dto: GeneratePromptDto) => Promise<IpcResult<GeneratedPrompt>>
+  listTemplates: () => Promise<IpcResult<AIToolTemplate[]>>
+  registerTemplate: (dto: RegisterTemplateDto) => Promise<IpcResult<void>>
+  validateTemplate: (dto: ValidateTemplateDto) => Promise<IpcResult<ValidationResult>>
+}
