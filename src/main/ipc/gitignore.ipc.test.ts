@@ -13,13 +13,6 @@ vi.mock('../services/gitignore-parser', () => ({
   parseGitignore: vi.fn(),
 }))
 
-// Mock electron
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: vi.fn(),
-  },
-}))
-
 describe('Gitignore IPC Handlers', () => {
   let mockIpcMain: any
   let mockManager: any
@@ -75,7 +68,7 @@ describe('Gitignore IPC Handlers', () => {
         securityPatterns: [],
       }
 
-      vi.mocked(gitignoreParser.parseGitignore).mockResolvedValue(mockParseResult)
+      ;(gitignoreParser.parseGitignore as ReturnType<typeof vi.fn>).mockResolvedValue(mockParseResult)
 
       registerGitignoreHandlers()
 
@@ -98,7 +91,7 @@ describe('Gitignore IPC Handlers', () => {
     })
 
     it('should return error on parse failure', async () => {
-      vi.mocked(gitignoreParser.parseGitignore).mockRejectedValue(new Error('Parse failed'))
+      (gitignoreParser.parseGitignore as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Parse failed'))
 
       registerGitignoreHandlers()
 

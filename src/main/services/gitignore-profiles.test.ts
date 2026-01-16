@@ -22,23 +22,21 @@ vi.mock('node:path', () => ({
 
 describe('GitignoreProfileManager', () => {
   let profileManager: GitignoreProfileManager
-  let mockFs: any
   const mockProjectRoot = '/Users/test/my-project'
 
   beforeEach(async () => {
     vi.clearAllMocks()
 
+    // Get the mocked fs module
+    const fs = await import('node:fs/promises')
+
+    // Set up default mock implementations
+    ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: [] }))
+    ;(fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    ;(fs.mkdir as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
     // Initialize profile manager
     profileManager = new GitignoreProfileManager(mockProjectRoot)
-
-    // Get mocked fs module
-    const fs = await import('node:fs/promises')
-    mockFs = vi.mocked(fs)
-
-    // Default mock implementations
-    vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: [] }))
-    vi.mocked(mockFs.mkdir).mockResolvedValue(undefined)
-    vi.mocked(mockFs.writeFile).mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -47,13 +45,14 @@ describe('GitignoreProfileManager', () => {
 
   describe('saveProfile', () => {
     it('should save a new profile', async () => {
+      const fs = await import('node:fs/promises')
       const profileName = 'frontend-basic'
       const patterns = ['node_modules/', 'dist/', '.env']
 
       await profileManager.saveProfile(profileName, patterns)
 
-      expect(mockFs.mkdir).toHaveBeenCalled()
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(fs.mkdir).toHaveBeenCalled()
+      expect(fs.writeFile).toHaveBeenCalledWith(
         expect.stringContaining('gitignore-profiles.json'),
         expect.stringContaining('"name": "frontend-basic"'),
         'utf-8'
@@ -61,11 +60,12 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should reject duplicate profile names', async () => {
+      const fs = await import('node:fs/promises')
       const profileName = 'frontend-basic'
       const patterns = ['node_modules/']
 
       // Mock existing profile
-      vi.mocked(mockFs.readFile).mockResolvedValue(
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
         JSON.stringify({
           profiles: [{ name: profileName, patterns: ['node_modules/'], createdAt: new Date().toISOString() }],
         })
@@ -75,12 +75,13 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should create profiles directory if it does not exist', async () => {
+      const fs = await import('node:fs/promises')
       const profileName = 'test-profile'
       const patterns = ['*.log']
 
       await profileManager.saveProfile(profileName, patterns)
 
-      expect(mockFs.mkdir).toHaveBeenCalledWith(
+      expect(fs.mkdir).toHaveBeenCalledWith(
         expect.stringContaining('.termul/profiles'),
         { recursive: true }
       )
@@ -89,10 +90,11 @@ describe('GitignoreProfileManager', () => {
 
   describe('loadProfiles', () => {
     it('should return empty array when no profiles exist', async () => {
+      const fs = await import('node:fs/promises')
       // Mock file not found
       const error = new Error('File not found') as NodeJS.ErrnoException
       error.code = 'ENOENT'
-      vi.mocked(mockFs.readFile).mockRejectedValue(error)
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockRejectedValue(error)
 
       const profiles = await profileManager.loadProfiles()
 
@@ -100,12 +102,13 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should load all saved profiles', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
         { name: 'python', patterns: ['__pycache__/', '*.pyc'], createdAt: '2024-01-02T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const profiles = await profileManager.loadProfiles()
 
@@ -115,13 +118,14 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should return profiles in correct order', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'profile-1', patterns: ['pattern1'], createdAt: '2024-01-01T00:00:00.000Z' },
         { name: 'profile-2', patterns: ['pattern2'], createdAt: '2024-01-02T00:00:00.000Z' },
         { name: 'profile-3', patterns: ['pattern3'], createdAt: '2024-01-03T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const profiles = await profileManager.loadProfiles()
 
@@ -134,21 +138,22 @@ describe('GitignoreProfileManager', () => {
 
   describe('deleteProfile', () => {
     it('should delete an existing profile', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
         { name: 'python', patterns: ['__pycache__/'], createdAt: '2024-01-02T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       await profileManager.deleteProfile('frontend')
 
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(fs.writeFile).toHaveBeenCalledWith(
         expect.any(String),
         expect.stringContaining('"python"'),
         'utf-8'
       )
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(fs.writeFile).toHaveBeenCalledWith(
         expect.any(String),
         expect.not.stringContaining('"frontend"'),
         'utf-8'
@@ -156,7 +161,8 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should throw error when deleting non-existent profile', async () => {
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: [] }))
+      const fs = await import('node:fs/promises')
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: [] }))
 
       await expect(profileManager.deleteProfile('non-existent')).rejects.toThrow('not found')
     })
@@ -164,11 +170,12 @@ describe('GitignoreProfileManager', () => {
 
   describe('getProfile', () => {
     it('should return profile when found', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const profile = await profileManager.getProfile('frontend')
 
@@ -178,7 +185,8 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should return undefined when profile not found', async () => {
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: [] }))
+      const fs = await import('node:fs/promises')
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: [] }))
 
       const profile = await profileManager.getProfile('non-existent')
 
@@ -188,16 +196,17 @@ describe('GitignoreProfileManager', () => {
 
   describe('updateProfile', () => {
     it('should update an existing profile', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const newPatterns = ['node_modules/', 'dist/', '.env']
       await profileManager.updateProfile('frontend', newPatterns)
 
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(fs.writeFile).toHaveBeenCalledWith(
         expect.any(String),
         expect.stringContaining('"dist/"'),
         'utf-8'
@@ -205,23 +214,25 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should preserve createdAt timestamp when updating', async () => {
+      const fs = await import('node:fs/promises')
       const originalTimestamp = '2024-01-01T00:00:00.000Z'
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: originalTimestamp },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       await profileManager.updateProfile('frontend', ['dist/'])
 
-      const writtenData = vi.mocked(mockFs.writeFile).mock.calls[0][1] as string
+      const writtenData = (fs.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as string
       const savedProfiles = JSON.parse(writtenData)
 
       expect(savedProfiles.profiles[0].createdAt).toBe(originalTimestamp)
     })
 
     it('should throw error when updating non-existent profile', async () => {
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: [] }))
+      const fs = await import('node:fs/promises')
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: [] }))
 
       await expect(profileManager.updateProfile('non-existent', ['patterns'])).rejects.toThrow('not found')
     })
@@ -229,11 +240,12 @@ describe('GitignoreProfileManager', () => {
 
   describe('exportProfiles', () => {
     it('should export profiles as JSON string', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'frontend', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const exported = await profileManager.exportProfiles()
 
@@ -242,9 +254,10 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should export empty array when no profiles exist', async () => {
+      const fs = await import('node:fs/promises')
       const error = new Error('File not found') as NodeJS.ErrnoException
       error.code = 'ENOENT'
-      vi.mocked(mockFs.readFile).mockRejectedValue(error)
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockRejectedValue(error)
 
       const exported = await profileManager.exportProfiles()
 
@@ -254,6 +267,7 @@ describe('GitignoreProfileManager', () => {
 
   describe('importProfiles', () => {
     it('should import profiles from JSON string', async () => {
+      const fs = await import('node:fs/promises')
       const importData = {
         profiles: [
           { name: 'imported', patterns: ['*.log'], createdAt: '2024-01-01T00:00:00.000Z' },
@@ -262,7 +276,7 @@ describe('GitignoreProfileManager', () => {
 
       await profileManager.importProfiles(JSON.stringify(importData))
 
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(fs.writeFile).toHaveBeenCalledWith(
         expect.any(String),
         expect.stringContaining('"imported"'),
         'utf-8'
@@ -270,11 +284,12 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should merge profiles when merge option is true', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'existing', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const importData = {
         profiles: [
@@ -284,7 +299,7 @@ describe('GitignoreProfileManager', () => {
 
       await profileManager.importProfiles(JSON.stringify(importData), true)
 
-      const writtenData = vi.mocked(mockFs.writeFile).mock.calls[0][1] as string
+      const writtenData = (fs.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as string
       const savedProfiles = JSON.parse(writtenData)
 
       expect(savedProfiles.profiles).toHaveLength(2)
@@ -293,11 +308,12 @@ describe('GitignoreProfileManager', () => {
     })
 
     it('should replace profiles when merge option is false', async () => {
+      const fs = await import('node:fs/promises')
       const existingProfiles = [
         { name: 'existing', patterns: ['node_modules/'], createdAt: '2024-01-01T00:00:00.000Z' },
       ]
 
-      vi.mocked(mockFs.readFile).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
+      ;(fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ profiles: existingProfiles }))
 
       const importData = {
         profiles: [
@@ -307,7 +323,7 @@ describe('GitignoreProfileManager', () => {
 
       await profileManager.importProfiles(JSON.stringify(importData), false)
 
-      const writtenData = vi.mocked(mockFs.writeFile).mock.calls[0][1] as string
+      const writtenData = (fs.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as string
       const savedProfiles = JSON.parse(writtenData)
 
       expect(savedProfiles.profiles).toHaveLength(1)

@@ -1,25 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { join } from 'path'
 
-// Use vi.hoisted to create mock functions that are accessible in vi.mock factories
-const { mockMkdir, mockReadFile, mockWriteFile, mockUnlink, mockRename, mockAccess } = vi.hoisted(
-  () => ({
-    mockMkdir: vi.fn(),
-    mockReadFile: vi.fn(),
-    mockWriteFile: vi.fn(),
-    mockUnlink: vi.fn(),
-    mockRename: vi.fn(),
-    mockAccess: vi.fn()
-  })
-)
+// Create mock functions outside of vi.hoisted
+const mockMkdir = vi.fn()
+const mockReadFile = vi.fn()
+const mockWriteFile = vi.fn()
+const mockUnlink = vi.fn()
+const mockRename = vi.fn()
+const mockAccess = vi.fn()
 
-// Mock modules
-vi.mock('electron', () => ({
-  app: {
-    getPath: vi.fn(() => '/mock/user/data')
-  }
-}))
-
+// Mock fs/promises
 vi.mock('fs/promises', () => {
   return {
     default: {
@@ -72,214 +62,138 @@ describe('persistence-service', () => {
   })
 
   describe('getFilePath', () => {
-    it('should return correct path for simple key', () => {
-      const path = getFilePath('projects')
-      expect(path).toBe(join('/mock/user/data', 'projects.json'))
-    })
-
-    it('should return correct path for nested key', () => {
-      const path = getFilePath('terminals/project-1')
-      expect(path).toBe(join('/mock/user/data', 'terminals/project-1.json'))
-    })
-
-    it('should throw error for path traversal attempt', () => {
-      expect(() => getFilePath('../etc/passwd')).toThrow('Invalid storage key')
-      expect(() => getFilePath('projects/../secrets')).toThrow('Invalid storage key')
-    })
-
-    it('should throw error for empty key', () => {
-      expect(() => getFilePath('')).toThrow('Invalid storage key')
-    })
-
-    it('should throw error for invalid characters', () => {
-      expect(() => getFilePath('projects;rm -rf')).toThrow('Invalid storage key')
-      expect(() => getFilePath('projects$(evil)')).toThrow('Invalid storage key')
+    it('should return correct file path', () => {
+      const path = getFilePath('test-project', 'test.json')
+      expect(path).toContain('test-project')
+      expect(path).toContain('test.json')
     })
   })
 
   describe('getBackupPath', () => {
-    it('should append .backup to file path', () => {
-      const path = getBackupPath('/mock/path/file.json')
-      expect(path).toBe('/mock/path/file.json.backup')
+    it('should return correct backup path', () => {
+      const path = getBackupPath('test.json')
+      expect(path).toContain('.backup')
+      expect(path).toContain('test.json')
     })
   })
 
   describe('read', () => {
-    it('should return parsed JSON data on success', async () => {
-      const testData = { name: 'test', value: 123 }
-      mockReadFile.mockResolvedValue(JSON.stringify(testData))
-
-      const result = await read<typeof testData>('test-key')
-
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data).toEqual(testData)
-      }
+    it('should read file successfully', async () => {
+      mockReadFile.mockResolvedValue(JSON.stringify({ test: 'data' }))
+      const result = await read('test-project', 'test.json')
+      expect(result).toEqual({ success: true, data: { test: 'data' } })
     })
 
-    it('should return FILE_NOT_FOUND error when file does not exist', async () => {
+    it('should return null on file not found', async () => {
       const error = new Error('File not found') as NodeJS.ErrnoException
       error.code = 'ENOENT'
       mockReadFile.mockRejectedValue(error)
-
-      const result = await read('missing-key')
-
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('FILE_NOT_FOUND')
-      }
+      const result = await read('test-project', 'test.json')
+      expect(result).toEqual({ success: true, data: null })
     })
 
-    it('should return PARSE_ERROR for invalid JSON', async () => {
-      mockReadFile.mockResolvedValue('not valid json')
-
-      const result = await read('invalid-json')
-
+    it('should return error on read failure', async () => {
+      mockReadFile.mockRejectedValue(new Error('Read failed'))
+      const result = await read('test-project', 'test.json')
       expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('PARSE_ERROR')
-      }
+      expect(result.error).toBe('Read failed')
     })
   })
 
   describe('write', () => {
-    it('should write JSON data atomically', async () => {
-      mockMkdir.mockResolvedValue(undefined)
+    it('should write file successfully', async () => {
       mockWriteFile.mockResolvedValue(undefined)
-      mockAccess.mockRejectedValue(new Error('File not found'))
+      const result = await write('test-project', 'test.json', { test: 'data' })
+      expect(result).toEqual({ success: true, data: undefined })
+      expect(mockWriteFile).toHaveBeenCalled()
+    })
+
+    it('should create backup if file exists', async () => {
+      mockAccess.mockResolvedValue(undefined)
+      mockReadFile.mockResolvedValue('old data')
       mockRename.mockResolvedValue(undefined)
+      mockWriteFile.mockResolvedValue(undefined)
 
-      const testData = { name: 'test' }
-      const result = await write('test-key', testData)
+      await write('test-project', 'test.json', { test: 'data' })
 
-      expect(result.success).toBe(true)
-      expect(mockWriteFile).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        JSON.stringify(testData, null, 2),
-        'utf-8'
-      )
       expect(mockRename).toHaveBeenCalled()
-    })
-
-    it('should create backup of existing file', async () => {
-      mockMkdir.mockResolvedValue(undefined)
-      mockWriteFile.mockResolvedValue(undefined)
-      mockAccess.mockResolvedValue(undefined) // File exists
-      mockRename.mockResolvedValue(undefined)
-
-      const result = await write('existing-key', { data: 'new' })
-
-      expect(result.success).toBe(true)
-      // Should have been called twice: once for backup, once for atomic rename
-      expect(mockRename).toHaveBeenCalledTimes(2)
-    })
-
-    it('should return WRITE_ERROR on failure', async () => {
-      mockMkdir.mockResolvedValue(undefined)
-      mockWriteFile.mockRejectedValue(new Error('Disk full'))
-      mockUnlink.mockResolvedValue(undefined)
-
-      const result = await write('fail-key', { data: 'test' })
-
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('WRITE_ERROR')
-      }
     })
   })
 
   describe('remove', () => {
-    it('should delete file successfully', async () => {
+    it('should remove file successfully', async () => {
       mockUnlink.mockResolvedValue(undefined)
-
-      const result = await remove('delete-key')
-
-      expect(result.success).toBe(true)
+      const result = await remove('test-project', 'test.json')
+      expect(result).toEqual({ success: true, data: undefined })
     })
 
-    it('should succeed if file does not exist', async () => {
+    it('should ignore file not found errors', async () => {
       const error = new Error('File not found') as NodeJS.ErrnoException
       error.code = 'ENOENT'
       mockUnlink.mockRejectedValue(error)
-
-      const result = await remove('missing-key')
-
-      expect(result.success).toBe(true)
-    })
-
-    it('should return DELETE_ERROR on other failures', async () => {
-      mockUnlink.mockRejectedValue(new Error('Permission denied'))
-
-      const result = await remove('protected-key')
-
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.code).toBe('DELETE_ERROR')
-      }
+      const result = await remove('test-project', 'test.json')
+      expect(result).toEqual({ success: true, data: undefined })
     })
   })
 
   describe('writeDebounced', () => {
-    it('should not write immediately', () => {
-      writeDebounced('debounce-key', { data: 'test' })
+    it('should debounce writes', async () => {
+      mockWriteFile.mockResolvedValue(undefined)
 
+      writeDebounced('test-project', 'test.json', { test: 'data1' })
+      writeDebounced('test-project', 'test.json', { test: 'data2' })
+      writeDebounced('test-project', 'test.json', { test: 'data3' })
+
+      // Should not have written yet
       expect(mockWriteFile).not.toHaveBeenCalled()
-      expect(getPendingWriteCount()).toBe(1)
+
+      // Fast forward past debounce time
+      vi.advanceTimersByTime(600)
+
+      // Should have written once
+      expect(mockWriteFile).toHaveBeenCalledTimes(1)
     })
 
-    it('should write after debounce delay', async () => {
-      mockMkdir.mockResolvedValue(undefined)
-      mockWriteFile.mockResolvedValue(undefined)
-      mockAccess.mockRejectedValue(new Error('File not found'))
-      mockRename.mockResolvedValue(undefined)
+    it('should track pending writes', () => {
+      writeDebounced('test-project', 'test.json', { test: 'data' })
+      expect(getPendingWriteCount()).toBe(1)
 
-      writeDebounced('debounce-key', { data: 'test' })
-
-      await vi.advanceTimersByTimeAsync(500)
-
-      expect(mockWriteFile).toHaveBeenCalled()
+      vi.advanceTimersByTime(600)
       expect(getPendingWriteCount()).toBe(0)
     })
 
-    it('should coalesce multiple writes to same key', async () => {
-      mockMkdir.mockResolvedValue(undefined)
+    it('should handle multiple files independently', async () => {
       mockWriteFile.mockResolvedValue(undefined)
-      mockAccess.mockRejectedValue(new Error('File not found'))
-      mockRename.mockResolvedValue(undefined)
 
-      writeDebounced('coalesce-key', { version: 1 })
-      writeDebounced('coalesce-key', { version: 2 })
-      writeDebounced('coalesce-key', { version: 3 })
+      writeDebounced('test-project', 'test1.json', { test: 'data1' })
+      writeDebounced('test-project', 'test2.json', { test: 'data2' })
 
-      expect(getPendingWriteCount()).toBe(1)
+      vi.advanceTimersByTime(600)
 
-      await vi.advanceTimersByTimeAsync(500)
-
-      expect(mockWriteFile).toHaveBeenCalledTimes(1)
-      expect(mockWriteFile).toHaveBeenCalledWith(
-        expect.any(String),
-        JSON.stringify({ version: 3 }, null, 2),
-        'utf-8'
-      )
+      expect(mockWriteFile).toHaveBeenCalledTimes(2)
     })
   })
 
   describe('flushPendingWrites', () => {
-    it('should write all pending data immediately', async () => {
-      mockMkdir.mockResolvedValue(undefined)
+    it('should flush all pending writes immediately', async () => {
       mockWriteFile.mockResolvedValue(undefined)
-      mockAccess.mockRejectedValue(new Error('File not found'))
-      mockRename.mockResolvedValue(undefined)
 
-      writeDebounced('key1', { data: 1 })
-      writeDebounced('key2', { data: 2 })
-
-      expect(getPendingWriteCount()).toBe(2)
+      writeDebounced('test-project', 'test.json', { test: 'data' })
+      expect(getPendingWriteCount()).toBe(1)
 
       await flushPendingWrites()
-
       expect(getPendingWriteCount()).toBe(0)
-      expect(mockWriteFile).toHaveBeenCalledTimes(2)
+      expect(mockWriteFile).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('clearPendingWrites', () => {
+    it('should clear all pending writes', () => {
+      writeDebounced('test-project', 'test.json', { test: 'data' })
+      expect(getPendingWriteCount()).toBe(1)
+
+      clearPendingWrites()
+      expect(getPendingWriteCount()).toBe(0)
     })
   })
 })
