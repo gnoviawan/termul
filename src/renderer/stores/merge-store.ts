@@ -2,15 +2,18 @@
  * Merge Store
  *
  * State management for merge operations including conflict detection,
- * merge preferences, and merge workflow state.
- * Source: Story 2.2 - Conflict Detection UI (Accurate vs Fast modes)
+ * merge preferences, merge preview, and merge workflow state.
+ * Source: Story 2.2 - Conflict Detection UI, Story 2.3 - Merge Preview UI
  */
 
 import { create } from 'zustand'
 import type {
   DetectionMode,
   ConflictDetectionResult,
-  MergePreference
+  MergePreference,
+  MergePreview,
+  FileChange,
+  ConflictedFile
 } from '@/shared/types/merge.types'
 
 /**
@@ -24,6 +27,14 @@ interface MergeStore {
   detectionError: string | null
   preferenceLoaded: boolean
 
+  // Preview state (Story 2.3)
+  mergePreview: MergePreview | null
+  isLoadingPreview: boolean
+  previewError: string | null
+  showConflictsOnly: boolean
+  selectedFile: FileChange | ConflictedFile | null
+  isDiffOpen: boolean
+
   // Actions
   setDetectionMode: (mode: DetectionMode) => void
   detectConflicts: (projectId: string, sourceBranch: string, targetBranch: string) => Promise<void>
@@ -31,6 +42,14 @@ interface MergeStore {
   savePreference: (mode: DetectionMode) => Promise<void>
   clearResults: () => void
   clearError: () => void
+
+  // Preview actions (Story 2.3)
+  getMergePreview: (projectId: string, sourceBranch: string, targetBranch: string) => Promise<void>
+  setShowConflictsOnly: (show: boolean) => void
+  setSelectedFile: (file: FileChange | ConflictedFile | null) => void
+  openDiff: () => void
+  closeDiff: () => void
+  clearPreview: () => void
 }
 
 /**
@@ -44,6 +63,14 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   isDetecting: false,
   detectionError: null,
   preferenceLoaded: false,
+
+  // Preview initial state (Story 2.3)
+  mergePreview: null,
+  isLoadingPreview: false,
+  previewError: null,
+  showConflictsOnly: false,
+  selectedFile: null,
+  isDiffOpen: false,
 
   // Set detection mode
   setDetectionMode: (mode: DetectionMode) => {
@@ -109,6 +136,59 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   // Clear error state
   clearError: () => {
     set({ detectionError: null })
+  },
+
+  // Get merge preview (Story 2.3)
+  getMergePreview: async (projectId: string, sourceBranch: string, targetBranch: string) => {
+    set({ isLoadingPreview: true, previewError: null })
+
+    try {
+      const result = await window.api.merge.getPreview({
+        projectId,
+        sourceBranch,
+        targetBranch
+      })
+
+      if (result.success) {
+        set({ mergePreview: result.data, isLoadingPreview: false })
+      } else {
+        set({ previewError: result.error || 'Preview generation failed', isLoadingPreview: false })
+      }
+    } catch (error) {
+      set({ previewError: String(error), isLoadingPreview: false })
+    }
+  },
+
+  // Show conflicts only toggle (Story 2.3)
+  setShowConflictsOnly: (show: boolean) => {
+    set({ showConflictsOnly: show })
+  },
+
+  // Set selected file for diff preview (Story 2.3)
+  setSelectedFile: (file: FileChange | ConflictedFile | null) => {
+    set({ selectedFile: file })
+  },
+
+  // Open diff preview (Story 2.3)
+  openDiff: () => {
+    set({ isDiffOpen: true })
+  },
+
+  // Close diff preview (Story 2.3)
+  closeDiff: () => {
+    set({ isDiffOpen: false, selectedFile: null })
+  },
+
+  // Clear preview state (Story 2.3)
+  clearPreview: () => {
+    set({
+      mergePreview: null,
+      isLoadingPreview: false,
+      previewError: null,
+      showConflictsOnly: false,
+      selectedFile: null,
+      isDiffOpen: false
+    })
   }
 }))
 
@@ -118,6 +198,14 @@ export const useDetectionResult = () => useMergeStore((state) => state.detection
 export const useIsDetecting = () => useMergeStore((state) => state.isDetecting)
 export const useDetectionError = () => useMergeStore((state) => state.detectionError)
 export const usePreferenceLoaded = () => useMergeStore((state) => state.preferenceLoaded)
+
+// Preview selectors (Story 2.3)
+export const useMergePreview = () => useMergeStore((state) => state.mergePreview)
+export const useIsLoadingPreview = () => useMergeStore((state) => state.isLoadingPreview)
+export const usePreviewError = () => useMergeStore((state) => state.previewError)
+export const useShowConflictsOnly = () => useMergeStore((state) => state.showConflictsOnly)
+export const useSelectedFile = () => useMergeStore((state) => state.selectedFile)
+export const useIsDiffOpen = () => useMergeStore((state) => state.isDiffOpen)
 
 // Combined selectors
 export const useDetectionState = () => useMergeStore((state) => ({
@@ -132,5 +220,11 @@ export const useMergeActions = () => useMergeStore((state) => ({
   detectConflicts: state.detectConflicts,
   loadPreference: state.loadPreference,
   clearResults: state.clearResults,
-  clearError: state.clearError
+  clearError: state.clearError,
+  getMergePreview: state.getMergePreview,
+  setShowConflictsOnly: state.setShowConflictsOnly,
+  setSelectedFile: state.setSelectedFile,
+  openDiff: state.openDiff,
+  closeDiff: state.closeDiff,
+  clearPreview: state.clearPreview
 }))

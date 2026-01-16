@@ -12,3 +12,15 @@ export type { ConflictDetectionResultsProps } from './ConflictDetectionResults'
 
 export { MergeDialog } from './MergeDialog'
 export type { MergeDialogProps } from './MergeDialog'
+
+export { MergePreviewDialog } from './MergePreviewDialog'
+export type { MergePreviewDialogProps } from './MergePreviewDialog'
+
+export { FileChangeGroup } from './FileChangeGroup'
+export type { FileChangeGroupProps } from './FileChangeGroup'
+
+export { FileChangeItem } from './FileChangeItem'
+export type { FileChangeItemProps } from './FileChangeItem'
+
+export { DiffPreview } from './DiffPreview'
+export type { DiffPreviewProps } from './DiffPreview'
