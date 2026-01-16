@@ -14,7 +14,8 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronRight,
-  SlidersHorizontal
+  SlidersHorizontal,
+  GitBranch
 } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import type { Project, ProjectColor } from '@/types/project'
@@ -25,7 +26,7 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
-import { WorktreeProjectSection } from '@/src/features/worktrees/components'
+import { WorktreeProjectSection, WorktreeCreateDialog } from '@/src/features/worktrees/components'
 
 interface ContextMenuState {
   isOpen: boolean
@@ -45,6 +46,13 @@ interface DeleteConfirmState {
   isOpen: boolean
   projectId: string
   projectName: string
+}
+
+interface WorktreeCreateDialogState {
+  isOpen: boolean
+  projectId: string
+  projectName?: string
+  projectPath?: string
 }
 
 interface ProjectSidebarProps {
@@ -102,6 +110,14 @@ export function ProjectSidebar({
     projectId: '',
     projectName: ''
   })
+
+  // Worktree create dialog state
+  const [worktreeCreateDialog, setWorktreeCreateDialog] = useState<WorktreeCreateDialogState>({
+    isOpen: false,
+    projectId: '',
+    projectName: ''
+  })
+  const [isWorktreeCreating, setIsWorktreeCreating] = useState(false)
 
   // Available shells state
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
@@ -209,6 +225,34 @@ export function ProjectSidebar({
     setDeleteConfirm({ isOpen: false, projectId: '', projectName: '' })
   }, [])
 
+  const handleOpenWorktreeCreateDialog = useCallback((projectId: string): void => {
+    const project = projects.find((p) => p.id === projectId)
+    // Validate project exists and has path before opening dialog
+    if (!project) {
+      console.error('[ProjectSidebar] Cannot open worktree dialog: project not found', projectId)
+      return
+    }
+    if (!project.path) {
+      console.error('[ProjectSidebar] Cannot open worktree dialog: project has no path', projectId)
+      return
+    }
+    setWorktreeCreateDialog({
+      isOpen: true,
+      projectId,
+      projectName: project.name,
+      projectPath: project.path
+    })
+  }, [projects])
+
+  const handleWorktreeCreated = useCallback((worktreeId: string): void => {
+    // Refresh worktrees for this project and expand the section
+    // Note: The WorktreeProjectSection component listens to IPC events and will update
+    // However, we proactively load to ensure UI is in sync
+    console.log('[ProjectSidebar] Worktree created:', worktreeId, '- expanding project section')
+    // The worktree store will auto-update via IPC event listeners in WorktreeProjectSection
+    // No additional action needed here as the event-driven architecture handles refresh
+  }, [])
+
   const getContextMenuItems = useCallback(
     (projectId: string): ContextMenuItem[] => {
       const project = projects.find((p) => p.id === projectId)
@@ -228,6 +272,12 @@ export function ProjectSidebar({
           label: 'Change Color',
           icon: <Palette size={14} />,
           onClick: () => handleOpenColorPicker(projectId, contextMenu.x, contextMenu.y)
+        },
+        {
+          label: 'Create Worktree',
+          icon: <GitBranch size={14} />,
+          onClick: () => handleOpenWorktreeCreateDialog(projectId),
+          disabled: isWorktreeCreating
         }
       ]
 
@@ -258,7 +308,7 @@ export function ProjectSidebar({
 
       return items
     },
-    [projects, availableShells, contextMenu.x, contextMenu.y, handleStartRename, handleOpenColorPicker, onUpdateProject, onArchiveProject, handleConfirmDelete]
+    [projects, availableShells, contextMenu.x, contextMenu.y, handleStartRename, handleOpenColorPicker, handleOpenWorktreeCreateDialog, onUpdateProject, onArchiveProject, handleConfirmDelete, isWorktreeCreating]
   )
 
   const getArchivedContextMenuItems = useCallback(
@@ -461,6 +511,19 @@ export function ProjectSidebar({
         onConfirm={handleDelete}
         onCancel={handleCancelDelete}
       />
+
+      {/* Worktree Create Dialog */}
+      {worktreeCreateDialog.isOpen && (
+        <WorktreeCreateDialog
+          isOpen={worktreeCreateDialog.isOpen}
+          projectId={worktreeCreateDialog.projectId}
+          projectName={worktreeCreateDialog.projectName}
+          projectPath={worktreeCreateDialog.projectPath ?? ''}
+          onClose={() => setWorktreeCreateDialog({ isOpen: false, projectId: '', projectName: '', projectPath: '' })}
+          onSuccess={handleWorktreeCreated}
+          onCreatingChange={setIsWorktreeCreating}
+        />
+      )}
     </aside>
   )
 }

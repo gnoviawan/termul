@@ -159,6 +159,7 @@ export interface ArchivedWorktree {
 // DTOs for worktree operations
 export interface CreateWorktreeDto {
   projectId: string
+  projectPath: string // Actual Git repository path
   branchName: string
   gitignoreSelections: string[]
 }
@@ -329,4 +330,42 @@ export interface AIPromptApi {
   listTemplates: () => Promise<IpcResult<AIToolTemplate[]>>
   registerTemplate: (dto: RegisterTemplateDto) => Promise<IpcResult<void>>
   validateTemplate: (dto: ValidateTemplateDto) => Promise<IpcResult<ValidationResult>>
+}
+
+// ============================================================================
+// Keyboard Shortcuts Types (Story 3.3)
+// ============================================================================
+
+// Import keyboard shortcuts types from keyboard-shortcuts.types.ts
+import type {
+  KeyboardShortcut,
+  Keybinding,
+  ShortcutConflict,
+  ShortcutRemapResult,
+  ShortcutCategory,
+  KeyboardShortcutSettings,
+  UpdateShortcutDto,
+  KeyboardShortcutErrorCodeType
+} from './keyboard-shortcuts.types'
+
+// Re-export for convenience
+export type {
+  KeyboardShortcut,
+  Keybinding,
+  ShortcutConflict,
+  ShortcutRemapResult,
+  ShortcutCategory,
+  KeyboardShortcutSettings,
+  UpdateShortcutDto,
+  KeyboardShortcutErrorCodeType
+} from './keyboard-shortcuts.types'
+
+// Keyboard Shortcuts API exposed via preload
+// Story 3.3 - Task 2.7: Add keyboard shortcuts API to preload script
+export interface KeyboardShortcutsApi {
+  listShortcuts: () => Promise<IpcResult<KeyboardShortcut[]>>
+  updateShortcut: (dto: UpdateShortcutDto) => Promise<IpcResult<KeyboardShortcut>>
+  resetShortcuts: () => Promise<IpcResult<KeyboardShortcut[]>>
+  getShortcutForCommand: (command: string) => Promise<IpcResult<KeyboardShortcut | null>>
+  formatKeybinding: (keybinding: { modifier: string; key: string }) => Promise<IpcResult<string>>
 }

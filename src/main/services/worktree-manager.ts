@@ -9,6 +9,42 @@
  */
 
 import simpleGit, { type SimpleGit } from 'simple-git'
+import { execSync } from 'node:child_process'
+
+/**
+ * Find Git executable path on the system
+ * On Windows, the main process may not have PATH set correctly
+ */
+function findGitExecutable(): string | undefined {
+  try {
+    // Try to find git using 'where' command on Windows
+    const gitPath = execSync('where git', { encoding: 'utf-8' }).trim().split('\n')[0]
+    console.log('[WorktreeManager] Found Git at:', gitPath)
+    return gitPath
+  } catch {
+    // Fallback to common Windows Git installation paths
+    const commonPaths = [
+      'C:\\Program Files\\Git\\bin\\git.exe',
+      'C:\\Program Files\\Git\\cmd\\git.exe',
+      'C:\\Program Files (x86)\\Git\\bin\\git.exe',
+      'C:\\Program Files (x86)\\Git\\cmd\\git.exe'
+    ]
+    for (const path of commonPaths) {
+      try {
+        execSync(`"${path}" --version`, { encoding: 'utf-8' })
+        console.log('[WorktreeManager] Found Git at common path:', path)
+        return path
+      } catch {
+        // Continue to next path
+      }
+    }
+    console.warn('[WorktreeManager] Could not find Git executable')
+    return undefined
+  }
+}
+
+// Cache the Git executable path
+let GIT_EXECUTABLE: string | undefined = findGitExecutable()
 
 /**
  * Re-export types from renderer for main process use
@@ -169,7 +205,23 @@ export class WorktreeManager {
   constructor(projectRoot: string, projectId: string) {
     this.projectRoot = projectRoot
     this.projectId = projectId
-    this.git = simpleGit(projectRoot)
+
+    // Try to use explicit Git path, but fall back to default if not found
+    const gitConfig: any = {
+      baseDir: projectRoot,
+      timeout: { block: 10000 }
+    }
+
+    // Only set explicit git path if we found one successfully
+    if (GIT_EXECUTABLE) {
+      gitConfig.git = GIT_EXECUTABLE
+      console.log('[WorktreeManager] Using explicit Git path:', GIT_EXECUTABLE)
+    } else {
+      console.log('[WorktreeManager] Using system PATH to find Git')
+    }
+
+    this.git = simpleGit(gitConfig)
+    console.log('[WorktreeManager] Initialized with projectRoot:', projectRoot)
   }
 
   /**
@@ -183,15 +235,47 @@ export class WorktreeManager {
    */
   async validateGitVersion(): Promise<GitVersionValidation> {
     try {
+      console.log('[WorktreeManager] validateGitVersion - projectRoot:', this.projectRoot)
       const result = await this.git.version()
-      const version = result.git
+      console.log('[WorktreeManager] Raw version() result:', result)
+
+      // simple-git v3.x returns { major, minor, patch, agent, installed }
+      // simple-git v2.x returns { git: "version string" }
+      let version: string
+
+      if ((result as any).major !== undefined) {
+        // Newer format (v3.x)
+        const { major, minor, patch } = result as { major: number; minor: number; patch: number }
+        version = `${major}.${minor}.${patch}`
+      } else if ((result as any).git) {
+        // Older format (v2.x)
+        version = (result as any).git
+      } else if ((result as any).version) {
+        version = (result as any).version
+      } else if ((result as any).stdout) {
+        version = (result as any).stdout
+      } else if (typeof result === 'string') {
+        version = result
+      }
+
+      console.log('[WorktreeManager] Extracted version:', version)
+
+      if (!version) {
+        throw new Error('Could not extract version from git --version output')
+      }
+
+      // Clean up version string (remove 'git version ' prefix if present)
+      const cleanVersion = version.replace(/^git version\s+/i, '').trim()
+      console.log('[WorktreeManager] Cleaned version:', cleanVersion)
 
       // Parse semantic version for comparison
-      const isValid = this.compareVersions(version, MINIMUM_GIT_VERSION) >= 0
+      const isValid = this.compareVersions(cleanVersion, MINIMUM_GIT_VERSION) >= 0
+      console.log('[WorktreeManager] Version check - valid:', isValid, 'detected:', cleanVersion, 'required:', MINIMUM_GIT_VERSION)
 
       // Return validation result instead of throwing for old versions
-      return { valid: isValid, version }
+      return { valid: isValid, version: cleanVersion }
     } catch (error) {
+      console.error('[WorktreeManager] validateGitVersion error:', error)
       throw new WorktreeError(
         'GIT_OPERATION_FAILED',
         'Failed to determine Git version. Ensure Git is installed and accessible.',
@@ -215,8 +299,11 @@ export class WorktreeManager {
   async create(options: CreateWorktreeOptions): Promise<WorktreeMetadata> {
     const { projectId, branchName, gitignoreSelections } = options
 
+    console.log('[WorktreeManager] create - projectRoot:', this.projectRoot, 'projectId:', projectId, 'branchName:', branchName)
+
     // Validate Git version first
     const versionCheck = await this.validateGitVersion()
+    console.log('[WorktreeManager] create - versionCheck:', versionCheck)
 
     // Throw error if version too old for worktree operations
     if (!versionCheck.valid) {
@@ -235,7 +322,10 @@ export class WorktreeManager {
 
     // Create the worktree via Git
     try {
-      await this.git.worktreeAdd(worktreePath, branchName)
+      // simple-git v3.x doesn't have worktree methods, use raw() with git worktree add
+      // Use -b flag to create new branch if it doesn't exist
+      const createResult = await this.git.raw(['worktree', 'add', '-b', branchName, worktreePath])
+      console.log('[WorktreeManager] worktree add result:', createResult)
     } catch (error) {
       throw new WorktreeError(
         'GIT_OPERATION_FAILED',
@@ -278,8 +368,28 @@ export class WorktreeManager {
    */
   async list(projectId: string): Promise<WorktreeMetadata[]> {
     try {
-      const result = await this.git.worktreeList()
-      const worktrees = result.all || []
+      // simple-git v3.x doesn't have worktree methods, use raw() with git worktree list
+      // Output format: "worktree /path/to/worktree branch_name"
+      const rawOutput = await this.git.raw(['worktree', 'list', '--porcelain'])
+
+      // Parse porcelain output (more reliable than parsing default format)
+      const lines = rawOutput.split('\n')
+      const worktrees: Array<{ path: string; branch: string }> = []
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim()
+        if (line.startsWith('worktree ')) {
+          const path = line.substring('worktree '.length).trim()
+          // Next line should be the branch reference
+          const nextLine = lines[i + 1]?.trim()
+          if (nextLine?.startsWith('branch ')) {
+            const branchRef = nextLine.substring('branch '.length).trim()
+            // Extract branch name from refs/heads/branch_name
+            const branch = branchRef.replace('refs/heads/', '')
+            worktrees.push({ path, branch })
+          }
+        }
+      }
 
       // Filter to this project and map to metadata
       return worktrees
@@ -328,8 +438,8 @@ export class WorktreeManager {
       // Get worktree path from ID
       const worktreePath = await this.getWorktreePathById(worktreeId)
 
-      // Remove the worktree
-      await this.git.worktreeRemove(worktreePath)
+      // simple-git v3.x doesn't have worktreeRemove(), use raw() with git worktree remove
+      await this.git.raw(['worktree', 'remove', worktreePath])
 
       // Optionally delete the branch
       if (options.deleteBranch) {

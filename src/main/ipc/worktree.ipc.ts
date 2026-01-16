@@ -59,8 +59,11 @@ export function registerWorktreeIpc(): void {
   // Create a new worktree
   ipcMain.handle('worktree:create', async (_event, dto: CreateWorktreeDto): Promise<IpcResult<WorktreeMetadata>> => {
     try {
-      // TODO: Get projectRoot from project registry using dto.projectId
-      const projectRoot = process.cwd()
+      console.log('[worktree:create] Received DTO:', dto)
+
+      // Use projectPath from DTO - this is the actual Git repository path
+      const projectRoot = dto.projectPath
+      console.log('[worktree:create] Using projectRoot:', projectRoot)
 
       const manager = new WorktreeManager(projectRoot, dto.projectId)
 
