@@ -24,3 +24,12 @@ export type { FileChangeItemProps } from './FileChangeItem'
 
 export { DiffPreview } from './DiffPreview'
 export type { DiffPreviewProps } from './DiffPreview'
+
+export { MergeWorkflowManager } from './MergeWorkflowManager'
+export type { MergeWorkflowManagerProps } from './MergeWorkflowManager'
+
+export { BranchSelectionStep } from './BranchSelectionStep'
+export type { BranchSelectionStepProps } from './BranchSelectionStep'
+
+export { MergeValidationStep } from './MergeValidationStep'
+export type { MergeValidationStepProps } from './MergeValidationStep'

@@ -3,10 +3,11 @@
  *
  * Context menu for worktree actions: Open Terminal, Archive, Delete, Show in Explorer.
  * Source: Story 1.5 - Task 7: Add Worktree Actions Menu
+ * Story 2.4 - Task 1: Added "Merge to main" option
  */
 
 import { memo } from 'react'
-import { Terminal, Archive, Trash2, FolderOpen, ExternalLink } from 'lucide-react'
+import { Terminal, Archive, Trash2, FolderOpen, ExternalLink, GitMerge } from 'lucide-react'
 import { ContextMenu } from '@/components/ContextMenu'
 import type { ContextMenuItem } from '@/components/ContextMenu'
 import type { WorktreeMetadata } from '../../worktree.types'
@@ -21,6 +22,7 @@ export interface WorktreeContextMenuProps {
   onArchive?: (worktreeId: string) => void
   onDelete?: (worktreeId: string) => void
   onShowInExplorer?: (worktreeId: string) => void
+  onMergeToMain?: (worktreeId: string) => void  // Story 2.4
 }
 
 /**
@@ -44,7 +46,8 @@ export const WorktreeContextMenu = memo(({
   onOpenTerminal,
   onArchive,
   onDelete,
-  onShowInExplorer
+  onShowInExplorer,
+  onMergeToMain  // Story 2.4
 }: WorktreeContextMenuProps) => {
   console.log('[WorktreeContextMenu] Rendered with isOpen:', isOpen, 'worktree:', worktree.branchName, 'position:', { x, y })
 
@@ -77,6 +80,19 @@ export const WorktreeContextMenu = memo(({
     {
       type: 'separator'
     },
+    // Story 2.4: Merge to main option
+    ...(onMergeToMain ? [{
+      label: 'Merge to main',
+      icon: <GitMerge size={14} />,
+      onClick: () => {
+        onMergeToMain(worktree.id)
+        onClose()
+      },
+      shortcut: 'Ctrl+Shift+M',
+      disabled: worktree.hasUncommittedChanges,
+      tooltip: worktree.hasUncommittedChanges ? 'Cannot merge worktree with uncommitted changes' : undefined
+    } as ContextMenuItem] : []),
+    ...(onMergeToMain ? [{ type: 'separator' as const }] : []),
     {
       label: 'Archive',
       icon: <Archive size={14} />,

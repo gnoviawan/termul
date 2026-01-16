@@ -3,7 +3,7 @@
  *
  * State management for merge operations including conflict detection,
  * merge preferences, merge preview, and merge workflow state.
- * Source: Story 2.2 - Conflict Detection UI, Story 2.3 - Merge Preview UI
+ * Source: Story 2.2 - Conflict Detection UI, Story 2.3 - Merge Preview UI, Story 2.4 - Merge Workflow
  */
 
 import { create } from 'zustand'
@@ -13,8 +13,14 @@ import type {
   MergePreference,
   MergePreview,
   FileChange,
-  ConflictedFile
+  ConflictedFile,
+  MergeResult
 } from '@/shared/types/merge.types'
+
+/**
+ * Workflow state for merge process
+ */
+export type WorkflowState = 'idle' | 'select-branch' | 'detect-conflicts' | 'preview' | 'validate' | 'execute' | 'complete'
 
 /**
  * Merge store state and actions
@@ -35,6 +41,16 @@ interface MergeStore {
   selectedFile: FileChange | ConflictedFile | null
   isDiffOpen: boolean
 
+  // Workflow state (Story 2.4)
+  workflowState: WorkflowState
+  sourceBranch: string
+  targetBranch: string
+  mergeResult: MergeResult | null
+  isMerging: boolean
+  mergeError: string | null
+  worktreeId: string | null
+  projectId: string | null
+
   // Actions
   setDetectionMode: (mode: DetectionMode) => void
   detectConflicts: (projectId: string, sourceBranch: string, targetBranch: string) => Promise<void>
@@ -50,6 +66,13 @@ interface MergeStore {
   openDiff: () => void
   closeDiff: () => void
   clearPreview: () => void
+
+  // Workflow actions (Story 2.4)
+  setWorkflowState: (state: WorkflowState) => void
+  setBranches: (source: string, target: string) => void
+  setWorktreeContext: (worktreeId: string, projectId: string) => void
+  executeMerge: () => Promise<void>
+  resetWorkflow: () => void
 }
 
 /**
@@ -71,6 +94,16 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   showConflictsOnly: false,
   selectedFile: null,
   isDiffOpen: false,
+
+  // Workflow initial state (Story 2.4)
+  workflowState: 'idle',
+  sourceBranch: '',
+  targetBranch: '',
+  mergeResult: null,
+  isMerging: false,
+  mergeError: null,
+  worktreeId: null,
+  projectId: null,
 
   // Set detection mode
   setDetectionMode: (mode: DetectionMode) => {
@@ -189,6 +222,62 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
       selectedFile: null,
       isDiffOpen: false
     })
+  },
+
+  // Set workflow state (Story 2.4)
+  setWorkflowState: (state: WorkflowState) => {
+    set({ workflowState: state })
+  },
+
+  // Set branches for merge (Story 2.4)
+  setBranches: (source: string, target: string) => {
+    set({ sourceBranch: source, targetBranch: target })
+  },
+
+  // Set worktree context (Story 2.4)
+  setWorktreeContext: (worktreeId: string, projectId: string) => {
+    set({ worktreeId, projectId })
+  },
+
+  // Execute merge (Story 2.4)
+  executeMerge: async () => {
+    const { projectId, sourceBranch, targetBranch } = get()
+    if (!projectId || !sourceBranch || !targetBranch) {
+      set({ mergeError: 'Missing required context for merge', isMerging: false })
+      return
+    }
+
+    set({ isMerging: true, mergeError: null })
+
+    try {
+      const result = await window.api.merge.execute({
+        projectId,
+        sourceBranch,
+        targetBranch
+      })
+
+      if (result.success && result.data) {
+        set({ mergeResult: result.data, isMerging: false, workflowState: 'complete' })
+      } else {
+        set({ mergeError: result.error || 'Merge failed', isMerging: false })
+      }
+    } catch (error) {
+      set({ mergeError: String(error), isMerging: false })
+    }
+  },
+
+  // Reset workflow state (Story 2.4)
+  resetWorkflow: () => {
+    set({
+      workflowState: 'idle',
+      sourceBranch: '',
+      targetBranch: '',
+      mergeResult: null,
+      isMerging: false,
+      mergeError: null,
+      worktreeId: null,
+      projectId: null
+    })
   }
 }))
 
@@ -206,6 +295,13 @@ export const usePreviewError = () => useMergeStore((state) => state.previewError
 export const useShowConflictsOnly = () => useMergeStore((state) => state.showConflictsOnly)
 export const useSelectedFile = () => useMergeStore((state) => state.selectedFile)
 export const useIsDiffOpen = () => useMergeStore((state) => state.isDiffOpen)
+
+// Workflow selectors (Story 2.4)
+export const useWorkflowState = () => useMergeStore((state) => state.workflowState)
+export const useSourceBranch = () => useMergeStore((state) => state.sourceBranch)
+export const useTargetBranch = () => useMergeStore((state) => state.targetBranch)
+export const useIsMerging = () => useMergeStore((state) => state.isMerging)
+export const useMergeError = () => useMergeStore((state) => state.mergeError)
 
 // Combined selectors
 export const useDetectionState = () => useMergeStore((state) => ({
@@ -226,5 +322,10 @@ export const useMergeActions = () => useMergeStore((state) => ({
   setSelectedFile: state.setSelectedFile,
   openDiff: state.openDiff,
   closeDiff: state.closeDiff,
-  clearPreview: state.clearPreview
+  clearPreview: state.clearPreview,
+  setWorkflowState: state.setWorkflowState,
+  setBranches: state.setBranches,
+  setWorktreeContext: state.setWorktreeContext,
+  executeMerge: state.executeMerge,
+  resetWorkflow: state.resetWorkflow
 }))
