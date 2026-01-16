@@ -271,3 +271,36 @@ export interface GitignoreApi {
   deleteProfile: (dto: DeleteProfileDto) => Promise<IpcResult<void>>
   loadProfiles: (dto: LoadProfilesDto) => Promise<IpcResult<GitignoreProfile[]>>
 }
+
+// ============================================================================
+// Merge Types (Story 2.1)
+// ============================================================================
+
+// Import merge types from merge.types.ts
+export type {
+  ConflictDetectionResult,
+  MergePreview,
+  ConflictedFile,
+  MergeResult,
+  MergeValidationResult,
+  FileChange,
+  DetectionMode,
+  MergeStrategy,
+  ConflictSeverity,
+  MergePreference
+} from './merge.types'
+
+// DTOs for merge operations
+export type { DetectConflictsDto, MergePreviewDto, ExecuteMergeDto, ValidateMergeDto } from './merge.types'
+
+// Merge API exposed via preload
+// Story 2.1 - Task 5: Update Shared Types
+export interface MergeApi {
+  detectConflicts: (dto: DetectConflictsDto) => Promise<IpcResult<ConflictDetectionResult>>
+  getPreview: (dto: MergePreviewDto) => Promise<IpcResult<MergePreview>>
+  execute: (dto: ExecuteMergeDto) => Promise<IpcResult<MergeResult>>
+  getConflictedFiles: (projectId: string) => Promise<IpcResult<ConflictedFile[]>>
+  validate: (dto: ValidateMergeDto) => Promise<IpcResult<MergeValidationResult>>
+  getPreference: () => Promise<IpcResult<MergePreference>>
+  setPreference: (pref: MergePreference) => Promise<IpcResult<void>>
+}

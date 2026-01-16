@@ -7,6 +7,7 @@ import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
 import { registerWorktreeIpc } from './ipc/worktree.ipc'
+import { registerMergeIpc } from './ipc/merge.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
@@ -104,6 +105,7 @@ export function initializeApp(): void {
     registerPersistenceIpc()
     registerSystemIpc()
     registerWorktreeIpc()
+    registerMergeIpc()
     initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window

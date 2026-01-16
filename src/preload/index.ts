@@ -28,8 +28,21 @@ import type {
   DeleteWorktreeOptions,
   StatusChangedCallback,
   WorktreeCreatedCallback,
-  WorktreeDeletedCallback
+  WorktreeDeletedCallback,
+  MergeApi
 } from '../shared/types/ipc.types'
+import type {
+  ConflictDetectionResult,
+  MergePreview,
+  MergeResult,
+  ConflictedFile,
+  MergeValidationResult,
+  DetectConflictsDto,
+  MergePreviewDto,
+  ExecuteMergeDto,
+  ValidateMergeDto,
+  MergePreference
+} from '../shared/types/merge.types'
 import type {
   UpdateInfo,
   UpdateState,
@@ -354,6 +367,38 @@ const worktreeApi: WorktreeApi = {
   }
 }
 
+// Merge API for renderer
+// Story 2.1 - Task 4: Implement Preload API
+const mergeApi: MergeApi = {
+  detectConflicts: (dto: DetectConflictsDto): Promise<IpcResult<ConflictDetectionResult>> => {
+    return ipcRenderer.invoke('merge:detect-conflicts', dto)
+  },
+
+  getPreview: (dto: MergePreviewDto): Promise<IpcResult<MergePreview>> => {
+    return ipcRenderer.invoke('merge:get-preview', dto)
+  },
+
+  execute: (dto: ExecuteMergeDto): Promise<IpcResult<MergeResult>> => {
+    return ipcRenderer.invoke('merge:execute', dto)
+  },
+
+  getConflictedFiles: (projectId: string): Promise<IpcResult<ConflictedFile[]>> => {
+    return ipcRenderer.invoke('merge:get-conflicted-files', projectId)
+  },
+
+  validate: (dto: ValidateMergeDto): Promise<IpcResult<MergeValidationResult>> => {
+    return ipcRenderer.invoke('merge:validate', dto)
+  },
+
+  getPreference: (): Promise<IpcResult<MergePreference>> => {
+    return ipcRenderer.invoke('merge:get-preference')
+  },
+
+  setPreference: (pref: MergePreference): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('merge:set-preference', pref)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -363,7 +408,8 @@ const api = {
   system: systemApi,
   keyboard: keyboardApi,
   updater: updaterApi,
-  worktree: worktreeApi
+  worktree: worktreeApi,
+  merge: mergeApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
