@@ -6,6 +6,7 @@ import type {
   DialogApi,
   SystemApi,
   KeyboardApi,
+  KeyboardShortcutsApi,
   WorktreeApi,
   MergeApi,
   AIPromptApi
@@ -22,6 +23,7 @@ declare global {
       dialog: DialogApi
       system: SystemApi
       keyboard: KeyboardApi
+      keyboardShortcuts: KeyboardShortcutsApi
       updater: UpdaterApi
       worktree: WorktreeApi
       merge: MergeApi

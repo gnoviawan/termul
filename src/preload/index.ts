@@ -20,6 +20,7 @@ import type {
   SystemApi,
   KeyboardApi,
   KeyboardShortcutCallback,
+  KeyboardShortcutsApi,
   WorktreeApi,
   WorktreeMetadata,
   WorktreeStatus,
@@ -63,6 +64,10 @@ import type {
   RegisterTemplateDto,
   ValidateTemplateDto
 } from '../shared/types/ai-prompt.types'
+import type {
+  KeyboardShortcut,
+  UpdateShortcutDto
+} from '../shared/types/keyboard-shortcuts.types'
 
 // Terminal API for renderer
 const terminalApi: TerminalApi = {
@@ -428,6 +433,30 @@ const aiPromptApi: AIPromptApi = {
   }
 }
 
+// Keyboard Shortcuts API for renderer
+// Story 3.3 - Task 2.7: Add keyboard shortcuts API to preload script
+const keyboardShortcutsApi: KeyboardShortcutsApi = {
+  listShortcuts: (): Promise<IpcResult<KeyboardShortcut[]>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:list')
+  },
+
+  updateShortcut: (dto: UpdateShortcutDto): Promise<IpcResult<KeyboardShortcut>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:update', dto)
+  },
+
+  resetShortcuts: (): Promise<IpcResult<KeyboardShortcut[]>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:reset')
+  },
+
+  getShortcutForCommand: (command: string): Promise<IpcResult<KeyboardShortcut | null>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:get-shortcut', command)
+  },
+
+  formatKeybinding: (keybinding: { modifier: string; key: string }): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:format-keybinding', keybinding)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -436,6 +465,7 @@ const api = {
   persistence: persistenceApi,
   system: systemApi,
   keyboard: keyboardApi,
+  keyboardShortcuts: keyboardShortcutsApi,
   updater: updaterApi,
   worktree: worktreeApi,
   merge: mergeApi,

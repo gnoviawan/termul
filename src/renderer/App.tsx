@@ -11,6 +11,7 @@ import AppPreferences from './pages/AppPreferences'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { AITemplatesSettings } from './src/features/ai-templates'
+import { KeyboardShortcutsSettings } from './src/features/keyboard'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useCwd } from './hooks/use-cwd'
@@ -80,7 +81,8 @@ const router = createHashRouter(
         { path: 'snapshots', element: <WorkspaceSnapshots /> },
         { path: 'settings', element: <ProjectSettings /> },
         { path: 'preferences', element: <AppPreferences /> },
-        { path: 'ai-templates', element: <AITemplatesSettings /> }
+        { path: 'ai-templates', element: <AITemplatesSettings /> },
+        { path: 'keyboard-shortcuts', element: <KeyboardShortcutsSettings /> }
       ]
     },
     { path: '*', element: <NotFound /> }
