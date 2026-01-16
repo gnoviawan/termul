@@ -182,3 +182,6 @@ vi.mock('../main/menu', () => ({
   setMainWindow: vi.fn()
 }))
 
+// Mock Element.scrollIntoView for jsdom
+Element.prototype.scrollIntoView = vi.fn()
+

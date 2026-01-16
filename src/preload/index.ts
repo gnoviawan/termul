@@ -285,6 +285,7 @@ const updaterApi: UpdaterApi = {
 }
 
 // Worktree API for renderer
+// Story 1.6 - Task 6: Update IPC Channels for Archive/Delete
 const worktreeApi: WorktreeApi = {
   list: (projectId: string): Promise<IpcResult<WorktreeMetadata[]>> => {
     return ipcRenderer.invoke('worktree:list', projectId)
@@ -302,8 +303,20 @@ const worktreeApi: WorktreeApi = {
     return ipcRenderer.invoke('worktree:archive', worktreeId)
   },
 
-  restore: (archiveId: string): Promise<IpcResult<WorktreeMetadata>> => {
-    return ipcRenderer.invoke('worktree:restore', archiveId)
+  restore: (archiveId: string, projectId: string): Promise<IpcResult<WorktreeMetadata>> => {
+    return ipcRenderer.invoke('worktree:restore', archiveId, projectId)
+  },
+
+  listArchived: (projectId: string): Promise<IpcResult<ArchivedWorktree[]>> => {
+    return ipcRenderer.invoke('worktree:list-archived', projectId)
+  },
+
+  deleteArchive: (archiveId: string, projectId: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('worktree:delete-archive', archiveId, projectId)
+  },
+
+  cleanupArchives: (projectId: string): Promise<IpcResult<{ cleaned: number }>> => {
+    return ipcRenderer.invoke('worktree:cleanup-archives', projectId)
   },
 
   getStatus: (worktreeId: string): Promise<IpcResult<WorktreeStatus>> => {

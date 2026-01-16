@@ -64,6 +64,72 @@ export interface DeleteWorktreeOptions {
 }
 
 /**
+ * Archive manifest structure
+ */
+interface ArchiveManifest {
+  archives: ArchivedWorktree[]
+  version: number
+}
+
+/**
+ * Create archive manifest if it doesn't exist
+ */
+async function ensureArchiveManifest(projectRoot: string): Promise<ArchiveManifest> {
+  const fs = await import('node:fs/promises')
+  const path = await import('node:path')
+
+  const manifestPath = path.join(projectRoot, '.termul', 'archives', 'archive-manifest.json')
+
+  try {
+    const content = await fs.readFile(manifestPath, 'utf-8')
+    return JSON.parse(content) as ArchiveManifest
+  } catch {
+    // Create new manifest if it doesn't exist
+    const manifest: ArchiveManifest = {
+      archives: [],
+      version: 1
+    }
+
+    // Ensure archives directory exists
+    await fs.mkdir(path.join(projectRoot, '.termul', 'archives'), { recursive: true })
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2))
+
+    return manifest
+  }
+}
+
+/**
+ * Save archive manifest
+ */
+async function saveArchiveManifest(projectRoot: string, manifest: ArchiveManifest): Promise<void> {
+  const fs = await import('node:fs/promises')
+  const path = await import('node:path')
+
+  const manifestPath = path.join(projectRoot, '.termul', 'archives', 'archive-manifest.json')
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2))
+}
+
+/**
+ * Check for unpushed commits in a worktree
+ */
+async function checkUnpushedCommits(worktreePath: string): Promise<{ hasUnpushed: boolean; count: number }> {
+  const simpleGit = await import('simple-git')
+  const git = simpleGit.default(worktreePath)
+
+  try {
+    const status = await git.status()
+    const unpushedCount = status.ahead || 0
+
+    return {
+      hasUnpushed: unpushedCount > 0,
+      count: unpushedCount
+    }
+  } catch {
+    return { hasUnpushed: false, count: 0 }
+  }
+}
+
+/**
  * Result of Git version validation
  */
 export interface GitVersionValidation {
@@ -284,12 +350,80 @@ export class WorktreeManager {
    * - Moves worktree to archives directory
    * - Creates archive manifest with 30-day retention
    *
+   * Story 1.6 - Task 1.3: Implement archive operation
+   *
    * @param worktreeId - ID of worktree to archive
    * @returns Archived worktree metadata
    */
   async archive(worktreeId: string): Promise<ArchivedWorktree> {
-    // TODO: Implement archival logic (Story 1.2, AC #8)
-    throw new WorktreeError('ARCHIVE_NOT_FOUND', 'Archive operation not yet implemented')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    try {
+      // Get worktree path from ID
+      const worktreePath = await this.getWorktreePathById(worktreeId)
+
+      // Check if worktree exists
+      try {
+        await fs.access(worktreePath)
+      } catch {
+        throw new WorktreeError('WORKTREE_NOT_FOUND', `Worktree not found at path: ${worktreePath}`)
+      }
+
+      // Get worktree metadata
+      const worktrees = await this.list(this.projectId)
+      const worktree = worktrees.find(w => w.id === worktreeId)
+
+      if (!worktree) {
+        throw new WorktreeError('WORKTREE_NOT_FOUND', `Worktree with ID ${worktreeId} not found`)
+      }
+
+      // Check for unpushed commits
+      const unpushedInfo = await checkUnpushedCommits(worktreePath)
+
+      // Generate archive path: .termul/archives/<sanitized-branch-name>-<timestamp>/
+      const timestamp = Date.now()
+      const sanitizedBranch = this.sanitizeBranchName(worktree.branchName)
+      const archiveDirName = `${sanitizedBranch}-${timestamp}`
+      const archivePath = path.join(this.projectRoot, '.termul', 'archives', archiveDirName)
+
+      // Ensure archives directory exists
+      await fs.mkdir(path.join(this.projectRoot, '.termul', 'archives'), { recursive: true })
+
+      // Move worktree to archive path
+      await fs.rename(worktreePath, archivePath)
+
+      // Calculate expiration date (30 days from now)
+      const expiresAt = new Date()
+      expiresAt.setDate(expiresAt.getDate() + 30)
+
+      // Create archived worktree metadata
+      const archivedWorktree: ArchivedWorktree = {
+        originalPath: worktreePath,
+        archivePath,
+        archivedAt: new Date().toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        branchName: worktree.branchName,
+        projectId: this.projectId,
+        unpushedCommits: unpushedInfo.hasUnpushed,
+        commitCount: unpushedInfo.count
+      }
+
+      // Update archive manifest
+      const manifest = await ensureArchiveManifest(this.projectRoot)
+      manifest.archives.push(archivedWorktree)
+      await saveArchiveManifest(this.projectRoot, manifest)
+
+      return archivedWorktree
+    } catch (error) {
+      if (error instanceof WorktreeError) {
+        throw error
+      }
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        `Failed to archive worktree: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
   }
 
   /**
@@ -298,12 +432,184 @@ export class WorktreeManager {
    * Implements AC #9:
    * - Restores worktree from archive
    *
-   * @param archiveId - ID of archive to restore
+   * Story 1.6 - Task 2.3: Implement restore functionality
+   *
+   * @param archiveId - ID of archive to restore (branch name from archive)
    * @returns Restored worktree metadata
    */
   async restore(archiveId: string): Promise<WorktreeMetadata> {
-    // TODO: Implement restore logic (Story 1.2, AC #9)
-    throw new WorktreeError('WORKTREE_NOT_FOUND', 'Restore operation not yet implemented')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    try {
+      // Load archive manifest
+      const manifest = await ensureArchiveManifest(this.projectRoot)
+      const archive = manifest.archives.find(a => a.branchName === archiveId || a.archivePath.endsWith(archiveId))
+
+      if (!archive) {
+        throw new WorktreeError('ARCHIVE_NOT_FOUND', `Archive ${archiveId} not found`)
+      }
+
+      // Check if archive is expired
+      const expiresAt = new Date(archive.expiresAt)
+      const now = new Date()
+
+      if (now > expiresAt) {
+        throw new WorktreeError('ARCHIVE_NOT_FOUND', `Archive ${archiveId} has expired and was cleaned up`)
+      }
+
+      // Check if original path already exists
+      try {
+        await fs.access(archive.originalPath)
+        throw new WorktreeError('PATH_EXISTS', `Cannot restore: worktree already exists at ${archive.originalPath}`)
+      } catch {
+        // Path doesn't exist, which is good
+      }
+
+      // Move archive back to original location
+      await fs.rename(archive.archivePath, archive.originalPath)
+
+      // Remove from manifest
+      const updatedManifest = {
+        ...manifest,
+        archives: manifest.archives.filter(a => a !== archive)
+      }
+      await saveArchiveManifest(this.projectRoot, updatedManifest)
+
+      // Return worktree metadata
+      const nowIso = new Date().toISOString()
+      const worktreeMetadata: WorktreeMetadata = {
+        id: `${this.projectId}-${archive.branchName}-${Date.now()}`,
+        projectId: this.projectId,
+        branchName: archive.branchName,
+        worktreePath: archive.originalPath,
+        createdAt: archive.archivedAt,
+        lastAccessedAt: nowIso,
+        isArchived: false,
+      }
+
+      return worktreeMetadata
+    } catch (error) {
+      if (error instanceof WorktreeError) {
+        throw error
+      }
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        `Failed to restore worktree: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
+  }
+
+  /**
+   * List all archived worktrees for a project
+   *
+   * Story 1.6 - Task 2.1: Create ArchiveManagementPanel component
+   *
+   * @returns Array of archived worktree metadata
+   */
+  async listArchived(): Promise<ArchivedWorktree[]> {
+    try {
+      const manifest = await ensureArchiveManifest(this.projectRoot)
+
+      // Filter out expired archives
+      const now = new Date()
+      const validArchives = manifest.archives.filter(archive => {
+        const expiresAt = new Date(archive.expiresAt)
+        return expiresAt > now
+      })
+
+      return validArchives
+    } catch (error) {
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        `Failed to list archived worktrees: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
+  }
+
+  /**
+   * Delete an archive permanently
+   *
+   * Story 1.6 - Task 2: Archive Management UI
+   *
+   * @param archiveId - ID of archive to delete (branch name)
+   */
+  async deleteArchive(archiveId: string): Promise<void> {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    try {
+      // Load archive manifest
+      const manifest = await ensureArchiveManifest(this.projectRoot)
+      const archive = manifest.archives.find(a => a.branchName === archiveId || a.archivePath.endsWith(archiveId))
+
+      if (!archive) {
+        throw new WorktreeError('ARCHIVE_NOT_FOUND', `Archive ${archiveId} not found`)
+      }
+
+      // Delete archive directory
+      await fs.rm(archive.archivePath, { recursive: true, force: true })
+
+      // Remove from manifest
+      const updatedManifest = {
+        ...manifest,
+        archives: manifest.archives.filter(a => a !== archive)
+      }
+      await saveArchiveManifest(this.projectRoot, updatedManifest)
+    } catch (error) {
+      if (error instanceof WorktreeError) {
+        throw error
+      }
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        `Failed to delete archive: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
+  }
+
+  /**
+   * Cleanup expired archives
+   *
+   * Story 1.6 - Task 2.4: Add auto-cleanup for archives older than 30 days
+   *
+   * @returns Number of archives cleaned up
+   */
+  async cleanupExpiredArchives(): Promise<number> {
+    const fs = await import('node:fs/promises')
+
+    try {
+      const manifest = await ensureArchiveManifest(this.projectRoot)
+      const now = new Date()
+
+      const expiredArchives = manifest.archives.filter(archive => {
+        const expiresAt = new Date(archive.expiresAt)
+        return expiresAt <= now
+      })
+
+      // Delete expired archive directories
+      for (const archive of expiredArchives) {
+        await fs.rm(archive.archivePath, { recursive: true, force: true })
+      }
+
+      // Update manifest to remove expired archives
+      if (expiredArchives.length > 0) {
+        const updatedManifest = {
+          ...manifest,
+          archives: manifest.archives.filter(archive => {
+            const expiresAt = new Date(archive.expiresAt)
+            return expiresAt > now
+          })
+        }
+        await saveArchiveManifest(this.projectRoot, updatedManifest)
+      }
+
+      return expiredArchives.length
+    } catch (error) {
+      throw new WorktreeError(
+        'GIT_OPERATION_FAILED',
+        `Failed to cleanup expired archives: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
   }
 
   /**

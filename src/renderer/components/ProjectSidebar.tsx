@@ -25,6 +25,7 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
+import { WorktreeProjectSection } from '@/src/features/worktrees/components'
 
 interface ContextMenuState {
   isOpen: boolean
@@ -330,21 +331,30 @@ export function ProjectSidebar({
                   className="list-none"
                   whileDrag={{ scale: 1.02, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
                 >
-                  <ProjectItem
-                    project={project}
-                    isActive={project.id === activeProjectId}
-                    isEditing={editingId === project.id}
-                    editName={editName}
-                    shortcut={`Ctrl+${index + 1}`}
-                    onClick={() => {
-                      onSelectProject(project.id)
-                      navigate('/')
-                    }}
-                    onContextMenu={(e) => handleContextMenu(e, project.id)}
-                    onEditNameChange={setEditName}
-                    onSaveRename={() => handleSaveRename(project.id)}
-                    onCancelRename={handleCancelRename}
-                  />
+                  <div>
+                    <ProjectItem
+                      project={project}
+                      isActive={project.id === activeProjectId}
+                      isEditing={editingId === project.id}
+                      editName={editName}
+                      shortcut={`Ctrl+${index + 1}`}
+                      onClick={() => {
+                        onSelectProject(project.id)
+                        navigate('/')
+                      }}
+                      onContextMenu={(e) => handleContextMenu(e, project.id)}
+                      onEditNameChange={setEditName}
+                      onSaveRename={() => handleSaveRename(project.id)}
+                      onCancelRename={handleCancelRename}
+                    />
+                    <WorktreeProjectSection
+                      projectId={project.id}
+                      onWorktreeSelect={(worktreeId) => {
+                        // TODO: Handle worktree selection (open terminal, etc.)
+                        console.log('Selected worktree:', worktreeId, 'in project:', project.id)
+                      }}
+                    />
+                  </div>
                 </Reorder.Item>
               ))}
             </Reorder.Group>

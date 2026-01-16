@@ -64,6 +64,10 @@ export interface WorktreeStore {
   filterStatus: WorktreeStatusFilter
   isLoading: boolean
   error: string | null
+  selectedWorktreeId: string | null
+  expandedProjects: Set<string>
+  isRefreshingStatus: boolean
+  lastStatusUpdate: number
 
   // Actions
   createWorktree: (projectId: string, config: CreateWorktreeConfig) => Promise<void>
@@ -71,6 +75,10 @@ export interface WorktreeStore {
   archiveWorktree: (worktreeId: string) => Promise<void>
   updateWorktreeStatus: (worktreeId: string, status: WorktreeStatus) => void
   setActiveWorktree: (worktreeId: string) => void
+  setSelectedWorktree: (worktreeId: string | null) => void
+  toggleProjectExpanded: (projectId: string) => void
+  setProjectExpanded: (projectId: string, expanded: boolean) => void
+  refreshStatus: (worktreeId: string) => Promise<void>
   loadWorktrees: (projectId: string) => Promise<void>
   clearError: () => void
   initializeEventListeners: () => () => void
@@ -84,6 +92,10 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   filterStatus: 'all',
   isLoading: false,
   error: null,
+  selectedWorktreeId: null,
+  expandedProjects: new Set<string>(),
+  isRefreshingStatus: false,
+  lastStatusUpdate: 0,
 
   // Create a new worktree
   createWorktree: async (projectId: string, config: CreateWorktreeConfig): Promise<void> => {
@@ -268,6 +280,66 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
     set({ error: null })
   },
 
+  // Set selected worktree
+  setSelectedWorktree: (worktreeId: string | null): void => {
+    set({ selectedWorktreeId: worktreeId })
+  },
+
+  // Toggle project expanded state
+  toggleProjectExpanded: (projectId: string): void => {
+    set((state) => {
+      const newExpandedProjects = new Set(state.expandedProjects)
+      if (newExpandedProjects.has(projectId)) {
+        newExpandedProjects.delete(projectId)
+      } else {
+        newExpandedProjects.add(projectId)
+      }
+      return { expandedProjects: newExpandedProjects }
+    })
+  },
+
+  // Set project expanded state
+  setProjectExpanded: (projectId: string, expanded: boolean): void => {
+    set((state) => {
+      const newExpandedProjects = new Set(state.expandedProjects)
+      if (expanded) {
+        newExpandedProjects.add(projectId)
+      } else {
+        newExpandedProjects.delete(projectId)
+      }
+      return { expandedProjects: newExpandedProjects }
+    })
+  },
+
+  // Refresh worktree status
+  refreshStatus: async (worktreeId: string): Promise<void> => {
+    set({ isRefreshingStatus: true })
+
+    try {
+      const result = await window.api.worktree.status(worktreeId)
+
+      if (!result.success) {
+        set({ isRefreshingStatus: false })
+        return
+      }
+
+      // Update status cache
+      set((state) => {
+        const newStatusCache = new Map(state.statusCache)
+        newStatusCache.set(worktreeId, { ...result.data, updatedAt: Date.now() })
+        return {
+          statusCache: newStatusCache,
+          isRefreshingStatus: false,
+          lastStatusUpdate: Date.now()
+        }
+      })
+    } catch (error) {
+      set({
+        isRefreshingStatus: false
+      })
+    }
+  },
+
   // Initialize IPC event listeners
   initializeEventListeners: (): (() => void) => {
     const unsubscribers: (() => void)[] = []
@@ -359,6 +431,10 @@ export function useWorktreeActions(): Pick<
   | 'archiveWorktree'
   | 'updateWorktreeStatus'
   | 'setActiveWorktree'
+  | 'setSelectedWorktree'
+  | 'toggleProjectExpanded'
+  | 'setProjectExpanded'
+  | 'refreshStatus'
   | 'loadWorktrees'
   | 'clearError'
   | 'initializeEventListeners'
@@ -370,6 +446,10 @@ export function useWorktreeActions(): Pick<
       archiveWorktree: state.archiveWorktree,
       updateWorktreeStatus: state.updateWorktreeStatus,
       setActiveWorktree: state.setActiveWorktree,
+      setSelectedWorktree: state.setSelectedWorktree,
+      toggleProjectExpanded: state.toggleProjectExpanded,
+      setProjectExpanded: state.setProjectExpanded,
+      refreshStatus: state.refreshStatus,
       loadWorktrees: state.loadWorktrees,
       clearError: state.clearError,
       initializeEventListeners: state.initializeEventListeners
@@ -383,4 +463,99 @@ export function useWorktreeLoading(): boolean {
 
 export function useWorktreeError(): string | null {
   return useWorktreeStore((state) => state.error)
+}
+
+export function useSelectedWorktreeId(): string | null {
+  return useWorktreeStore((state) => state.selectedWorktreeId)
+}
+
+export function useProjectExpanded(projectId: string): boolean {
+  return useWorktreeStore((state) => state.expandedProjects.has(projectId))
+}
+
+export function useWorktreeCount(projectId: string): number {
+  return useWorktreeStore((state) => {
+    return Array.from(state.worktrees.values()).filter(
+      (w) => w.projectId === projectId && !w.isArchived
+    ).length
+  })
+}
+
+export function useIsRefreshingStatus(): boolean {
+  return useWorktreeStore((state) => state.isRefreshingStatus)
+}
+
+// ============================================================================
+// DEV HELPER: Add mock worktrees for testing
+// Call from browser console: window.__addMockWorktrees__('your-project-id')
+// ============================================================================
+if (typeof window !== 'undefined') {
+  const store = useWorktreeStore.getState()
+
+  // Helper to list project IDs from the DOM
+  ;(window as any).__listProjectIds__ = () => {
+    const projectButtons = document.querySelectorAll('[class*="project"]')
+    const ids: string[] = []
+    projectButtons.forEach((btn: any) => {
+      // Try to find project ID from click handlers or data attributes
+      const text = btn.textContent || ''
+      console.log('Found project element:', text)
+    })
+    console.log('Check the ProjectSidebar component for actual project IDs')
+    console.log('Or look in React DevTools under ProjectSidebar -> props -> projects')
+    return 'See console output'
+  }
+
+  ;(window as any).__addMockWorktrees__ = (projectId: string) => {
+    const now = new Date().toISOString()
+    const mockWorktrees: WorktreeMetadata[] = [
+      {
+        id: `${projectId}-feature-auth-123`,
+        projectId,
+        branchName: 'feature/auth',
+        worktreePath: `/path/to/project/.termul/worktrees/feature-auth`,
+        createdAt: now,
+        lastAccessedAt: now,
+        isArchived: false,
+      },
+      {
+        id: `${projectId}-feature-login-456`,
+        projectId,
+        branchName: 'feature/login',
+        worktreePath: `/path/to/project/.termul/worktrees/feature-login`,
+        createdAt: now,
+        lastAccessedAt: now,
+        isArchived: false,
+      },
+      {
+        id: `${projectId}-bugfix-crash-789`,
+        projectId,
+        branchName: 'bugfix/crash',
+        worktreePath: `/path/to/project/.termul/worktrees/bugfix-crash`,
+        createdAt: now,
+        lastAccessedAt: now,
+        isArchived: false,
+      },
+    ]
+
+    // Add to store
+    const newWorktrees = new Map(store.worktrees)
+    mockWorktrees.forEach((wt) => newWorktrees.set(wt.id, wt))
+    useWorktreeStore.setState({ worktrees: newWorktrees })
+
+    console.log(`✅ Added ${mockWorktrees.length} mock worktrees for project: ${projectId}`)
+    console.log('Worktrees:', Array.from(newWorktrees.values()).map((wt) => ({
+      id: wt.id,
+      branch: wt.branchName,
+      projectId: wt.projectId,
+    })))
+    return mockWorktrees
+  }
+
+  // Expose store for debugging
+  ;(window as any).__worktreeStore__ = useWorktreeStore
+
+  console.log('[DEV] 🔧 Mock worktree helpers available:')
+  console.log('  - window.__addMockWorktrees__(projectId)  // Add mock worktrees')
+  console.log('  - window.__worktreeStore__                // Access worktree store')
 }

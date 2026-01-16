@@ -194,7 +194,10 @@ export interface WorktreeApi {
   create: (data: CreateWorktreeDto) => Promise<IpcResult<WorktreeMetadata>>
   delete: (worktreeId: string, options?: DeleteWorktreeOptions) => Promise<IpcResult<void>>
   archive: (worktreeId: string) => Promise<IpcResult<ArchivedWorktree>>
-  restore: (archiveId: string) => Promise<IpcResult<WorktreeMetadata>>
+  restore: (archiveId: string, projectId: string) => Promise<IpcResult<WorktreeMetadata>>
+  listArchived: (projectId: string) => Promise<IpcResult<ArchivedWorktree[]>>
+  deleteArchive: (archiveId: string, projectId: string) => Promise<IpcResult<void>>
+  cleanupArchives: (projectId: string) => Promise<IpcResult<{ cleaned: number }>>
   getStatus: (worktreeId: string) => Promise<IpcResult<WorktreeStatus>>
   onStatusChanged: (callback: StatusChangedCallback) => Unsubscribe
   onCreated: (callback: WorktreeCreatedCallback) => Unsubscribe
