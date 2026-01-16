@@ -11,27 +11,38 @@ import { WorktreeProjectSection } from './WorktreeProjectSection'
 // Import the mocked store functions at module level
 import * as worktreeStore from '@/stores/worktree-store'
 
+vi.mock('@/stores/worktree-store', () => ({
+  useWorktrees: vi.fn(),
+  useWorktreeCount: vi.fn(),
+  useProjectExpanded: vi.fn(),
+  useSelectedWorktreeId: vi.fn(),
+  useWorktreeActions: vi.fn(),
+  useWorktreeStore: vi.fn()
+}))
+
+
 describe('WorktreeProjectSection', () => {
   const mockWorktrees = [
     {
-      id: 'test-project-feature-auth-1234567890',
+      id: 'test-project-feature-auth',
       projectId: 'test-project',
       branchName: 'feature/auth',
       worktreePath: '/path/to/project/.termul/worktrees/feature-auth',
       createdAt: '2026-01-16T00:00:00.000Z',
       lastAccessedAt: '2026-01-16T00:00:00.000Z',
-      isArchived: false,
+      isArchived: false
     },
     {
-      id: 'test-project-feature-login-1234567891',
+      id: 'test-project-feature-login',
       projectId: 'test-project',
       branchName: 'feature/login',
       worktreePath: '/path/to/project/.termul/worktrees/feature-login',
       createdAt: '2026-01-16T00:00:00.000Z',
-      lastAccessedAt: '2026-01-15T00:00:00.000Z',
-      isArchived: false,
-    },
+      lastAccessedAt: '2026-01-16T00:00:00.000Z',
+      isArchived: false
+    }
   ]
+
 
   const mockActions = {
     toggleProjectExpanded: vi.fn(),
@@ -48,6 +59,12 @@ describe('WorktreeProjectSection', () => {
     initializeEventListeners: vi.fn()
   }
 
+  const mockStatusCache = new Map([
+    [mockWorktrees[0].id, { dirty: false, ahead: 1, behind: 0, conflicted: false, currentBranch: 'feature/auth', updatedAt: Date.now() }],
+    [mockWorktrees[1].id, { dirty: true, ahead: 0, behind: 2, conflicted: false, currentBranch: 'feature/login', updatedAt: Date.now() }]
+  ])
+
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -57,7 +74,9 @@ describe('WorktreeProjectSection', () => {
     vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(false)
     vi.mocked(worktreeStore.useSelectedWorktreeId).mockReturnValue(null)
     vi.mocked(worktreeStore.useWorktreeActions).mockReturnValue(mockActions)
+    vi.mocked(worktreeStore.useWorktreeStore).mockImplementation((selector: any) => selector({ statusCache: mockStatusCache }))
   })
+
 
   describe('rendering', () => {
     it('should render worktree section header when worktrees exist', () => {
@@ -81,14 +100,15 @@ describe('WorktreeProjectSection', () => {
       const worktreesWithArchived = [
         ...mockWorktrees,
         {
-          id: 'test-project-archived-1234567892',
+          id: 'test-project-archived',
           projectId: 'test-project',
           branchName: 'archived-branch',
           worktreePath: '/path/to/project/.termul/worktrees/archived',
           createdAt: '2026-01-16T00:00:00.000Z',
           lastAccessedAt: '2026-01-14T00:00:00.000Z',
-          isArchived: true,
-        },
+          isArchived: true
+        }
+
       ]
 
       vi.mocked(worktreeStore.useWorktrees).mockReturnValue(worktreesWithArchived)
@@ -150,8 +170,9 @@ describe('WorktreeProjectSection', () => {
       const worktreeButton = screen.getByText('feature/auth')
       worktreeButton.click()
 
-      expect(mockActions.setSelectedWorktree).toHaveBeenCalledWith('test-project-feature-auth-1234567890')
-      expect(onWorktreeSelect).toHaveBeenCalledWith('test-project-feature-auth-1234567890')
+      expect(mockActions.setSelectedWorktree).toHaveBeenCalledWith('test-project-feature-auth')
+      expect(onWorktreeSelect).toHaveBeenCalledWith('test-project-feature-auth')
+
     })
   })
 

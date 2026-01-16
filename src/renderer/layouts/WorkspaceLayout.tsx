@@ -34,11 +34,13 @@ import {
   useCommandHistory
 } from '@/hooks/use-command-history'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import { useWorktreeActions } from '@/stores/worktree-store'
 import {
   useTerminalFontSize,
   useDefaultShell,
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
+
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
@@ -120,6 +122,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
+  const { initializeEventListeners } = useWorktreeActions()
+
 
   // Helper to get active key for a shortcut
   const getActiveKey = useCallback(
@@ -304,7 +308,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
   // These are intercepted at the Electron level because Chromium reserves them
   useEffect(() => {
-    return window.api.keyboard.onShortcut((shortcut) => {
+    const cleanupWorktreeListeners = initializeEventListeners()
+    const cleanupShortcuts = window.api.keyboard.onShortcut((shortcut) => {
       switch (shortcut) {
         case 'nextTerminal':
           cycleTerminal('next')
@@ -333,7 +338,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
       }
     })
-  }, [cycleTerminal, fontSize, updateAppSetting])
+
+    return () => {
+      cleanupWorktreeListeners()
+      cleanupShortcuts()
+    }
+  }, [cycleTerminal, fontSize, initializeEventListeners, updateAppSetting])
+
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {

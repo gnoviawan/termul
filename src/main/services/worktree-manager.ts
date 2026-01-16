@@ -10,11 +10,13 @@
 
 import simpleGit, { type SimpleGit } from 'simple-git'
 import { execSync } from 'node:child_process'
+import type { ArchivedWorktree, WorktreeMetadata, WorktreeStatus } from '../../shared/types/ipc.types'
 
 /**
  * Find Git executable path on the system
  * On Windows, the main process may not have PATH set correctly
  */
+
 function findGitExecutable(): string | undefined {
   try {
     // Try to find git using 'where' command on Windows
@@ -46,11 +48,7 @@ function findGitExecutable(): string | undefined {
 // Cache the Git executable path
 let GIT_EXECUTABLE: string | undefined = findGitExecutable()
 
-/**
- * Re-export types from renderer for main process use
- * TODO: Move to shared types location in future refactor (elicitation finding)
- */
-export type { WorktreeMetadata, WorktreeStatus, ArchivedWorktree } from '../../renderer/src/features/worktrees/worktree.types'
+
 
 /**
  * Error types for worktree operations
@@ -241,7 +239,8 @@ export class WorktreeManager {
 
       // simple-git v3.x returns { major, minor, patch, agent, installed }
       // simple-git v2.x returns { git: "version string" }
-      let version: string
+      let version = ''
+
 
       if ((result as any).major !== undefined) {
         // Newer format (v3.x)
@@ -335,7 +334,7 @@ export class WorktreeManager {
 
     // Generate metadata
     const now = new Date().toISOString()
-    const worktreeId = `${projectId}-${sanitizedBranch}-${Date.now()}`
+    const worktreeId = `${projectId}-${sanitizedBranch}`
 
     const metadata: WorktreeMetadata = {
       id: worktreeId,
@@ -345,17 +344,11 @@ export class WorktreeManager {
       createdAt: now,
       lastAccessedAt: now,
       isArchived: false,
-      gitignoreProfile: gitignoreSelections.length > 0 ? 'custom' : undefined,
-      status: {
-        dirty: false,
-        ahead: 0,
-        behind: 0,
-        conflicted: false,
-        currentBranch: branchName,
-      },
+      gitignoreProfile: gitignoreSelections.length > 0 ? 'custom' : undefined
     }
 
     return metadata
+
   }
 
   /**
@@ -375,41 +368,64 @@ export class WorktreeManager {
       // Parse porcelain output (more reliable than parsing default format)
       const lines = rawOutput.split('\n')
       const worktrees: Array<{ path: string; branch: string }> = []
+      let currentPath: string | null = null
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim()
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
         if (line.startsWith('worktree ')) {
-          const path = line.substring('worktree '.length).trim()
-          // Next line should be the branch reference
-          const nextLine = lines[i + 1]?.trim()
-          if (nextLine?.startsWith('branch ')) {
-            const branchRef = nextLine.substring('branch '.length).trim()
-            // Extract branch name from refs/heads/branch_name
-            const branch = branchRef.replace('refs/heads/', '')
-            worktrees.push({ path, branch })
-          }
+          currentPath = line.substring('worktree '.length).trim()
+          continue
+        }
+
+        if (line.startsWith('branch ') && currentPath) {
+          const branchRef = line.substring('branch '.length).trim()
+          const branch = branchRef.replace('refs/heads/', '')
+          worktrees.push({ path: currentPath, branch })
+          currentPath = null
+          continue
+        }
+
+        if (!line) {
+          currentPath = null
         }
       }
 
-      // Filter to this project and map to metadata
-      return worktrees
-        .filter(wt => wt.path.includes(this.projectRoot))
-        .map(wt => ({
-          id: `${projectId}-${wt.branch}`,
-          projectId,
-          branchName: wt.branch,
-          worktreePath: wt.path,
-          createdAt: new Date().toISOString(),
-          lastAccessedAt: new Date().toISOString(),
-          isArchived: false,
-          status: {
-            dirty: false,
-            ahead: 0,
-            behind: 0,
-            conflicted: false,
-            currentBranch: wt.branch,
-          },
-        }))
+       // Filter to this project and map to metadata
+       const nowIso = new Date().toISOString()
+       const normalizedProjectRoot = this.projectRoot.replace(/\\/g, '/').toLowerCase()
+
+       const projectWorktrees = worktrees.filter((wt) => {
+         const normalizedPath = wt.path.replace(/\\/g, '/').toLowerCase()
+         return normalizedPath.startsWith(normalizedProjectRoot)
+       })
+
+       return projectWorktrees.map(wt => {
+         const sanitizedBranch = this.sanitizeBranchName(wt.branch)
+         return {
+           id: `${projectId}-${sanitizedBranch}`,
+           projectId,
+           branchName: wt.branch,
+           worktreePath: wt.path,
+           createdAt: nowIso,
+           lastAccessedAt: nowIso,
+           isArchived: false
+         }
+       })
+
+       console.log('[WorktreeManager] list projectRoot:', this.projectRoot, 'total:', worktrees.length, 'filtered:', projectWorktrees.length)
+
+       return projectWorktrees.map(wt => {
+         const sanitizedBranch = this.sanitizeBranchName(wt.branch)
+         return {
+           id: `${projectId}-${sanitizedBranch}`,
+           projectId,
+           branchName: wt.branch,
+           worktreePath: wt.path,
+           createdAt: nowIso,
+           lastAccessedAt: nowIso,
+           isArchived: false
+         }
+       })
     } catch (error) {
       throw new WorktreeError(
         'GIT_OPERATION_FAILED',
@@ -588,15 +604,17 @@ export class WorktreeManager {
 
       // Return worktree metadata
       const nowIso = new Date().toISOString()
-      const worktreeMetadata: WorktreeMetadata = {
-        id: `${this.projectId}-${archive.branchName}-${Date.now()}`,
+     const sanitizedBranch = this.sanitizeBranchName(archive.branchName)
+     const worktreeMetadata: WorktreeMetadata = {
+        id: `${this.projectId}-${sanitizedBranch}`,
         projectId: this.projectId,
         branchName: archive.branchName,
         worktreePath: archive.originalPath,
         createdAt: archive.archivedAt,
         lastAccessedAt: nowIso,
-        isArchived: false,
+        isArchived: false
       }
+
 
       return worktreeMetadata
     } catch (error) {
@@ -772,8 +790,8 @@ export class WorktreeManager {
 
     for (const pattern of patterns) {
       try {
-        // Use micromatch for pattern matching (already in project from Story 1.1)
-        const { glob } = await import('glob')
+        // @ts-expect-error glob types are unavailable in node tsconfig
+        const { glob } = await import('glob') as { glob: (pattern: string, options: { cwd: string; dot: boolean; absolute: boolean; nodir: boolean }) => Promise<string[]> }
 
         // Convert .gitignore pattern to glob pattern
         const globPattern = pattern.endsWith('/') ? `${pattern}**` : pattern
@@ -785,6 +803,7 @@ export class WorktreeManager {
           absolute: false,
           nodir: true
         })
+
 
         // Copy each matched file to worktree
         for (const file of files) {
@@ -951,10 +970,11 @@ export class WorktreeManager {
    */
   private async getWorktreePathById(worktreeId: string): Promise<string> {
     // TODO: Implement proper ID-to-path lookup
-    // For now, extract from ID format: projectId-branch-timestamp
+    // For now, extract from ID format: projectId-branch
     const parts = worktreeId.split('-')
-    const branch = parts.slice(1, -1).join('-') // Remove projectId and timestamp
+    const branch = parts.slice(1).join('-')
     const sanitized = this.sanitizeBranchName(branch)
     return this.generateWorktreePath(sanitized)
   }
+
 }

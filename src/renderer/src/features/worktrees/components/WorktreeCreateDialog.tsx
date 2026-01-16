@@ -131,7 +131,13 @@ export function WorktreeCreateDialog({
     const trimmedBranch = branchName.trim()
     if (!trimmedBranch || isCreating) return
 
+    if (!projectPath) {
+      setError('Project path is required to create a worktree')
+      return
+    }
+
     // Validate branch name
+
     if (!isValidBranchName(trimmedBranch)) {
       setBranchError('Invalid branch name. Cannot contain: .., ~, ^, :, \\, ?, *, spaces, or start/end with /')
       return
@@ -174,9 +180,11 @@ export function WorktreeCreateDialog({
         return
       }
 
-      // Success - call callback and close
+      // Success - reset state, call callback and close
+      setIsCreating(false)
       onSuccess?.(result.data.id)
       onClose()
+
     } catch (err) {
       console.error('[WorktreeCreateDialog] Exception during create:', err)
       if (!isMountedRef.current) return
@@ -320,11 +328,12 @@ export function WorktreeCreateDialog({
                         />
                         <div className="flex-1 min-w-0">
                           <span className="text-sm text-foreground">{item.label}</span>
-                          {item.warning && (
+                          {'warning' in item && item.warning && (
                             <span className="block text-xs text-destructive mt-0.5">
                               ⚠️ {item.warning} - recommended: NO
                             </span>
                           )}
+
                         </div>
                       </label>
                     )

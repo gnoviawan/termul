@@ -51,8 +51,9 @@ afterEach(() => {
 
 describe('WorktreeStore', () => {
   const mockWorktree: WorktreeMetadata = {
-    id: 'project-123-feature-test-1234567890',
+    id: 'project-123-feature-test',
     projectId: 'project-123',
+
     branchName: 'feature/test',
     worktreePath: '/project/.termul/worktrees/feature-test',
     createdAt: '2026-01-16T00:00:00.000Z',
@@ -145,8 +146,10 @@ describe('WorktreeStore', () => {
 
       const config: CreateWorktreeConfig = {
         branchName: 'feature/test',
-        gitignoreSelections: []
+        gitignoreSelections: [],
+        projectPath: '/project/path'
       }
+
 
       const { createWorktree } = useWorktreeStore.getState()
       await createWorktree('project-123', config)
@@ -166,8 +169,10 @@ describe('WorktreeStore', () => {
 
       const config: CreateWorktreeConfig = {
         branchName: 'nonexistent',
-        gitignoreSelections: []
+        gitignoreSelections: [],
+        projectPath: '/project/path'
       }
+
 
       const { createWorktree } = useWorktreeStore.getState()
       await createWorktree('project-123', config)

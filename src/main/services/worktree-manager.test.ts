@@ -9,7 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { WorktreeManager } from './worktree-manager'
-import type { WorktreeMetadata, WorktreeStatus, ArchivedWorktree } from '../../renderer/src/features/worktrees/worktree.types'
+import type { WorktreeMetadata, WorktreeStatus, ArchivedWorktree } from '../../shared/types/ipc.types'
+
 import simpleGit from 'simple-git'
 
 // Store mock instances for test control
@@ -267,12 +268,13 @@ describe('WorktreeManager', () => {
 
   describe('getStatus', () => {
     it('should return worktree status with all fields', async () => {
-      // Worktree ID format: projectId-branchName-timestamp
-      // getWorktreePathById extracts: parts.slice(1, -1).join('-')
-      // For 'project-123-feature-test-12345' -> '123-feature-test'
-      const worktreeId = 'project-123-feature-test-12345'
+      // Worktree ID format: projectId-branchName
+      // getWorktreePathById extracts: parts.slice(1).join('-')
+      // For 'project-123-feature-test' -> '123-feature-test'
+      const worktreeId = 'project-123-feature-test'
       const worktreePath = `${mockProjectRoot}/.termul/worktrees/123-feature-test`
-      const worktreeGit = simpleGit(worktreePath)
+      const worktreeGit = simpleGit(worktreePath) as unknown as { status: ReturnType<typeof vi.fn> }
+
 
       const mockStatus = {
         files: [],
@@ -300,9 +302,10 @@ describe('WorktreeManager', () => {
     })
 
     it('should detect dirty status when files modified', async () => {
-      const worktreeId = 'project-123-feature-test-12345'
+      const worktreeId = 'project-123-feature-test'
       const worktreePath = `${mockProjectRoot}/.termul/worktrees/123-feature-test`
-      const worktreeGit = simpleGit(worktreePath)
+      const worktreeGit = simpleGit(worktreePath) as unknown as { status: ReturnType<typeof vi.fn> }
+
 
       const mockStatus = {
         files: [{ path: 'test.ts', index: 'M', working_dir: 'M' }],
@@ -325,8 +328,10 @@ describe('WorktreeManager', () => {
 
   describe('copyGitignoreFiles', () => {
     it('should copy files matching .gitignore patterns to worktree', async () => {
+      // @ts-expect-error glob types not available in node tsconfig
       const { glob } = await import('glob')
       const fs = await import('node:fs/promises')
+
 
       const worktreePath = '/Users/test/my-project/.termul/worktrees/test'
       const patterns = ['node_modules/', '.env']
@@ -345,6 +350,7 @@ describe('WorktreeManager', () => {
     })
 
     it('should throw WorktreeError with FILE_COPY_FAILED code on error', async () => {
+      // @ts-expect-error glob types not available in node tsconfig
       const { glob } = await import('glob')
 
       const worktreePath = '/Users/test/my-project/.termul/worktrees/test'
@@ -425,8 +431,9 @@ describe('WorktreeManager', () => {
       })
 
       // Mock readdir to return directory entries
-      vi.mocked(fs.readdir).mockImplementation(async (dirPath: string, options?: any) => {
+      vi.mocked(fs.readdir).mockImplementation(async (dirPath: any, options?: any) => {
         if (dirPath === mockProjectRoot) {
+
           return [
             createMockDirent('.git', true),
             createMockDirent('.termul', true),
@@ -444,8 +451,9 @@ describe('WorktreeManager', () => {
       })
 
       // Mock stat to return file sizes
-      vi.mocked(fs.stat).mockImplementation(async (filePath: string) => {
+      vi.mocked(fs.stat).mockImplementation(async (filePath: any) => {
         if (String(filePath).endsWith('package.json')) {
+
           return { size: 1024 } as any
         }
         if (String(filePath).endsWith('index.ts')) {

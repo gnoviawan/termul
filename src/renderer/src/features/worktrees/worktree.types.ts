@@ -52,7 +52,9 @@ export interface ArchivedWorktree {
 export interface CreateWorktreeConfig {
   branchName: string
   gitignoreSelections: string[]
+  projectPath: string
 }
+
 
 /**
  * Options for deleting a worktree

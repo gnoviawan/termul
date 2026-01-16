@@ -26,6 +26,7 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
+import { useWorktreeActions } from '@/stores/worktree-store'
 import { WorktreeProjectSection, WorktreeCreateDialog } from '@/src/features/worktrees/components'
 
 interface ContextMenuState {
@@ -119,6 +120,8 @@ export function ProjectSidebar({
   })
   const [isWorktreeCreating, setIsWorktreeCreating] = useState(false)
 
+  const { loadWorktrees, refreshStatus, setProjectExpanded } = useWorktreeActions()
+
   // Available shells state
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
 
@@ -136,6 +139,27 @@ export function ProjectSidebar({
     }
     fetchShells()
   }, [])
+
+  useEffect(() => {
+    const activeProject = projects.find((project) => project.id === activeProjectId)
+
+    if (!activeProject) {
+      return
+    }
+
+    if (!activeProject.path) {
+      console.warn('[ProjectSidebar] Active project has no path, skipping worktree load:', activeProject.id)
+      return
+    }
+
+    loadWorktrees(activeProject.id)
+      .then(() => {
+        setProjectExpanded(activeProject.id, true)
+      })
+      .catch((error: unknown) => {
+        console.error('[ProjectSidebar] Failed to load worktrees on startup:', error)
+      })
+  }, [activeProjectId, loadWorktrees, projects, setProjectExpanded])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {
     e.preventDefault()
@@ -245,13 +269,19 @@ export function ProjectSidebar({
   }, [projects])
 
   const handleWorktreeCreated = useCallback((worktreeId: string): void => {
-    // Refresh worktrees for this project and expand the section
-    // Note: The WorktreeProjectSection component listens to IPC events and will update
-    // However, we proactively load to ensure UI is in sync
+    const projectId = worktreeId.split('-')[0]
+
     console.log('[ProjectSidebar] Worktree created:', worktreeId, '- expanding project section')
-    // The worktree store will auto-update via IPC event listeners in WorktreeProjectSection
-    // No additional action needed here as the event-driven architecture handles refresh
-  }, [])
+
+    setIsWorktreeCreating(false)
+    setProjectExpanded(projectId, true)
+
+    loadWorktrees(projectId)
+      .then(() => refreshStatus(worktreeId))
+      .catch((error: unknown) => {
+        console.error('[ProjectSidebar] Failed to refresh worktrees:', error)
+      })
+  }, [loadWorktrees, refreshStatus, setProjectExpanded])
 
   const getContextMenuItems = useCallback(
     (projectId: string): ContextMenuItem[] => {
@@ -519,7 +549,10 @@ export function ProjectSidebar({
           projectId={worktreeCreateDialog.projectId}
           projectName={worktreeCreateDialog.projectName}
           projectPath={worktreeCreateDialog.projectPath ?? ''}
-          onClose={() => setWorktreeCreateDialog({ isOpen: false, projectId: '', projectName: '', projectPath: '' })}
+          onClose={() => {
+            setWorktreeCreateDialog({ isOpen: false, projectId: '', projectName: '', projectPath: '' })
+            setIsWorktreeCreating(false)
+          }}
           onSuccess={handleWorktreeCreated}
           onCreatingChange={setIsWorktreeCreating}
         />

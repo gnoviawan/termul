@@ -18,9 +18,17 @@ import { WorktreeArchiveDialog } from './WorktreeArchiveDialog'
 import { WorktreeDeleteDialog } from './WorktreeDeleteDialog'
 import { WorktreeSearchBar } from './WorktreeSearchBar'
 import { WorktreeFilterBar, type WorktreeStatusFilter } from './WorktreeFilterBar'
-import { useWorktrees, useWorktreeCount, useProjectExpanded, useSelectedWorktreeId, useWorktreeActions } from '@/stores/worktree-store'
-import type { WorktreeMetadata } from '../../worktree.types'
+import {
+  useWorktrees,
+  useWorktreeCount,
+  useProjectExpanded,
+  useSelectedWorktreeId,
+  useWorktreeActions,
+  useWorktreeStore
+} from '@/stores/worktree-store'
+import type { WorktreeMetadata } from '../worktree.types'
 import { MergeWorkflowManager, SyncWorkflowManager } from '../../merge/components'
+
 
 /**
  * Check if branch is main/master (requires extra confirmation)
@@ -103,10 +111,13 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
   const [isBulkSelectMode, setIsBulkSelectMode] = useState(false)
   const [selectedWorktrees, setSelectedWorktrees] = useState<Set<string>>(new Set())
 
+  const statusCache = useWorktreeStore((state) => state.statusCache)
+
   // Filter out archived worktrees
   const activeWorktrees = useMemo(() => {
     return worktrees.filter((w) => !w.isArchived)
   }, [worktrees])
+
 
   // Apply search and status filters
   const filteredWorktrees = useMemo(() => {
@@ -123,7 +134,7 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
     // Apply status filter
     if (statusFilter !== 'all') {
       filtered = filtered.filter(w => {
-        const status = w.status
+        const status = statusCache.get(w.id)
         switch (statusFilter) {
           case 'dirty':
             return status?.dirty ?? false
@@ -140,12 +151,12 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
     }
 
     return filtered
-  }, [activeWorktrees, searchQuery, statusFilter])
+  }, [activeWorktrees, searchQuery, statusCache, statusFilter])
+
 
   const hasWorktrees = activeWorktrees.length > 0
 
-  // Debug logging
-  console.log('[WorktreeProjectSection] projectId:', projectId, 'worktrees:', worktrees.length, 'activeWorktrees:', activeWorktrees.length, 'hasWorktrees:', hasWorktrees)
+
 
   const handleToggleExpanded = () => {
     toggleProjectExpanded(projectId)
@@ -434,12 +445,13 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
         <MergeWorkflowManager
           isOpen={mergeWorkflowOpen}
           worktreeId={mergeWorktree.id}
-          featureBranch={mergeWorktree.branchName}
+          sourceBranch={mergeWorktree.branchName}
           projectId={projectId}
           onCancel={() => setMergeWorkflowOpen(false)}
           onComplete={() => setMergeWorkflowOpen(false)}
         />
       )}
+
 
       {/* Sync Workflow Dialog (Story 2.5) */}
       {syncWorktree && (

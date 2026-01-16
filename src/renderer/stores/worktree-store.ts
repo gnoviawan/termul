@@ -16,11 +16,6 @@ import type {
   DeleteWorktreeOptions,
   WorktreeStatusFilter
 } from '../src/features/worktrees/worktree.types'
-import type {
-  IpcResult,
-  CreateWorktreeDto,
-  DeleteWorktreeOptions as IpcDeleteOptions
-} from '../../shared/types/ipc.types'
 
 /**
  * Key for persisting worktree metadata
@@ -34,12 +29,13 @@ const STATUS_CACHE_TTL = 5 * 60 * 1000
 
 /**
  * Extract projectId from worktreeId
- * Format: "projectId-branchName-timestamp"
+ * Format: "projectId-branchName"
  */
 function extractProjectId(worktreeId: string): string {
   const parts = worktreeId.split('-')
   return parts[0]
 }
+
 
 /**
  * Check if status cache entry is stale
@@ -102,13 +98,13 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
     set({ isLoading: true, error: null })
 
     try {
-      const dto: CreateWorktreeDto = {
+      const result = await window.api.worktree.create({
         projectId,
+        projectPath: config.projectPath,
         branchName: config.branchName,
         gitignoreSelections: config.gitignoreSelections
-      }
+      })
 
-      const result = await window.api.worktree.create(dto)
 
       if (!result.success) {
         set({ error: result.error, isLoading: false })
@@ -237,17 +233,28 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
     set({ isLoading: true, error: null })
 
     try {
+      const mergeProjectWorktrees = (state: WorktreeStore, worktrees: WorktreeMetadata[]) => {
+        const nextWorktrees = new Map(state.worktrees)
+        for (const [id, worktree] of nextWorktrees) {
+          if (worktree.projectId === projectId) {
+            nextWorktrees.delete(id)
+          }
+        }
+        worktrees.forEach((worktree) => nextWorktrees.set(worktree.id, worktree))
+        return nextWorktrees
+      }
+
       // Try to load from persistence first
       const persistedResult = await window.api.persistence.read<WorktreeMetadata[]>(WORKTREES_STORAGE_KEY)
 
       if (persistedResult.success && persistedResult.data) {
         const projectWorktrees = persistedResult.data.filter((w) => w.projectId === projectId)
-        const worktreesMap = new Map(projectWorktrees.map((w) => [w.id, w]))
-
-        set({
-          worktrees: worktreesMap,
-          isLoading: false
-        })
+        if (projectWorktrees.length > 0 || get().worktrees.size === 0) {
+          set((state) => ({
+            worktrees: mergeProjectWorktrees(state, projectWorktrees),
+            isLoading: false
+          }))
+        }
       }
 
       // Fetch fresh data from API
@@ -258,15 +265,23 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
         return
       }
 
-      const worktreesMap = new Map(apiResult.data.map((w) => [w.id, w]))
+      const apiWorktrees = apiResult.data
 
-      set({
-        worktrees: worktreesMap,
-        isLoading: false
+      set((state) => {
+        const mergedWorktrees = mergeProjectWorktrees(state, apiWorktrees)
+        const persistedWorktrees = Array.from(mergedWorktrees.values())
+
+        window.api.persistence
+          .writeDebounced(WORKTREES_STORAGE_KEY, persistedWorktrees)
+          .catch((error: unknown) => {
+            console.error('[WorktreeStore] Failed to persist worktrees:', error)
+          })
+
+        return {
+          worktrees: mergedWorktrees,
+          isLoading: false
+        }
       })
-
-      // Persist fresh data
-      await window.api.persistence.writeDebounced(WORKTREES_STORAGE_KEY, apiResult.data)
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : 'Failed to load worktrees',
@@ -274,6 +289,7 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
       })
     }
   },
+
 
   // Clear error state
   clearError: (): void => {
@@ -316,7 +332,8 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
     set({ isRefreshingStatus: true })
 
     try {
-      const result = await window.api.worktree.status(worktreeId)
+      const result = await window.api.worktree.getStatus(worktreeId)
+
 
       if (!result.success) {
         set({ isRefreshingStatus: false })
