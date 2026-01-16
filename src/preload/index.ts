@@ -19,7 +19,16 @@ import type {
   PersistenceApi,
   SystemApi,
   KeyboardApi,
-  KeyboardShortcutCallback
+  KeyboardShortcutCallback,
+  WorktreeApi,
+  WorktreeMetadata,
+  WorktreeStatus,
+  ArchivedWorktree,
+  CreateWorktreeDto,
+  DeleteWorktreeOptions,
+  StatusChangedCallback,
+  WorktreeCreatedCallback,
+  WorktreeDeletedCallback
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -275,6 +284,63 @@ const updaterApi: UpdaterApi = {
   }
 }
 
+// Worktree API for renderer
+const worktreeApi: WorktreeApi = {
+  list: (projectId: string): Promise<IpcResult<WorktreeMetadata[]>> => {
+    return ipcRenderer.invoke('worktree:list', projectId)
+  },
+
+  create: (data: CreateWorktreeDto): Promise<IpcResult<WorktreeMetadata>> => {
+    return ipcRenderer.invoke('worktree:create', data)
+  },
+
+  delete: (worktreeId: string, options?: DeleteWorktreeOptions): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('worktree:delete', worktreeId, options)
+  },
+
+  archive: (worktreeId: string): Promise<IpcResult<ArchivedWorktree>> => {
+    return ipcRenderer.invoke('worktree:archive', worktreeId)
+  },
+
+  restore: (archiveId: string): Promise<IpcResult<WorktreeMetadata>> => {
+    return ipcRenderer.invoke('worktree:restore', archiveId)
+  },
+
+  getStatus: (worktreeId: string): Promise<IpcResult<WorktreeStatus>> => {
+    return ipcRenderer.invoke('worktree:status', worktreeId)
+  },
+
+  onStatusChanged: (callback: StatusChangedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktreeId: string, status: WorktreeStatus): void => {
+      callback(worktreeId, status)
+    }
+    ipcRenderer.on('worktree:status-changed', listener)
+    return () => {
+      ipcRenderer.off('worktree:status-changed', listener)
+    }
+  },
+
+  onCreated: (callback: WorktreeCreatedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktree: WorktreeMetadata): void => {
+      callback(worktree)
+    }
+    ipcRenderer.on('worktree:created', listener)
+    return () => {
+      ipcRenderer.off('worktree:created', listener)
+    }
+  },
+
+  onDeleted: (callback: WorktreeDeletedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktreeId: string): void => {
+      callback(worktreeId)
+    }
+    ipcRenderer.on('worktree:deleted', listener)
+    return () => {
+      ipcRenderer.off('worktree:deleted', listener)
+    }
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -283,7 +349,8 @@ const api = {
   persistence: persistenceApi,
   system: systemApi,
   keyboard: keyboardApi,
-  updater: updaterApi
+  updater: updaterApi,
+  worktree: worktreeApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -117,3 +117,86 @@ export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal
 export interface KeyboardApi {
   onShortcut: (callback: KeyboardShortcutCallback) => () => void
 }
+
+// ============================================================================
+// Worktree Types (Story 1.3)
+// ============================================================================
+
+// Worktree status from Git operations (runtime-only, NOT persisted)
+export interface WorktreeStatus {
+  dirty: boolean
+  ahead: number
+  behind: number
+  conflicted: boolean
+  currentBranch: string
+  updatedAt?: number
+}
+
+// Worktree metadata (persisted to disk)
+export interface WorktreeMetadata {
+  id: string
+  projectId: string
+  branchName: string
+  worktreePath: string
+  createdAt: string
+  lastAccessedAt: string
+  isArchived: boolean
+  gitignoreProfile?: string
+}
+
+// Archived worktree metadata
+export interface ArchivedWorktree {
+  originalPath: string
+  archivePath: string
+  archivedAt: string
+  expiresAt: string
+  branchName: string
+  projectId: string
+  unpushedCommits: boolean
+  commitCount: number
+}
+
+// DTOs for worktree operations
+export interface CreateWorktreeDto {
+  projectId: string
+  branchName: string
+  gitignoreSelections: string[]
+}
+
+export interface DeleteWorktreeOptions {
+  force?: boolean
+  deleteBranch?: boolean
+}
+
+// Worktree error codes
+export const WorktreeErrorCode = {
+  BRANCH_NOT_FOUND: 'BRANCH_NOT_FOUND',
+  BRANCH_ALREADY_CHECKED_OUT: 'BRANCH_ALREADY_CHECKED_OUT',
+  GIT_OPERATION_FAILED: 'GIT_OPERATION_FAILED',
+  PATH_EXISTS: 'PATH_EXISTS',
+  INSUFFICIENT_DISK_SPACE: 'INSUFFICIENT_DISK_SPACE',
+  GIT_VERSION_TOO_OLD: 'GIT_VERSION_TOO_OLD',
+  WORKTREE_NOT_FOUND: 'WORKTREE_NOT_FOUND',
+  NOT_IMPLEMENTED: 'NOT_IMPLEMENTED'
+} as const
+
+export type WorktreeErrorCodeType = (typeof WorktreeErrorCode)[keyof typeof WorktreeErrorCode]
+
+// Event callback types
+export type StatusChangedCallback = (worktreeId: string, status: WorktreeStatus) => void
+export type WorktreeCreatedCallback = (worktree: WorktreeMetadata) => void
+export type WorktreeDeletedCallback = (worktreeId: string) => void
+export type Unsubscribe = () => void
+
+// Worktree API exposed via preload
+export interface WorktreeApi {
+  list: (projectId: string) => Promise<IpcResult<WorktreeMetadata[]>>
+  create: (data: CreateWorktreeDto) => Promise<IpcResult<WorktreeMetadata>>
+  delete: (worktreeId: string, options?: DeleteWorktreeOptions) => Promise<IpcResult<void>>
+  archive: (worktreeId: string) => Promise<IpcResult<ArchivedWorktree>>
+  restore: (archiveId: string) => Promise<IpcResult<WorktreeMetadata>>
+  getStatus: (worktreeId: string) => Promise<IpcResult<WorktreeStatus>>
+  onStatusChanged: (callback: StatusChangedCallback) => Unsubscribe
+  onCreated: (callback: WorktreeCreatedCallback) => Unsubscribe
+  onDeleted: (callback: WorktreeDeletedCallback) => Unsubscribe
+}
