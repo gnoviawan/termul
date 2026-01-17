@@ -17,9 +17,6 @@ export interface WorktreeListProps {
   isEmpty?: boolean
   showFreshness?: boolean
   onWorktreeContextMenu?: (e: React.MouseEvent, worktree: WorktreeMetadata) => void
-  isBulkSelectMode?: boolean
-  selectedWorktrees?: Set<string>
-  onToggleSelection?: (worktreeId: string) => void
   onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
 }
 
@@ -34,9 +31,6 @@ export function WorktreeList({
   isEmpty = false,
   showFreshness = false,
   onWorktreeContextMenu,
-  isBulkSelectMode = false,
-  selectedWorktrees,
-  onToggleSelection,
   onOpenTerminal
 }: WorktreeListProps) {
   const listRef = useRef<HTMLUListElement>(null)
@@ -132,9 +126,6 @@ export function WorktreeList({
             onSelect={onWorktreeSelect}
             showFreshness={showFreshness}
             onContextMenu={onWorktreeContextMenu}
-            isBulkSelectMode={isBulkSelectMode}
-            isSelected={selectedWorktrees?.has(worktree.id) ?? false}
-            onToggleSelection={onToggleSelection}
             onOpenTerminal={onOpenTerminal}
           />
         </li>

@@ -1,7 +1,7 @@
 /**
  * Unit tests for WorktreeItem Component
  *
- * Tests worktree item rendering, status badges, and keyboard interactions.
+ * Tests worktree item rendering, status dots, and keyboard interactions.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -15,11 +15,6 @@ vi.mock('@/stores/worktree-store', () => ({
   useWorktreeActions: vi.fn(),
 }))
 
-// Mock FreshnessIndicator component
-vi.mock('./FreshnessIndicator', () => ({
-  FreshnessIndicator: () => <span data-testid="freshness">2d ago</span>,
-}))
-
 // Mock cn utility
 vi.mock('@/lib/utils', () => ({
   cn: (...classes: unknown[]) => classes.filter(Boolean).join(' '),
@@ -27,12 +22,8 @@ vi.mock('@/lib/utils', () => ({
 
 // Mock lucide-react icons
 vi.mock('lucide-react', () => ({
-  Circle: () => <span data-testid="dot-icon">●</span>,
-  ArrowUp: () => <span data-testid="arrow-up">↑</span>,
-  ArrowDown: () => <span data-testid="arrow-down">↓</span>,
-  AlertTriangle: () => <span data-testid="warning">⚠</span>,
   MoreVertical: () => <span data-testid="more">⋮</span>,
-  Clock: () => <span data-testid="clock">🕐</span>,
+  Check: () => <span data-testid="check">✓</span>,
 }))
 
 describe('WorktreeItem', () => {
@@ -69,78 +60,98 @@ describe('WorktreeItem', () => {
       expect(screen.getByText('feature/auth')).toBeInTheDocument()
     })
 
-    it('should render no badges when status is clean', () => {
+    it('should have compact layout (no subtitle, no freshness indicator)', () => {
       const { useWorktreeStatus } = require('@/stores/worktree-store')
       useWorktreeStatus.mockReturnValue(cleanStatus)
 
       render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
 
-      expect(screen.queryByTestId('dot-icon')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('arrow-up')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('arrow-down')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('warning')).not.toBeInTheDocument()
+      // Should not have freshness indicator
+      expect(screen.queryByTestId('freshness')).not.toBeInTheDocument()
+      // Should only have branch name and status dots
+      expect(screen.getByText('feature/auth')).toBeInTheDocument()
+    })
+  })
+
+  describe('StatusDots component', () => {
+    it('should render green dot for clean status', () => {
+      const { useWorktreeStatus } = require('@/stores/worktree-store')
+      useWorktreeStatus.mockReturnValue(cleanStatus)
+
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+
+      // Green dot for clean status
+      const greenDots = container.querySelectorAll('.bg-green-500')
+      expect(greenDots.length).toBe(1)
     })
 
-    it('should render dirty badge with dot icon', () => {
+    it('should render orange dot for dirty status', () => {
       const { useWorktreeStatus } = require('@/stores/worktree-store')
       const dirtyStatus: WorktreeStatus = { ...cleanStatus, dirty: true }
       useWorktreeStatus.mockReturnValue(dirtyStatus)
 
-      render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
 
-      expect(screen.getByTestId('dot-icon')).toBeInTheDocument()
+      // Orange dot for dirty status
+      const orangeDots = container.querySelectorAll('.bg-orange-400')
+      expect(orangeDots.length).toBe(1)
     })
 
-    it('should render ahead badge with count', () => {
-      const { useWorktreeStatus } = require('@/stores/worktree-store')
-      const aheadStatus: WorktreeStatus = { ...cleanStatus, ahead: 3 }
-      useWorktreeStatus.mockReturnValue(aheadStatus)
-
-      render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
-
-      expect(screen.getByTestId('arrow-up')).toBeInTheDocument()
-      expect(screen.getByText('↑3')).toBeInTheDocument()
-    })
-
-    it('should render behind badge with count', () => {
-      const { useWorktreeStatus } = require('@/stores/worktree-store')
-      const behindStatus: WorktreeStatus = { ...cleanStatus, behind: 2 }
-      useWorktreeStatus.mockReturnValue(behindStatus)
-
-      render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
-
-      expect(screen.getByTestId('arrow-down')).toBeInTheDocument()
-      expect(screen.getByText('↓2')).toBeInTheDocument()
-    })
-
-    it('should render conflicted badge with warning icon', () => {
+    it('should render red dot for conflicted status', () => {
       const { useWorktreeStatus } = require('@/stores/worktree-store')
       const conflictedStatus: WorktreeStatus = { ...cleanStatus, conflicted: true }
       useWorktreeStatus.mockReturnValue(conflictedStatus)
 
-      render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
 
-      expect(screen.getByTestId('warning')).toBeInTheDocument()
+      // Red dot for conflicted status
+      const redDots = container.querySelectorAll('.bg-red-500')
+      expect(redDots.length).toBe(1)
     })
 
-    it('should render all status badges when all conditions are true', () => {
+    it('should render yellow dot for ahead status', () => {
       const { useWorktreeStatus } = require('@/stores/worktree-store')
-      const allStatus: WorktreeStatus = {
+      const aheadStatus: WorktreeStatus = { ...cleanStatus, ahead: 3 }
+      useWorktreeStatus.mockReturnValue(aheadStatus)
+
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+
+      // Yellow dot for ahead status
+      const yellowDots = container.querySelectorAll('.bg-yellow-500')
+      expect(yellowDots.length).toBe(1)
+    })
+
+    it('should render cyan dot for behind status', () => {
+      const { useWorktreeStatus } = require('@/stores/worktree-store')
+      const behindStatus: WorktreeStatus = { ...cleanStatus, behind: 2 }
+      useWorktreeStatus.mockReturnValue(behindStatus)
+
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+
+      // Cyan dot for behind status
+      const cyanDots = container.querySelectorAll('.bg-cyan-500')
+      expect(cyanDots.length).toBe(1)
+    })
+
+    it('should render multiple dots when multiple conditions apply', () => {
+      const { useWorktreeStatus } = require('@/stores/worktree-store')
+      const multipleStatus: WorktreeStatus = {
         dirty: true,
         ahead: 5,
-        behind: 1,
-        conflicted: true,
+        behind: 0,
+        conflicted: false,
         currentBranch: 'feature/auth',
         updatedAt: Date.now(),
       }
-      useWorktreeStatus.mockReturnValue(allStatus)
+      useWorktreeStatus.mockReturnValue(multipleStatus)
 
-      render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
+      const { container } = render(<WorktreeItem worktree={mockWorktree} isActive={false} onSelect={vi.fn()} />)
 
-      expect(screen.getByTestId('dot-icon')).toBeInTheDocument()
-      expect(screen.getByTestId('arrow-up')).toBeInTheDocument()
-      expect(screen.getByTestId('arrow-down')).toBeInTheDocument()
-      expect(screen.getByTestId('warning')).toBeInTheDocument()
+      // Orange dot for dirty, yellow dot for ahead
+      const orangeDots = container.querySelectorAll('.bg-orange-400')
+      const yellowDots = container.querySelectorAll('.bg-yellow-500')
+      expect(orangeDots.length).toBe(1)
+      expect(yellowDots.length).toBe(1)
     })
   })
 

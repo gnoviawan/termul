@@ -26,7 +26,7 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
-import { useWorktreeActions } from '@/stores/worktree-store'
+import { useWorktreeActions, useWorktreeCount, useProjectExpanded } from '@/stores/worktree-store'
 import { WorktreeProjectSection, WorktreeCreateDialog } from '@/src/features/worktrees/components'
 
 interface ContextMenuState {
@@ -120,7 +120,7 @@ export function ProjectSidebar({
   })
   const [isWorktreeCreating, setIsWorktreeCreating] = useState(false)
 
-  const { loadWorktrees, refreshStatus, setProjectExpanded } = useWorktreeActions()
+  const { loadWorktrees, refreshStatus, setProjectExpanded, expandProjectExclusive } = useWorktreeActions()
 
   // Available shells state
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
@@ -419,6 +419,7 @@ export function ProjectSidebar({
                       editName={editName}
                       shortcut={`Ctrl+${index + 1}`}
                       onClick={() => {
+                        expandProjectExclusive(project.id)
                         onSelectProject(project.id)
                         navigate('/')
                       }}
@@ -433,6 +434,7 @@ export function ProjectSidebar({
                         // TODO: Handle worktree selection (open terminal, etc.)
                         console.log('Selected worktree:', worktreeId, 'in project:', project.id)
                       }}
+                      onCreateWorktree={handleOpenWorktreeCreateDialog}
                     />
                   </div>
                 </Reorder.Item>
@@ -456,6 +458,7 @@ export function ProjectSidebar({
                     key={project.id}
                     project={project}
                     onClick={() => {
+                      expandProjectExclusive(project.id)
                       onSelectProject(project.id)
                       navigate('/')
                     }}
@@ -588,6 +591,9 @@ function ProjectItem({
 }: ProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
+  const worktreeCount = useWorktreeCount(project.id)
+  const isExpanded = useProjectExpanded(project.id)
+  const { toggleProjectExpanded } = useWorktreeActions()
 
   // Focus input when editing starts
   useEffect(() => {
@@ -607,10 +613,24 @@ function ProjectItem({
     }
   }
 
+  const handleChevronClick = (e: React.MouseEvent<HTMLSpanElement>): void => {
+    e.stopPropagation()
+    toggleProjectExpanded(project.id)
+  }
+
+  const handleChevronKeyDown = (e: React.KeyboardEvent<HTMLSpanElement>): void => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      e.stopPropagation()
+      toggleProjectExpanded(project.id)
+    }
+  }
+
   return (
     <button
       onClick={isEditing ? undefined : onClick}
       onContextMenu={onContextMenu}
+      aria-expanded={worktreeCount > 0 ? isExpanded : undefined}
       className={cn(
         'w-full flex items-center px-4 py-2 transition-colors group text-left',
         isActive ? 'bg-secondary' : 'hover:bg-secondary/50'
@@ -623,6 +643,22 @@ function ProjectItem({
           isActive && `shadow-sm ${colors.shadow}`
         )}
       />
+      {worktreeCount > 0 && !isEditing && (
+        <span
+          role="button"
+          tabIndex={0}
+          className="mr-1 flex-shrink-0 cursor-pointer"
+          onClick={handleChevronClick}
+          onKeyDown={handleChevronKeyDown}
+          aria-label={isExpanded ? 'Collapse worktrees' : 'Expand worktrees'}
+        >
+          {isExpanded ? (
+            <ChevronDown size={14} className="text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <ChevronRight size={14} className="text-muted-foreground" aria-hidden="true" />
+          )}
+        </span>
+      )}
       {isEditing ? (
         <input
           ref={inputRef}
@@ -645,14 +681,29 @@ function ProjectItem({
         </span>
       )}
       {!isEditing && (
-        <span
-          className={cn(
-            'ml-auto text-xs font-mono text-muted-foreground transition-opacity',
-            isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        <div className="ml-auto flex items-center gap-2">
+          {worktreeCount > 0 && (
+            <span
+              className={cn(
+                'flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full',
+                'text-xs font-medium bg-primary/10 text-primary',
+                'transition-opacity',
+                isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              )}
+              aria-label={`${worktreeCount} worktree${worktreeCount !== 1 ? 's' : ''}`}
+            >
+              {worktreeCount}
+            </span>
           )}
-        >
-          {shortcut}
-        </span>
+          <span
+            className={cn(
+              'text-xs font-mono text-muted-foreground transition-opacity',
+              isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            )}
+          >
+            {shortcut}
+          </span>
+        </div>
       )}
     </button>
   )

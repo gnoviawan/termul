@@ -75,6 +75,7 @@ export interface WorktreeStore {
   setSelectedWorktree: (worktreeId: string | null) => void
   toggleProjectExpanded: (projectId: string) => void
   setProjectExpanded: (projectId: string, expanded: boolean) => void
+  expandProjectExclusive: (projectId: string) => void
   refreshStatus: (worktreeId: string) => Promise<void>
   loadWorktrees: (projectId: string) => Promise<void>
   clearError: () => void
@@ -328,6 +329,11 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
     })
   },
 
+  // Expand one project exclusively (collapse all others)
+  expandProjectExclusive: (projectId: string): void => {
+    set({ expandedProjects: new Set([projectId]) })
+  },
+
   // Refresh worktree status
   refreshStatus: async (worktreeId: string): Promise<void> => {
     set({ isRefreshingStatus: true })
@@ -455,6 +461,7 @@ export function useWorktreeActions(): Pick<
   | 'setSelectedWorktree'
   | 'toggleProjectExpanded'
   | 'setProjectExpanded'
+  | 'expandProjectExclusive'
   | 'refreshStatus'
   | 'loadWorktrees'
   | 'clearError'
@@ -470,6 +477,7 @@ export function useWorktreeActions(): Pick<
       setSelectedWorktree: state.setSelectedWorktree,
       toggleProjectExpanded: state.toggleProjectExpanded,
       setProjectExpanded: state.setProjectExpanded,
+      expandProjectExclusive: state.expandProjectExclusive,
       refreshStatus: state.refreshStatus,
       loadWorktrees: state.loadWorktrees,
       clearError: state.clearError,

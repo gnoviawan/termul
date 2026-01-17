@@ -79,15 +79,9 @@ describe('WorktreeProjectSection', () => {
 
 
   describe('rendering', () => {
-    it('should render worktree section header when worktrees exist', () => {
+    it('should not render worktree section header (header removed, now in ProjectItem)', () => {
       render(<WorktreeProjectSection projectId="test-project" />)
-      expect(screen.getByText('Worktrees')).toBeInTheDocument()
-    })
-
-    it('should display worktree count badge', () => {
-      vi.mocked(worktreeStore.useWorktreeCount).mockReturnValue(3)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      expect(screen.getByText('3')).toBeInTheDocument()
+      expect(screen.queryByText('Worktrees')).not.toBeInTheDocument()
     })
 
     it('should not render when no worktrees exist', () => {
@@ -112,35 +106,16 @@ describe('WorktreeProjectSection', () => {
       ]
 
       vi.mocked(worktreeStore.useWorktrees).mockReturnValue(worktreesWithArchived)
-      vi.mocked(worktreeStore.useWorktreeCount).mockReturnValue(2)
 
       render(<WorktreeProjectSection projectId="test-project" />)
-      expect(screen.getByText('2')).toBeInTheDocument()
+      // Should only show non-archived worktrees
+      expect(screen.getByText('feature/auth')).toBeInTheDocument()
+      expect(screen.getByText('feature/login')).toBeInTheDocument()
+      expect(screen.queryByText('archived-branch')).not.toBeInTheDocument()
     })
   })
 
   describe('expand/collapse', () => {
-    it('should show chevron-right when collapsed', () => {
-      vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(false)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      const button = screen.getByRole('button', { name: /worktrees for project/i })
-      expect(button).toHaveAttribute('aria-expanded', 'false')
-    })
-
-    it('should show chevron-down when expanded', () => {
-      vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(true)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      const button = screen.getByRole('button', { name: /worktrees for project/i })
-      expect(button).toHaveAttribute('aria-expanded', 'true')
-    })
-
-    it('should call toggleProjectExpanded when header clicked', () => {
-      render(<WorktreeProjectSection projectId="test-project" />)
-      const button = screen.getByRole('button', { name: /worktrees for project/i })
-      button.click()
-      expect(mockActions.toggleProjectExpanded).toHaveBeenCalledWith('test-project')
-    })
-
     it('should show worktree list when expanded', () => {
       vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(true)
       render(<WorktreeProjectSection projectId="test-project" />)
@@ -176,24 +151,54 @@ describe('WorktreeProjectSection', () => {
     })
   })
 
-  describe('accessibility', () => {
-    it('should have proper aria-expanded attribute', () => {
+  describe('+ worktree button', () => {
+    it('should render + worktree button when onCreateWorktree prop is provided and expanded', () => {
+      vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(true)
+      const onCreateWorktree = vi.fn()
+      render(
+        <WorktreeProjectSection
+          projectId="test-project"
+          onCreateWorktree={onCreateWorktree}
+        />
+      )
+
+      expect(screen.getByText('worktree')).toBeInTheDocument()
+    })
+
+    it('should not render + worktree button when onCreateWorktree prop is not provided', () => {
+      vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(true)
+      render(<WorktreeProjectSection projectId="test-project" />)
+
+      expect(screen.queryByText('worktree')).not.toBeInTheDocument()
+    })
+
+    it('should not render + worktree button when collapsed', () => {
       vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(false)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      const button = screen.getByRole('button', { name: /worktrees for project/i })
-      expect(button).toHaveAttribute('aria-expanded', 'false')
+      const onCreateWorktree = vi.fn()
+      render(
+        <WorktreeProjectSection
+          projectId="test-project"
+          onCreateWorktree={onCreateWorktree}
+        />
+      )
+
+      expect(screen.queryByText('worktree')).not.toBeInTheDocument()
     })
 
-    it('should have proper aria-label for worktree count', () => {
-      vi.mocked(worktreeStore.useWorktreeCount).mockReturnValue(1)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      expect(screen.getByLabelText('1 worktree')).toBeInTheDocument()
-    })
+    it('should call onCreateWorktree when + worktree button is clicked', () => {
+      vi.mocked(worktreeStore.useProjectExpanded).mockReturnValue(true)
+      const onCreateWorktree = vi.fn()
+      render(
+        <WorktreeProjectSection
+          projectId="test-project"
+          onCreateWorktree={onCreateWorktree}
+        />
+      )
 
-    it('should have plural aria-label for multiple worktrees', () => {
-      vi.mocked(worktreeStore.useWorktreeCount).mockReturnValue(2)
-      render(<WorktreeProjectSection projectId="test-project" />)
-      expect(screen.getByLabelText('2 worktrees')).toBeInTheDocument()
+      const button = screen.getByLabelText('Create new worktree')
+      button.click()
+
+      expect(onCreateWorktree).toHaveBeenCalledWith('test-project')
     })
   })
 })

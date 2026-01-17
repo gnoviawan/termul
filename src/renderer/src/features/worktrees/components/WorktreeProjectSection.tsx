@@ -9,7 +9,7 @@
  */
 
 import { memo, useState, useCallback, useMemo } from 'react'
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { Loader2, Plus } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { WorktreeList } from './WorktreeList'
@@ -42,37 +42,13 @@ export interface WorktreeProjectSectionProps {
   projectId: string
   onWorktreeSelect?: (worktreeId: string) => void
   onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
-}
-
-/**
- * WorktreeCountBadge - Shows count of worktrees for a project
- */
-interface WorktreeCountBadgeProps {
-  count: number
-  className?: string
-}
-
-function WorktreeCountBadge({ count, className }: WorktreeCountBadgeProps) {
-  if (count === 0) return null
-
-  return (
-    <span
-      className={cn(
-        'ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full',
-        'text-xs font-medium bg-primary/10 text-primary',
-        className
-      )}
-      aria-label={`${count} worktree${count !== 1 ? 's' : ''}`}
-    >
-      {count}
-    </span>
-  )
+  onCreateWorktree?: (projectId: string) => void
 }
 
 /**
  * WorktreeProjectSection - Collapsible section showing worktrees for a project
  */
-export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpenTerminal }: WorktreeProjectSectionProps) => {
+export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpenTerminal, onCreateWorktree }: WorktreeProjectSectionProps) => {
   const worktrees = useWorktrees(projectId)
   const worktreeCount = useWorktreeCount(projectId)
   const isExpanded = useProjectExpanded(projectId)
@@ -109,8 +85,6 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<WorktreeStatusFilter>('all')
-  const [isBulkSelectMode, setIsBulkSelectMode] = useState(false)
-  const [selectedWorktrees, setSelectedWorktrees] = useState<Set<string>>(new Set())
 
   const statusCache = useWorktreeStore((state) => state.statusCache)
 
@@ -156,12 +130,6 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
 
 
   const hasWorktrees = activeWorktrees.length > 0
-
-
-
-  const handleToggleExpanded = () => {
-    toggleProjectExpanded(projectId)
-  }
 
   const handleWorktreeSelect = (worktreeId: string) => {
     setSelectedWorktree(worktreeId)
@@ -291,38 +259,6 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
     setSelectedWorktreeForDialog(null)
   }, [])
 
-  // Bulk selection handlers
-  const handleToggleBulkSelect = useCallback(() => {
-    setIsBulkSelectMode(prev => !prev)
-    setSelectedWorktrees(new Set())
-  }, [])
-
-  const handleToggleWorktreeSelection = useCallback((worktreeId: string) => {
-    setSelectedWorktrees(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(worktreeId)) {
-        newSet.delete(worktreeId)
-      } else {
-        newSet.add(worktreeId)
-      }
-      return newSet
-    })
-  }, [])
-
-  const handleBulkArchive = useCallback(async () => {
-    console.log('[WorktreeProjectSection] Bulk archive:', Array.from(selectedWorktrees))
-    // TODO: Implement bulk archive via IPC
-    setIsBulkSelectMode(false)
-    setSelectedWorktrees(new Set())
-  }, [selectedWorktrees])
-
-  const handleBulkDelete = useCallback(async () => {
-    console.log('[WorktreeProjectSection] Bulk delete:', Array.from(selectedWorktrees))
-    // TODO: Implement bulk delete via IPC
-    setIsBulkSelectMode(false)
-    setSelectedWorktrees(new Set())
-  }, [selectedWorktrees])
-
   // Don't render if no worktrees
   if (!hasWorktrees) {
     return null
@@ -330,31 +266,6 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
 
   return (
     <div className="worktree-section">
-      {/* Header with expand/collapse toggle */}
-      <button
-        type="button"
-        onClick={handleToggleExpanded}
-        className={cn(
-          'w-full flex items-center px-4 py-1.5 text-left transition-colors',
-          'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'
-        )}
-        aria-expanded={isExpanded}
-        aria-label={`Worktrees for project (${activeWorktrees.length})`}
-      >
-        <span className="flex-shrink-0 mr-1">
-          {isExpanded ? (
-            <ChevronDown size={14} aria-hidden="true" />
-          ) : (
-            <ChevronRight size={14} aria-hidden="true" />
-          )}
-        </span>
-        <span className="text-xs font-medium">Worktrees</span>
-        {isLoading && (
-          <Loader2 size={12} className="ml-2 animate-spin text-muted-foreground" />
-        )}
-        <WorktreeCountBadge count={activeWorktrees.length} />
-      </button>
-
       {/* Collapsible worktree list */}
       <AnimatePresence initial={false}>
         {isExpanded && (
@@ -380,11 +291,6 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
             <WorktreeFilterBar
               filter={statusFilter}
               onFilterChange={setStatusFilter}
-              selectedCount={selectedWorktrees.size}
-              onBulkSelect={handleToggleBulkSelect}
-              isBulkSelectMode={isBulkSelectMode}
-              onBulkArchive={handleBulkArchive}
-              onBulkDelete={handleBulkDelete}
             />
 
             {/* Worktree List */}
@@ -396,11 +302,21 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
                 isLoading={isLoading}
                 isEmpty={filteredWorktrees.length === 0}
                 onWorktreeContextMenu={handleContextMenu}
-                isBulkSelectMode={isBulkSelectMode}
-                selectedWorktrees={selectedWorktrees}
-                onToggleSelection={handleToggleWorktreeSelection}
                 onOpenTerminal={onOpenTerminal}
               />
+
+              {/* + Worktree button - full width with background matching worktree items */}
+              {onCreateWorktree && (
+                <button
+                  type="button"
+                  onClick={() => onCreateWorktree(projectId)}
+                  className="w-full flex items-center gap-1 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors rounded-md mt-1"
+                  aria-label="Create new worktree"
+                >
+                  <Plus size={14} aria-hidden="true" />
+                  <span>worktree</span>
+                </button>
+              )}
             </div>
           </motion.div>
         )}
