@@ -134,6 +134,8 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
     cwd?: string
     output: never[]
     pendingScrollback?: string[]
+    worktreeId?: string
+    breadcrumbContext?: string
   }> = []
 
   // Map old IDs to new IDs for active terminal selection
@@ -149,7 +151,9 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
       shell: persistedTerminal.shell || 'powershell',
       cwd: persistedTerminal.cwd,
       output: [],
-      pendingScrollback: persistedTerminal.scrollback
+      pendingScrollback: persistedTerminal.scrollback,
+      worktreeId: persistedTerminal.worktreeId,
+      breadcrumbContext: persistedTerminal.breadcrumbContext
     })
   }
 

@@ -21,6 +21,7 @@ export interface WorktreeItemProps {
   isBulkSelectMode?: boolean
   isSelected?: boolean
   onToggleSelection?: (worktreeId: string) => void
+  onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
 }
 
 /**
@@ -92,7 +93,8 @@ export const WorktreeItem = memo(({
   onContextMenu,
   isBulkSelectMode = false,
   isSelected = false,
-  onToggleSelection
+  onToggleSelection,
+  onOpenTerminal
 }: WorktreeItemProps) => {
   const status = useWorktreeStatus(worktree.id)
 
@@ -105,8 +107,10 @@ export const WorktreeItem = memo(({
       onToggleSelection(worktree.id)
     } else {
       onSelect(worktree.id)
+      // Auto-open terminal when clicking worktree (Story 3.6)
+      onOpenTerminal?.(worktree.id, worktree.worktreePath, worktree.branchName)
     }
-  }, [isBulkSelectMode, onToggleSelection, onSelect, worktree.id])
+  }, [isBulkSelectMode, onToggleSelection, onSelect, onOpenTerminal, worktree.id, worktree.worktreePath, worktree.branchName])
 
   // Generate status description for accessibility
   const getStatusDescription = (): string => {

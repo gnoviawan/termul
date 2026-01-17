@@ -83,7 +83,11 @@ describe('app-settings-store', () => {
         defaultProjectColor: 'blue',
         maxTerminalsPerProject: 10,
         orphanDetectionEnabled: true,
-        orphanDetectionTimeout: 600000
+        orphanDetectionTimeout: 600000,
+        emergencyModeEnabled: false,
+        autoOpenTerminalOnWorktreeClick: true,
+        persistTerminalSessions: true,
+        maxTerminalSessions: 10
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -107,7 +111,11 @@ describe('app-settings-store', () => {
           defaultProjectColor: 'red',
           maxTerminalsPerProject: 5,
           orphanDetectionEnabled: false,
-          orphanDetectionTimeout: 300000
+          orphanDetectionTimeout: 300000,
+          emergencyModeEnabled: true,
+          autoOpenTerminalOnWorktreeClick: false,
+          persistTerminalSessions: false,
+          maxTerminalSessions: 5
         },
         isLoaded: true
       })
@@ -149,10 +157,76 @@ describe('app-settings-store', () => {
     })
   })
 
+  describe('emergency mode settings (Story 3.5)', () => {
+    it('should have emergencyModeEnabled default to false', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.emergencyModeEnabled).toBe(false)
+    })
+
+    it('should update emergencyModeEnabled to true', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('emergencyModeEnabled', true)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.emergencyModeEnabled).toBe(true)
+    })
+
+    it('should toggle emergencyModeEnabled', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('emergencyModeEnabled', true)
+      expect(useAppSettingsStore.getState().settings.emergencyModeEnabled).toBe(true)
+      updateSetting('emergencyModeEnabled', false)
+      expect(useAppSettingsStore.getState().settings.emergencyModeEnabled).toBe(false)
+    })
+
+    it('should include emergencyModeEnabled in full settings object', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings).toHaveProperty('emergencyModeEnabled')
+      expect(typeof settings.emergencyModeEnabled).toBe('boolean')
+    })
+  })
+
   describe('selectors', () => {
     it('useAppSettings should return settings object', () => {
       const settings = useAppSettingsStore.getState().settings
       expect(settings).toEqual(DEFAULT_APP_SETTINGS)
+    })
+  })
+
+  describe('terminal context settings (Story 3.6)', () => {
+    it('should have autoOpenTerminalOnWorktreeClick default to true', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.autoOpenTerminalOnWorktreeClick).toBe(true)
+    })
+
+    it('should update autoOpenTerminalOnWorktreeClick', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('autoOpenTerminalOnWorktreeClick', false)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.autoOpenTerminalOnWorktreeClick).toBe(false)
+    })
+
+    it('should have persistTerminalSessions default to true', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.persistTerminalSessions).toBe(true)
+    })
+
+    it('should update persistTerminalSessions', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('persistTerminalSessions', false)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.persistTerminalSessions).toBe(false)
+    })
+
+    it('should have maxTerminalSessions default to 10', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.maxTerminalSessions).toBe(10)
+    })
+
+    it('should update maxTerminalSessions', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('maxTerminalSessions', 20)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.maxTerminalSessions).toBe(20)
     })
   })
 })

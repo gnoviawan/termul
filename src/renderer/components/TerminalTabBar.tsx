@@ -237,6 +237,9 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
     setIsEditing(true)
   }, [terminal.name])
 
+  // Display worktree name or terminal name (Story 3.6)
+  const displayName = terminal.breadcrumbContext?.split('/').pop() || terminal.name
+
   const handleSave = useCallback(() => {
     const trimmedName = editName.trim()
     if (trimmedName && trimmedName !== terminal.name) {
@@ -333,7 +336,7 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             onDoubleClick={handleDoubleClick}
             className={cn('text-sm font-medium', isActive && 'text-foreground')}
           >
-            {terminal.name}
+            {displayName}
           </span>
         )}
         <button

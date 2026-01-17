@@ -41,6 +41,7 @@ function isMainBranch(branchName: string): boolean {
 export interface WorktreeProjectSectionProps {
   projectId: string
   onWorktreeSelect?: (worktreeId: string) => void
+  onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
 }
 
 /**
@@ -71,7 +72,7 @@ function WorktreeCountBadge({ count, className }: WorktreeCountBadgeProps) {
 /**
  * WorktreeProjectSection - Collapsible section showing worktrees for a project
  */
-export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: WorktreeProjectSectionProps) => {
+export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpenTerminal }: WorktreeProjectSectionProps) => {
   const worktrees = useWorktrees(projectId)
   const worktreeCount = useWorktreeCount(projectId)
   const isExpanded = useProjectExpanded(projectId)
@@ -398,6 +399,7 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect }: Wor
                 isBulkSelectMode={isBulkSelectMode}
                 selectedWorktrees={selectedWorktrees}
                 onToggleSelection={handleToggleWorktreeSelection}
+                onOpenTerminal={onOpenTerminal}
               />
             </div>
           </motion.div>

@@ -16,6 +16,7 @@ import type {
   DeleteWorktreeOptions,
   WorktreeStatusFilter
 } from '../src/features/worktrees/worktree.types'
+import { useTerminalStore } from './terminal-store'
 
 /**
  * Key for persisting worktree metadata
@@ -399,6 +400,9 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
             activeWorktreeId: newActiveWorktreeId
           }
         })
+
+        // Close terminals associated with deleted worktree (Story 3.6)
+        useTerminalStore.getState().closeTerminalsByWorktreeId(worktreeId)
       })
     )
 

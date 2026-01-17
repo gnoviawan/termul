@@ -20,6 +20,7 @@ export interface WorktreeListProps {
   isBulkSelectMode?: boolean
   selectedWorktrees?: Set<string>
   onToggleSelection?: (worktreeId: string) => void
+  onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
 }
 
 /**
@@ -35,7 +36,8 @@ export function WorktreeList({
   onWorktreeContextMenu,
   isBulkSelectMode = false,
   selectedWorktrees,
-  onToggleSelection
+  onToggleSelection,
+  onOpenTerminal
 }: WorktreeListProps) {
   const listRef = useRef<HTMLUListElement>(null)
   const selectedIndex = worktrees.findIndex((w) => w.id === selectedWorktreeId)
@@ -133,6 +135,7 @@ export function WorktreeList({
             isBulkSelectMode={isBulkSelectMode}
             isSelected={selectedWorktrees?.has(worktree.id) ?? false}
             onToggleSelection={onToggleSelection}
+            onOpenTerminal={onOpenTerminal}
           />
         </li>
       ))}

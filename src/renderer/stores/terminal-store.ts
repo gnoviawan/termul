@@ -19,7 +19,9 @@ export interface TerminalState {
     projectId: string,
     shell?: Terminal['shell'],
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    worktreeId?: string,
+    breadcrumbContext?: string
   ) => Terminal
   closeTerminal: (id: string, projectId: string) => void
   renameTerminal: (id: string, name: string) => void
@@ -36,6 +38,7 @@ export interface TerminalState {
   truncateHiddenTerminalBuffers: () => void
   getTerminalCount: () => number
   isTerminalLimitReached: () => boolean
+  closeTerminalsByWorktreeId: (worktreeId: string) => void
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -54,7 +57,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     projectId: string,
     shell: Terminal['shell'] = 'powershell',
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    worktreeId?: string,
+    breadcrumbContext?: string
   ): Terminal => {
     // Check global terminal limit
     const { terminals } = get()
@@ -71,7 +76,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       output: [],
       pendingScrollback,
       healthStatus: 'running',
-      isHidden: false
+      isHidden: false,
+      worktreeId,
+      breadcrumbContext
     }
     set((state) => ({
       terminals: [...state.terminals, newTerminal],
@@ -203,6 +210,22 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   isTerminalLimitReached: (): boolean => {
     return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
+  },
+
+  closeTerminalsByWorktreeId: (worktreeId: string): void => {
+    const { terminals, activeTerminalId } = get()
+    const toRemove = terminals.filter((t) => t.worktreeId === worktreeId)
+    const remaining = terminals.filter((t) => t.worktreeId !== worktreeId)
+
+    // Update active terminal if it was closed
+    const newActiveId = toRemove.some((t) => t.id === activeTerminalId)
+      ? remaining.find((t) => t.projectId === toRemove[0]?.projectId)?.id || ''
+      : activeTerminalId
+
+    set({
+      terminals: remaining,
+      activeTerminalId: newActiveId
+    })
   }
 }))
 
@@ -236,7 +259,7 @@ export function useActiveTerminalId(): string {
 
 export function useTerminalActions(): Pick<
   TerminalState,
-  'selectTerminal' | 'addTerminal' | 'closeTerminal' | 'renameTerminal' | 'reorderTerminals' | 'updateTerminalCwd' | 'setTerminalPtyId'
+  'selectTerminal' | 'addTerminal' | 'closeTerminal' | 'renameTerminal' | 'reorderTerminals' | 'updateTerminalCwd' | 'setTerminalPtyId' | 'closeTerminalsByWorktreeId'
 > {
   return useTerminalStore(
     useShallow((state) => ({
@@ -246,7 +269,8 @@ export function useTerminalActions(): Pick<
       renameTerminal: state.renameTerminal,
       reorderTerminals: state.reorderTerminals,
       updateTerminalCwd: state.updateTerminalCwd,
-      setTerminalPtyId: state.setTerminalPtyId
+      setTerminalPtyId: state.setTerminalPtyId,
+      closeTerminalsByWorktreeId: state.closeTerminalsByWorktreeId
     }))
   )
 }

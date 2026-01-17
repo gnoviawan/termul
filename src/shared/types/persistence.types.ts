@@ -5,6 +5,8 @@ export interface PersistedTerminal {
   shell: string
   cwd?: string
   scrollback?: string[] // Lines of terminal output for restoration
+  worktreeId?: string // Associated worktree ID (Story 3.6)
+  breadcrumbContext?: string // Display context for breadcrumbs (Story 3.6)
 }
 
 // Default scrollback limit to prevent excessive storage

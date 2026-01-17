@@ -43,3 +43,11 @@ export const useOrphanDetectionEnabled = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
 export const useOrphanDetectionTimeout = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
+export const useEmergencyModeEnabled = () =>
+  useAppSettingsStore((state) => state.settings.emergencyModeEnabled)
+export const useAutoOpenTerminalOnWorktreeClick = () =>
+  useAppSettingsStore((state) => state.settings.autoOpenTerminalOnWorktreeClick)
+export const usePersistTerminalSessions = () =>
+  useAppSettingsStore((state) => state.settings.persistTerminalSessions)
+export const useMaxTerminalSessions = () =>
+  useAppSettingsStore((state) => state.settings.maxTerminalSessions)
