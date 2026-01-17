@@ -139,6 +139,26 @@ const DEFAULT_SHORTCUTS: KeyboardShortcut[] = [
     currentUserKeybinding: { modifier: 'cmd', key: 'p' },
     category: 'global',
     isEditable: false
+  },
+
+  // Emergency Mode shortcuts (Story 3.5)
+  {
+    id: 'emergency.toggle',
+    command: 'emergency:toggle',
+    description: 'Toggle Emergency Mode',
+    defaultKeybinding: { modifier: 'shift', key: 'e' },
+    currentUserKeybinding: { modifier: 'shift', key: 'e' },
+    category: 'global',
+    isEditable: false
+  },
+  {
+    id: 'emergency.quick-hotfix',
+    command: 'emergency:quick-hotfix',
+    description: 'Quick Hotfix Creation',
+    defaultKeybinding: { modifier: 'shift', key: 'h' },
+    currentUserKeybinding: { modifier: 'shift', key: 'h' },
+    category: 'worktree-operations',
+    isEditable: false
   }
 ]
 

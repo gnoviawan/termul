@@ -1,4 +1,4 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download } from 'lucide-react'
+import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, AlertTriangle } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -13,6 +13,7 @@ import {
   useShowExitCode
 } from '@/stores/context-bar-settings-store'
 import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
+import { useEmergencyModeEnabled } from '@/stores/app-settings-store'
 
 interface StatusBarProps {
   project: Project | undefined
@@ -22,6 +23,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const bgColor = project ? statusBarColors[project.color] : 'bg-status-bar'
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
+  const emergencyModeEnabled = useEmergencyModeEnabled()
 
   // Context bar visibility settings
   const showGitBranch = useShowGitBranch()
@@ -104,6 +106,21 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center space-x-4">
+        {emergencyModeEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center">
+                <StatusItem icon={<AlertTriangle size={14} />} className="bg-destructive/20 text-destructive">
+                  Emergency Mode
+                </StatusItem>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Emergency Mode active - prompts skipped for quick hotfix creation
+            </TooltipContent>
+          </Tooltip>
+        )}
+
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>
