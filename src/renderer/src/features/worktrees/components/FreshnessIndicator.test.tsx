@@ -4,21 +4,24 @@
  * Tests relative time calculation, freshness levels, and visual variants.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { FreshnessIndicator } from './FreshnessIndicator'
+
 
 describe('FreshnessIndicator', () => {
   // Mock current date to 2026-01-16 12:00:00
   const mockNow = new Date('2026-01-16T12:00:00.000Z')
 
   beforeEach(() => {
-    vi.useSystemTime(mockNow)
+    vi.useFakeTimers()
+    vi.setSystemTime(mockNow)
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
+
 
   describe('time calculation', () => {
     it('should show "Just now" for less than 1 minute', () => {
@@ -150,7 +153,8 @@ describe('FreshnessIndicator', () => {
 
       const badge = container.querySelector('.inline-flex')
       expect(badge).toBeInTheDocument()
-      expect(badge).toHaveClass({ 'px-2': true, 'py-0.5': true, 'rounded': true })
+      expect(badge).toHaveClass('px-2', 'py-0.5', 'rounded')
+
     })
 
     it('should render minimal variant without icon', () => {

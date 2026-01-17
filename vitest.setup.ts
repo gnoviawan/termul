@@ -1,5 +1,7 @@
 import '@testing-library/jest-dom'
 import { vi, type Mock } from 'vitest'
+import * as electronMock from 'electron'
+
 
 // Type definition for mock electron object
 export interface MockElectron {
@@ -81,8 +83,19 @@ const mockElectron = {
     send: vi.fn(),
     invoke: vi.fn()
   },
-  webUtils: {}
+  webUtils: {},
+  screen: {
+    getPrimaryDisplay: vi.fn(() => ({
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      workAreaSize: { width: 1920, height: 1040 }
+    })),
+    getAllDisplays: vi.fn(() => [{
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      workAreaSize: { width: 1920, height: 1040 }
+    }])
+  }
 }
+
 
 // Mock Electron with explicit named exports for ESM compatibility
 // Using vi.mock before any imports with a function that returns the exports
@@ -222,20 +235,49 @@ vi.mock('micromatch', () => {
       unixify: vi.fn((s: string) => s.replace(/\\/g, '/')),
       braceExpand: vi.fn((s: string) => [s]),
       expand: vi.fn((s: string) => [s]),
-      globstar: vi.fn(() => '**'),
-      // Named exports for ESM
-      match: mockMatch,
-      isMatch: mockIsMatch
+      globstar: vi.fn(() => '**')
     },
     // Named exports for ESM compatibility
     match: mockMatch,
-    isMatch: mockIsMatch
+    isMatch: mockIsMatch,
+    matcher: vi.fn((pattern: string) => {
+      const regex = new RegExp(
+        '^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.')
+      )
+      return (str: string) => regex.test(str)
+    }),
+    scan: vi.fn((pattern: string) => [pattern]),
+    parse: vi.fn((pattern: string) => ({ pattern })),
+    makeRe: vi.fn((pattern: string) => {
+      const regex = new RegExp(
+        '^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.')
+      )
+      return regex
+    }),
+    any: [],
+    parseNoExt: vi.fn(() => ({})),
+    contains: vi.fn(() => false),
+    matchKeys: vi.fn(() => []),
+    filter: mockMatch,
+    sep: '/',
+    isWindows: false,
+    unixify: vi.fn((s: string) => s.replace(/\\/g, '/')),
+    braceExpand: vi.fn((s: string) => [s]),
+    expand: vi.fn((s: string) => [s]),
+    globstar: vi.fn(() => '**')
   }
 })
 
+
 // Make mocks available globally for tests
-// We need to get the mocked electron module to set it globally
-global.mockElectron = mockElectron as any
+// Use the current electron mock so tests share the same instance
+const electronModule = (electronMock as unknown as { default?: typeof mockElectron })
+const electronExports = (electronModule.default ?? electronModule) as typeof mockElectron
+
+Object.assign(mockElectron, electronExports)
+
+global.mockElectron = mockElectron as typeof electronExports
+
 
 // Mock window.matchMedia for sonner/toast components
 Object.defineProperty(window, 'matchMedia', {
@@ -341,84 +383,121 @@ vi.mock('@/stores/app-settings-store', () => {
   // Create mock store state
   const mockState = {
     settings: {
-      theme: 'dark' as const,
-      fontSize: 14,
-      shell: 'powershell',
-      terminalFontFamily: 'Cascadia Code, monospace',
+      terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
       terminalFontSize: 14,
-      terminalBufferSize: 1000,
-      orphanDetectionEnabled: false,
-      orphanDetectionTimeout: 5000
+      terminalBufferSize: 10000,
+      defaultShell: '',
+      defaultProjectColor: 'blue',
+      maxTerminalsPerProject: 10,
+      orphanDetectionEnabled: true,
+      orphanDetectionTimeout: 600000,
+      emergencyModeEnabled: false
     },
     isLoaded: false,
-    setTheme: vi.fn(),
-    setFontSize: vi.fn(),
-    setShell: vi.fn(),
-    setTerminalFontFamily: vi.fn(),
-    setTerminalFontSize: vi.fn(),
-    setTerminalBufferSize: vi.fn(),
     setSettings: vi.fn(),
     updateSetting: vi.fn(),
     resetToDefaults: vi.fn()
   }
 
+
   // Zustand store is a function that can be called with a selector
   const useAppSettingsStore = vi.fn((selector?: (state: typeof mockState) => any) => {
     return selector ? selector(mockState) : mockState
-  })
+  }) as unknown as ((selector?: (state: typeof mockState) => any) => any) & {
+    getState: () => typeof mockState
+    setState: (partial: Partial<typeof mockState>) => void
+  }
 
-  // Add getState directly for tests that need it
-  useAppSettingsStore.getState = vi.fn(() => mockState)
+  useAppSettingsStore.getState = () => mockState
+  useAppSettingsStore.setState = (partial) => {
+    Object.assign(mockState, partial)
+  }
+
 
   return {
     useAppSettingsStore,
-    useTerminalFontFamily: vi.fn(() => 'Cascadia Code, monospace'),
-    useTerminalFontSize: vi.fn(() => 14),
-    useTerminalBufferSize: vi.fn(() => 1000)
+    useTerminalFontFamily: () => mockState.settings.terminalFontFamily,
+    useTerminalFontSize: () => mockState.settings.terminalFontSize,
+    useDefaultShell: () => mockState.settings.defaultShell,
+    useMaxTerminalsPerProject: () => mockState.settings.maxTerminalsPerProject,
+    useTerminalBufferSize: () => mockState.settings.terminalBufferSize,
+    useUpdateAppSetting: () => mockState.updateSetting
   }
+
 })
 
 vi.mock('@/stores/worktree-store', () => {
   // Create mock store state
   const mockState = {
-    worktrees: [],
-    status: 'idle' as const,
+    worktrees: new Map(),
+    statusCache: new Map(),
     error: null as string | null,
     activeWorktreeId: null as string | null,
-    projectExpanded: {} as Record<string, boolean>,
+    expandedProjects: new Set<string>(),
+    selectedWorktreeId: null as string | null,
+    isLoading: false,
+    isRefreshingStatus: false,
+    filterStatus: 'all' as const,
+    lastStatusUpdate: 0,
     loadWorktrees: vi.fn(),
     createWorktree: vi.fn(),
     deleteWorktree: vi.fn(),
-    updateWorktree: vi.fn(),
-    updateStatusCache: vi.fn(),
+    archiveWorktree: vi.fn(),
+    updateWorktreeStatus: vi.fn(),
     setActiveWorktree: vi.fn(),
+    setSelectedWorktree: vi.fn(),
     toggleProjectExpanded: vi.fn(),
+    setProjectExpanded: vi.fn(),
+    refreshStatus: vi.fn(),
     clearError: vi.fn(),
-    clearWorktrees: vi.fn()
+    initializeEventListeners: vi.fn(() => vi.fn())
   }
+
 
   // Zustand store is a function that can be called with a selector
   const useWorktreeStore = vi.fn((selector?: (state: typeof mockState) => any) => {
     return selector ? selector(mockState) : mockState
-  })
+  }) as unknown as ((selector?: (state: typeof mockState) => any) => any) & {
+    getState: () => typeof mockState
+    setState: (partial: Partial<typeof mockState>) => void
+  }
 
-  // Add getState directly for tests that need it
-  useWorktreeStore.getState = vi.fn(() => mockState)
+  useWorktreeStore.getState = () => mockState
+  useWorktreeStore.setState = (partial) => {
+    Object.assign(mockState, partial)
+  }
+
 
   return {
     useWorktreeStore,
     useWorktrees: vi.fn(() => []),
     useWorktreeCount: vi.fn(() => 0),
-    useWorktreeStatus: vi.fn(() => 'clean'),
+    useWorktreeStatus: vi.fn(() => ({
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+      conflicted: false,
+      currentBranch: 'main',
+      updatedAt: Date.now()
+    })),
     useProjectExpanded: vi.fn(() => true),
     useSelectedWorktreeId: vi.fn(() => null),
     useWorktreeActions: vi.fn(() => ({
-      selectWorktree: vi.fn(),
-      toggleProjectExpanded: vi.fn(),
+      createWorktree: vi.fn(),
       deleteWorktree: vi.fn(),
-      archiveWorktree: vi.fn()
+      archiveWorktree: vi.fn(),
+      updateWorktreeStatus: vi.fn(),
+      setActiveWorktree: vi.fn(),
+      setSelectedWorktree: vi.fn(),
+      toggleProjectExpanded: vi.fn(),
+      setProjectExpanded: vi.fn(),
+      refreshStatus: vi.fn(),
+      loadWorktrees: vi.fn(),
+      clearError: vi.fn(),
+      initializeEventListeners: vi.fn()
     }))
   }
+
 })
 
 vi.mock('@/lib/utils', () => ({

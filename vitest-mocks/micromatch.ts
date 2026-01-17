@@ -13,14 +13,15 @@ const mockMatch = vi.fn((list: string[], pattern: string | string[]) => {
 })
 
 const mockIsMatch = vi.fn((str: string, pattern: string | string[]) => {
-  if (typeof pattern === 'string') {
+  const patterns = Array.isArray(pattern) ? pattern : [pattern]
+  return patterns.some((item) => {
     const regex = new RegExp(
-      '^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.')
+      '^' + item.replace(/\*/g, '.*').replace(/\?/g, '.')
     )
     return regex.test(str)
-  }
-  return false
+  })
 })
+
 
 export const match = mockMatch
 export const isMatch = mockIsMatch
