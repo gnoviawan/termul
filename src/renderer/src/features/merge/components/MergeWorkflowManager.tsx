@@ -137,18 +137,12 @@ export const MergeWorkflowManager = memo(({
     }
   }, [isOpen, resetWorkflow])
 
-  // Handle Escape key
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      onCancel()
-    } else if (e.key === 'Enter' && !isMerging) {
-      handleNext()
-    } else if (e.key === 'Backspace' && !e.shiftKey && !isMerging) {
-      handleBack()
-    }
-  }, [isMerging, onCancel])
+  // Pure callbacks (no dependencies)
+  const handleConfirmCancel = useCallback(() => {
+    setShowConfirmation(false)
+  }, [])
 
-  // Handle Next button
+  // Store-action callbacks
   const handleNext = useCallback(async () => {
     switch (workflowState) {
       case 'select-branch':
@@ -178,7 +172,6 @@ export const MergeWorkflowManager = memo(({
     }
   }, [workflowState, sourceBranch, targetBranch, projectId, detectConflicts, getMergePreview, setWorkflowState])
 
-  // Handle confirmation dialog confirm (Story 2.6)
   const handleConfirmMerge = useCallback(async () => {
     setShowConfirmation(false)
     setWorkflowState('execute')
@@ -197,29 +190,52 @@ export const MergeWorkflowManager = memo(({
     setMergeProgress(90)
   }, [setWorkflowState, setMergeStep, setMergeProgress, executeMerge])
 
-  // Handle confirmation dialog cancel
-  const handleConfirmCancel = useCallback(() => {
-    setShowConfirmation(false)
-  }, [])
+  const handleComplete = useCallback(() => {
+    try {
+      // Call parent callback first while merge state is still available
+      onComplete?.()
+    } catch (error) {
+      console.error('[MergeWorkflowManager] onComplete callback failed:', error)
+    } finally {
+      // Reset workflow state after callback completes
+      resetWorkflow()
+    }
+  }, [resetWorkflow, onComplete])
 
-  // Handle success dialog close
-  const handleSuccessClose = useCallback(() => {
-    setShowSuccess(false)
-    handleComplete()
-  }, [handleComplete])
-
-  // Handle error dialog close
   const handleErrorClose = useCallback(() => {
     setShowError(false)
     clearError()
   }, [clearError])
 
-  // Handle error retry
   const handleErrorRetry = useCallback(() => {
     setShowError(false)
     clearError()
     executeMerge()
   }, [clearError, executeMerge])
+
+  const handleBack = useCallback(() => {
+    const currentIndex = getStepIndex(workflowState)
+    if (currentIndex > 0) {
+      setWorkflowState(WORKFLOW_STEPS[currentIndex - 1].id)
+    }
+  }, [workflowState, setWorkflowState])
+
+  // Callback-dependent callbacks
+  const handleSuccessClose = useCallback(() => {
+    setShowSuccess(false)
+    handleComplete()
+  }, [handleComplete])
+
+  // Event handlers
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      onCancel()
+    } else if (e.key === 'Enter' && !isMerging) {
+      handleNext()
+    } else if (e.key === 'Backspace' && !e.shiftKey && !isMerging) {
+      handleBack()
+    }
+  }, [isMerging, onCancel, handleNext, handleBack])
 
   // Watch for merge completion to show success/error dialogs (Story 2.6)
   useEffect(() => {
@@ -242,28 +258,6 @@ export const MergeWorkflowManager = memo(({
       setMergeProgress(50)
     }
   }, [workflowState, isMerging, setMergeStep, setMergeProgress])
-
-  // Handle Back button
-  const handleBack = useCallback(() => {
-    const currentIndex = getStepIndex(workflowState)
-    if (currentIndex > 0) {
-      setWorkflowState(WORKFLOW_STEPS[currentIndex - 1].id)
-    }
-  }, [workflowState, setWorkflowState])
-
-  // Handle retry after error
-  const handleRetry = useCallback(() => {
-    clearError()
-    if (workflowState === 'execute') {
-      executeMerge()
-    }
-  }, [workflowState, clearError, executeMerge])
-
-  // Handle complete workflow
-  const handleComplete = useCallback(() => {
-    resetWorkflow()
-    onComplete?.()
-  }, [resetWorkflow, onComplete])
 
   if (!isOpen) return null
 

@@ -6,14 +6,18 @@
  * Source: Story 2.2 - Conflict Detection UI, Story 2.3 - Merge Preview UI, Story 2.4 - Merge Workflow
  */
 
+// External dependencies
 import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
+
+// Type imports
 import type {
-  DetectionMode,
   ConflictDetectionResult,
+  ConflictedFile,
+  DetectionMode,
+  FileChange,
   MergePreference,
   MergePreview,
-  FileChange,
-  ConflictedFile,
   MergeResult
 } from '@/shared/types/merge.types'
 
@@ -338,30 +342,62 @@ export const useMergeProgress = () => useMergeStore((state) => state.mergeProgre
 export const useMergeStep = () => useMergeStore((state) => state.mergeStep)
 
 // Combined selectors
-export const useDetectionState = () => useMergeStore((state) => ({
-  isDetecting: state.isDetecting,
-  result: state.detectionResult,
-  error: state.detectionError
-}))
+export const useDetectionState = () => useMergeStore(
+  useShallow((state) => ({
+    isDetecting: state.isDetecting,
+    result: state.detectionResult,
+    error: state.detectionError
+  }))
+)
 
 // Actions selector
-export const useMergeActions = () => useMergeStore((state) => ({
-  setDetectionMode: state.setDetectionMode,
-  detectConflicts: state.detectConflicts,
-  loadPreference: state.loadPreference,
-  clearResults: state.clearResults,
-  clearError: state.clearError,
-  getMergePreview: state.getMergePreview,
-  setShowConflictsOnly: state.setShowConflictsOnly,
-  setSelectedFile: state.setSelectedFile,
-  openDiff: state.openDiff,
-  closeDiff: state.closeDiff,
-  clearPreview: state.clearPreview,
-  setWorkflowState: state.setWorkflowState,
-  setBranches: state.setBranches,
-  setWorktreeContext: state.setWorktreeContext,
-  executeMerge: state.executeMerge,
-  resetWorkflow: state.resetWorkflow,
-  setMergeProgress: state.setMergeProgress,
-  setMergeStep: state.setMergeStep
-}))
+/**
+ * Hook to access all merge store actions with stable references.
+ * Uses shallow equality to prevent unnecessary re-renders.
+ *
+ * @returns Object containing all merge store actions
+ */
+export function useMergeActions(): Pick<
+  MergeStore,
+  | 'setDetectionMode'
+  | 'detectConflicts'
+  | 'loadPreference'
+  | 'clearResults'
+  | 'clearError'
+  | 'getMergePreview'
+  | 'setShowConflictsOnly'
+  | 'setSelectedFile'
+  | 'openDiff'
+  | 'closeDiff'
+  | 'clearPreview'
+  | 'setWorkflowState'
+  | 'setBranches'
+  | 'setWorktreeContext'
+  | 'executeMerge'
+  | 'resetWorkflow'
+  | 'setMergeProgress'
+  | 'setMergeStep'
+> {
+  return useMergeStore(
+    useShallow((state) => ({
+    setDetectionMode: state.setDetectionMode,
+    detectConflicts: state.detectConflicts,
+    loadPreference: state.loadPreference,
+    clearResults: state.clearResults,
+    clearError: state.clearError,
+    getMergePreview: state.getMergePreview,
+    setShowConflictsOnly: state.setShowConflictsOnly,
+    setSelectedFile: state.setSelectedFile,
+    openDiff: state.openDiff,
+    closeDiff: state.closeDiff,
+    clearPreview: state.clearPreview,
+    setWorkflowState: state.setWorkflowState,
+    setBranches: state.setBranches,
+    setWorktreeContext: state.setWorktreeContext,
+    executeMerge: state.executeMerge,
+    resetWorkflow: state.resetWorkflow,
+    setMergeProgress: state.setMergeProgress,
+    setMergeStep: state.setMergeStep
+    }))
+  )
+}

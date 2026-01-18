@@ -6,7 +6,7 @@
  * Source: Story 2.4 - Task 3: Create Branch Selection Step
  */
 
-import { memo } from 'react'
+import { memo, useEffect } from 'react'
 import { GitBranch, Info } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
@@ -43,10 +43,12 @@ export const BranchSelectionStep = memo(({
   // Auto-detect default target branch
   const defaultTarget = availableBranches.find(b => MAIN_BRANCHES.includes(b)) || 'main'
 
-  // Initialize target if not set
-  if (!targetBranch && defaultTarget) {
-    onTargetChange(defaultTarget)
-  }
+  // Initialize target branch if not set (useEffect to avoid setState during render)
+  useEffect(() => {
+    if (!targetBranch && defaultTarget) {
+      onTargetChange(defaultTarget)
+    }
+  }, [targetBranch, defaultTarget, onTargetChange])
 
   const isValid = sourceBranch && targetBranch && sourceBranch !== targetBranch
 
