@@ -32,7 +32,12 @@ import type {
   WorktreeDeletedCallback,
   MergeApi,
   AIPromptApi,
-  ProjectApi
+  ProjectApi,
+  GitignoreApi,
+  ParseGitignoreDto,
+  SaveProfileDto,
+  DeleteProfileDto,
+  LoadProfilesDto
 } from '../shared/types/ipc.types'
 import type {
   ConflictDetectionResult,
@@ -477,6 +482,25 @@ const projectApi: ProjectApi = {
   }
 }
 
+// Gitignore API for renderer
+const gitignoreApi: GitignoreApi = {
+  parse: (dto: ParseGitignoreDto): Promise<IpcResult<any>> => {
+    return ipcRenderer.invoke('gitignore:parse', dto)
+  },
+
+  saveProfile: (dto: SaveProfileDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('gitignore:profiles:save', dto)
+  },
+
+  deleteProfile: (dto: DeleteProfileDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('gitignore:profiles:delete', dto)
+  },
+
+  loadProfiles: (dto: LoadProfilesDto): Promise<IpcResult<any>> => {
+    return ipcRenderer.invoke('gitignore:profiles:list', dto)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -490,7 +514,8 @@ const api = {
   worktree: worktreeApi,
   merge: mergeApi,
   aiPrompt: aiPromptApi,
-  project: projectApi
+  project: projectApi,
+  gitignore: gitignoreApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

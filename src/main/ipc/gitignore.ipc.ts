@@ -51,8 +51,10 @@ export function registerGitignoreHandlers(): void {
    * Parse .gitignore file
    */
   ipcMain.handle('gitignore:parse', async (_event, dto: ParseGitignoreDto): Promise<IpcResult<GitignoreParseResult>> => {
+    console.log('[gitignore:parse] Called with projectRoot:', dto.projectRoot)
     try {
       const result = await parseGitignore(dto.projectRoot)
+      console.log('[gitignore:parse] Parsed patterns count:', result.patterns.length)
 
       // Convert Map to object for serialization
       const serializedResult = {
@@ -61,8 +63,10 @@ export function registerGitignoreHandlers(): void {
         securityPatterns: result.securityPatterns
       }
 
+      console.log('[gitignore:parse] Returning success with patterns:', serializedResult.patterns.length)
       return { success: true, data: serializedResult as any }
     } catch (error) {
+      console.error('[gitignore:parse] Error:', error)
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

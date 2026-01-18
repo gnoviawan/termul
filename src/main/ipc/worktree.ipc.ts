@@ -7,7 +7,7 @@
  */
 
 import { BrowserWindow, ipcMain } from 'electron'
-import { WorktreeManager, type CreateWorktreeOptions, type DeleteWorktreeOptions } from '../services/worktree-manager'
+import { WorktreeManager, type CreateWorktreeOptions, type DeleteWorktreeOptions, type PatternValidationResult } from '../services/worktree-manager'
 import { read } from '../services/persistence-service'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import type {
@@ -108,6 +108,22 @@ export function registerWorktreeIpc(): void {
       console.log('[worktree:create] Using projectRoot:', projectRoot)
 
       const manager = new WorktreeManager(projectRoot, dto.projectId)
+
+      // Validate patterns if any are selected
+      if (dto.gitignoreSelections.length > 0) {
+        const validation = await manager.validatePatterns(dto.gitignoreSelections)
+
+        if (!validation.valid) {
+          const errorMessages = validation.errors.map(e => `${e.pattern}: ${e.error}`).join(', ')
+          return {
+            success: false,
+            error: `Pattern validation failed: ${errorMessages}`,
+            code: 'FILE_COPY_FAILED'
+          }
+        }
+
+        console.log('[worktree:create] Pattern validation passed, estimated size:', validation.estimatedSize)
+      }
 
       const options: CreateWorktreeOptions = {
         projectId: dto.projectId,

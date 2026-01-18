@@ -4,22 +4,14 @@
  * Modal dialog for creating a new Git worktree from the project sidebar.
  * Allows users to specify branch name and .gitignore patterns to copy.
  * Source: Story 1.4 - Add Create Worktree to Project Context Menu
+ * Tech-Spec: Dynamic .gitignore Pattern Selection for Worktree Creation
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { GitBranch, X, Check } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { GitBranch, X, Check, AlertTriangle, Search, Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
-
-// Pre-defined .gitignore patterns for selection
-// These are common patterns that users typically want to exclude from worktrees
-const GITIGNORE_PATTERNS = [
-  { pattern: 'node_modules/', label: 'node_modules/', defaultSelected: false },
-  { pattern: '.env', label: '.env', defaultSelected: false, warning: 'Contains sensitive credentials' },
-  { pattern: 'dist/', label: 'dist/', defaultSelected: false },
-  { pattern: 'build/', label: 'build/', defaultSelected: false },
-  { pattern: '.git/', label: '.git/', defaultSelected: false }
-] as const
+import type { ParsedPattern } from '@shared/types/ipc.types'
 
 // Git branch name validation rules
 // Branch names cannot contain: .., ~, ^, :, \, ?, [, *, spaces
@@ -63,6 +55,14 @@ export function WorktreeCreateDialog({
   const [error, setError] = useState<string | null>(null)
   const [branchError, setBranchError] = useState<string | null>(null)
 
+  // Dynamic pattern loading state
+  const [availablePatterns, setAvailablePatterns] = useState<ParsedPattern[]>([])
+  const [isLoadingPatterns, setIsLoadingPatterns] = useState(false)
+  const [patternLoadError, setPatternLoadError] = useState<string | null>(null)
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('')
+
   // Track mounted state to prevent memory leak
   const isMountedRef = useRef(true)
 
@@ -74,11 +74,72 @@ export function WorktreeCreateDialog({
     }
   }, [])
 
+  // Load patterns from .gitignore when dialog opens
+  useEffect(() => {
+    if (!isOpen) {
+      // Reset state when dialog closes
+      setAvailablePatterns([])
+      setPatternLoadError(null)
+      setSearchQuery('')
+      return
+    }
+
+    const loadPatterns = async (): Promise<void> => {
+      setIsLoadingPatterns(true)
+      setPatternLoadError(null)
+
+      try {
+        console.log('[WorktreeCreateDialog] Loading patterns from projectRoot:', projectPath)
+        const result = await window.api.gitignore.parse({ projectRoot: projectPath })
+        console.log('[WorktreeCreateDialog] IPC result:', result)
+
+        if (!isMountedRef.current) return
+
+        if (!result.success) {
+          console.log('[WorktreeCreateDialog] IPC failed:', result.error, result.code)
+          // Handle missing .gitignore gracefully
+          if (result.code === 'GITIGNORE_PARSE_FAILED') {
+            setPatternLoadError(null) // No error, just no patterns
+            setAvailablePatterns([])
+          } else {
+            setPatternLoadError(result.error ?? 'Failed to load patterns')
+          }
+          setIsLoadingPatterns(false)
+          return
+        }
+
+        // Extract patterns from response
+        const patterns = result.data?.patterns ?? []
+        console.log('[WorktreeCreateDialog] Parsed patterns:', patterns.length, patterns)
+        setAvailablePatterns(patterns)
+
+        // Initialize selected patterns (exclude security-sensitive patterns)
+        const initialSelection = new Set(
+          patterns
+            .filter((p: ParsedPattern) => !p.isSecuritySensitive)
+            .map((p: ParsedPattern) => p.pattern)
+        )
+        setSelectedPatterns(initialSelection)
+      } catch (err) {
+        if (!isMountedRef.current) return
+        console.error('[WorktreeCreateDialog] Failed to load patterns:', err)
+        // Treat errors as missing .gitignore - allow creation to proceed
+        setPatternLoadError(null)
+        setAvailablePatterns([])
+      } finally {
+        if (isMountedRef.current) {
+          setIsLoadingPatterns(false)
+        }
+      }
+    }
+
+    loadPatterns()
+  }, [isOpen, projectPath])
+
   // Reset form when modal opens - parent controls reset timing
   useEffect(() => {
     if (isOpen) {
       setBranchName('')
-      setSelectedPatterns(new Set())
       setIsCreating(false)
       setError(null)
       setBranchError(null)
@@ -107,6 +168,19 @@ export function WorktreeCreateDialog({
     onCreatingChange?.(isCreating)
   }, [isCreating, onCreatingChange])
 
+  // Debounced search with useMemo
+  const filteredPatterns = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return availablePatterns
+    }
+
+    const query = searchQuery.toLowerCase()
+    return availablePatterns.filter((pattern) =>
+      pattern.pattern.toLowerCase().includes(query) ||
+      pattern.category.toLowerCase().includes(query)
+    )
+  }, [availablePatterns, searchQuery])
+
   const togglePattern = useCallback((pattern: string): void => {
     setSelectedPatterns((prev) => {
       const newSet = new Set(prev)
@@ -120,8 +194,8 @@ export function WorktreeCreateDialog({
   }, [])
 
   const selectAllPatterns = useCallback((): void => {
-    setSelectedPatterns(new Set(Array.from(GITIGNORE_PATTERNS.map((p) => p.pattern))))
-  }, [])
+    setSelectedPatterns(new Set(filteredPatterns.map((p) => p.pattern)))
+  }, [filteredPatterns])
 
   const deselectAllPatterns = useCallback((): void => {
     setSelectedPatterns(new Set())
@@ -137,7 +211,6 @@ export function WorktreeCreateDialog({
     }
 
     // Validate branch name
-
     if (!isValidBranchName(trimmedBranch)) {
       setBranchError('Invalid branch name. Cannot contain: .., ~, ^, :, \\, ?, *, spaces, or start/end with /')
       return
@@ -168,7 +241,12 @@ export function WorktreeCreateDialog({
       if (!isMountedRef.current) return
 
       if (!result.success) {
-        setError(result.error ?? 'Failed to create worktree')
+        // Check if error is from pattern validation
+        if (result.error?.includes('Pattern validation failed')) {
+          setError(result.error)
+        } else {
+          setError(result.error ?? 'Failed to create worktree')
+        }
         setIsCreating(false)
         return
       }
@@ -194,6 +272,10 @@ export function WorktreeCreateDialog({
   }, [branchName, selectedPatterns, projectId, projectPath, isCreating, onSuccess, onClose])
 
   const isFormValid = branchName.trim().length > 0 && !isCreating && !branchError
+
+  const selectedCount = selectedPatterns.size
+  const totalCount = availablePatterns.length
+  const hasNoGitignore = !isLoadingPatterns && availablePatterns.length === 0 && !patternLoadError
 
   return (
     <AnimatePresence>
@@ -236,7 +318,7 @@ export function WorktreeCreateDialog({
             </div>
 
             {/* Content */}
-            <div className="p-4 space-y-4">
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
               {/* Error Display */}
               {error && (
                 <div className="bg-destructive/10 border border-destructive/20 rounded px-3 py-2 text-xs text-destructive" role="alert">
@@ -284,61 +366,133 @@ export function WorktreeCreateDialog({
               {/* .gitignore Patterns */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-medium text-muted-foreground">
-                    .gitignore Patterns to Copy
-                  </label>
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground">
+                      .gitignore Patterns to Copy
+                    </label>
+                    {totalCount > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {totalCount} patterns from .gitignore · {selectedCount} selected
+                      </p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={selectAllPatterns}
-                      disabled={isCreating}
-                      className="text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
+                      disabled={isCreating || isLoadingPatterns || filteredPatterns.length === 0}
+                      className="text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Select All
                     </button>
                     <button
                       type="button"
                       onClick={deselectAllPatterns}
-                      disabled={isCreating}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      disabled={isCreating || selectedCount === 0}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Deselect All
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-1.5" role="group" aria-label="Gitignore patterns">
-                  {GITIGNORE_PATTERNS.map((item) => {
-                    const isSelected = selectedPatterns.has(item.pattern)
-                    return (
-                      <label
-                        key={item.pattern}
-                        className={cn(
-                          'flex items-start gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors',
-                          isSelected ? 'bg-secondary/70' : 'hover:bg-secondary/30',
-                          isCreating && 'opacity-50 cursor-not-allowed'
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => togglePattern(item.pattern)}
-                          disabled={isCreating}
-                          className="mt-0.5 rounded border-border"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm text-foreground">{item.label}</span>
-                          {'warning' in item && item.warning && (
-                            <span className="block text-xs text-destructive mt-0.5">
-                              ⚠️ {item.warning} - recommended: NO
-                            </span>
-                          )}
+                {/* Search Input */}
+                {totalCount > 0 && (
+                  <div className="relative mb-2">
+                    <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search patterns..."
+                      disabled={isCreating || isLoadingPatterns}
+                      className="w-full bg-secondary border border-border rounded pl-8 pr-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
 
+                {/* Loading State */}
+                {isLoadingPatterns && (
+                  <div className="flex items-center justify-center py-8 text-muted-foreground">
+                    <Loader2 size={16} className="animate-spin mr-2" />
+                    <span className="text-xs">Loading patterns from .gitignore...</span>
+                  </div>
+                )}
+
+                {/* No .gitignore Message */}
+                {hasNoGitignore && (
+                  <div className="py-4 px-3 bg-muted/30 rounded text-center">
+                    <p className="text-xs text-muted-foreground">
+                      No .gitignore found. All files will be copied to the worktree.
+                    </p>
+                  </div>
+                )}
+
+                {/* Pattern Error */}
+                {patternLoadError && (
+                  <div className="py-4 px-3 bg-destructive/10 rounded text-center">
+                    <p className="text-xs text-destructive">
+                      Failed to load patterns: {patternLoadError}
+                    </p>
+                  </div>
+                )}
+
+                {/* Pattern List */}
+                {!isLoadingPatterns && filteredPatterns.length > 0 && (
+                  <div className="space-y-0.5 max-h-[200px] overflow-y-auto" role="group" aria-label="Gitignore patterns">
+                    {filteredPatterns.map((pattern) => {
+                      const isSelected = selectedPatterns.has(pattern.pattern)
+                      return (
+                        <div
+                          key={pattern.pattern}
+                          onClick={() => !isCreating && togglePattern(pattern.pattern)}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-2 rounded cursor-pointer transition-colors',
+                            isSelected ? 'bg-primary/10' : 'hover:bg-secondary/30',
+                            isCreating && 'opacity-50 cursor-not-allowed'
+                          )}
+                          role="button"
+                          tabIndex={isCreating ? -1 : 0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              togglePattern(pattern.pattern)
+                            }
+                          }}
+                          aria-pressed={isSelected}
+                        >
+                          <span className="flex-1 min-w-0 text-sm text-foreground truncate">
+                            {pattern.pattern}
+                          </span>
+                          <span className="text-xs text-muted-foreground uppercase">
+                            {pattern.category}
+                          </span>
+                          {pattern.isSecuritySensitive && (
+                            <AlertTriangle
+                              size={12}
+                              className="text-destructive flex-shrink-0"
+                              aria-label="Security-sensitive pattern"
+                            />
+                          )}
+                          {isSelected && (
+                            <Check
+                              size={14}
+                              className="text-primary flex-shrink-0"
+                              aria-hidden="true"
+                            />
+                          )}
                         </div>
-                      </label>
-                    )
-                  })}
-                </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* No Search Results */}
+                {!isLoadingPatterns && searchQuery && filteredPatterns.length === 0 && totalCount > 0 && (
+                  <div className="py-4 text-center text-muted-foreground">
+                    <p className="text-xs">No patterns match "{searchQuery}"</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -358,7 +512,7 @@ export function WorktreeCreateDialog({
               >
                 {isCreating ? (
                   <>
-                    <span className="animate-spin" aria-hidden="true">⟳</span>
+                    <Loader2 size={12} className="animate-spin" aria-hidden="true" />
                     Creating...
                   </>
                 ) : (

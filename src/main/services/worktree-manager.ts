@@ -98,6 +98,15 @@ export interface DeleteWorktreeOptions {
 }
 
 /**
+ * Result of pattern validation
+ */
+export interface PatternValidationResult {
+  valid: boolean
+  errors: Array<{ pattern: string; error: string }>
+  estimatedSize: number
+}
+
+/**
  * Archive manifest structure
  */
 interface ArchiveManifest {
@@ -791,38 +800,191 @@ export class WorktreeManager {
     for (const pattern of patterns) {
       try {
         // @ts-expect-error glob types are unavailable in node tsconfig
-        const { glob } = await import('glob') as { glob: (pattern: string, options: { cwd: string; dot: boolean; absolute: boolean; nodir: boolean }) => Promise<string[]> }
+        const { glob } = await import('glob') as { glob: (pattern: string, options: { cwd: string; dot: boolean; absolute: boolean; nodir: boolean }) => Promise<Iterable<string>> }
 
         // Convert .gitignore pattern to glob pattern
-        const globPattern = pattern.endsWith('/') ? `${pattern}**` : pattern
+        // Strip leading / as patterns are already relative to project root
+        let globPattern = pattern.startsWith('/') ? pattern.slice(1) : pattern
+
+        // For directories (pattern doesn't contain * or ?), append /** to match contents
+        if (!globPattern.includes('*') && !globPattern.includes('?')) {
+          globPattern = globPattern.endsWith('/') ? `${globPattern}**` : `${globPattern}/**`
+        }
 
         // Find matching files in project root
-        const files = await glob(globPattern, {
+        const filesResult = await glob(globPattern, {
           cwd: this.projectRoot,
           dot: true,
           absolute: false,
-          nodir: true
+          nodir: false // Include directories too
         })
 
+        // Convert to array in case glob returns an iterable
+        const files = Array.from(filesResult)
 
         // Copy each matched file to worktree
         for (const file of files) {
           const sourcePath = path.join(this.projectRoot, file)
           const targetPath = path.join(worktreePath, file)
 
-          // Create target directory if it doesn't exist
-          await fs.mkdir(path.dirname(targetPath), { recursive: true })
+          // Get source stats to check if it's a directory
+          try {
+            const stats = await fs.stat(sourcePath)
 
-          // Copy file
-          await fs.copyFile(sourcePath, targetPath)
+            if (stats.isDirectory()) {
+              // Create directory
+              await fs.mkdir(targetPath, { recursive: true })
+            } else {
+              // Create target directory if it doesn't exist
+              await fs.mkdir(path.dirname(targetPath), { recursive: true })
+              // Copy file
+              await fs.copyFile(sourcePath, targetPath)
+            }
+          } catch {
+            throw new WorktreeError(
+              'FILE_COPY_FAILED',
+              `Failed to access file: ${file}`,
+              'Check file permissions'
+            )
+          }
         }
       } catch (error) {
+        if (error instanceof WorktreeError) throw error
         throw new WorktreeError(
           'FILE_COPY_FAILED',
           `Failed to copy files matching pattern "${pattern}"`,
           'Check file permissions and disk space'
         )
       }
+    }
+  }
+
+  /**
+   * Validate .gitignore patterns before worktree creation
+   *
+   * Implements Tech-Spec: Dynamic .gitignore Pattern Selection
+   * - Checks all selected patterns have matching files (no empty globs)
+   * - Validates file read permissions
+   * - Calculates total size estimate
+   * - Returns detailed errors if validation fails
+   *
+   * @param patterns - Patterns from .gitignore to validate
+   * @returns Validation result with errors and size estimate
+   */
+  async validatePatterns(patterns: string[]): Promise<PatternValidationResult> {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    const errors: Array<{ pattern: string; error: string }> = []
+    let totalSize = 0
+
+    for (const pattern of patterns) {
+      try {
+        // Convert .gitignore pattern to glob pattern
+        // Strip leading / as patterns are already relative to project root
+        let globPattern = pattern.startsWith('/') ? pattern.slice(1) : pattern
+
+        // For patterns without wildcards, check if it's a directory or file directly
+        if (!globPattern.includes('*') && !globPattern.includes('?') && !globPattern.includes('[')) {
+          const itemPath = path.join(this.projectRoot, globPattern)
+
+          try {
+            const stats = await fs.stat(itemPath)
+
+            if (stats.isDirectory()) {
+              // For directories, calculate size by walking the directory
+              async function getDirSize(dirPath: string): Promise<number> {
+                let size = 0
+                const entries = await fs.readdir(dirPath, { withFileTypes: true })
+
+                for (const entry of entries) {
+                  const fullPath = path.join(dirPath, entry.name)
+
+                  if (entry.isDirectory()) {
+                    size += await getDirSize(fullPath)
+                  } else if (entry.isFile()) {
+                    const stat = await fs.stat(fullPath)
+                    size += stat.size
+                  }
+                }
+
+                return size
+              }
+
+              totalSize += await getDirSize(itemPath)
+              continue
+            } else if (stats.isFile()) {
+              // For files, just add the size
+              await fs.access(itemPath, fs.constants.R_OK)
+              totalSize += stats.size
+              continue
+            }
+          } catch {
+            // Path doesn't exist or isn't accessible - try glob instead
+          }
+        }
+
+        // Use glob for patterns with wildcards or if direct check failed
+        // @ts-expect-error glob types are unavailable in node tsconfig
+        const { glob } = await import('glob') as { glob: (pattern: string, options: { cwd: string; dot: boolean; absolute: boolean; nodir: boolean }) => Promise<Iterable<string>> }
+
+        // For directories (pattern doesn't contain * or ?), append /** to match contents
+        if (!globPattern.includes('*') && !globPattern.includes('?')) {
+          globPattern = globPattern.endsWith('/') ? `${globPattern}**` : `${globPattern}/**`
+        }
+
+        console.log('[validatePatterns] pattern:', pattern, '-> globPattern:', globPattern)
+
+        // Find matching files in project root
+        const filesResult = await glob(globPattern, {
+          cwd: this.projectRoot,
+          dot: true,
+          absolute: false,
+          nodir: false // Include directories too
+        })
+
+        // Convert to array in case glob returns an iterable
+        const files = Array.from(filesResult)
+        console.log('[validatePatterns] files found:', files.length, files.slice(0, 5))
+
+        // Check if pattern matches any files
+        if (files.length === 0) {
+          errors.push({ pattern, error: 'No files match this pattern' })
+          continue
+        }
+
+        // Check file permissions and calculate size
+        for (const file of files) {
+          const filePath = path.join(this.projectRoot, file)
+
+          try {
+            // Check read permissions
+            await fs.access(filePath, fs.constants.R_OK)
+
+            // Get file stats for size calculation
+            const stats = await fs.stat(filePath)
+
+            // Only add file sizes, not directories
+            if (!stats.isDirectory()) {
+              totalSize += stats.size
+            }
+          } catch {
+            errors.push({ pattern, error: `Cannot read file: ${file}` })
+          }
+        }
+      } catch (error) {
+        console.error('[validatePatterns] error for pattern:', pattern, error)
+        errors.push({
+          pattern,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        })
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      estimatedSize: totalSize
     }
   }
 

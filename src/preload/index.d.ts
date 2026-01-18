@@ -10,7 +10,8 @@ import type {
   WorktreeApi,
   MergeApi,
   AIPromptApi,
-  ProjectApi
+  ProjectApi,
+  GitignoreApi
 } from '@shared/types/ipc.types'
 import type { UpdaterApi } from '@shared/types/updater.types'
 
@@ -30,6 +31,7 @@ declare global {
       merge: MergeApi
       aiPrompt: AIPromptApi
       project: ProjectApi
+      gitignore: GitignoreApi
     }
   }
 }

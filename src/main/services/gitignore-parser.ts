@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { micromatch } from 'micromatch'
+import micromatch from 'micromatch'
 
 /**
  * Pattern categories for grouping

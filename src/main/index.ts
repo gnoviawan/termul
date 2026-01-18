@@ -11,6 +11,7 @@ import { registerProjectIpc } from './ipc/project.ipc'
 import { registerMergeIpc } from './ipc/merge.ipc'
 import { registerAIPromptIpc } from './ipc/ai-prompt.ipc'
 import { registerKeyboardShortcutsIpc } from './ipc/keyboard-shortcuts.ipc'
+import { registerGitignoreHandlers } from './ipc/gitignore.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
@@ -112,6 +113,7 @@ export function initializeApp(): void {
     registerMergeIpc()
     registerAIPromptIpc()
     registerKeyboardShortcutsIpc()
+    registerGitignoreHandlers()
     initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window
