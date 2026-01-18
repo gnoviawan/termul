@@ -8,7 +8,7 @@
  * Story 1.6 - Task 3: Search and Filter integration
  */
 
-import { memo, useState, useCallback, useMemo } from 'react'
+import { memo, useState, useCallback, useMemo, useEffect } from 'react'
 import { Loader2, Plus } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
@@ -43,12 +43,13 @@ export interface WorktreeProjectSectionProps {
   onWorktreeSelect?: (worktreeId: string) => void
   onOpenTerminal?: (worktreeId: string, worktreePath: string, branchName: string) => void
   onCreateWorktree?: (projectId: string) => void
+  onDialogStateChange?: (isOpen: boolean) => void
 }
 
 /**
  * WorktreeProjectSection - Collapsible section showing worktrees for a project
  */
-export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpenTerminal, onCreateWorktree }: WorktreeProjectSectionProps) => {
+export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpenTerminal, onCreateWorktree, onDialogStateChange }: WorktreeProjectSectionProps) => {
   const worktrees = useWorktrees(projectId)
   const worktreeCount = useWorktreeCount(projectId)
   const isExpanded = useProjectExpanded(projectId)
@@ -87,6 +88,17 @@ export const WorktreeProjectSection = memo(({ projectId, onWorktreeSelect, onOpe
   const [statusFilter, setStatusFilter] = useState<WorktreeStatusFilter>('all')
 
   const statusCache = useWorktreeStore((state) => state.statusCache)
+
+  // Notify parent when any dialog is open (to disable drag on parent Reorder.Item)
+  useEffect(() => {
+    const hasOpenDialog =
+      contextMenuState.isOpen ||
+      archiveDialogOpen ||
+      deleteDialogOpen ||
+      mergeWorkflowOpen ||
+      syncWorkflowOpen
+    onDialogStateChange?.(hasOpenDialog)
+  }, [contextMenuState.isOpen, archiveDialogOpen, deleteDialogOpen, mergeWorkflowOpen, syncWorkflowOpen, onDialogStateChange])
 
   // Filter out archived worktrees
   const activeWorktrees = useMemo(() => {

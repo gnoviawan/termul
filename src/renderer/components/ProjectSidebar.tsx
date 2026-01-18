@@ -120,6 +120,20 @@ export function ProjectSidebar({
   })
   const [isWorktreeCreating, setIsWorktreeCreating] = useState(false)
 
+  // Track which projects have open nested dialogs (merge, sync, etc.)
+  const [projectsWithOpenDialogs, setProjectsWithOpenDialogs] = useState<Set<string>>(new Set())
+
+  // Check if a project has any open dialog (sidebar or nested)
+  const hasOpenDialog = (projectId: string): boolean => {
+    return (
+      projectsWithOpenDialogs.has(projectId) ||
+      contextMenu.projectId === projectId ||
+      colorPicker.projectId === projectId ||
+      deleteConfirm.projectId === projectId ||
+      worktreeCreateDialog.projectId === projectId
+    )
+  }
+
   const { loadWorktrees, refreshStatus, setProjectExpanded, expandProjectExclusive } = useWorktreeActions()
 
   // Available shells state
@@ -409,6 +423,7 @@ export function ProjectSidebar({
                   key={project.id}
                   value={project}
                   className="list-none"
+                  drag={!hasOpenDialog(project.id)}
                   whileDrag={{ scale: 1.02, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
                 >
                   <div>
@@ -435,6 +450,17 @@ export function ProjectSidebar({
                         console.log('Selected worktree:', worktreeId, 'in project:', project.id)
                       }}
                       onCreateWorktree={handleOpenWorktreeCreateDialog}
+                      onDialogStateChange={(isOpen) => {
+                        setProjectsWithOpenDialogs(prev => {
+                          const next = new Set(prev)
+                          if (isOpen) {
+                            next.add(project.id)
+                          } else {
+                            next.delete(project.id)
+                          }
+                          return next
+                        })
+                      }}
                     />
                   </div>
                 </Reorder.Item>
