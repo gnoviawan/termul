@@ -64,6 +64,11 @@ interface MergeStore {
   mergeProgress: number
   mergeStep: MergeStep
 
+  // Branch state (Phase 1: Add Branch Fetching)
+  availableBranches: string[]
+  isLoadingBranches: boolean
+  branchError: string | null
+
   // Actions
   setDetectionMode: (mode: DetectionMode) => void
   detectConflicts: (projectId: string, sourceBranch: string, targetBranch: string) => Promise<void>
@@ -90,6 +95,10 @@ interface MergeStore {
   // Merge progress actions (Story 2.6)
   setMergeProgress: (progress: number) => void
   setMergeStep: (step: MergeStep) => void
+
+  // Branch actions (Phase 1: Add Branch Fetching)
+  getBranches: (projectId: string) => Promise<void>
+  clearBranchError: () => void
 }
 
 /**
@@ -125,6 +134,11 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   // Merge progress initial state (Story 2.6)
   mergeProgress: 0,
   mergeStep: 'idle',
+
+  // Branch initial state (Phase 1: Add Branch Fetching)
+  availableBranches: [],
+  isLoadingBranches: false,
+  branchError: null,
 
   // Set detection mode
   setDetectionMode: (mode: DetectionMode) => {
@@ -311,6 +325,40 @@ export const useMergeStore = create<MergeStore>((set, get) => ({
   // Set merge step (Story 2.6)
   setMergeStep: (step: MergeStep) => {
     set({ mergeStep: step })
+  },
+
+  // Branch fetching action (Phase 1: Add Branch Fetching)
+  getBranches: async (projectId: string) => {
+    set({ isLoadingBranches: true, branchError: null })
+
+    try {
+      const result = await window.api.merge.getBranches(projectId)
+
+      if (result.success) {
+        set({
+          availableBranches: result.data || [],
+          isLoadingBranches: false,
+          branchError: null
+        })
+      } else {
+        set({
+          availableBranches: [],
+          isLoadingBranches: false,
+          branchError: result.error || 'Failed to fetch branches'
+        })
+      }
+    } catch (error) {
+      set({
+        availableBranches: [],
+        isLoadingBranches: false,
+        branchError: String(error)
+      })
+    }
+  },
+
+  // Clear error state (Phase 1: Add Branch Fetching)
+  clearBranchError: () => {
+    set({ branchError: null })
   }
 }))
 
@@ -340,6 +388,11 @@ export const useMergeResult = () => useMergeStore((state) => state.mergeResult)
 // Merge progress selectors (Story 2.6)
 export const useMergeProgress = () => useMergeStore((state) => state.mergeProgress)
 export const useMergeStep = () => useMergeStore((state) => state.mergeStep)
+
+// Branch selectors (Phase 1: Add Branch Fetching)
+export const useAvailableBranches = () => useMergeStore((state) => state.availableBranches)
+export const useIsLoadingBranches = () => useMergeStore((state) => state.isLoadingBranches)
+export const useBranchError = () => useMergeStore((state) => state.branchError)
 
 // Combined selectors
 export const useDetectionState = () => useMergeStore(
@@ -377,6 +430,8 @@ export function useMergeActions(): Pick<
   | 'resetWorkflow'
   | 'setMergeProgress'
   | 'setMergeStep'
+  | 'getBranches'
+  | 'clearBranchError'
 > {
   return useMergeStore(
     useShallow((state) => ({
@@ -397,7 +452,9 @@ export function useMergeActions(): Pick<
     executeMerge: state.executeMerge,
     resetWorkflow: state.resetWorkflow,
     setMergeProgress: state.setMergeProgress,
-    setMergeStep: state.setMergeStep
+    setMergeStep: state.setMergeStep,
+    getBranches: state.getBranches,
+    clearBranchError: state.clearBranchError
     }))
   )
 }

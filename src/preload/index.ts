@@ -31,7 +31,8 @@ import type {
   WorktreeCreatedCallback,
   WorktreeDeletedCallback,
   MergeApi,
-  AIPromptApi
+  AIPromptApi,
+  ProjectApi
 } from '../shared/types/ipc.types'
 import type {
   ConflictDetectionResult,
@@ -410,6 +411,10 @@ const mergeApi: MergeApi = {
 
   setPreference: (pref: MergePreference): Promise<IpcResult<void>> => {
     return ipcRenderer.invoke('merge:set-preference', pref)
+  },
+
+  getBranches: (projectId: string): Promise<IpcResult<string[]>> => {
+    return ipcRenderer.invoke('merge:get-branches', projectId)
   }
 }
 
@@ -457,6 +462,21 @@ const keyboardShortcutsApi: KeyboardShortcutsApi = {
   }
 }
 
+// Project API for renderer
+const projectApi: ProjectApi = {
+  register: (projectId: string, projectPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('project:register', projectId, projectPath)
+  },
+
+  getPath: (projectId: string): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('project:get-path', projectId)
+  },
+
+  unregister: (projectId: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('project:unregister', projectId)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -469,7 +489,8 @@ const api = {
   updater: updaterApi,
   worktree: worktreeApi,
   merge: mergeApi,
-  aiPrompt: aiPromptApi
+  aiPrompt: aiPromptApi,
+  project: projectApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

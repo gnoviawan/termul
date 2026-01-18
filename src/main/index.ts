@@ -7,6 +7,7 @@ import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
 import { registerWorktreeIpc } from './ipc/worktree.ipc'
+import { registerProjectIpc } from './ipc/project.ipc'
 import { registerMergeIpc } from './ipc/merge.ipc'
 import { registerAIPromptIpc } from './ipc/ai-prompt.ipc'
 import { registerKeyboardShortcutsIpc } from './ipc/keyboard-shortcuts.ipc'
@@ -106,6 +107,7 @@ export function initializeApp(): void {
     registerShellIpc()
     registerPersistenceIpc()
     registerSystemIpc()
+    registerProjectIpc() // Must be before registerMergeIpc()
     registerWorktreeIpc()
     registerMergeIpc()
     registerAIPromptIpc()

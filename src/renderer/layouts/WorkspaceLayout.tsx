@@ -535,6 +535,70 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
 
+  // Register all projects with main process on mount
+  // Use a ref to track if registration is in progress to avoid races
+  useEffect(() => {
+    let isMounted = true
+    const registrationInProgress = new Set<string>()
+
+    const registerAllProjects = async () => {
+      for (const project of projects) {
+        // Skip if already registering this project
+        if (registrationInProgress.has(project.id)) {
+          continue
+        }
+
+        if (project.path && isMounted) {
+          registrationInProgress.add(project.id)
+          try {
+            await window.api.project.register(project.id, project.path)
+          } catch (error) {
+            console.error(`[WorkspaceLayout] Failed to register project ${project.id}:`, error)
+          } finally {
+            registrationInProgress.delete(project.id)
+          }
+        }
+      }
+    }
+
+    // Start registration but don't block render
+    registerAllProjects().catch(error => {
+      console.error('[WorkspaceLayout] Project registration failed:', error)
+    })
+
+    // Cleanup function to prevent updates after unmount
+    return () => {
+      isMounted = false
+    }
+  }, [projects])
+
+  // Also register when projects are added or updated
+  useEffect(() => {
+    const handleProjectUpdate = async (project: { id: string; path?: string }) => {
+      if (project.path) {
+        try {
+          await window.api.project.register(project.id, project.path)
+        } catch (error) {
+          console.error(`[WorkspaceLayout] Failed to register project ${project.id}:`, error)
+        }
+      }
+    }
+
+    // Watch for project path changes
+    const unsubscriptions: Array<() => void> = []
+
+    projects.forEach(project => {
+      // Re-register when project path changes
+      if (project.path) {
+        handleProjectUpdate(project)
+      }
+    })
+
+    return () => {
+      unsubscriptions.forEach(unsub => unsub())
+    }
+  }, [projects])
+
   // Memoize project env vars to avoid unnecessary re-renders
   const projectEnv = useMemo(
     () => envVarsToRecord(activeProject?.envVars),

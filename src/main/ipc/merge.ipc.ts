@@ -8,8 +8,9 @@
 
 import { ipcMain } from 'electron'
 import { MergeManager } from '../services/merge-manager'
+import { projectRegistry } from '../services/project-registry'
+import type { IpcResult } from '../../shared/types/ipc.types'
 import type {
-  IpcResult,
   ConflictDetectionResult,
   MergePreview,
   MergeResult,
@@ -51,11 +52,14 @@ function mapErrorToIpcResult(error: unknown, defaultMessage: string): IpcResult<
 
 /**
  * Get project root from project ID
- * TODO: Integrate with project registry when available
+ * Uses project registry to lookup actual filesystem path
  */
 function getProjectRoot(projectId: string): string {
-  // For now, use current working directory as placeholder
-  return process.cwd()
+  const projectRoot = projectRegistry.get(projectId)
+  if (!projectRoot) {
+    throw new Error(`Project ${projectId} not found in registry. Was it registered via project:register?`)
+  }
+  return projectRoot
 }
 
 /**
@@ -215,4 +219,24 @@ export function registerMergeIpc(): void {
       return mapErrorToIpcResult(error, 'Failed to set merge preference')
     }
   })
+
+  // Branch fetching handler
+  ipcMain.handle(
+    'merge:get-branches',
+    async (_event, projectId: string): Promise<IpcResult<string[]>> => {
+      try {
+        // Now uses the fixed getProjectRoot()
+        const projectRoot = getProjectRoot(projectId)
+        const manager = new MergeManager(projectRoot, projectId)
+        const branches = await manager.getLocalBranches()
+
+        return {
+          success: true,
+          data: branches
+        }
+      } catch (error) {
+        return mapErrorToIpcResult(error, 'Failed to fetch branches')
+      }
+    }
+  )
 }

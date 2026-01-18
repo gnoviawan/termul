@@ -4,6 +4,7 @@
  * First step in merge workflow: select source and target branches.
  * Source branch is pre-filled with worktree branch, target defaults to main/master.
  * Source: Story 2.4 - Task 3: Create Branch Selection Step
+ * Phase 1: Add Branch Fetching - Now uses fetched branches instead of hardcoded values
  */
 
 import { memo, useEffect } from 'react'
@@ -16,20 +17,20 @@ export interface BranchSelectionStepProps {
   targetBranch: string
   onSourceChange: (branch: string) => void
   onTargetChange: (branch: string) => void
-  availableBranches?: string[]
+  availableBranches: string[]
+  isLoadingBranches?: boolean
+  branchError?: string | null
+  onRetryFetch?: () => void
 }
-
-/**
- * Common branch names for auto-detection
- */
-const MAIN_BRANCHES = ['main', 'master', 'develop', 'development']
 
 /**
  * BranchSelectionStep - Branch selection for merge
  *
  * Features:
  * - Source branch pre-filled (read-only display)
- * - Target branch defaults to main/master
+ * - Target branch fetched from actual project, defaults to main/master
+ * - Loading state during branch fetch
+ * - Error state with retry button
  * - Branch validation (source != target)
  * - Info tip about selecting correct branches
  */
@@ -38,12 +39,17 @@ export const BranchSelectionStep = memo(({
   targetBranch,
   onSourceChange,
   onTargetChange,
-  availableBranches = MAIN_BRANCHES
+  availableBranches,
+  isLoadingBranches = false,
+  branchError,
+  onRetryFetch
 }: BranchSelectionStepProps) => {
-  // Auto-detect default target branch
-  const defaultTarget = availableBranches.find(b => MAIN_BRANCHES.includes(b)) || 'main'
+  // Auto-detect default target branch (runs when branches load)
+  const defaultTarget = availableBranches.find(b =>
+    b.toLowerCase() === 'main' || b.toLowerCase() === 'master'
+  ) || availableBranches[0] || ''
 
-  // Initialize target branch if not set (useEffect to avoid setState during render)
+  // Initialize target branch if not set
   useEffect(() => {
     if (!targetBranch && defaultTarget) {
       onTargetChange(defaultTarget)
@@ -80,9 +86,6 @@ export const BranchSelectionStep = memo(({
             {sourceBranch || 'Not detected'}
           </span>
         </div>
-        <p className="text-xs text-muted-foreground">
-          This is the branch containing your changes to be merged.
-        </p>
       </div>
 
       {/* Target branch selection */}
@@ -90,26 +93,45 @@ export const BranchSelectionStep = memo(({
         <label className="text-sm font-medium text-foreground">
           Target Branch
         </label>
-        <select
-          value={targetBranch}
-          onChange={(e) => onTargetChange(e.target.value)}
-          className={cn(
-            "w-full px-4 py-3 rounded-md bg-background border border-border",
-            "text-sm text-foreground font-mono",
-            "focus:outline-none focus:ring-2 focus:ring-blue-500",
-            "cursor-pointer"
-          )}
-        >
-          <option value="">Select target branch...</option>
-          {availableBranches.map(branch => (
-            <option key={branch} value={branch}>
-              {branch}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-muted-foreground">
-          The branch that will receive your changes. Typically this is <code>main</code> or <code>master</code>.
-        </p>
+
+        {/* Loading state */}
+        {isLoadingBranches ? (
+          <div className="px-4 py-3 rounded-md bg-muted border border-border animate-pulse">
+            <span className="text-sm text-muted-foreground">Loading branches...</span>
+          </div>
+        ) : branchError ? (
+          /* Error state */
+          <div className="p-4 rounded-md bg-red-500/10 border border-red-500/20">
+            <p className="text-sm text-red-500 mb-2">{branchError}</p>
+            {onRetryFetch && (
+              <button
+                onClick={onRetryFetch}
+                className="text-sm text-red-500 underline hover:text-red-600"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        ) : (
+          /* Normal state */
+          <select
+            value={targetBranch}
+            onChange={(e) => onTargetChange(e.target.value)}
+            className={cn(
+              "w-full px-4 py-3 rounded-md bg-background border border-border",
+              "text-sm text-foreground font-mono",
+              "focus:outline-none focus:ring-2 focus:ring-blue-500",
+              "cursor-pointer"
+            )}
+          >
+            <option value="">Select target branch...</option>
+            {availableBranches.map(branch => (
+              <option key={branch} value={branch}>
+                {branch}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Validation message */}
@@ -122,7 +144,7 @@ export const BranchSelectionStep = memo(({
       )}
 
       {/* Ready indicator */}
-      {isValid && (
+      {isValid && !isLoadingBranches && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

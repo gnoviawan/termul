@@ -80,6 +80,17 @@ export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>
 }
 
+// ============================================================================
+// Project Types (Phase 0: Fix Project Path Resolution)
+// ============================================================================
+
+// Project API exposed via preload
+export interface ProjectApi {
+  register: (projectId: string, projectPath: string) => Promise<IpcResult<void>>
+  getPath: (projectId: string) => Promise<IpcResult<string>>
+  unregister: (projectId: string) => Promise<IpcResult<void>>
+}
+
 // Shell detection types
 export interface ShellInfo {
   path: string
@@ -304,6 +315,7 @@ export interface MergeApi {
   validate: (dto: ValidateMergeDto) => Promise<IpcResult<MergeValidationResult>>
   getPreference: () => Promise<IpcResult<MergePreference>>
   setPreference: (pref: MergePreference) => Promise<IpcResult<void>>
+  getBranches: (projectId: string) => Promise<IpcResult<string[]>>
 }
 
 // ============================================================================

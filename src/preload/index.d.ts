@@ -9,7 +9,8 @@ import type {
   KeyboardShortcutsApi,
   WorktreeApi,
   MergeApi,
-  AIPromptApi
+  AIPromptApi,
+  ProjectApi
 } from '@shared/types/ipc.types'
 import type { UpdaterApi } from '@shared/types/updater.types'
 
@@ -28,6 +29,7 @@ declare global {
       worktree: WorktreeApi
       merge: MergeApi
       aiPrompt: AIPromptApi
+      project: ProjectApi
     }
   }
 }

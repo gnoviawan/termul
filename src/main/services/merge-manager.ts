@@ -401,6 +401,52 @@ export class MergeManager {
     }
   }
 
+  /**
+   * Get list of local branches for the project
+   * Includes timeout protection to prevent UI freezing on large repositories
+   *
+   * @param timeoutMs - Maximum time to wait for branch fetch (default: 10000ms)
+   * @returns Array of local branch names sorted with main/master first
+   */
+  async getLocalBranches(timeoutMs: number = 10000): Promise<string[]> {
+    // Add timeout protection with proper type handling
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new MergeError('BRANCH_FETCH_TIMEOUT', `Branch fetch timed out after ${timeoutMs}ms`)), timeoutMs)
+    )
+
+    try {
+      // Type-safe Promise.race with explicit error handling
+      const result = await Promise.race([
+        this.git.branchLocal(),
+        timeoutPromise
+      ])
+
+      // Narrow the type - if we got here, branchLocal succeeded
+      const branches = result.branches !== undefined ? result : { all: [] }
+
+      // branches.all is already an array of branch names from simple-git
+      const allBranches = branches.all
+
+      // Sort with main/master first, then alphabetically
+      return allBranches.sort((a, b) => {
+        const aIsMain = a.toLowerCase() === 'main' || a.toLowerCase() === 'master'
+        const bIsMain = b.toLowerCase() === 'main' || b.toLowerCase() === 'master'
+
+        if (aIsMain && !bIsMain) return -1
+        if (!aIsMain && bIsMain) return 1
+        return a.localeCompare(b)
+      })
+    } catch (error) {
+      if (error instanceof MergeError && error.code === 'BRANCH_FETCH_TIMEOUT') {
+        throw error
+      }
+      throw new MergeError(
+        'BRANCH_FETCH_FAILED',
+        `Failed to fetch branches: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
+    }
+  }
+
   // ============================================================================
   // Private Helper Methods
   // ============================================================================

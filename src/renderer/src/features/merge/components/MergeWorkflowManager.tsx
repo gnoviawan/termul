@@ -14,7 +14,7 @@ import { memo, useEffect, useCallback, useState } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import { useMergeStore, useWorkflowState, useSourceBranch, useTargetBranch, useIsMerging, useMergeError, useMergeResult, useDetectionResult, useMergePreview, useMergeProgress, useMergeStep, useMergeActions } from '@/stores/merge-store'
+import { useMergeStore, useWorkflowState, useSourceBranch, useTargetBranch, useIsMerging, useMergeError, useMergeResult, useDetectionResult, useMergePreview, useMergeProgress, useMergeStep, useMergeActions, useAvailableBranches, useIsLoadingBranches, useBranchError } from '@/stores/merge-store'
 import { BranchSelectionStep } from './BranchSelectionStep'
 import { MergeDialog } from './MergeDialog'
 import { MergePreviewDialog } from './MergePreviewDialog'
@@ -101,6 +101,11 @@ export const MergeWorkflowManager = memo(({
   const mergeProgress = useMergeProgress()
   const mergeStep = useMergeStep()
 
+  // Branch state (Phase 1: Add Branch Fetching)
+  const availableBranches = useAvailableBranches()
+  const isLoadingBranches = useIsLoadingBranches()
+  const branchError = useBranchError()
+
   // Local state for dialogs (Story 2.6)
   const [showConfirmation, setShowConfirmation] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
@@ -116,7 +121,9 @@ export const MergeWorkflowManager = memo(({
     resetWorkflow,
     clearError,
     setMergeProgress,
-    setMergeStep
+    setMergeStep,
+    getBranches,
+    clearBranchError
   } = useMergeActions()
 
   // Initialize workflow on mount
@@ -124,9 +131,10 @@ export const MergeWorkflowManager = memo(({
     if (isOpen && workflowState === 'idle') {
       setWorktreeContext(worktreeId, projectId)
       setBranches(initialSourceBranch, '')
+      getBranches(projectId) // Fetch branches for this specific project
       setWorkflowState('select-branch')
     }
-  }, [isOpen, workflowState, worktreeId, projectId, initialSourceBranch, setWorktreeContext, setBranches, setWorkflowState])
+  }, [isOpen, workflowState, worktreeId, projectId, initialSourceBranch, setWorktreeContext, setBranches, setWorkflowState, getBranches])
 
   // Reset on unmount
   useEffect(() => {
@@ -339,6 +347,10 @@ export const MergeWorkflowManager = memo(({
                   targetBranch={targetBranch}
                   onSourceChange={(branch) => setBranches(branch, targetBranch)}
                   onTargetChange={(branch) => setBranches(sourceBranch, branch)}
+                  availableBranches={availableBranches}
+                  isLoadingBranches={isLoadingBranches}
+                  branchError={branchError}
+                  onRetryFetch={() => getBranches(projectId)}
                 />
               )}
 
