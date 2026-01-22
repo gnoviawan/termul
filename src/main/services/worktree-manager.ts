@@ -103,6 +103,8 @@ export interface DeleteWorktreeOptions {
 export interface PatternValidationResult {
   valid: boolean
   errors: Array<{ pattern: string; error: string }>
+  /** Patterns that matched no files (non-blocking) */
+  warnings: Array<{ pattern: string; warning: string }>
   estimatedSize: number
 }
 
@@ -862,20 +864,20 @@ export class WorktreeManager {
   /**
    * Validate .gitignore patterns before worktree creation
    *
-   * Implements Tech-Spec: Dynamic .gitignore Pattern Selection
-   * - Checks all selected patterns have matching files (no empty globs)
-   * - Validates file read permissions
-   * - Calculates total size estimate
-   * - Returns detailed errors if validation fails
+   * - Checks selected patterns for file read permissions
+   * - Calculates total size estimate for matching files
+   * - Returns warnings for non-matching patterns (non-blocking)
+   * - Returns errors for permission issues (blocking)
    *
-   * @param patterns - Patterns from .gitignore to validate
-   * @returns Validation result with errors and size estimate
+   * @param patterns - Array of .gitignore patterns to validate
+   * @returns Validation result with errors (blocking) and warnings (non-blocking)
    */
   async validatePatterns(patterns: string[]): Promise<PatternValidationResult> {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
 
     const errors: Array<{ pattern: string; error: string }> = []
+    const warnings: Array<{ pattern: string; warning: string }> = []
     let totalSize = 0
 
     for (const pattern of patterns) {
@@ -949,7 +951,7 @@ export class WorktreeManager {
 
         // Check if pattern matches any files
         if (files.length === 0) {
-          errors.push({ pattern, error: 'No files match this pattern' })
+          warnings.push({ pattern, warning: 'No files match this pattern' })
           continue
         }
 
@@ -984,6 +986,7 @@ export class WorktreeManager {
     return {
       valid: errors.length === 0,
       errors,
+      warnings,
       estimatedSize: totalSize
     }
   }

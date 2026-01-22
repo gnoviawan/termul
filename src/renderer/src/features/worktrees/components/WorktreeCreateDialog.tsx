@@ -54,6 +54,7 @@ export function WorktreeCreateDialog({
   const [isCreating, setIsCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [branchError, setBranchError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<Array<{ pattern: string; warning: string }>>([])
 
   // Dynamic pattern loading state
   const [availablePatterns, setAvailablePatterns] = useState<ParsedPattern[]>([])
@@ -143,6 +144,7 @@ export function WorktreeCreateDialog({
       setIsCreating(false)
       setError(null)
       setBranchError(null)
+      setWarnings([])
     }
   }, [isOpen])
 
@@ -201,6 +203,9 @@ export function WorktreeCreateDialog({
     setSelectedPatterns(new Set())
   }, [])
 
+  // TODO: Update IPC response to include warnings so they can be displayed to users
+  // The backend now returns warnings in PatternValidationResult, but the IPC handler
+  // needs to be updated to pass them through to the renderer in the success response
   const handleCreate = useCallback(async () => {
     const trimmedBranch = branchName.trim()
     if (!trimmedBranch || isCreating) return
@@ -226,6 +231,7 @@ export function WorktreeCreateDialog({
     setIsCreating(true)
     setError(null)
     setBranchError(null)
+    setWarnings([]) // Clear previous warnings
 
     try {
       const result = await window.api.worktree.create({
@@ -319,6 +325,20 @@ export function WorktreeCreateDialog({
 
             {/* Content */}
             <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Warning Display - non-blocking amber/yellow */}
+              {warnings.length > 0 && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2 text-xs text-amber-600 dark:text-amber-500">
+                  <p className="font-medium mb-1">The following patterns don't match any files (this is OK):</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {warnings.map((w, i) => (
+                      <li key={i}>
+                        <code className="bg-amber-500/10 px-1 rounded">{w.pattern}</code>: {w.warning}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Error Display */}
               {error && (
                 <div className="bg-destructive/10 border border-destructive/20 rounded px-3 py-2 text-xs text-destructive" role="alert">

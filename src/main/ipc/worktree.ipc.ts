@@ -113,13 +113,17 @@ export function registerWorktreeIpc(): void {
       if (dto.gitignoreSelections.length > 0) {
         const validation = await manager.validatePatterns(dto.gitignoreSelections)
 
-        if (!validation.valid) {
+        if (validation.errors.length > 0) {
           const errorMessages = validation.errors.map(e => `${e.pattern}: ${e.error}`).join(', ')
           return {
             success: false,
             error: `Pattern validation failed: ${errorMessages}`,
             code: 'FILE_COPY_FAILED'
           }
+        }
+
+        if (validation.warnings.length > 0) {
+          console.log('[worktree:create] Pattern warnings:', validation.warnings)
         }
 
         console.log('[worktree:create] Pattern validation passed, estimated size:', validation.estimatedSize)
