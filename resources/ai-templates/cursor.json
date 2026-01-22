@@ -1,0 +1,26 @@
+{
+  "id": "cursor-conflict-resolution",
+  "name": "Cursor Conflict Resolution",
+  "description": "Generate prompt for Cursor to resolve merge conflicts",
+  "tool": "cursor",
+  "isDefault": true,
+  "promptTemplate": "I need help resolving a Git merge conflict.\n\n**Context:**\n- Branch: {{branchName}}\n{{#if targetBranch}}\n- Target branch: {{targetBranch}}\n{{/if}}\n{{#if conflictedFiles}}\n- Conflicted files:\n{{#each conflictedFiles}}\n  - {{this}}\n{{/each}}\n{{/if}}\n\n**Instructions:**\nPlease help me resolve these conflicts by:\n1. Explaining what each side is trying to do\n2. Suggesting a resolution that preserves both intents\n3. Showing the exact code to replace the conflict markers\n\nUse Cursor's conflict resolution features to:\- Navigate between conflict markers\n- View both sides of the conflict\n- Apply suggested resolutions\n\nNote: I'm using Cursor CLI, so please provide commands that work with Cursor's interface.",
+  "variables": [
+    {
+      "name": "branchName",
+      "description": "Current branch name",
+      "required": true
+    },
+    {
+      "name": "targetBranch",
+      "description": "Target branch for merge",
+      "required": false
+    },
+    {
+      "name": "conflictedFiles",
+      "description": "List of conflicted file paths",
+      "required": false
+    }
+  ],
+  "requiredVars": ["branchName"]
+}

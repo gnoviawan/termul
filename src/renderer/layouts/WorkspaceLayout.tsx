@@ -10,6 +10,7 @@ import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { QuickHotfixDialog } from '@/src/features/worktrees/components/QuickHotfixDialog'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { EnvVariable } from '@/types/project'
 import {
@@ -34,11 +35,15 @@ import {
   useCommandHistory
 } from '@/hooks/use-command-history'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import { useWorktreeActions, useWorktreeStore, useSelectedWorktreeId } from '@/stores/worktree-store'
 import {
   useTerminalFontSize,
   useDefaultShell,
-  useMaxTerminalsPerProject
+  useMaxTerminalsPerProject,
+  useEmergencyModeEnabled,
+  useAutoOpenTerminalOnWorktreeClick
 } from '@/stores/app-settings-store'
+
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
@@ -59,6 +64,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
+  const [isQuickHotfixDialogOpen, setIsQuickHotfixDialogOpen] = useState(false)
   const [closeConfirmTerminalId, setCloseConfirmTerminalId] = useState<string | null>(null)
   const [isTerminalSearchOpen, setIsTerminalSearchOpen] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
@@ -114,12 +120,74 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCreateSnapshotModalOpen(true)
   }, [])
 
+  const handleOpenQuickHotfix = useCallback(() => {
+    setIsCommandPaletteOpen(false)
+    if (!activeProject) {
+      toast.error('No active project', {
+        description: 'Select a project to create a hotfix worktree'
+      })
+      return
+    }
+    setIsQuickHotfixDialogOpen(true)
+  }, [activeProject])
+
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const fontSize = useTerminalFontSize()
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
+  const emergencyModeEnabled = useEmergencyModeEnabled()
+  const autoOpenTerminalOnWorktreeClick = useAutoOpenTerminalOnWorktreeClick()
   const updateAppSetting = useUpdateAppSetting()
+  const { initializeEventListeners } = useWorktreeActions()
+
+  // Track selected worktree for auto-opening terminal (Story 3.6)
+  const selectedWorktreeId = useSelectedWorktreeId()
+  const previousWorktreeIdRef = useRef<string | null>(null)
+
+  // Auto-open terminal when worktree is selected (Story 3.6)
+  useEffect(() => {
+    if (!autoOpenTerminalOnWorktreeClick) return
+    if (!selectedWorktreeId || selectedWorktreeId === previousWorktreeIdRef.current) return
+    if (!activeProject || !activeProjectId) return
+
+    const worktree = useWorktreeStore.getState().worktrees.get(selectedWorktreeId)
+    if (!worktree || !worktree.worktreePath) return
+
+    // Check if we already have a terminal open for this worktree
+    const existingTerminal = terminals.find(t => t.worktreeId === selectedWorktreeId)
+    if (existingTerminal) {
+      // Terminal already exists, just select it
+      selectTerminal(existingTerminal.id)
+      previousWorktreeIdRef.current = selectedWorktreeId
+      return
+    }
+
+    // Create new terminal for the worktree
+    const shell = activeProject.defaultShell || appDefaultShell || ''
+    const breadcrumbContext = `${activeProject.name}/${worktree.branchName}`
+    addTerminal(
+      worktree.branchName,
+      activeProjectId,
+      shell,
+      worktree.worktreePath,
+      undefined,
+      selectedWorktreeId,
+      breadcrumbContext
+    )
+
+    previousWorktreeIdRef.current = selectedWorktreeId
+  }, [
+    selectedWorktreeId,
+    activeProject,
+    activeProjectId,
+    terminals,
+    autoOpenTerminalOnWorktreeClick,
+    appDefaultShell,
+    addTerminal,
+    selectTerminal
+  ])
+
 
   // Helper to get active key for a shortcut
   const getActiveKey = useCallback(
@@ -270,6 +338,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
+      // Emergency Mode toggle (Ctrl+Shift+E)
+      if (matchesShortcut(e, getActiveKey('emergencyMode'))) {
+        e.preventDefault()
+        e.stopPropagation()
+        updateAppSetting('emergencyModeEnabled', !emergencyModeEnabled)
+        toast.info(
+          !emergencyModeEnabled ? 'Emergency Mode enabled' : 'Emergency Mode disabled',
+          {
+            description: !emergencyModeEnabled
+              ? 'Quick hotfix creation flow activated - prompts will be skipped'
+              : 'Normal workflow restored'
+          }
+        )
+        return
+      }
+
+      // Quick Hotfix (Ctrl+Shift+H) - always available
+      if (matchesShortcut(e, getActiveKey('quickHotfix'))) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleOpenQuickHotfix()
+        return
+      }
+
       // Cmd/Ctrl + 1-9 for project switching (keep hardcoded - not customizable)
       if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
         e.preventDefault()
@@ -298,13 +390,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
     appDefaultShell,
     maxTerminals,
     isWorkspaceRoute,
-    cycleTerminal
+    cycleTerminal,
+    emergencyModeEnabled,
+    handleOpenQuickHotfix
   ])
 
   // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
   // These are intercepted at the Electron level because Chromium reserves them
   useEffect(() => {
-    return window.api.keyboard.onShortcut((shortcut) => {
+    const cleanupWorktreeListeners = initializeEventListeners()
+    const cleanupShortcuts = window.api.keyboard.onShortcut((shortcut) => {
       switch (shortcut) {
         case 'nextTerminal':
           cycleTerminal('next')
@@ -333,7 +428,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
       }
     })
-  }, [cycleTerminal, fontSize, updateAppSetting])
+
+    return () => {
+      cleanupWorktreeListeners()
+      cleanupShortcuts()
+    }
+  }, [cycleTerminal, fontSize, initializeEventListeners, updateAppSetting])
+
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {
@@ -433,6 +534,70 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
+
+  // Register all projects with main process on mount
+  // Use a ref to track if registration is in progress to avoid races
+  useEffect(() => {
+    let isMounted = true
+    const registrationInProgress = new Set<string>()
+
+    const registerAllProjects = async () => {
+      for (const project of projects) {
+        // Skip if already registering this project
+        if (registrationInProgress.has(project.id)) {
+          continue
+        }
+
+        if (project.path && isMounted) {
+          registrationInProgress.add(project.id)
+          try {
+            await window.api.project.register(project.id, project.path)
+          } catch (error) {
+            console.error(`[WorkspaceLayout] Failed to register project ${project.id}:`, error)
+          } finally {
+            registrationInProgress.delete(project.id)
+          }
+        }
+      }
+    }
+
+    // Start registration but don't block render
+    registerAllProjects().catch(error => {
+      console.error('[WorkspaceLayout] Project registration failed:', error)
+    })
+
+    // Cleanup function to prevent updates after unmount
+    return () => {
+      isMounted = false
+    }
+  }, [projects])
+
+  // Also register when projects are added or updated
+  useEffect(() => {
+    const handleProjectUpdate = async (project: { id: string; path?: string }) => {
+      if (project.path) {
+        try {
+          await window.api.project.register(project.id, project.path)
+        } catch (error) {
+          console.error(`[WorkspaceLayout] Failed to register project ${project.id}:`, error)
+        }
+      }
+    }
+
+    // Watch for project path changes
+    const unsubscriptions: Array<() => void> = []
+
+    projects.forEach(project => {
+      // Re-register when project path changes
+      if (project.path) {
+        handleProjectUpdate(project)
+      }
+    })
+
+    return () => {
+      unsubscriptions.forEach(unsub => unsub())
+    }
+  }, [projects])
 
   // Memoize project env vars to avoid unnecessary re-renders
   const projectEnv = useMemo(
@@ -584,6 +749,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onSwitchProject={selectProject}
         onNewTerminal={handleNewTerminal}
         onSaveSnapshot={handleOpenSnapshotModal}
+        onOpenQuickHotfix={handleOpenQuickHotfix}
+        emergencyModeEnabled={emergencyModeEnabled}
       />
 
       <CreateSnapshotModal
@@ -598,6 +765,35 @@ export default function WorkspaceLayout(): React.JSX.Element {
         entries={commandHistory}
         onSelectCommand={handleInsertCommand}
       />
+
+      {/* Quick Hotfix Dialog */}
+      {activeProject && activeProject.path && (
+        <QuickHotfixDialog
+          isOpen={isQuickHotfixDialogOpen}
+          onClose={() => setIsQuickHotfixDialogOpen(false)}
+          projectId={activeProject.id}
+          projectName={activeProject.name}
+          projectPath={activeProject.path}
+          onSuccess={(worktreeId) => {
+            // Get worktree data for the toast notification
+            const worktree = useWorktreeStore.getState().worktrees.get(worktreeId)
+            const branchName = worktree?.branchName || worktreeId
+            toast.success('Hotfix worktree created', {
+              description: `Hotfix worktree created: ${branchName}`
+            })
+            // Auto-open terminal in the new worktree
+            // The worktree store will be updated via IPC event, and we can get the path from there
+            setTimeout(() => {
+              const w = useWorktreeStore.getState().worktrees.get(worktreeId)
+              if (w && w.worktreePath) {
+                const shell = activeProject.defaultShell || appDefaultShell || ''
+                const breadcrumbContext = `${activeProject.name}/${w.branchName}`
+                addTerminal(branchName, activeProjectId, shell, w.worktreePath, undefined, worktreeId, breadcrumbContext)
+              }
+            }, 100)
+          }}
+        />
+      )}
 
       {/* Close Terminal Confirmation */}
       <ConfirmDialog

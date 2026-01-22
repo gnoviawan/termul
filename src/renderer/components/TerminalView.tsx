@@ -1,5 +1,12 @@
 import type { Terminal, TerminalLine } from '@/types/project'
 import { cn } from '@/lib/utils'
+import {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage
+} from './ui/breadcrumb'
 
 interface TerminalViewProps {
   terminal: Terminal
@@ -7,6 +14,9 @@ interface TerminalViewProps {
 }
 
 export function TerminalView({ terminal, splitView = false }: TerminalViewProps) {
+  // Parse breadcrumb context (Story 3.6)
+  const breadcrumbParts = terminal.breadcrumbContext?.split('/') || []
+
   return (
     <div
       className={cn(
@@ -14,7 +24,28 @@ export function TerminalView({ terminal, splitView = false }: TerminalViewProps)
         splitView && 'border-r border-border'
       )}
     >
-      <div className="h-full p-4 font-mono text-sm overflow-y-auto">
+      {/* Breadcrumbs - Story 3.6 */}
+      {breadcrumbParts.length > 0 && (
+        <div className="px-4 py-2 border-b border-border bg-background">
+          <Breadcrumb>
+            <BreadcrumbList className="text-xs">
+              {breadcrumbParts.map((part, index) => (
+                <BreadcrumbItem key={index}>
+                  {index === breadcrumbParts.length - 1 ? (
+                    <BreadcrumbPage>{part}</BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink href="#" onClick={(e) => e.preventDefault()}>
+                      {part}
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+              ))}
+            </BreadcrumbList>
+          </Breadcrumb>
+        </div>
+      )}
+
+      <div className="flex-1 p-4 font-mono text-sm overflow-y-auto">
         {terminal.output?.map((line, index) => (
           <TerminalLineItem key={index} line={line} />
         ))}

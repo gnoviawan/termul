@@ -1,19 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ipcMain, BrowserWindow } from 'electron'
 import { registerTerminalIpc, unregisterTerminalIpc } from './terminal.ipc'
 import { PtyManager } from '../services/pty-manager'
 import { IpcErrorCodes } from '../../shared/types/ipc.types'
-
-// Mock electron
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn()
-  },
-  BrowserWindow: {
-    getAllWindows: vi.fn(() => [])
-  }
-}))
 
 // Mock pty-manager
 vi.mock('../services/pty-manager', () => ({

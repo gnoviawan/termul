@@ -47,6 +47,8 @@ export interface Terminal {
   healthStatus?: TerminalHealthStatus // Terminal health status
   isHidden?: boolean // Whether terminal is currently hidden (on another route)
   hiddenSince?: number // Timestamp when terminal was hidden (for buffer truncation)
+  worktreeId?: string // Associated worktree ID (Story 3.6)
+  breadcrumbContext?: string // Display context for breadcrumbs (Story 3.6)
 }
 
 export interface TerminalLine {

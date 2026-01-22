@@ -1,20 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { WindowState } from '../../shared/types/persistence.types'
 
-// Mock electron screen module
-const mockDisplay = {
-  bounds: { x: 0, y: 0, width: 1920, height: 1080 },
-  workAreaSize: { width: 1920, height: 1040 }
-}
-
-vi.mock('electron', () => ({
-  screen: {
-    getPrimaryDisplay: vi.fn(() => mockDisplay),
-    getAllDisplays: vi.fn(() => [mockDisplay])
-  },
-  BrowserWindow: vi.fn()
-}))
-
 // Mock persistence service
 vi.mock('./persistence-service', () => ({
   read: vi.fn(),

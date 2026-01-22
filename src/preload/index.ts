@@ -19,8 +19,38 @@ import type {
   PersistenceApi,
   SystemApi,
   KeyboardApi,
-  KeyboardShortcutCallback
+  KeyboardShortcutCallback,
+  KeyboardShortcutsApi,
+  WorktreeApi,
+  WorktreeMetadata,
+  WorktreeStatus,
+  ArchivedWorktree,
+  CreateWorktreeDto,
+  DeleteWorktreeOptions,
+  StatusChangedCallback,
+  WorktreeCreatedCallback,
+  WorktreeDeletedCallback,
+  MergeApi,
+  AIPromptApi,
+  ProjectApi,
+  GitignoreApi,
+  ParseGitignoreDto,
+  SaveProfileDto,
+  DeleteProfileDto,
+  LoadProfilesDto
 } from '../shared/types/ipc.types'
+import type {
+  ConflictDetectionResult,
+  MergePreview,
+  MergeResult,
+  ConflictedFile,
+  MergeValidationResult,
+  DetectConflictsDto,
+  MergePreviewDto,
+  ExecuteMergeDto,
+  ValidateMergeDto,
+  MergePreference
+} from '../shared/types/merge.types'
 import type {
   UpdateInfo,
   UpdateState,
@@ -32,6 +62,18 @@ import type {
   UpdaterErrorCallback,
   UpdaterErrorCode
 } from '../shared/types/updater.types'
+import type {
+  GeneratedPrompt,
+  AIToolTemplate,
+  ValidationResult,
+  GeneratePromptDto,
+  RegisterTemplateDto,
+  ValidateTemplateDto
+} from '../shared/types/ai-prompt.types'
+import type {
+  KeyboardShortcut,
+  UpdateShortcutDto
+} from '../shared/types/keyboard-shortcuts.types'
 
 // Terminal API for renderer
 const terminalApi: TerminalApi = {
@@ -275,6 +317,190 @@ const updaterApi: UpdaterApi = {
   }
 }
 
+// Worktree API for renderer
+// Story 1.6 - Task 6: Update IPC Channels for Archive/Delete
+const worktreeApi: WorktreeApi = {
+  list: (projectId: string): Promise<IpcResult<WorktreeMetadata[]>> => {
+    return ipcRenderer.invoke('worktree:list', projectId)
+  },
+
+  create: (data: CreateWorktreeDto): Promise<IpcResult<WorktreeMetadata>> => {
+    return ipcRenderer.invoke('worktree:create', data)
+  },
+
+  delete: (worktreeId: string, options?: DeleteWorktreeOptions): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('worktree:delete', worktreeId, options)
+  },
+
+  archive: (worktreeId: string): Promise<IpcResult<ArchivedWorktree>> => {
+    return ipcRenderer.invoke('worktree:archive', worktreeId)
+  },
+
+  restore: (archiveId: string, projectId: string): Promise<IpcResult<WorktreeMetadata>> => {
+    return ipcRenderer.invoke('worktree:restore', archiveId, projectId)
+  },
+
+  listArchived: (projectId: string): Promise<IpcResult<ArchivedWorktree[]>> => {
+    return ipcRenderer.invoke('worktree:list-archived', projectId)
+  },
+
+  deleteArchive: (archiveId: string, projectId: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('worktree:delete-archive', archiveId, projectId)
+  },
+
+  cleanupArchives: (projectId: string): Promise<IpcResult<{ cleaned: number }>> => {
+    return ipcRenderer.invoke('worktree:cleanup-archives', projectId)
+  },
+
+  getStatus: (worktreeId: string): Promise<IpcResult<WorktreeStatus>> => {
+    return ipcRenderer.invoke('worktree:status', worktreeId)
+  },
+
+  onStatusChanged: (callback: StatusChangedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktreeId: string, status: WorktreeStatus): void => {
+      callback(worktreeId, status)
+    }
+    ipcRenderer.on('worktree:status-changed', listener)
+    return () => {
+      ipcRenderer.off('worktree:status-changed', listener)
+    }
+  },
+
+  onCreated: (callback: WorktreeCreatedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktree: WorktreeMetadata): void => {
+      callback(worktree)
+    }
+    ipcRenderer.on('worktree:created', listener)
+    return () => {
+      ipcRenderer.off('worktree:created', listener)
+    }
+  },
+
+  onDeleted: (callback: WorktreeDeletedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, worktreeId: string): void => {
+      callback(worktreeId)
+    }
+    ipcRenderer.on('worktree:deleted', listener)
+    return () => {
+      ipcRenderer.off('worktree:deleted', listener)
+    }
+  }
+}
+
+// Merge API for renderer
+// Story 2.1 - Task 4: Implement Preload API
+const mergeApi: MergeApi = {
+  detectConflicts: (dto: DetectConflictsDto): Promise<IpcResult<ConflictDetectionResult>> => {
+    return ipcRenderer.invoke('merge:detect-conflicts', dto)
+  },
+
+  getPreview: (dto: MergePreviewDto): Promise<IpcResult<MergePreview>> => {
+    return ipcRenderer.invoke('merge:get-preview', dto)
+  },
+
+  execute: (dto: ExecuteMergeDto): Promise<IpcResult<MergeResult>> => {
+    return ipcRenderer.invoke('merge:execute', dto)
+  },
+
+  getConflictedFiles: (projectId: string): Promise<IpcResult<ConflictedFile[]>> => {
+    return ipcRenderer.invoke('merge:get-conflicted-files', projectId)
+  },
+
+  validate: (dto: ValidateMergeDto): Promise<IpcResult<MergeValidationResult>> => {
+    return ipcRenderer.invoke('merge:validate', dto)
+  },
+
+  getPreference: (): Promise<IpcResult<MergePreference>> => {
+    return ipcRenderer.invoke('merge:get-preference')
+  },
+
+  setPreference: (pref: MergePreference): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('merge:set-preference', pref)
+  },
+
+  getBranches: (projectId: string): Promise<IpcResult<string[]>> => {
+    return ipcRenderer.invoke('merge:get-branches', projectId)
+  }
+}
+
+// AI Prompt API for renderer
+// Story 3.1 - Task 5: Extend Preload API
+const aiPromptApi: AIPromptApi = {
+  generate: (dto: GeneratePromptDto): Promise<IpcResult<GeneratedPrompt>> => {
+    return ipcRenderer.invoke('ai-prompt:generate', dto)
+  },
+
+  listTemplates: (): Promise<IpcResult<AIToolTemplate[]>> => {
+    return ipcRenderer.invoke('ai-prompt:list-templates')
+  },
+
+  registerTemplate: (dto: RegisterTemplateDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('ai-prompt:register-template', dto)
+  },
+
+  validateTemplate: (dto: ValidateTemplateDto): Promise<IpcResult<ValidationResult>> => {
+    return ipcRenderer.invoke('ai-prompt:validate-template', dto)
+  }
+}
+
+// Keyboard Shortcuts API for renderer
+// Story 3.3 - Task 2.7: Add keyboard shortcuts API to preload script
+const keyboardShortcutsApi: KeyboardShortcutsApi = {
+  listShortcuts: (): Promise<IpcResult<KeyboardShortcut[]>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:list')
+  },
+
+  updateShortcut: (dto: UpdateShortcutDto): Promise<IpcResult<KeyboardShortcut>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:update', dto)
+  },
+
+  resetShortcuts: (): Promise<IpcResult<KeyboardShortcut[]>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:reset')
+  },
+
+  getShortcutForCommand: (command: string): Promise<IpcResult<KeyboardShortcut | null>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:get-shortcut', command)
+  },
+
+  formatKeybinding: (keybinding: { modifier: string; key: string }): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('keyboard-shortcuts:format-keybinding', keybinding)
+  }
+}
+
+// Project API for renderer
+const projectApi: ProjectApi = {
+  register: (projectId: string, projectPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('project:register', projectId, projectPath)
+  },
+
+  getPath: (projectId: string): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('project:get-path', projectId)
+  },
+
+  unregister: (projectId: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('project:unregister', projectId)
+  }
+}
+
+// Gitignore API for renderer
+const gitignoreApi: GitignoreApi = {
+  parse: (dto: ParseGitignoreDto): Promise<IpcResult<any>> => {
+    return ipcRenderer.invoke('gitignore:parse', dto)
+  },
+
+  saveProfile: (dto: SaveProfileDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('gitignore:profiles:save', dto)
+  },
+
+  deleteProfile: (dto: DeleteProfileDto): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('gitignore:profiles:delete', dto)
+  },
+
+  loadProfiles: (dto: LoadProfilesDto): Promise<IpcResult<any>> => {
+    return ipcRenderer.invoke('gitignore:profiles:list', dto)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -283,7 +509,13 @@ const api = {
   persistence: persistenceApi,
   system: systemApi,
   keyboard: keyboardApi,
-  updater: updaterApi
+  keyboardShortcuts: keyboardShortcutsApi,
+  updater: updaterApi,
+  worktree: worktreeApi,
+  merge: mergeApi,
+  aiPrompt: aiPromptApi,
+  project: projectApi,
+  gitignore: gitignoreApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

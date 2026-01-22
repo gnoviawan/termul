@@ -80,6 +80,17 @@ export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>
 }
 
+// ============================================================================
+// Project Types (Phase 0: Fix Project Path Resolution)
+// ============================================================================
+
+// Project API exposed via preload
+export interface ProjectApi {
+  register: (projectId: string, projectPath: string) => Promise<IpcResult<void>>
+  getPath: (projectId: string) => Promise<IpcResult<string>>
+  unregister: (projectId: string) => Promise<IpcResult<void>>
+}
+
 // Shell detection types
 export interface ShellInfo {
   path: string
@@ -116,4 +127,257 @@ export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal
 // Keyboard API for renderer
 export interface KeyboardApi {
   onShortcut: (callback: KeyboardShortcutCallback) => () => void
+}
+
+// ============================================================================
+// Worktree Types (Story 1.3)
+// ============================================================================
+
+// Worktree status from Git operations (runtime-only, NOT persisted)
+export interface WorktreeStatus {
+  dirty: boolean
+  ahead: number
+  behind: number
+  conflicted: boolean
+  currentBranch: string
+  updatedAt?: number
+}
+
+// Worktree metadata (persisted to disk)
+export interface WorktreeMetadata {
+  id: string
+  projectId: string
+  branchName: string
+  worktreePath: string
+  createdAt: string
+  lastAccessedAt: string
+  isArchived: boolean
+  gitignoreProfile?: string
+}
+
+// Archived worktree metadata
+export interface ArchivedWorktree {
+  originalPath: string
+  archivePath: string
+  archivedAt: string
+  expiresAt: string
+  branchName: string
+  projectId: string
+  unpushedCommits: boolean
+  commitCount: number
+}
+
+// DTOs for worktree operations
+export interface CreateWorktreeDto {
+  projectId: string
+  projectPath: string // Actual Git repository path
+  branchName: string
+  gitignoreSelections: string[]
+}
+
+export interface DeleteWorktreeOptions {
+  force?: boolean
+  deleteBranch?: boolean
+}
+
+// Worktree error codes
+export const WorktreeErrorCode = {
+  BRANCH_NOT_FOUND: 'BRANCH_NOT_FOUND',
+  BRANCH_ALREADY_CHECKED_OUT: 'BRANCH_ALREADY_CHECKED_OUT',
+  GIT_OPERATION_FAILED: 'GIT_OPERATION_FAILED',
+  PATH_EXISTS: 'PATH_EXISTS',
+  INSUFFICIENT_DISK_SPACE: 'INSUFFICIENT_DISK_SPACE',
+  GIT_VERSION_TOO_OLD: 'GIT_VERSION_TOO_OLD',
+  WORKTREE_NOT_FOUND: 'WORKTREE_NOT_FOUND',
+  NOT_IMPLEMENTED: 'NOT_IMPLEMENTED'
+} as const
+
+export type WorktreeErrorCodeType = (typeof WorktreeErrorCode)[keyof typeof WorktreeErrorCode]
+
+// Event callback types
+export type StatusChangedCallback = (worktreeId: string, status: WorktreeStatus) => void
+export type WorktreeCreatedCallback = (worktree: WorktreeMetadata) => void
+export type WorktreeDeletedCallback = (worktreeId: string) => void
+export type Unsubscribe = () => void
+
+// Worktree API exposed via preload
+export interface WorktreeApi {
+  list: (projectId: string) => Promise<IpcResult<WorktreeMetadata[]>>
+  create: (data: CreateWorktreeDto) => Promise<IpcResult<WorktreeMetadata>>
+  delete: (worktreeId: string, options?: DeleteWorktreeOptions) => Promise<IpcResult<void>>
+  archive: (worktreeId: string) => Promise<IpcResult<ArchivedWorktree>>
+  restore: (archiveId: string, projectId: string) => Promise<IpcResult<WorktreeMetadata>>
+  listArchived: (projectId: string) => Promise<IpcResult<ArchivedWorktree[]>>
+  deleteArchive: (archiveId: string, projectId: string) => Promise<IpcResult<void>>
+  cleanupArchives: (projectId: string) => Promise<IpcResult<{ cleaned: number }>>
+  getStatus: (worktreeId: string) => Promise<IpcResult<WorktreeStatus>>
+  onStatusChanged: (callback: StatusChangedCallback) => Unsubscribe
+  onCreated: (callback: WorktreeCreatedCallback) => Unsubscribe
+  onDeleted: (callback: WorktreeDeletedCallback) => Unsubscribe
+}
+
+// ============================================================================
+// Gitignore Types (Story 1.4)
+// ============================================================================
+
+// Pattern category for .gitignore patterns
+export type PatternCategory = 'dependencies' | 'build' | 'env' | 'cache' | 'ide' | 'test' | 'other'
+
+// Parsed .gitignore pattern with metadata
+export interface ParsedPattern {
+  pattern: string
+  category: PatternCategory
+  isSecuritySensitive: boolean
+  relatedPatterns: string[]
+}
+
+// Result of parsing .gitignore file
+export interface GitignoreParseResult {
+  patterns: ParsedPattern[]
+  groupedPatterns: Map<PatternCategory, ParsedPattern[]>
+  securityPatterns: ParsedPattern[]
+}
+
+// Gitignore profile for saved pattern selections
+export interface GitignoreProfile {
+  name: string
+  patterns: string[]
+  createdAt: string
+}
+
+// DTOs for gitignore operations
+export interface ParseGitignoreDto {
+  projectRoot: string
+}
+
+export interface SaveProfileDto {
+  projectRoot: string
+  name: string
+  patterns: string[]
+}
+
+export interface DeleteProfileDto {
+  projectRoot: string
+  name: string
+}
+
+export interface LoadProfilesDto {
+  projectRoot: string
+}
+
+// Gitignore error codes
+export const GitignoreErrorCode = {
+  GITIGNORE_PARSE_FAILED: 'GITIGNORE_PARSE_FAILED',
+  FILE_COPY_FAILED: 'FILE_COPY_FAILED',
+  PROFILE_NOT_FOUND: 'PROFILE_NOT_FOUND',
+  PROFILE_ALREADY_EXISTS: 'PROFILE_ALREADY_EXISTS',
+  INVALID_PROFILE_DATA: 'INVALID_PROFILE_DATA'
+} as const
+
+export type GitignoreErrorCodeType = (typeof GitignoreErrorCode)[keyof typeof GitignoreErrorCode]
+
+// Gitignore API exposed via preload
+export interface GitignoreApi {
+  parse: (dto: ParseGitignoreDto) => Promise<IpcResult<GitignoreParseResult>>
+  saveProfile: (dto: SaveProfileDto) => Promise<IpcResult<void>>
+  deleteProfile: (dto: DeleteProfileDto) => Promise<IpcResult<void>>
+  loadProfiles: (dto: LoadProfilesDto) => Promise<IpcResult<GitignoreProfile[]>>
+}
+
+// ============================================================================
+// Merge Types (Story 2.1)
+// ============================================================================
+
+// Import merge types from merge.types.ts
+export type {
+  ConflictDetectionResult,
+  MergePreview,
+  ConflictedFile,
+  MergeResult,
+  MergeValidationResult,
+  FileChange,
+  DetectionMode,
+  MergeStrategy,
+  ConflictSeverity,
+  MergePreference
+} from './merge.types'
+
+// DTOs for merge operations
+export type { DetectConflictsDto, MergePreviewDto, ExecuteMergeDto, ValidateMergeDto } from './merge.types'
+
+// Merge API exposed via preload
+// Story 2.1 - Task 5: Update Shared Types
+export interface MergeApi {
+  detectConflicts: (dto: DetectConflictsDto) => Promise<IpcResult<ConflictDetectionResult>>
+  getPreview: (dto: MergePreviewDto) => Promise<IpcResult<MergePreview>>
+  execute: (dto: ExecuteMergeDto) => Promise<IpcResult<MergeResult>>
+  getConflictedFiles: (projectId: string) => Promise<IpcResult<ConflictedFile[]>>
+  validate: (dto: ValidateMergeDto) => Promise<IpcResult<MergeValidationResult>>
+  getPreference: () => Promise<IpcResult<MergePreference>>
+  setPreference: (pref: MergePreference) => Promise<IpcResult<void>>
+  getBranches: (projectId: string) => Promise<IpcResult<string[]>>
+}
+
+// ============================================================================
+// AI Prompt Types (Story 3.1)
+// ============================================================================
+
+// Import AI prompt types from ai-prompt.types.ts
+export type {
+  AIToolType,
+  PromptContext,
+  GeneratedPrompt,
+  AIToolTemplate,
+  TemplateVariable,
+  ValidationResult,
+  GeneratePromptDto,
+  RegisterTemplateDto,
+  ValidateTemplateDto
+} from './ai-prompt.types'
+
+// AI Prompt API exposed via preload
+// Story 3.1 - Task 5: Extend Preload API
+export interface AIPromptApi {
+  generate: (dto: GeneratePromptDto) => Promise<IpcResult<GeneratedPrompt>>
+  listTemplates: () => Promise<IpcResult<AIToolTemplate[]>>
+  registerTemplate: (dto: RegisterTemplateDto) => Promise<IpcResult<void>>
+  validateTemplate: (dto: ValidateTemplateDto) => Promise<IpcResult<ValidationResult>>
+}
+
+// ============================================================================
+// Keyboard Shortcuts Types (Story 3.3)
+// ============================================================================
+
+// Import keyboard shortcuts types from keyboard-shortcuts.types.ts
+import type {
+  KeyboardShortcut,
+  Keybinding,
+  ShortcutConflict,
+  ShortcutRemapResult,
+  ShortcutCategory,
+  KeyboardShortcutSettings,
+  UpdateShortcutDto,
+  KeyboardShortcutErrorCodeType
+} from './keyboard-shortcuts.types'
+
+// Re-export for convenience
+export type {
+  KeyboardShortcut,
+  Keybinding,
+  ShortcutConflict,
+  ShortcutRemapResult,
+  ShortcutCategory,
+  KeyboardShortcutSettings,
+  UpdateShortcutDto,
+  KeyboardShortcutErrorCodeType
+} from './keyboard-shortcuts.types'
+
+// Keyboard Shortcuts API exposed via preload
+// Story 3.3 - Task 2.7: Add keyboard shortcuts API to preload script
+export interface KeyboardShortcutsApi {
+  listShortcuts: () => Promise<IpcResult<KeyboardShortcut[]>>
+  updateShortcut: (dto: UpdateShortcutDto) => Promise<IpcResult<KeyboardShortcut>>
+  resetShortcuts: () => Promise<IpcResult<KeyboardShortcut[]>>
+  getShortcutForCommand: (command: string) => Promise<IpcResult<KeyboardShortcut | null>>
+  formatKeybinding: (keybinding: { modifier: string; key: string }) => Promise<IpcResult<string>>
 }

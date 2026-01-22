@@ -27,6 +27,10 @@ export interface AppSettings {
   maxTerminalsPerProject: number // Maximum terminals allowed per project
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
+  emergencyModeEnabled: boolean // Emergency Mode for quick hotfix creation without prompts
+  autoOpenTerminalOnWorktreeClick: boolean // Auto-open terminal when clicking worktree (Story 3.6)
+  persistTerminalSessions: boolean // Persist terminal sessions across restarts (Story 3.6)
+  maxTerminalSessions: number // Maximum terminal sessions to keep (Story 3.6)
 }
 
 // Terminal buffer size options
@@ -76,7 +80,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   defaultProjectColor: 'blue',
   maxTerminalsPerProject: 10,
   orphanDetectionEnabled: true,
-  orphanDetectionTimeout: 600000 // 10 minutes
+  orphanDetectionTimeout: 600000, // 10 minutes
+  emergencyModeEnabled: false,
+  autoOpenTerminalOnWorktreeClick: true,
+  persistTerminalSessions: true,
+  maxTerminalSessions: 10
 }
 
 // Persistence key for app settings
@@ -161,6 +169,18 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Reset Zoom',
     description: 'Reset terminal font size to default',
     defaultKey: 'ctrl+0'
+  },
+  emergencyMode: {
+    id: 'emergencyMode',
+    label: 'Toggle Emergency Mode',
+    description: 'Toggle emergency mode for quick hotfix creation',
+    defaultKey: 'ctrl+shift+e'
+  },
+  quickHotfix: {
+    id: 'quickHotfix',
+    label: 'Quick Hotfix',
+    description: 'Create hotfix worktree with minimal prompts',
+    defaultKey: 'ctrl+shift+h'
   }
 }
 

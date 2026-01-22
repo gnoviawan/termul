@@ -14,7 +14,8 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronRight,
-  SlidersHorizontal
+  SlidersHorizontal,
+  GitBranch
 } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import type { Project, ProjectColor } from '@/types/project'
@@ -25,6 +26,8 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
+import { useWorktreeActions, useWorktreeCount, useProjectExpanded } from '@/stores/worktree-store'
+import { WorktreeProjectSection, WorktreeCreateDialog } from '@/src/features/worktrees/components'
 
 interface ContextMenuState {
   isOpen: boolean
@@ -44,6 +47,13 @@ interface DeleteConfirmState {
   isOpen: boolean
   projectId: string
   projectName: string
+}
+
+interface WorktreeCreateDialogState {
+  isOpen: boolean
+  projectId: string
+  projectName?: string
+  projectPath?: string
 }
 
 interface ProjectSidebarProps {
@@ -102,6 +112,30 @@ export function ProjectSidebar({
     projectName: ''
   })
 
+  // Worktree create dialog state
+  const [worktreeCreateDialog, setWorktreeCreateDialog] = useState<WorktreeCreateDialogState>({
+    isOpen: false,
+    projectId: '',
+    projectName: ''
+  })
+  const [isWorktreeCreating, setIsWorktreeCreating] = useState(false)
+
+  // Track which projects have open nested dialogs (merge, sync, etc.)
+  const [projectsWithOpenDialogs, setProjectsWithOpenDialogs] = useState<Set<string>>(new Set())
+
+  // Check if a project has any open dialog (sidebar or nested)
+  const hasOpenDialog = (projectId: string): boolean => {
+    return (
+      projectsWithOpenDialogs.has(projectId) ||
+      contextMenu.projectId === projectId ||
+      colorPicker.projectId === projectId ||
+      deleteConfirm.projectId === projectId ||
+      worktreeCreateDialog.projectId === projectId
+    )
+  }
+
+  const { loadWorktrees, refreshStatus, setProjectExpanded, expandProjectExclusive } = useWorktreeActions()
+
   // Available shells state
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
 
@@ -119,6 +153,27 @@ export function ProjectSidebar({
     }
     fetchShells()
   }, [])
+
+  useEffect(() => {
+    const activeProject = projects.find((project) => project.id === activeProjectId)
+
+    if (!activeProject) {
+      return
+    }
+
+    if (!activeProject.path) {
+      console.warn('[ProjectSidebar] Active project has no path, skipping worktree load:', activeProject.id)
+      return
+    }
+
+    loadWorktrees(activeProject.id)
+      .then(() => {
+        setProjectExpanded(activeProject.id, true)
+      })
+      .catch((error: unknown) => {
+        console.error('[ProjectSidebar] Failed to load worktrees on startup:', error)
+      })
+  }, [activeProjectId, loadWorktrees, projects, setProjectExpanded])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {
     e.preventDefault()
@@ -208,6 +263,40 @@ export function ProjectSidebar({
     setDeleteConfirm({ isOpen: false, projectId: '', projectName: '' })
   }, [])
 
+  const handleOpenWorktreeCreateDialog = useCallback((projectId: string): void => {
+    const project = projects.find((p) => p.id === projectId)
+    // Validate project exists and has path before opening dialog
+    if (!project) {
+      console.error('[ProjectSidebar] Cannot open worktree dialog: project not found', projectId)
+      return
+    }
+    if (!project.path) {
+      console.error('[ProjectSidebar] Cannot open worktree dialog: project has no path', projectId)
+      return
+    }
+    setWorktreeCreateDialog({
+      isOpen: true,
+      projectId,
+      projectName: project.name,
+      projectPath: project.path
+    })
+  }, [projects])
+
+  const handleWorktreeCreated = useCallback((worktreeId: string): void => {
+    const projectId = worktreeId.split('-')[0]
+
+    console.log('[ProjectSidebar] Worktree created:', worktreeId, '- expanding project section')
+
+    setIsWorktreeCreating(false)
+    setProjectExpanded(projectId, true)
+
+    loadWorktrees(projectId)
+      .then(() => refreshStatus(worktreeId))
+      .catch((error: unknown) => {
+        console.error('[ProjectSidebar] Failed to refresh worktrees:', error)
+      })
+  }, [loadWorktrees, refreshStatus, setProjectExpanded])
+
   const getContextMenuItems = useCallback(
     (projectId: string): ContextMenuItem[] => {
       const project = projects.find((p) => p.id === projectId)
@@ -227,6 +316,12 @@ export function ProjectSidebar({
           label: 'Change Color',
           icon: <Palette size={14} />,
           onClick: () => handleOpenColorPicker(projectId, contextMenu.x, contextMenu.y)
+        },
+        {
+          label: 'Create Worktree',
+          icon: <GitBranch size={14} />,
+          onClick: () => handleOpenWorktreeCreateDialog(projectId),
+          disabled: isWorktreeCreating
         }
       ]
 
@@ -257,7 +352,7 @@ export function ProjectSidebar({
 
       return items
     },
-    [projects, availableShells, contextMenu.x, contextMenu.y, handleStartRename, handleOpenColorPicker, onUpdateProject, onArchiveProject, handleConfirmDelete]
+    [projects, availableShells, contextMenu.x, contextMenu.y, handleStartRename, handleOpenColorPicker, handleOpenWorktreeCreateDialog, onUpdateProject, onArchiveProject, handleConfirmDelete, isWorktreeCreating]
   )
 
   const getArchivedContextMenuItems = useCallback(
@@ -328,23 +423,46 @@ export function ProjectSidebar({
                   key={project.id}
                   value={project}
                   className="list-none"
+                  drag={!hasOpenDialog(project.id)}
                   whileDrag={{ scale: 1.02, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
                 >
-                  <ProjectItem
-                    project={project}
-                    isActive={project.id === activeProjectId}
-                    isEditing={editingId === project.id}
-                    editName={editName}
-                    shortcut={`Ctrl+${index + 1}`}
-                    onClick={() => {
-                      onSelectProject(project.id)
-                      navigate('/')
-                    }}
-                    onContextMenu={(e) => handleContextMenu(e, project.id)}
-                    onEditNameChange={setEditName}
-                    onSaveRename={() => handleSaveRename(project.id)}
-                    onCancelRename={handleCancelRename}
-                  />
+                  <div>
+                    <ProjectItem
+                      project={project}
+                      isActive={project.id === activeProjectId}
+                      isEditing={editingId === project.id}
+                      editName={editName}
+                      shortcut={`Ctrl+${index + 1}`}
+                      onClick={() => {
+                        expandProjectExclusive(project.id)
+                        onSelectProject(project.id)
+                        navigate('/')
+                      }}
+                      onContextMenu={(e) => handleContextMenu(e, project.id)}
+                      onEditNameChange={setEditName}
+                      onSaveRename={() => handleSaveRename(project.id)}
+                      onCancelRename={handleCancelRename}
+                    />
+                    <WorktreeProjectSection
+                      projectId={project.id}
+                      onWorktreeSelect={(worktreeId) => {
+                        // TODO: Handle worktree selection (open terminal, etc.)
+                        console.log('Selected worktree:', worktreeId, 'in project:', project.id)
+                      }}
+                      onCreateWorktree={handleOpenWorktreeCreateDialog}
+                      onDialogStateChange={(isOpen) => {
+                        setProjectsWithOpenDialogs(prev => {
+                          const next = new Set(prev)
+                          if (isOpen) {
+                            next.add(project.id)
+                          } else {
+                            next.delete(project.id)
+                          }
+                          return next
+                        })
+                      }}
+                    />
+                  </div>
                 </Reorder.Item>
               ))}
             </Reorder.Group>
@@ -366,6 +484,7 @@ export function ProjectSidebar({
                     key={project.id}
                     project={project}
                     onClick={() => {
+                      expandProjectExclusive(project.id)
                       onSelectProject(project.id)
                       navigate('/')
                     }}
@@ -451,6 +570,22 @@ export function ProjectSidebar({
         onConfirm={handleDelete}
         onCancel={handleCancelDelete}
       />
+
+      {/* Worktree Create Dialog */}
+      {worktreeCreateDialog.isOpen && (
+        <WorktreeCreateDialog
+          isOpen={worktreeCreateDialog.isOpen}
+          projectId={worktreeCreateDialog.projectId}
+          projectName={worktreeCreateDialog.projectName}
+          projectPath={worktreeCreateDialog.projectPath ?? ''}
+          onClose={() => {
+            setWorktreeCreateDialog({ isOpen: false, projectId: '', projectName: '', projectPath: '' })
+            setIsWorktreeCreating(false)
+          }}
+          onSuccess={handleWorktreeCreated}
+          onCreatingChange={setIsWorktreeCreating}
+        />
+      )}
     </aside>
   )
 }
@@ -482,6 +617,9 @@ function ProjectItem({
 }: ProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
+  const worktreeCount = useWorktreeCount(project.id)
+  const isExpanded = useProjectExpanded(project.id)
+  const { toggleProjectExpanded } = useWorktreeActions()
 
   // Focus input when editing starts
   useEffect(() => {
@@ -501,10 +639,24 @@ function ProjectItem({
     }
   }
 
+  const handleChevronClick = (e: React.MouseEvent<HTMLSpanElement>): void => {
+    e.stopPropagation()
+    toggleProjectExpanded(project.id)
+  }
+
+  const handleChevronKeyDown = (e: React.KeyboardEvent<HTMLSpanElement>): void => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      e.stopPropagation()
+      toggleProjectExpanded(project.id)
+    }
+  }
+
   return (
     <button
       onClick={isEditing ? undefined : onClick}
       onContextMenu={onContextMenu}
+      aria-expanded={worktreeCount > 0 ? isExpanded : undefined}
       className={cn(
         'w-full flex items-center px-4 py-2 transition-colors group text-left',
         isActive ? 'bg-secondary' : 'hover:bg-secondary/50'
@@ -517,6 +669,22 @@ function ProjectItem({
           isActive && `shadow-sm ${colors.shadow}`
         )}
       />
+      {worktreeCount > 0 && !isEditing && (
+        <span
+          role="button"
+          tabIndex={0}
+          className="mr-1 flex-shrink-0 cursor-pointer"
+          onClick={handleChevronClick}
+          onKeyDown={handleChevronKeyDown}
+          aria-label={isExpanded ? 'Collapse worktrees' : 'Expand worktrees'}
+        >
+          {isExpanded ? (
+            <ChevronDown size={14} className="text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <ChevronRight size={14} className="text-muted-foreground" aria-hidden="true" />
+          )}
+        </span>
+      )}
       {isEditing ? (
         <input
           ref={inputRef}
@@ -539,14 +707,29 @@ function ProjectItem({
         </span>
       )}
       {!isEditing && (
-        <span
-          className={cn(
-            'ml-auto text-xs font-mono text-muted-foreground transition-opacity',
-            isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        <div className="ml-auto flex items-center gap-2">
+          {worktreeCount > 0 && (
+            <span
+              className={cn(
+                'flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full',
+                'text-xs font-medium bg-primary/10 text-primary',
+                'transition-opacity',
+                isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              )}
+              aria-label={`${worktreeCount} worktree${worktreeCount !== 1 ? 's' : ''}`}
+            >
+              {worktreeCount}
+            </span>
           )}
-        >
-          {shortcut}
-        </span>
+          <span
+            className={cn(
+              'text-xs font-mono text-muted-foreground transition-opacity',
+              isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            )}
+          >
+            {shortcut}
+          </span>
+        </div>
       )}
     </button>
   )

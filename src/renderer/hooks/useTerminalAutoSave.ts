@@ -28,7 +28,9 @@ export function serializeTerminalsForProject(
         name: t.name,
         shell: t.shell,
         cwd: t.cwd,
-        scrollback: extractScrollback(t.id)
+        scrollback: extractScrollback(t.id),
+        worktreeId: t.worktreeId,
+        breadcrumbContext: t.breadcrumbContext
       })
     ),
     updatedAt: new Date().toISOString()

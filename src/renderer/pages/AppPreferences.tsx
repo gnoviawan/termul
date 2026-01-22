@@ -8,7 +8,10 @@ import {
   useDefaultProjectColor,
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
-  useOrphanDetectionTimeout
+  useOrphanDetectionTimeout,
+  useAutoOpenTerminalOnWorktreeClick,
+  usePersistTerminalSessions,
+  useMaxTerminalSessions
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
 import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
@@ -36,6 +39,9 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
+  const autoOpenTerminalOnWorktreeClick = useAutoOpenTerminalOnWorktreeClick()
+  const persistTerminalSessions = usePersistTerminalSessions()
+  const maxTerminalSessions = useMaxTerminalSessions()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -127,6 +133,18 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleAutoUpdateToggle = async (enabled: boolean) => {
     await setAutoUpdateEnabled(enabled)
+  }
+
+  const handleAutoOpenTerminalOnWorktreeClickChange = (value: boolean) => {
+    updateSetting('autoOpenTerminalOnWorktreeClick', value)
+  }
+
+  const handlePersistTerminalSessionsChange = (value: boolean) => {
+    updateSetting('persistTerminalSessions', value)
+  }
+
+  const handleMaxTerminalSessionsChange = (value: number) => {
+    updateSetting('maxTerminalSessions', value)
   }
 
   const formatLastChecked = (date: Date | null): string => {
@@ -366,6 +384,98 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Terminals inactive for this duration will be cleaned up (only if not displayed).
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Terminal Context Section - Story 3.6 */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Terminal Context</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Configure terminal behavior when working with worktrees.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-6">
+                {/* Auto-open Terminal on Worktree Click */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Auto-open Terminal
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Open terminal when clicking worktree</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Automatically open a terminal in the worktree directory when you click on it in the sidebar
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleAutoOpenTerminalOnWorktreeClickChange(!autoOpenTerminalOnWorktreeClick)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        autoOpenTerminalOnWorktreeClick ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          autoOpenTerminalOnWorktreeClick ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Persist Terminal Sessions */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Persist Terminal Sessions
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Save terminal sessions across restarts</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Remember terminal tabs, working directories, and scrollback when you restart the app
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handlePersistTerminalSessionsChange(!persistTerminalSessions)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        persistTerminalSessions ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          persistTerminalSessions ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Max Terminal Sessions */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Max Terminal Sessions to Keep
+                  </label>
+                  <select
+                    value={maxTerminalSessions}
+                    onChange={(e) => handleMaxTerminalSessionsChange(parseInt(e.target.value))}
+                    disabled={!persistTerminalSessions}
+                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value={5}>5 sessions</option>
+                    <option value={10}>10 sessions</option>
+                    <option value={20}>20 sessions</option>
+                    <option value={50}>50 sessions</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Maximum number of terminal sessions to keep in history. Older sessions will be removed.
                   </p>
                 </div>
               </div>
