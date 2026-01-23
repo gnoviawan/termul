@@ -47,6 +47,8 @@ export interface GLMClientOptions {
   apiKey: string
   model?: string
   timeout?: number
+  maxRetries?: number
+  retryDelay?: number
 }
 
 /**
@@ -65,6 +67,8 @@ export class GLMClient {
   private client: ZhipuAI
   private model: string
   private timeout: number
+  private maxRetries: number
+  private retryDelay: number
 
   /**
    * Create a new GLM client instance
@@ -84,6 +88,8 @@ export class GLMClient {
     })
     this.model = options.model || 'glm-4.7'
     this.timeout = options.timeout || 30000 // 30 seconds default
+    this.maxRetries = options.maxRetries ?? 3
+    this.retryDelay = options.retryDelay ?? 1000 // 1 second default
   }
 
   /**
@@ -98,7 +104,7 @@ export class GLMClient {
     messages: ChatMessage[],
     maxTokens?: number
   ): Promise<GLMResponse> {
-    try {
+    return this.retryAsync(async () => {
       const response = await this.client.createCompletions({
         model: this.model,
         messages: messages.map((msg) => ({
@@ -157,9 +163,7 @@ export class GLMClient {
             }
           : undefined
       }
-    } catch (error) {
-      throw this.handleError(error)
-    }
+    })
   }
 
   /**
@@ -190,6 +194,47 @@ export class GLMClient {
     })
 
     return this.chat(messages, maxTokens)
+  }
+
+  /**
+   * Retry an async operation with exponential backoff
+   *
+   * @param operation - The async operation to retry
+   * @param attempt - Current attempt number (used internally for recursion)
+   * @returns Promise resolving to the operation result
+   * @throws GLMError if all retries fail
+   */
+  private async retryAsync<T>(
+    operation: () => Promise<T>,
+    attempt: number = 1
+  ): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      const glmError = this.handleError(error)
+
+      // Don't retry authentication or invalid request errors
+      if (
+        glmError.code === GLMErrorCodes.AUTHENTICATION_FAILED ||
+        glmError.code === GLMErrorCodes.INVALID_REQUEST
+      ) {
+        throw glmError
+      }
+
+      // Check if we should retry
+      if (attempt >= this.maxRetries) {
+        throw glmError
+      }
+
+      // Calculate exponential backoff delay
+      const delay = this.retryDelay * Math.pow(2, attempt - 1)
+
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, delay))
+
+      // Retry the operation
+      return this.retryAsync(operation, attempt + 1)
+    }
   }
 
   /**
