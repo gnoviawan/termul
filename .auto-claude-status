@@ -1,6 +1,6 @@
 {
   "active": true,
-  "spec": "006-implement-virtual-scrolling-for-command-history-mo",
+  "spec": "002-add-skeleton-loading-state-for-shell-detection",
   "state": "building",
   "subtasks": {
     "completed": 5,
@@ -9,17 +9,17 @@
     "failed": 0
   },
   "phase": {
-    "current": "Integration and end-to-end verification",
+    "current": "Integration Testing and Verification",
     "id": null,
-    "total": 1
+    "total": 2
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 5,
-    "started_at": "2026-01-23T19:34:08.221652"
+    "number": 7,
+    "started_at": "2026-01-23T19:34:23.996678"
   },
-  "last_update": "2026-01-23T21:14:30.331669"
+  "last_update": "2026-01-23T21:20:14.822929"
 }

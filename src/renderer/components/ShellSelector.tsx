@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ChevronDown, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 
 interface ShellSelectorProps {
@@ -78,7 +79,11 @@ export function ShellSelector({ onSelectShell, defaultShell, className }: ShellS
       {isOpen && (
         <div className="absolute top-full right-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
           {loading ? (
-            <div className="px-3 py-2 text-sm text-muted-foreground">Loading shells...</div>
+            <div className="py-1 px-3 space-y-1">
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+            </div>
           ) : sortedShells && sortedShells.length > 0 ? (
             <div className="py-1">
               {sortedShells.map((shell) => (

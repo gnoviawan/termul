@@ -314,4 +314,80 @@ describe('terminal-store', () => {
       expect(terminal2?.lastExitCode).toBeUndefined()
     })
   })
+
+  describe('updateTerminalActivity', () => {
+    it('should set hasActivity to true', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      updateTerminalActivity('t1', true)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.hasActivity).toBe(true)
+    })
+
+    it('should set hasActivity to false', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      // First set to true
+      updateTerminalActivity('t1', true)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(true)
+
+      // Then set to false
+      updateTerminalActivity('t1', false)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(false)
+    })
+
+    it('should not affect other terminals', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      updateTerminalActivity('t1', true)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(terminal1?.hasActivity).toBe(true)
+      expect(terminal2?.hasActivity).toBeUndefined()
+    })
+  })
+
+  describe('updateTerminalLastActivityTimestamp', () => {
+    it('should update the lastActivityTimestamp', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const timestamp = Date.now()
+
+      updateTerminalLastActivityTimestamp('t1', timestamp)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.lastActivityTimestamp).toBe(timestamp)
+    })
+
+    it('should not affect other terminals', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const timestamp = Date.now()
+
+      updateTerminalLastActivityTimestamp('t1', timestamp)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(terminal1?.lastActivityTimestamp).toBe(timestamp)
+      expect(terminal2?.lastActivityTimestamp).toBeUndefined()
+    })
+
+    it('should overwrite existing timestamp', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const firstTimestamp = 1000000
+      const secondTimestamp = 2000000
+
+      updateTerminalLastActivityTimestamp('t1', firstTimestamp)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(firstTimestamp)
+
+      updateTerminalLastActivityTimestamp('t1', secondTimestamp)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(secondTimestamp)
+    })
+  })
 })

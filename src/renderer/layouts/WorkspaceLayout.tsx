@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { FolderKanban, Terminal } from 'lucide-react'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { TerminalTabBar } from '@/components/TerminalTabBar'
 import { ConnectedTerminal, TerminalSearchHandle } from '@/components/terminal/ConnectedTerminal'
@@ -468,16 +470,29 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <main className="flex-1 flex flex-col min-w-0">
         {projects.length === 0 ? (
           /* No Projects Empty State */
-          <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg">
-            <p className="text-muted-foreground text-sm mb-4">
-              No projects yet. Create one to get started.
-            </p>
-            <button
-              onClick={() => setIsNewProjectModalOpen(true)}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+          <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.4, ease: 'easeOut' }}
+              className="flex flex-col items-center text-center max-w-md"
             >
-              Create Project
-            </button>
+              <div className="mb-6">
+                <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
+              </div>
+              <h2 className="text-xl font-semibold text-foreground mb-2">
+                No Projects Yet
+              </h2>
+              <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                Create your first project to organize your terminals, snapshots, and commands
+              </p>
+              <button
+                onClick={() => setIsNewProjectModalOpen(true)}
+                className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+              >
+                Create Your First Project
+              </button>
+            </motion.div>
           </div>
         ) : (
           <>
@@ -530,16 +545,29 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
               {/* Show empty state only when current project has no terminals AND we're on workspace route */}
               {isWorkspaceRoute && terminals.length === 0 && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <p className="text-muted-foreground text-sm mb-4">
-                    No terminal open. Create one to get started.
-                  </p>
-                  <button
-                    onClick={handleNewTerminal}
-                    className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                <div className="absolute inset-0 flex items-center justify-center px-6">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4, ease: 'easeOut' }}
+                    className="flex flex-col items-center text-center max-w-md"
                   >
-                    Create Terminal
-                  </button>
+                    <div className="mb-6">
+                      <Terminal className="w-24 h-24 text-muted-foreground/50" />
+                    </div>
+                    <h2 className="text-xl font-semibold text-foreground mb-2">
+                      No Terminals Yet
+                    </h2>
+                    <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                      Create a terminal to start running commands and managing your project
+                    </p>
+                    <button
+                      onClick={handleNewTerminal}
+                      className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                    >
+                      Create Your First Terminal
+                    </button>
+                  </motion.div>
                 </div>
               )}
 

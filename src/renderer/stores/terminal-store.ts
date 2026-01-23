@@ -33,6 +33,8 @@ export interface TerminalState {
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  updateTerminalActivity: (id: string, hasActivity: boolean) => void
+  updateTerminalLastActivityTimestamp: (id: string, timestamp: number) => void
   truncateHiddenTerminalBuffers: () => void
   getTerminalCount: () => number
   isTerminalLimitReached: () => boolean
@@ -171,6 +173,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         }
         return t
       })
+    }))
+  },
+
+  updateTerminalActivity: (id: string, hasActivity: boolean): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, hasActivity } : t))
+    }))
+  },
+
+  updateTerminalLastActivityTimestamp: (id: string, timestamp: number): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t))
     }))
   },
 

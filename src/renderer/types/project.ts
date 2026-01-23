@@ -47,6 +47,8 @@ export interface Terminal {
   healthStatus?: TerminalHealthStatus // Terminal health status
   isHidden?: boolean // Whether terminal is currently hidden (on another route)
   hiddenSince?: number // Timestamp when terminal was hidden (for buffer truncation)
+  hasActivity?: boolean // Whether terminal has recent output activity
+  lastActivityTimestamp?: number // Timestamp when last activity occurred
 }
 
 export interface TerminalLine {

@@ -14,6 +14,7 @@ import type { Terminal } from '@/types/project'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
 import { ContextMenu, ContextMenuItem } from './ContextMenu'
+import { Skeleton } from './ui/skeleton'
 
 interface TerminalTabBarProps {
   terminals: Terminal[]
@@ -176,7 +177,11 @@ export function TerminalTabBar({
             {isDropdownOpen && (
               <div className="absolute top-full left-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
                 {loading ? (
-                  <div className="px-3 py-2 text-sm text-muted-foreground">Loading shells...</div>
+                  <div className="py-1 px-3 space-y-2">
+                    <Skeleton className="h-8 w-full" />
+                    <Skeleton className="h-8 w-full" />
+                    <Skeleton className="h-8 w-full" />
+                  </div>
                 ) : sortedShells && sortedShells.length > 0 ? (
                   <div className="py-1">
                     {sortedShells.map((shell) => (

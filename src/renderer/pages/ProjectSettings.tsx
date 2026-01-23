@@ -12,6 +12,7 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
@@ -294,32 +295,33 @@ export default function ProjectSettings() {
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
                       Default Shell
                     </label>
-                    <div className="relative">
-                      <select
-                        value={shell}
-                        onChange={(e) => {
-                          setShell(e.target.value)
-                          setHasChanges(true)
-                        }}
-                        disabled={shellsLoading}
-                        className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm disabled:opacity-50"
-                      >
-                        {shellsLoading ? (
-                          <option value="">Loading shells...</option>
-                        ) : availableShells?.available && availableShells.available.length > 0 ? (
-                          availableShells.available.map((s) => (
-                            <option key={s.name} value={s.name}>
-                              {s.displayName}
-                            </option>
-                          ))
-                        ) : (
-                          <option value="">No shells detected</option>
-                        )}
-                      </select>
-                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
-                        <ChevronDown size={14} />
+                    {shellsLoading ? (
+                      <Skeleton className="w-full h-10" />
+                    ) : (
+                      <div className="relative">
+                        <select
+                          value={shell}
+                          onChange={(e) => {
+                            setShell(e.target.value)
+                            setHasChanges(true)
+                          }}
+                          className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm"
+                        >
+                          {availableShells?.available && availableShells.available.length > 0 ? (
+                            availableShells.available.map((s) => (
+                              <option key={s.name} value={s.name}>
+                                {s.displayName}
+                              </option>
+                            ))
+                          ) : (
+                            <option value="">No shells detected</option>
+                          )}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
+                          <ChevronDown size={14} />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   <div>
