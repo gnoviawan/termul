@@ -1,0 +1,33 @@
+{
+  "name": "code-reviewer-action",
+  "version": "1.0.0",
+  "description": "Automated code review using GLM 4.7 model from Zhipu AI",
+  "main": "dist/index.js",
+  "author": {
+    "name": "Termul Manager",
+    "email": "termul@example.com"
+  },
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "ncc build index.ts -o dist --source-map --license licenses.txt",
+    "lint": "eslint *.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
+    "zhipuai-sdk-nodejs-v4": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "@vercel/ncc": "^0.38.3",
+    "eslint": "^9.32.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.16"
+  }
+}
