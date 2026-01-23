@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { History, Terminal, Clock } from 'lucide-react'
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { CommandHistoryEntry } from '@/stores/command-history-store'
 
 interface CommandHistoryModalProps {
@@ -19,15 +20,13 @@ export function CommandHistoryModal({
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   // Filter entries based on query
   const filteredEntries = useMemo(() => {
-    if (!query) return entries.slice(0, 100) // Limit display
+    if (!query) return entries
     const lowerQuery = query.toLowerCase()
-    return entries
-      .filter((e) => e.command.toLowerCase().includes(lowerQuery))
-      .slice(0, 100)
+    return entries.filter((e) => e.command.toLowerCase().includes(lowerQuery))
   }, [entries, query])
 
   // Reset selection when query changes
@@ -44,15 +43,12 @@ export function CommandHistoryModal({
     }
   }, [isOpen])
 
-  // Scroll selected item into view
+  // Scroll selected item into view using Virtuoso
   useEffect(() => {
-    if (listRef.current) {
-      const selectedElement = listRef.current.querySelector(`[data-index="${selectedIndex}"]`)
-      if (selectedElement) {
-        selectedElement.scrollIntoView({ block: 'nearest' })
-      }
+    if (virtuosoRef.current && filteredEntries.length > 0) {
+      virtuosoRef.current.scrollToIndex(selectedIndex)
     }
-  }, [selectedIndex])
+  }, [selectedIndex, filteredEntries.length])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -129,48 +125,50 @@ export function CommandHistoryModal({
             </div>
 
             {/* Command List */}
-            <div ref={listRef} className="max-h-[50vh] overflow-y-auto">
-              {filteredEntries.length === 0 ? (
-                <div className="p-8 text-center text-muted-foreground">
-                  <History size={32} className="mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">
-                    {entries.length === 0 ? 'No command history yet' : 'No matching commands'}
-                  </p>
-                </div>
-              ) : (
-                filteredEntries.map((entry, index) => (
-                  <div
-                    key={entry.id}
-                    data-index={index}
-                    onClick={() => {
-                      onSelectCommand(entry.command)
-                      onClose()
-                    }}
-                    className={`px-4 py-3 cursor-pointer transition-colors ${
-                      index === selectedIndex
-                        ? 'bg-secondary'
-                        : 'hover:bg-secondary/50'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <code className="flex-1 text-sm font-mono text-foreground break-all">
-                        {entry.command}
-                      </code>
+            {filteredEntries.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <History size={32} className="mx-auto mb-2 opacity-50" />
+                <p className="text-sm">
+                  {entries.length === 0 ? 'No command history yet' : 'No matching commands'}
+                </p>
+              </div>
+            ) : (
+              <div className="max-h-[50vh]">
+                <Virtuoso
+                  ref={virtuosoRef}
+                  style={{ height: '50vh' }}
+                  data={filteredEntries}
+                  itemContent={(index, entry) => (
+                    <div
+                      key={entry.id}
+                      onClick={() => {
+                        onSelectCommand(entry.command)
+                        onClose()
+                      }}
+                      className={`px-4 py-3 cursor-pointer transition-colors ${
+                        index === selectedIndex ? 'bg-secondary' : 'hover:bg-secondary/50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <code className="flex-1 text-sm font-mono text-foreground break-all">
+                          {entry.command}
+                        </code>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Terminal size={12} />
+                          {entry.terminalName}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Clock size={12} />
+                          {formatTime(entry.timestamp)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Terminal size={12} />
-                        {entry.terminalName}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock size={12} />
-                        {formatTime(entry.timestamp)}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+                  )}
+                />
+              </div>
+            )}
 
             {/* Footer */}
             <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-end space-x-4 text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
