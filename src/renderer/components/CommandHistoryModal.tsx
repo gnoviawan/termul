@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { History, Terminal, Clock } from 'lucide-react'
-import { Virtuoso } from 'react-virtuoso'
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { CommandHistoryEntry } from '@/stores/command-history-store'
 
 interface CommandHistoryModalProps {
@@ -20,7 +20,7 @@ export function CommandHistoryModal({
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const virtuosoRef = useRef<{ scrollToIndex: (index: number) => void }>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   // Filter entries based on query
   const filteredEntries = useMemo(() => {

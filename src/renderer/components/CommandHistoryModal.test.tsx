@@ -9,18 +9,24 @@ describe('CommandHistoryModal', () => {
       id: '1',
       command: 'npm install',
       terminalName: 'default',
+      terminalId: 'term-1',
+      projectId: 'proj-1',
       timestamp: Date.now() - 60000
     },
     {
       id: '2',
       command: 'npm run dev',
       terminalName: 'default',
+      terminalId: 'term-1',
+      projectId: 'proj-1',
       timestamp: Date.now() - 120000
     },
     {
       id: '3',
       command: 'git status',
       terminalName: 'default',
+      terminalId: 'term-1',
+      projectId: 'proj-1',
       timestamp: Date.now() - 180000
     }
   ]
