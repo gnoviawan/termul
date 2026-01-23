@@ -1,7 +1,6 @@
 import * as core from '@actions/core'
 import * as github from '@actions/github'
-import { GLMClient } from './glm-client.js'
-import { GitHubClient } from './github-client.js'
+import { reviewPullRequest } from './review-orchestrator.js'
 
 /**
  * Main entry point for the Code Reviewer GitHub Action.
@@ -48,13 +47,43 @@ async function run(): Promise<void> {
 
     core.info(`Reviewing PR #${pullNumber} in ${owner}/${repo}`)
 
-    // TODO: Implement review logic in subsequent subtasks
-    core.info('Code review logic will be implemented in next phases')
+    // Get GitHub token
+    const githubToken =
+      core.getInput('github-token', { required: false }) || process.env.GITHUB_TOKEN || ''
+
+    if (!githubToken) {
+      core.setFailed('GitHub token is required. Please provide it via github-token input.')
+      return
+    }
+
+    // Perform the review
+    const result = await reviewPullRequest(pullNumber, {
+      glmApiKey,
+      githubToken,
+      model,
+      maxFiles,
+      maxTokens,
+      severity: severity as 'low' | 'medium' | 'high' | 'critical',
+      excludePatterns,
+      includeSecurity: true,
+      includePerformance: true,
+      includeBestPractices: true
+    })
+
+    // Log results
+    core.info(`Review completed: ${result.success ? 'SUCCESS' : 'FAILED'}`)
+    core.info(`Files reviewed: ${result.filesReviewed}/${result.totalFiles}`)
+    core.info(`Issues found: ${result.issuesFound}`)
 
     // Set outputs
-    core.setOutput('review-completed', 'true')
-    core.setOutput('issues-found', '0')
-    core.setOutput('review-summary', 'Review logic not yet implemented')
+    core.setOutput('review-completed', result.success ? 'true' : 'false')
+    core.setOutput('issues-found', result.issuesFound.toString())
+    core.setOutput('files-reviewed', result.filesReviewed.toString())
+    core.setOutput('review-summary', result.summary)
+
+    if (result.error) {
+      core.setFailed(result.error)
+    }
   } catch (error) {
     if (error instanceof Error) {
       core.error(`Error: ${error.message}`)
