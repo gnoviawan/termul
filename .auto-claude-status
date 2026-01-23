@@ -3,23 +3,23 @@
   "spec": "006-implement-virtual-scrolling-for-command-history-mo",
   "state": "building",
   "subtasks": {
-    "completed": 1,
+    "completed": 4,
     "total": 6,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Implement virtual scrolling in CommandHistoryModal",
+    "current": "Create tests for virtualized CommandHistoryModal",
     "id": null,
-    "total": 3
+    "total": 1
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 3,
+    "number": 4,
     "started_at": "2026-01-23T19:34:08.221652"
   },
-  "last_update": "2026-01-23T19:41:54.157693"
+  "last_update": "2026-01-23T19:43:50.538490"
 }

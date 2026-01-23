@@ -182,3 +182,34 @@ vi.mock('../main/menu', () => ({
   setMainWindow: vi.fn()
 }))
 
+// Mock react-virtuoso to render items directly in tests
+vi.mock('react-virtuoso', () => {
+  const React = require('react')
+  const VirtuosoComponent = React.forwardRef(
+    (
+      {
+        data,
+        itemContent
+      }: {
+        data: unknown[]
+        itemContent: (index: number, item: unknown) => React.JSX.Element
+      },
+      _ref: React.Ref<unknown>
+    ) => {
+      return React.createElement(
+        'div',
+        { 'data-testid': 'virtuoso-scroller', 'data-virtuoso-scroller': 'true' },
+        React.createElement(
+          'div',
+          { 'data-testid': 'virtuoso-item-list' },
+          data.map((item, index) =>
+            React.createElement('div', { key: index }, itemContent(index, item))
+          )
+        )
+      )
+    }
+  )
+  VirtuosoComponent.displayName = 'Virtuoso'
+  return { Virtuoso: VirtuosoComponent }
+})
+
