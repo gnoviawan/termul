@@ -1,0 +1,39 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Write(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Edit(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Glob(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Grep(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Read(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl\\.auto-claude\\specs\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Write(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl\\.auto-claude\\specs\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Edit(E:\\open-source\\PecutAPP\\termul\\.auto-claude\\worktrees\\tasks\\004-so-i-would-like-to-create-a-code-reviewer-using-cl\\.auto-claude\\specs\\004-so-i-would-like-to-create-a-code-reviewer-using-cl/**)",
+      "Read(E:\\open-source\\PecutAPP\\termul\\.auto-claude/**)",
+      "Write(E:\\open-source\\PecutAPP\\termul\\.auto-claude/**)",
+      "Edit(E:\\open-source\\PecutAPP\\termul\\.auto-claude/**)",
+      "Glob(E:\\open-source\\PecutAPP\\termul\\.auto-claude/**)",
+      "Grep(E:\\open-source\\PecutAPP\\termul\\.auto-claude/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

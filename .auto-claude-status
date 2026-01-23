@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "004-so-i-would-like-to-create-a-code-reviewer-using-cl",
+  "state": "building",
+  "subtasks": {
+    "completed": 5,
+    "total": 25,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "GLM 4.7 API Integration",
+    "id": null,
+    "total": 3
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 6,
+    "started_at": "2026-01-23T21:32:11.766789"
+  },
+  "last_update": "2026-01-23T21:47:10.508483"
+}

@@ -1,5 +1,6 @@
 import * as core from '@actions/core'
 import * as github from '@actions/github'
+import { GLMClient } from './glm-client.js'
 
 /**
  * Main entry point for the Code Reviewer GitHub Action.

@@ -19,7 +19,7 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@actions/github": "^6.0.1",
-    "zhipuai-sdk-nodejs-v4": "^1.0.0"
+    "zhipuai-sdk-nodejs-v4": "^0.1.12"
   },
   "devDependencies": {
     "@types/node": "^22.16.5",
