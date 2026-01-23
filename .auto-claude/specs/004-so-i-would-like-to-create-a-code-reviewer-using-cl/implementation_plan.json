@@ -1,0 +1,701 @@
+{
+  "feature": "GLM 4.7 Code Reviewer GitHub Action",
+  "description": "Build a GitHub Action that performs automated code review on Pull Requests using the GLM 4.7 model from Zhipu AI. Similar to Coderabbit, but with custom GLM 4.7 integration instead of default Anthropic API.",
+  "workflow_type": "feature",
+  "workflow_rationale": "This is a new feature that adds automated code review capability to the project's CI/CD pipeline. It requires creating new GitHub Action workflows, GLM 4.7 API integration, and GitHub API integration, following the feature workflow pattern.",
+  "created_at": "2026-01-23T14:16:10.761Z",
+  "updated_at": "2026-01-23T16:50:20.957Z",
+  "status": "in_progress",
+  "phases": [
+    {
+      "id": "phase-1-setup",
+      "name": "GitHub Action Setup",
+      "type": "setup",
+      "description": "Create the basic GitHub Action scaffolding including workflow file, action metadata, TypeScript configuration, and package setup.",
+      "depends_on": [],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Create GitHub Actions workflow file for code review",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/workflows/code-review.yml"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [
+            ".github/workflows/pr-validation.yml"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/workflows/code-review.yml | grep -E 'name:|on:|pull_request:'",
+            "expected": "name: Code Review\non:\n  pull_request:"
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Create action.yml metadata file with inputs and outputs",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/action.yml"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/action.yml | grep -E 'name:|description:|inputs:'",
+            "expected": "name: 'Code Reviewer'\ndescription: 'Automated code review using GLM 4.7'"
+          },
+          "status": "completed",
+          "notes": "Created action.yml with comprehensive inputs (glm-api-key, model, max-files, max-tokens, severity, exclude-patterns) and outputs (review-completed, issues-found, review-summary). Configured to use node20 runtime."
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Create package.json with required dependencies",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/package.json"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [
+            "package.json"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/package.json | grep -E 'zhipuai|@actions/core|@actions/github'",
+            "expected": "\"zhipuai-sdk-nodejs-v4\"\n\"@actions/core\"\n\"@actions/github\""
+          },
+          "status": "completed"
+        },
+        {
+          "id": "subtask-1-4",
+          "description": "Create TypeScript configuration for the action",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/tsconfig.json"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [
+            "tsconfig.json"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/tsconfig.json | grep -E 'strict|module|target'",
+            "expected": "\"strict\": true"
+          },
+          "status": "completed",
+          "notes": "Created tsconfig.json with strict mode enabled, ES2020 target, ESNext modules, and Node.js-compatible settings. Follows project patterns from root tsconfig.json, tsconfig.node.json, and tsconfig.web.json."
+        },
+        {
+          "id": "subtask-1-5",
+          "description": "Create initial index.ts with basic structure and imports",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/index.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/index.ts | grep -E 'import|async function run'",
+            "expected": "import * as core"
+          },
+          "status": "completed",
+          "notes": "Created index.ts with GitHub Actions core imports (@actions/core, @actions/github), async run() function as main entry point, basic error handling with try-catch, action input parsing for all configured inputs (glm-api-key, model, max-files, max-tokens, severity, exclude-patterns), GitHub context retrieval, and placeholder for review logic. Fixed TypeScript type annotation for filter parameter. Verification passed: imports and run function confirmed."
+        }
+      ]
+    },
+    {
+      "id": "phase-2-glm-integration",
+      "name": "GLM 4.7 API Integration",
+      "type": "implementation",
+      "description": "Build the GLM 4.7 API client module with authentication, request handling, and error handling.",
+      "depends_on": [
+        "phase-1-setup"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-2-1",
+          "description": "Create GLM 4.7 API client wrapper with authentication",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/glm-client.ts"
+          ],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/index.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/glm-client.ts | grep -E 'class GLMClient|async chat'",
+            "expected": "class GLMClient"
+          },
+          "status": "completed",
+          "notes": "Created GLMClient class with comprehensive error handling, TypeScript interfaces for request/response types, custom GLMError class with specific error codes (AUTHENTICATION_FAILED, RATE_LIMIT_EXCEEDED, INVALID_REQUEST, API_ERROR, NETWORK_ERROR), chat() method for sending message arrays, prompt() convenience method for single prompts, proper error classification in handleError(), validation methods, and configuration options. Fixed zhipuai-sdk-nodejs-v4 version from 1.0.0 to 0.1.12. Used correct API methods (client.createCompletions) and proper type assertions for response handling. TypeScript compilation passes successfully. Updated index.ts to import GLMClient."
+        },
+        {
+          "id": "subtask-2-2",
+          "description": "Implement code review prompt engineering for GLM 4.7",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/prompts.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/prompts.ts | grep -E 'generateReviewPrompt|export'",
+            "expected": "export function generateReviewPrompt"
+          },
+          "status": "completed",
+          "notes": "Created prompts.ts with comprehensive prompt engineering for GLM 4.7 code review. Includes main generateReviewPrompt() function with customizable options (severity levels, focus areas), specialized helper functions (single file, security-focused, quick review), structured output format for consistent review feedback, TypeScript types for all inputs/outputs, and JSDoc documentation. TypeScript compilation passes without errors."
+        },
+        {
+          "id": "subtask-2-3",
+          "description": "Add error handling and retry logic for GLM API calls",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/glm-client.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/glm-client.ts | grep -E 'try|catch|retry'",
+            "expected": "try {\n    catch"
+          },
+          "status": "completed",
+          "notes": "Added comprehensive error handling and retry logic with exponential backoff. Added retry configuration options (maxRetries, retryDelay) to GLMClientOptions interface. Implemented retryAsync() private method that retries failed requests with exponential backoff delay. Updated chat() method to use retry logic. Smart retry behavior: skips retries for authentication and invalid request errors (non-retryable), retries network errors and rate limit issues with configurable max retries (default 3) and exponential backoff. All error handling properly integrated with existing GLMError class."
+        }
+      ]
+    },
+    {
+      "id": "phase-3-github-integration",
+      "name": "GitHub API Integration",
+      "type": "implementation",
+      "description": "Build GitHub API integration for retrieving PR diffs, parsing changes, and posting review comments.",
+      "depends_on": [
+        "phase-1-setup"
+      ],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-3-1",
+          "description": "Create GitHub API client wrapper for PR operations",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/github-client.ts"
+          ],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/index.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/github-client.ts | grep -E 'class GitHubClient|getPR|listFiles'",
+            "expected": "class GitHubClient"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive GitHubClient class with TypeScript interfaces (PullRequest, PullRequestFile, ReviewComment, Review), custom GitHubError class with 6 error codes, 7 main methods (getPR, listFiles, getFileDiff, postReview, postComment, postLineComment, getFileContent), proper error handling for Octokit RequestError types, configuration options, validation methods, and JSDoc documentation. Updated index.ts to import GitHubClient. TypeScript compilation passes. Verification confirmed class and methods exist."
+        },
+        {
+          "id": "subtask-3-2",
+          "description": "Implement diff parser to extract changed code from PR",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/diff-parser.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/diff-parser.ts | grep -E 'parseDiff|extractChanges|export'",
+            "expected": "export function parseDiff"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive diff parser with parseDiff() as main function. Features: unified diff format parsing, binary file detection, merge conflict detection, line number tracking, language detection from file extensions, file filtering by patterns, change extraction, hunk parsing with proper line tracking, summary statistics generation. Custom DiffParserError class with 5 error codes (INVALID_DIFF, BINARY_FILE, MERGE_CONFLICT, FILE_TOO_LARGE, PARSE_ERROR). Helper functions: extractChanges(), getLineRanges(), filterDiffs(), getDiffSummary(). Supports 30+ programming languages. Handles edge cases: empty diffs, binary files, merge conflicts, large diffs, renamed/deleted/new files. TypeScript interfaces: ParsedDiff, DiffHunk, DiffLine, ParseDiffOptions. Verification passed: confirmed export function parseDiff. TypeScript compilation passes without errors."
+        },
+        {
+          "id": "subtask-3-3",
+          "description": "Implement PR comment posting with Markdown formatting",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/comment-formatter.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/comment-formatter.ts | grep -E 'formatComment|markdown|export'",
+            "expected": "export function formatComment"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive comment-formatter.ts with formatComment(), formatLineComment(), formatNoIssuesComment(), countIssuesBySeverity(), and truncateComment() functions. Features include grouped/flat display modes, severity-based organization (critical/high/medium/low), emoji indicators, colored badges, security/performance/best practices sections, configurable options, proper TypeScript types, and JSDoc documentation. TypeScript compilation passes without errors. Verification confirmed: export function formatComment exists."
+        }
+      ]
+    },
+    {
+      "id": "phase-4-review-logic",
+      "name": "Core Review Logic",
+      "type": "implementation",
+      "description": "Build the main code review logic that orchestrates diff retrieval, GLM 4.7 analysis, and comment posting.",
+      "depends_on": [
+        "phase-2-glm-integration",
+        "phase-3-github-integration"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-4-1",
+          "description": "Implement main review orchestrator function",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/review-orchestrator.ts"
+          ],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/index.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/review-orchestrator.ts | grep -E 'async function review|export'",
+            "expected": "export async function reviewPullRequest"
+          },
+          "status": "completed",
+          "notes": "Implemented comprehensive review orchestrator with reviewPullRequest() function. Coordinates entire workflow: gets PR details/files, filters by patterns and limits (maxFiles), parses diffs using diff-parser, generates prompts using prompts.ts, calls GLM 4.7 API via GLMClient, parses structured response into ReviewFeedback, formats comments via comment-formatter, posts to PR via GitHubClient. Includes error handling for GLM/GitHub API errors, posts error comments when appropriate, returns ReviewResult with success/summary/stats. Updated index.ts to import and use orchestrator, pass all action inputs, set outputs (review-completed, issues-found, files-reviewed, review-summary). Fixed GitHub token retrieval to use process.env.GITHUB_TOKEN. TypeScript compilation passes. Verification confirmed: export async function reviewPullRequest exists."
+        },
+        {
+          "id": "subtask-4-2",
+          "description": "Add edge case handling (large PRs, binary files, empty diffs)",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/review-orchestrator.ts",
+            ".github/actions/code-reviewer/diff-parser.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/review-orchestrator.ts | grep -E 'binary|chunking|empty'",
+            "expected": "binary"
+          },
+          "status": "completed",
+          "notes": "Enhanced review-orchestrator.ts with tracking for skipped files (filesSkipped, binaryFilesSkipped), largePRWarning flag, detailed statistics from filterAndParseFiles, and improved empty diff detection. Enhanced diff-parser.ts with EMPTY_DIFF error code, BINARY_EXTENSIONS set for early binary detection, isLikelyBinaryFile() helper, chunkLargeDiff() and shouldChunkDiff() functions, and better early detection of binary files. All verification passed: binary, chunking, and empty keywords found. TypeScript compilation passes without errors."
+        },
+        {
+          "id": "subtask-4-3",
+          "description": "Add rate limiting and exponential backoff for API calls",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/glm-client.ts",
+            ".github/actions/code-reviewer/review-orchestrator.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/glm-client.ts | grep -E 'backoff|delay|rate'",
+            "expected": "backoff"
+          },
+          "status": "completed",
+          "notes": "Verified that exponential backoff and rate limiting are already implemented. GLMClient has retryAsync() method with exponential backoff delay calculation (delay = retryDelay * 2^(attempt-1)), smart retry logic that retries on rate limit errors but skips auth/invalid request errors, and rate limit error detection in handleError(). Review orchestrator initializes GLMClient with retry configuration (maxRetries: 3, retryDelay: 1000). Verification passed: found 'backoff', 'delay', and 'rate' keywords in glm-client.ts."
+        }
+      ]
+    },
+    {
+      "id": "phase-5-testing",
+      "name": "Testing",
+      "type": "implementation",
+      "description": "Create unit, integration, and e2e tests for all components of the code reviewer.",
+      "depends_on": [
+        "phase-4-review-logic"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-5-1",
+          "description": "Create unit tests for GLM client",
+          "service": "github-actions",
+          "files_to_create": [
+            "tests/github-actions/glm-client.test.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "bun test tests/github-actions/glm-client.test.ts",
+            "expected": "Tests pass"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive unit tests for GLM client with 37 test cases covering constructor validation, chat() and prompt() methods, error classification, retry logic with exponential backoff, and helper methods. All tests use mocked ZhipuAI SDK to avoid real API calls. Test file located at .github/actions/code-reviewer/glm-client.test.ts for proper vitest module resolution. Run tests from action directory: cd .github/actions/code-reviewer && bun test glm-client.test.ts. All 37 tests pass successfully."
+        },
+        {
+          "id": "subtask-5-2",
+          "description": "Create unit tests for diff parser",
+          "service": "github-actions",
+          "files_to_create": [
+            "tests/github-actions/diff-parser.test.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "bun test tests/github-actions/diff-parser.test.ts",
+            "expected": "Tests pass"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive unit tests for diff parser with 68 test cases covering: basic diff parsing (simple diffs, multiple hunks, added/removed lines), file state detection (new/deleted/renamed files), line number tracking, language detection for 10+ file extensions, binary file handling, merge conflict detection, file size limits, empty diff handling, exclude patterns with glob matching, hunk limits, edge cases, all helper functions (extractChanges, getLineRanges, filterDiffs, getDiffSummary), chunking functionality (chunkLargeDiff, shouldChunkDiff), and DiffParserError class. All 68 tests pass successfully."
+        },
+        {
+          "id": "subtask-5-3",
+          "description": "Create unit tests for comment formatter",
+          "service": "github-actions",
+          "files_to_create": [
+            "tests/github-actions/comment-formatter.test.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "bun test tests/github-actions/comment-formatter.test.ts",
+            "expected": "Tests pass"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive unit tests for comment-formatter.ts with 47 test cases covering: formatComment() with various options (groupBySeverity, includeLineNumbers, maxIssuesPerSeverity), severity grouping and ordering, badges and emojis, line number formatting, reason field handling, additional sections (security, performance, best practices, positive feedback), formatLineComment() for all severity levels, formatNoIssuesComment() scenarios, countIssuesBySeverity() edge cases, truncateComment() for GitHub size limits, and edge cases (special characters, Unicode, long text). All 47 tests pass successfully."
+        },
+        {
+          "id": "subtask-5-4",
+          "description": "Create integration tests for GitHub API",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/github-api.integration.test.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd .github/actions/code-reviewer && bun test github-api.integration.test.ts",
+            "expected": "Tests pass"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive integration tests for GitHub API with 46 test cases covering: constructor validation, getPR() success/error cases, listFiles() with various file states, getFileDiff() with edge cases, postReview() with all event types (COMMENT/APPROVE/REQUEST_CHANGES), postComment() with multi-line content, postLineComment() with single and multi-line comments, getFileContent() with encoding and Unicode, error classification for all GitHub error codes (401/403/404/422/429), network error handling, and complete workflow scenarios. Test file located in action directory (.github/actions/code-reviewer/) to properly resolve @actions/github dependencies. All 46 tests pass successfully."
+        },
+        {
+          "id": "subtask-5-5",
+          "description": "Create e2e test for full review workflow",
+          "service": "github-actions",
+          "files_to_create": [
+            "tests/github-actions/e2e-review.test.ts"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "bun test tests/github-actions/e2e-review.test.ts",
+            "expected": "Tests pass"
+          },
+          "status": "completed",
+          "notes": "Created comprehensive e2e tests for full review workflow with 11 test cases covering: Simple PR Review (2 tests - full workflow with issues, no issues scenario), Multi-file PR (3 files with multiple severity levels), Large PR Handling (2 tests - exceeding max files limit, binary file filtering and exclude patterns), Error Handling (3 tests - GLM API authentication errors, empty PRs, PRs with only deleted files, GitHub API error handling infrastructure), Configuration Options (2 tests - custom severity levels, security/performance/best practices sections). Tests mock both ZhipuAI SDK and GitHub APIs to simulate real workflow without external dependencies. Test file located in action directory (.github/actions/code-reviewer/e2e-review.test.ts) for proper module mocking. Run with: cd .github/actions/code-reviewer && bun test e2e-review.test.ts. All 11 tests pass successfully."
+        }
+      ]
+    },
+    {
+      "id": "phase-6-integration",
+      "name": "Integration and Verification",
+      "type": "integration",
+      "description": "Bundle the action, update workflow configuration, add documentation, and verify end-to-end functionality.",
+      "depends_on": [
+        "phase-5-testing"
+      ],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-6-1",
+          "description": "Add bundling setup (vercel/ncc or esbuild) for action distribution",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [
+            ".github/actions/code-reviewer/package.json"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/package.json | grep -E 'ncc|esbuild|bundle'",
+            "expected": "@vercel/ncc"
+          },
+          "status": "completed",
+          "notes": "Bundling setup with @vercel/ncc already fully configured in package.json. Includes: @vercel/ncc v0.38.3 in devDependencies, build script 'ncc build index.ts -o dist --source-map --license licenses.txt', and main entry pointing to dist/index.js. No changes needed - verification passed successfully."
+        },
+        {
+          "id": "subtask-6-2",
+          "description": "Bundle TypeScript to single JavaScript file",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/dist/index.js"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "ls -la .github/actions/code-reviewer/dist/index.js && cat .github/actions/code-reviewer/dist/index.js | head -20",
+            "expected": "index.js exists and is bundled"
+          },
+          "status": "completed",
+          "notes": "Successfully bundled TypeScript source files to single JavaScript file using @vercel/ncc (version 0.38.4). Generated dist/index.js (1.7MB) with all dependencies and modules bundled. Also created source map (index.js.map, 1.9MB), licenses.txt (90kB), package.json, and sourcemap-register.cjs for proper source map support. All files committed to repository (force-added despite .gitignore) as required by GitHub Actions. Build completed in 20.4 seconds with no errors."
+        },
+        {
+          "id": "subtask-6-3",
+          "description": "Update workflow to use bundled action and configure secrets",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [
+            ".github/workflows/code-review.yml"
+          ],
+          "patterns_from": [
+            ".github/workflows/pr-validation.yml"
+          ],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/workflows/code-review.yml | grep -E 'GLM_API_KEY|permissions:|uses:'",
+            "expected": "GLM_API_KEY"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-6-4",
+          "description": "Create comprehensive README.md with usage instructions",
+          "service": "github-actions",
+          "files_to_create": [
+            ".github/actions/code-reviewer/README.md"
+          ],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cat .github/actions/code-reviewer/README.md | grep -E 'Usage|Setup|GLM_API_KEY'",
+            "expected": "Usage"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-6-5",
+          "description": "Run full test suite and verify all tests pass",
+          "service": "github-actions",
+          "files_to_create": [],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "bun run test",
+            "expected": "All tests pass"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-6-6",
+          "description": "End-to-end verification: Create test PR and verify review comments",
+          "all_services": true,
+          "files_to_create": [],
+          "files_to_modify": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "e2e",
+            "steps": [
+              "Create a test pull request in the repository",
+              "Verify GitHub Action triggers automatically",
+              "Check Actions tab for successful workflow run",
+              "Verify code review comment appears on PR",
+              "Verify comment contains specific line references",
+              "Verify comment provides actionable feedback"
+            ]
+          },
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_phases": 6,
+    "total_subtasks": 28,
+    "services_involved": [
+      "github-actions"
+    ],
+    "parallelism": {
+      "max_parallel_phases": 2,
+      "parallel_groups": [
+        {
+          "phases": [
+            "phase-2-glm-integration",
+            "phase-3-github-integration"
+          ],
+          "reason": "Both depend only on phase-1-setup and work on different components (GLM API vs GitHub API)"
+        }
+      ],
+      "recommended_workers": 2,
+      "speedup_estimate": "1.3x faster than sequential"
+    },
+    "startup_command": "source auto-claude/.venv/bin/activate && python auto-claude/run.py --spec 004 --parallel 2"
+  },
+  "verification_strategy": {
+    "risk_level": "high",
+    "skip_validation": false,
+    "test_creation_phase": "phase-5-testing",
+    "test_types_required": [
+      "unit",
+      "integration",
+      "e2e"
+    ],
+    "security_scanning_required": true,
+    "staging_deployment_required": true,
+    "acceptance_criteria": [
+      "All existing tests pass",
+      "New code has unit test coverage",
+      "Integration tests verify GitHub API and GLM API interactions",
+      "E2E tests verify full workflow from PR trigger to comment posting",
+      "No security vulnerabilities detected (API keys not exposed)",
+      "Action works correctly on test PRs"
+    ],
+    "verification_steps": [
+      {
+        "name": "Unit Tests",
+        "command": "bun test tests/github-actions/*.test.ts --exclude=*.integration.test.ts --exclude=*.e2e.test.ts",
+        "expected_outcome": "All unit tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Integration Tests",
+        "command": "bun test tests/github-actions/*.integration.test.ts",
+        "expected_outcome": "All integration tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "E2E Tests",
+        "command": "bun test tests/github-actions/*.e2e.test.ts",
+        "expected_outcome": "All e2e tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "TypeScript Compilation",
+        "command": "cd .github/actions/code-reviewer && npx tsc --noEmit",
+        "expected_outcome": "No type errors",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "ESLint",
+        "command": "eslint .github/actions/code-reviewer/**/*.ts",
+        "expected_outcome": "No linting errors",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Security Scan - Secrets",
+        "command": "python auto-claude/scan_secrets.py --all-files --json",
+        "expected_outcome": "No secrets detected in action code",
+        "type": "security",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Action Bundle Verification",
+        "command": "ls -la .github/actions/code-reviewer/dist/index.js && wc -l .github/actions/code-reviewer/dist/index.js",
+        "expected_outcome": "Bundled file exists and is non-empty",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "High risk change involving API key handling, external API integration, and GitHub Actions deployment. Requires comprehensive testing at unit, integration, and e2e levels. Security scanning is critical to ensure API keys are not exposed."
+  },
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": [
+        "bun test tests/github-actions/glm-client.test.ts",
+        "bun test tests/github-actions/diff-parser.test.ts",
+        "bun test tests/github-actions/comment-formatter.test.ts"
+      ],
+      "minimum_coverage": 80
+    },
+    "integration_tests": {
+      "required": true,
+      "commands": [
+        "bun test tests/github-actions/github-api.integration.test.ts"
+      ],
+      "services_to_test": [
+        "github-actions",
+        "glm-api",
+        "github-api"
+      ]
+    },
+    "e2e_tests": {
+      "required": true,
+      "commands": [
+        "bun test tests/github-actions/e2e-review.test.ts"
+      ],
+      "flows": [
+        "pr-creation-to-review-comment"
+      ]
+    },
+    "browser_verification": {
+      "required": false,
+      "pages": []
+    },
+    "database_verification": {
+      "required": false,
+      "checks": []
+    },
+    "workflow_verification": {
+      "required": true,
+      "checks": [
+        {
+          "name": "Workflow file exists",
+          "command": "cat .github/workflows/code-review.yml",
+          "expected": "Valid YAML with correct triggers"
+        },
+        {
+          "name": "Node.js version specified",
+          "command": "grep -A5 'actions/setup-node' .github/workflows/code-review.yml",
+          "expected": "Explicit Node version (20)"
+        },
+        {
+          "name": "Action metadata valid",
+          "command": "cat .github/actions/code-reviewer/action.yml",
+          "expected": "Valid action.yml with inputs defined"
+        },
+        {
+          "name": "Action bundle created",
+          "command": "ls -la .github/actions/code-reviewer/dist/index.js",
+          "expected": "Bundled JavaScript exists"
+        },
+        {
+          "name": "Dependencies installed",
+          "command": "cat .github/actions/code-reviewer/package.json",
+          "expected": "All required packages listed"
+        },
+        {
+          "name": "TypeScript compiles",
+          "command": "cd .github/actions/code-reviewer && npx tsc --noEmit",
+          "expected": "No type errors"
+        },
+        {
+          "name": "Tests pass",
+          "command": "bun run test",
+          "expected": "All tests passing"
+        }
+      ]
+    }
+  },
+  "qa_signoff": null,
+  "planStatus": "in_progress"
+}
