@@ -40,6 +40,9 @@ export interface ReviewResult {
   summary: string
   filesReviewed: number
   totalFiles: number
+  filesSkipped?: number
+  binaryFilesSkipped?: number
+  largePRWarning?: boolean
   error?: string
 }
 
@@ -117,7 +120,7 @@ export async function reviewPullRequest(
     }
 
     // Step 3: Filter files and parse diffs
-    const reviewFiles = await filterAndParseFiles(
+    const filterResult = await filterAndParseFiles(
       files,
       githubClient,
       pullNumber,
@@ -125,18 +128,23 @@ export async function reviewPullRequest(
       excludePatterns
     )
 
-    if (reviewFiles.length === 0) {
+    if (filterResult.reviewFiles.length === 0) {
       return {
         success: true,
         issuesFound: 0,
         summary: 'No reviewable files after filtering (binary files, excluded patterns, or empty diffs)',
         filesReviewed: 0,
-        totalFiles: files.length
+        totalFiles: files.length,
+        filesSkipped: filterResult.filesSkipped,
+        binaryFilesSkipped: filterResult.binaryFilesSkipped
       }
     }
 
+    // Check if this is a large PR (files were skipped due to limit)
+    const isLargePR = filterResult.filesSkipped > 0 || filterResult.binaryFilesSkipped > 0
+
     // Step 4: Generate review prompt
-    const codeChanges: CodeChangeContext[] = reviewFiles.map((file) => ({
+    const codeChanges: CodeChangeContext[] = filterResult.reviewFiles.map((file) => ({
       filePath: file.filePath,
       diff: file.patch || '',
       language: file.language
@@ -180,8 +188,11 @@ export async function reviewPullRequest(
       success: true,
       issuesFound,
       summary: feedback.summary,
-      filesReviewed: reviewFiles.length,
-      totalFiles: files.length
+      filesReviewed: filterResult.reviewFiles.length,
+      totalFiles: files.length,
+      filesSkipped: filterResult.filesSkipped,
+      binaryFilesSkipped: filterResult.binaryFilesSkipped,
+      largePRWarning: isLargePR
     }
   } catch (error) {
     return handleError(error, pullNumber, githubClient)
@@ -196,7 +207,7 @@ export async function reviewPullRequest(
  * @param pullNumber - Pull request number
  * @param maxFiles - Maximum number of files to review
  * @param excludePatterns - File patterns to exclude
- * @returns Promise resolving to filtered and parsed files
+ * @returns Promise resolving to filtered and parsed files with statistics
  */
 async function filterAndParseFiles(
   files: Array<{
@@ -208,19 +219,24 @@ async function filterAndParseFiles(
   pullNumber: number,
   maxFiles: number,
   excludePatterns: string[]
-): Promise<
-  Array<{
+): Promise<{
+  reviewFiles: Array<{
     filePath: string
     patch: string | null | undefined
     language?: string
   }>
->
+  filesSkipped: number
+  binaryFilesSkipped: number
+}>
 {
   const reviewFiles: Array<{
     filePath: string
     patch: string | null | undefined
     language?: string
   }> = []
+
+  let filesSkipped = 0
+  let binaryFilesSkipped = 0
 
   // Sort files by status (prioritize added/modified)
   const sortedFiles = [...files].sort((a, b) => {
@@ -233,17 +249,21 @@ async function filterAndParseFiles(
   for (const file of sortedFiles) {
     // Stop if we've reached the max files limit
     if (reviewFiles.length >= maxFiles) {
+      // Count remaining files as skipped
+      filesSkipped += sortedFiles.length - sortedFiles.indexOf(file)
       break
     }
 
     try {
       // Skip deleted files
-      if (file.status === 'removed' || !file.patch) {
+      if (file.status === 'removed' || !file.patch || file.patch.trim().length === 0) {
+        filesSkipped++
         continue
       }
 
       // Skip if file matches exclude patterns
       if (shouldExcludeFile(file.filename, excludePatterns)) {
+        filesSkipped++
         continue
       }
 
@@ -254,7 +274,14 @@ async function filterAndParseFiles(
       })
 
       // Skip if parsing failed or file is binary
-      if (!parsedDiff || parsedDiff.isBinary) {
+      if (!parsedDiff) {
+        filesSkipped++
+        continue
+      }
+
+      if (parsedDiff.isBinary) {
+        binaryFilesSkipped++
+        filesSkipped++
         continue
       }
 
@@ -267,13 +294,20 @@ async function filterAndParseFiles(
     } catch (error) {
       // Log error but continue processing other files
       if (error instanceof DiffParserError) {
-        // Skip files with parsing errors (binary, conflicts, etc.)
-        continue
+        // Track specific error types
+        if (error.code === 'BINARY_FILE') {
+          binaryFilesSkipped++
+        }
+        filesSkipped++
       }
     }
   }
 
-  return reviewFiles
+  return {
+    reviewFiles,
+    filesSkipped,
+    binaryFilesSkipped
+  }
 }
 
 /**

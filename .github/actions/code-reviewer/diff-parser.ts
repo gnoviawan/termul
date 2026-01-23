@@ -63,6 +63,7 @@ export const DiffParserErrorCodes = {
   BINARY_FILE: 'BINARY_FILE',
   MERGE_CONFLICT: 'MERGE_CONFLICT',
   FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  EMPTY_DIFF: 'EMPTY_DIFF',
   PARSE_ERROR: 'PARSE_ERROR'
 } as const
 
@@ -81,6 +82,54 @@ export class DiffParserError extends Error {
     this.name = 'DiffParserError'
   }
 }
+
+/**
+ * Common binary file extensions
+ */
+const BINARY_EXTENSIONS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'bmp',
+  'ico',
+  'svg',
+  'webp',
+  'pdf',
+  'zip',
+  'tar',
+  'gz',
+  'rar',
+  '7z',
+  'exe',
+  'dll',
+  'so',
+  'dylib',
+  'bin',
+  'dat',
+  'db',
+  'sqlite',
+  'woff',
+  'woff2',
+  'ttf',
+  'eot',
+  'mp3',
+  'mp4',
+  'avi',
+  'mov',
+  'wav',
+  'flac',
+  'ogg',
+  'class',
+  'jar',
+  'war',
+  'ear',
+  'swf',
+  'flv',
+  'pyc',
+  'pyo',
+  'node'
+])
 
 /**
  * Language detection based on file extension
@@ -118,6 +167,17 @@ const LANGUAGE_MAP: Record<string, string> = {
 }
 
 /**
+ * Check if a file is likely binary based on extension
+ *
+ * @param filePath - Path to the file
+ * @returns true if file has a binary extension
+ */
+function isLikelyBinaryFile(filePath: string): boolean {
+  const ext = filePath.split('.').pop()?.toLowerCase()
+  return ext ? BINARY_EXTENSIONS.has(ext) : false
+}
+
+/**
  * Parse a unified diff string into structured data
  *
  * @param diff - The unified diff string from GitHub API
@@ -134,6 +194,28 @@ export function parseDiff(
   // Handle null or empty diff
   if (!diff || diff.trim().length === 0) {
     return null
+  }
+
+  // Early binary file detection by extension
+  if (isLikelyBinaryFile(filePath)) {
+    if (!options.includeBinary) {
+      throw new DiffParserError(
+        'Binary file detected (by extension) and excluded',
+        DiffParserErrorCodes.BINARY_FILE,
+        filePath
+      )
+    }
+    return {
+      filePath,
+      isNew: false,
+      isDeleted: false,
+      isBinary: true,
+      isRename: false,
+      hunks: [],
+      language: detectLanguage(filePath),
+      additions: 0,
+      deletions: 0
+    }
   }
 
   const opts = {
@@ -180,6 +262,18 @@ export function parseDiff(
     throw new DiffParserError(
       `Diff size (${diff.length} bytes) exceeds maximum (${opts.maxFileSize} bytes)`,
       DiffParserErrorCodes.FILE_TOO_LARGE,
+      filePath
+    )
+  }
+
+  // Check for empty diff (only headers, no actual changes)
+  const hasChanges = diff.split('\n').some(
+    (line) => line.startsWith('+') || line.startsWith('-')
+  )
+  if (!hasChanges) {
+    throw new DiffParserError(
+      'Empty diff detected (no actual changes)',
+      DiffParserErrorCodes.EMPTY_DIFF,
       filePath
     )
   }
@@ -493,4 +587,55 @@ export function getDiffSummary(diffs: ParsedDiff[]): {
     ...summary,
     languages: Array.from(languages)
   }
+}
+
+/**
+ * Chunk a large diff into smaller pieces for processing
+ *
+ * @param diff - The parsed diff to chunk
+ * @param maxHunksPerChunk - Maximum hunks per chunk (default: 50)
+ * @returns Array of chunked diffs
+ */
+export function chunkLargeDiff(
+  diff: ParsedDiff,
+  maxHunksPerChunk: number = 50
+): ParsedDiff[] {
+  if (diff.hunks.length <= maxHunksPerChunk) {
+    return [diff]
+  }
+
+  const chunks: ParsedDiff[] = []
+  const totalChunks = Math.ceil(diff.hunks.length / maxHunksPerChunk)
+
+  for (let i = 0; i < totalChunks; i++) {
+    const startIdx = i * maxHunksPerChunk
+    const endIdx = Math.min(startIdx + maxHunksPerChunk, diff.hunks.length)
+    const chunkHunks = diff.hunks.slice(startIdx, endIdx)
+
+    const chunk: ParsedDiff = {
+      ...diff,
+      hunks: chunkHunks,
+      additions: chunkHunks.reduce((sum, hunk) => {
+        return sum + hunk.lines.filter((l) => l.type === 'added').length
+      }, 0),
+      deletions: chunkHunks.reduce((sum, hunk) => {
+        return sum + hunk.lines.filter((l) => l.type === 'removed').length
+      }, 0)
+    }
+
+    chunks.push(chunk)
+  }
+
+  return chunks
+}
+
+/**
+ * Check if a diff is too large and should be chunked
+ *
+ * @param diff - The parsed diff to check
+ * @param maxHunks - Maximum hunks before chunking is recommended
+ * @returns true if diff should be chunked
+ */
+export function shouldChunkDiff(diff: ParsedDiff, maxHunks: number = 50): boolean {
+  return diff.hunks.length > maxHunks
 }
