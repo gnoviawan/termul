@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "006-implement-virtual-scrolling-for-command-history-mo",
+  "state": "planning",
+  "subtasks": {
+    "completed": 0,
+    "total": 0,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Setup - Install react-virtuoso",
+    "id": null,
+    "total": 1
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 2,
+    "started_at": "2026-01-23T19:34:08.221652"
+  },
+  "last_update": "2026-01-23T19:36:48.150766"
+}
