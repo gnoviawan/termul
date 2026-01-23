@@ -1,0 +1,42 @@
+name: 'Code Reviewer'
+description: 'Automated code review using GLM 4.7'
+
+inputs:
+  glm-api-key:
+    description: 'API key for Zhipu AI GLM 4.7 API'
+    required: true
+  model:
+    description: 'GLM model to use for code review'
+    required: false
+    default: 'glm-4.7'
+  max-files:
+    description: 'Maximum number of files to review in a single PR'
+    required: false
+    default: '10'
+  max-tokens:
+    description: 'Maximum tokens to use per API call'
+    required: false
+    default: '16000'
+  severity:
+    description: 'Minimum severity level for issues to report (error, warning, info)'
+    required: false
+    default: 'warning'
+  exclude-patterns:
+    description: 'Comma-separated list of file patterns to exclude from review (e.g., *.min.js,*.lock)'
+    required: false
+    default: '*.min.js,*.lock,package-lock.json,yarn.lock'
+
+outputs:
+  review-completed:
+    description: 'Whether the code review was completed successfully'
+    value: ${{ steps.review.outputs.review-completed }}
+  issues-found:
+    description: 'Number of issues found during review'
+    value: ${{ steps.review.outputs.issues-found }}
+  review-summary:
+    description: 'Summary of the code review results'
+    value: ${{ steps.review.outputs.review-summary }}
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
