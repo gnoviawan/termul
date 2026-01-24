@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom'
 import { vi, type Mock } from 'vitest'
+import React from 'react'
 
 // Type definition for mock electron object
 export interface MockElectron {
@@ -184,7 +185,6 @@ vi.mock('../main/menu', () => ({
 
 // Mock react-virtuoso to render items directly in tests
 vi.mock('react-virtuoso', () => {
-  const React = require('react')
   const VirtuosoComponent = React.forwardRef(
     (
       {
