@@ -102,7 +102,7 @@ Since this is an Electron application, the following manual verification steps s
 ### Architecture Review ✅
 
 **Data Flow**:
-```
+```text
 Terminal Output (PTY)
     → IPC: window.api.terminal.onData
     → ConnectedTerminal Component
