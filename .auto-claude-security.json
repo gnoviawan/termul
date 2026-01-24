@@ -196,8 +196,8 @@
     "cargo_aliases": [],
     "shell_scripts": []
   },
-  "project_dir": "/Users/ajianaz/Ngoding/project-latest/termul",
+  "project_dir": "<project_root>",
   "created_at": "2026-01-23T19:11:18.075535",
   "project_hash": "0c7b5b6161367f35d12875b2f64b1f58",
-  "inherited_from": "/Users/ajianaz/Ngoding/project-latest/termul"
+  "inherited_from": "<project_root>"
 }

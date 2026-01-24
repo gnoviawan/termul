@@ -28,11 +28,12 @@ All components have been successfully implemented for the visual activity indica
 #### 4. Visual Indicator Component ✅
 - **File**: `src/renderer/components/terminal/ActivityIndicator.tsx`
 - **Implementation**: Created pulsing dot animation using framer-motion:
-  - Smooth scale animation: `[1, 1.2, 1]`
-  - Opacity animation: `[1, 0.7, 1]`
-  - Duration: 1.5 seconds, infinite loop
+  - **Standard animation**: scale `[1, 1.15, 1]`, opacity `[1, 0.75, 1]`, duration `2 seconds`
+  - **Reduced motion**: scale `[1, 1.1, 1]`, opacity `[1, 0.85, 1]`, duration `3 seconds`
+  - Infinite loop with `easeInOut` transition
   - Color: Primary theme color
   - Accessibility: Includes `aria-label="Terminal has activity"`
+  - Respects `prefers-reduced-motion` media query
 
 #### 5. UI Integration ✅
 - **File**: `src/renderer/components/TerminalTabBar.tsx`
@@ -139,4 +140,4 @@ The activity indicator feature has been fully implemented according to the speci
 
 **Status**: ✅ **READY FOR MANUAL TESTING**
 
-The application is currently running on http://localhost:5175/ and ready for manual verification using the test scenarios outlined above.
+The application is currently running on [http://localhost:5175/](http://localhost:5175/) and ready for manual verification using the test scenarios outlined above.
