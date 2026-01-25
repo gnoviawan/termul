@@ -54,3 +54,8 @@ docs/adr/
 .worktrees/
 .security-key
 logs/security/
+
+# Transient verification files (E2E reports, checklists)
+E2E_VERIFICATION_REPORT.md
+VERIFICATION_CHECKLIST.md
+*_VERIFICATION*.md
