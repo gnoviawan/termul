@@ -6,6 +6,7 @@ import type { DetectedShells } from '@shared/types/ipc.types'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
+import { Skeleton } from '@/components/ui/skeleton'
 
 interface NewProjectModalProps {
   isOpen: boolean
@@ -197,29 +198,30 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
                   Default Terminal
                 </label>
-                <div className="relative">
-                  <select
-                    value={selectedShell}
-                    onChange={(e) => setSelectedShell(e.target.value)}
-                    disabled={shellsLoading}
-                    className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer disabled:opacity-50"
-                  >
-                    {shellsLoading ? (
-                      <option value="">Loading shells...</option>
-                    ) : shells?.available && shells.available.length > 0 ? (
-                      shells.available.map((shell) => (
-                        <option key={shell.name} value={shell.name}>
-                          {shell.displayName}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No shells detected</option>
-                    )}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                    <ChevronDown size={14} />
+                {shellsLoading ? (
+                  <Skeleton className="w-full h-9 rounded" />
+                ) : (
+                  <div className="relative">
+                    <select
+                      value={selectedShell}
+                      onChange={(e) => setSelectedShell(e.target.value)}
+                      className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                    >
+                      {shells?.available && shells.available.length > 0 ? (
+                        shells.available.map((shell) => (
+                          <option key={shell.name} value={shell.name}>
+                            {shell.displayName}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No shells detected</option>
+                      )}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+                      <ChevronDown size={14} />
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
 

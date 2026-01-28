@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom'
 import { vi, type Mock } from 'vitest'
+import React from 'react'
 
 // Type definition for mock electron object
 export interface MockElectron {
@@ -181,4 +182,34 @@ vi.mock('../main/menu', () => ({
   setupMenu: vi.fn(),
   setMainWindow: vi.fn()
 }))
+
+// Mock react-virtuoso to render items directly in tests
+vi.mock('react-virtuoso', () => {
+  const VirtuosoComponent = React.forwardRef(
+    (
+      {
+        data,
+        itemContent
+      }: {
+        data: unknown[]
+        itemContent: (index: number, item: unknown) => React.JSX.Element
+      },
+      _ref: React.Ref<unknown>
+    ) => {
+      return React.createElement(
+        'div',
+        { 'data-testid': 'virtuoso-scroller', 'data-virtuoso-scroller': 'true' },
+        React.createElement(
+          'div',
+          { 'data-testid': 'virtuoso-item-list' },
+          data.map((item, index) =>
+            React.createElement('div', { key: index }, itemContent(index, item))
+          )
+        )
+      )
+    }
+  )
+  VirtuosoComponent.displayName = 'Virtuoso'
+  return { Virtuoso: VirtuosoComponent }
+})
 

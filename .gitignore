@@ -46,3 +46,16 @@ tmpclaude-*
 
 # ADR documentation
 docs/adr/
+
+# Auto Claude generated files
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.worktrees/
+.security-key
+logs/security/
+
+# Transient verification files (E2E reports, checklists)
+E2E_VERIFICATION_REPORT.md
+VERIFICATION_CHECKLIST.md
+*_VERIFICATION*.md

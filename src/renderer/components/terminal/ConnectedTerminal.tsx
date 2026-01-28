@@ -17,6 +17,7 @@ import {
   useKeyboardShortcutsStore,
   normalizeKeyEvent
 } from '@/stores/keyboard-shortcuts-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -80,6 +81,8 @@ function ConnectedTerminalComponent({
   const currentLineRef = useRef<string>('')
   // Resize debounce timer ref
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Activity timeout timer ref
+  const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Sync ptyIdRef with external terminal ID when provided
   useEffect(() => {
@@ -299,6 +302,22 @@ function ConnectedTerminalComponent({
     cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
+        // Update activity state in store
+        const terminal = useTerminalStore.getState().findTerminalByPtyId(id)
+        if (terminal) {
+          useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
+          useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, Date.now())
+
+          // Clear existing activity timeout and set new one
+          if (activityTimeoutRef.current) {
+            clearTimeout(activityTimeoutRef.current)
+          }
+          activityTimeoutRef.current = setTimeout(() => {
+            // Clear activity after 2 seconds of inactivity
+            useTerminalStore.getState().updateTerminalActivity(terminal.id, false)
+            activityTimeoutRef.current = null
+          }, 2000)
+        }
       }
     })
 
@@ -390,12 +409,17 @@ function ConnectedTerminalComponent({
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current)
       }
+      // Clean up activity timeout timer
+      if (activityTimeoutRef.current) {
+        clearTimeout(activityTimeoutRef.current)
+      }
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [
     externalTerminalId,
     memoizedSpawnOptions,
@@ -406,7 +430,6 @@ function ConnectedTerminalComponent({
     handleResize,
     initialScrollback,
     bufferSize
-    // fontFamily and fontSize intentionally excluded - handled by separate effect below
   ])
 
   // Update terminal font settings when app settings change (without recreating terminal)
