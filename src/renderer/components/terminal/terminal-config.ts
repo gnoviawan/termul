@@ -15,6 +15,7 @@ export const TERMINAL_THEME: ITheme = {
   cursorAccent: '#000000',
   selectionBackground: '#264f78',
   selectionForeground: '#ffffff',
+  selectionInactiveBackground: '#3a3d41',
   black: '#000000',
   red: '#cd3131',
   green: '#0dbc79',
@@ -43,7 +44,9 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   allowTransparency: false,
   scrollback: 10000,
   tabStopWidth: 4,
-  convertEol: false
+  convertEol: false,
+  rightClickSelectsWord: true,
+  screenReaderMode: true
 }
 
 /**

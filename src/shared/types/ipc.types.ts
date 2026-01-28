@@ -70,6 +70,7 @@ export const IpcErrorCodes = {
   RESIZE_FAILED: 'RESIZE_FAILED',
   KILL_FAILED: 'KILL_FAILED',
   DIALOG_CANCELED: 'DIALOG_CANCELED',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
   UNKNOWN_ERROR: 'UNKNOWN_ERROR'
 } as const
 
@@ -116,4 +117,10 @@ export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal
 // Keyboard API for renderer
 export interface KeyboardApi {
   onShortcut: (callback: KeyboardShortcutCallback) => () => void
+}
+
+// Clipboard API for renderer
+export interface ClipboardApi {
+  readText: () => Promise<IpcResult<string>>
+  writeText: (text: string) => Promise<IpcResult<void>>
 }

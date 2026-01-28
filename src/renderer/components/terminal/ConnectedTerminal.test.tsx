@@ -14,7 +14,12 @@ const mockTerminalInstance = {
     capturedResizeCallback = cb
     return { dispose: vi.fn() }
   }),
+  onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
   attachCustomKeyEventHandler: vi.fn(),
+  hasSelection: vi.fn(() => false),
+  getSelection: vi.fn(() => ''),
+  selectAll: vi.fn(),
+  paste: vi.fn(),
   write: vi.fn(),
   clear: vi.fn(),
   focus: vi.fn(),
@@ -49,7 +54,12 @@ vi.mock('@xterm/xterm', () => ({
     open = mockTerminalInstance.open
     onData = mockTerminalInstance.onData
     onResize = mockTerminalInstance.onResize
+    onSelectionChange = mockTerminalInstance.onSelectionChange
     attachCustomKeyEventHandler = mockTerminalInstance.attachCustomKeyEventHandler
+    hasSelection = mockTerminalInstance.hasSelection
+    getSelection = mockTerminalInstance.getSelection
+    selectAll = mockTerminalInstance.selectAll
+    paste = mockTerminalInstance.paste
     write = mockTerminalInstance.write
     clear = mockTerminalInstance.clear
     focus = mockTerminalInstance.focus
@@ -96,6 +106,11 @@ const mockTerminalApi = {
   })
 }
 
+const mockClipboardApi = {
+  readText: vi.fn<() => Promise<{ success: boolean; data?: string; error?: string }>>(),
+  writeText: vi.fn<() => Promise<{ success: boolean; error?: string }>>()
+}
+
 let capturedDataCallback: ((id: string, data: string) => void) | null = null
 let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
 
@@ -111,6 +126,7 @@ const mockTerminalApiWithMocks = mockTerminalApi as unknown as typeof mockTermin
 Object.defineProperty(window, 'api', {
   value: {
     terminal: mockTerminalApiWithMocks,
+    clipboard: mockClipboardApi,
     persistence: {
       read: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
       write: vi.fn(() => Promise.resolve({ success: true }))
@@ -137,6 +153,14 @@ describe('ConnectedTerminal', () => {
     })
     mockTerminalApiWithMocks.write.mockResolvedValue({ success: true, data: undefined })
     mockTerminalApiWithMocks.resize.mockResolvedValue({ success: true, data: undefined })
+
+    // Reset clipboard mocks
+    mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
+    mockClipboardApi.writeText.mockResolvedValue({ success: true })
+
+    // Reset terminal selection mocks
+    mockTerminalInstance.hasSelection.mockReturnValue(false)
+    mockTerminalInstance.getSelection.mockReturnValue('')
   })
 
   afterEach(() => {
@@ -573,6 +597,212 @@ describe('ConnectedTerminal', () => {
 
       // At least one fit should happen before spawn
       expect(fitIndices.some((idx) => idx < spawnIndex)).toBe(true)
+    })
+  })
+
+  describe('Clipboard functionality', () => {
+    it('should set up clipboard keyboard handlers', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+    })
+
+    it('should copy selection to clipboard on Ctrl+C when text is selected', async () => {
+      const selectedText = 'Hello, World!'
+      mockTerminalInstance.hasSelection.mockReturnValue(true)
+      mockTerminalInstance.getSelection.mockReturnValue(selectedText)
+      mockClipboardApi.writeText.mockResolvedValue({ success: true })
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      // Get the registered handler
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Simulate Ctrl+C with selection
+      const event = new KeyboardEvent('keydown', {
+        key: 'c',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Should prevent xterm from handling
+      expect(result).toBe(false)
+
+      // Should write to clipboard via the hook
+      await vi.waitFor(() => {
+        expect(mockClipboardApi.writeText).toHaveBeenCalledWith(selectedText)
+      })
+    })
+
+    it('should allow Ctrl+C interrupt when no selection exists', async () => {
+      mockTerminalInstance.hasSelection.mockReturnValue(false)
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'c',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Should allow xterm to handle (for interrupt signal)
+      expect(result).toBe(true)
+      expect(mockClipboardApi.writeText).not.toHaveBeenCalled()
+    })
+
+    it('should paste from clipboard on Ctrl+V', async () => {
+      const clipboardText = 'Pasted content'
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'v',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Should prevent xterm from handling
+      expect(result).toBe(false)
+
+      // Should read from clipboard and paste via the hook
+      await vi.waitFor(() => {
+        expect(mockClipboardApi.readText).toHaveBeenCalled()
+      })
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.paste).toHaveBeenCalledWith(clipboardText)
+      })
+    })
+
+    it('should select all on Ctrl+A', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'a',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Should prevent xterm from handling
+      expect(result).toBe(false)
+      expect(mockTerminalInstance.selectAll).toHaveBeenCalled()
+    })
+
+    it('should handle Cmd key on macOS for copy/paste', async () => {
+      const selectedText = 'Selected text'
+      mockTerminalInstance.hasSelection.mockReturnValue(true)
+      mockTerminalInstance.getSelection.mockReturnValue(selectedText)
+      mockClipboardApi.writeText.mockResolvedValue({ success: true })
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Simulate Cmd+C (metaKey on Mac)
+      const event = new KeyboardEvent('keydown', {
+        key: 'c',
+        metaKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+      await vi.waitFor(() => {
+        expect(mockClipboardApi.writeText).toHaveBeenCalledWith(selectedText)
+      })
+    })
+
+    it('should not handle clipboard shortcuts for non-keydown events', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Simulate keyup event
+      const event = new KeyboardEvent('keyup', {
+        key: 'c',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Should allow xterm to handle
+      expect(result).toBe(true)
+    })
+
+    it('should not interfere with other keyboard shortcuts', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Regular typing
+      const event = new KeyboardEvent('keydown', {
+        key: 'x',
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+    })
+  })
+
+  describe('Context menu', () => {
+    it('should render terminal container', async () => {
+      const { container } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      // Terminal container should be in the DOM
+      expect(container.querySelector('div')).toBeTruthy()
     })
   })
 })
