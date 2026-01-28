@@ -5,7 +5,8 @@ import type {
   PersistenceApi,
   DialogApi,
   SystemApi,
-  KeyboardApi
+  KeyboardApi,
+  ClipboardApi
 } from '@shared/types/ipc.types'
 import type { UpdaterApi } from '@shared/types/updater.types'
 
@@ -20,6 +21,7 @@ declare global {
       system: SystemApi
       keyboard: KeyboardApi
       updater: UpdaterApi
+      clipboard: ClipboardApi
     }
   }
 }

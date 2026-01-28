@@ -1,4 +1,4 @@
-import { useEffect, useRef, memo, useCallback, useMemo, useImperativeHandle } from 'react'
+import { useEffect, useRef, memo, useCallback, useMemo, useImperativeHandle, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -18,6 +18,14 @@ import {
   normalizeKeyEvent
 } from '@/stores/keyboard-shortcuts-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
+import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -83,6 +91,18 @@ function ConnectedTerminalComponent({
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Activity timeout timer ref
   const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Rate limiting for clipboard operations
+  const lastClipboardOpRef = useRef<number>(0)
+  const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
+
+  // State to track terminal instance for clipboard hook
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+
+  // Clipboard functionality
+  const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({
+    terminal: terminalInstance
+  })
 
   // Sync ptyIdRef with external terminal ID when provided
   useEffect(() => {
@@ -226,6 +246,7 @@ function ConnectedTerminalComponent({
     }
     const terminal = new Terminal(terminalOptions)
     terminalRef.current = terminal
+    setTerminalInstance(terminal)
 
     const fitAddon = new FitAddon()
     fitAddonRef.current = fitAddon
@@ -256,6 +277,46 @@ function ConnectedTerminalComponent({
           // Don't call stopPropagation() - let event bubble to window handler
           // Return false to prevent xterm from handling the event
           return false
+        }
+      }
+
+      // Handle copy/paste/select all keyboard shortcuts
+      const isCtrlOrCmd = event.ctrlKey || event.metaKey
+
+      if (isCtrlOrCmd) {
+        // Rate limit check
+        const now = Date.now()
+        if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) {
+          return false // Rate limited - prevent xterm handling but don't process
+        }
+
+        switch (event.key.toLowerCase()) {
+          case 'c':
+            // Copy: if selection exists, copy and prevent xterm handling
+            // Otherwise allow xterm to handle (for interrupt signal)
+            if (terminal.hasSelection()) {
+              const selection = terminal.getSelection()
+              if (selection) {
+                lastClipboardOpRef.current = now
+                // Use the hook's copySelection for consistency
+                void copySelection()
+              }
+              return false
+            }
+            // No selection - allow xterm to send Ctrl+C (interrupt signal)
+            return true
+
+          case 'v':
+            // Paste: read clipboard and paste to terminal
+            lastClipboardOpRef.current = now
+            // Use the hook's pasteFromClipboard for consistency
+            void pasteFromClipboard()
+            return false
+
+          case 'a':
+            // Select all
+            terminal.selectAll()
+            return false
         }
       }
 
@@ -415,6 +476,7 @@ function ConnectedTerminalComponent({
       }
       terminal.dispose()
       terminalRef.current = null
+      setTerminalInstance(null)
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
@@ -462,8 +524,61 @@ function ConnectedTerminalComponent({
     }
   }, [isVisible])
 
+  // Handle Select All
+  const handleSelectAll = useCallback((): void => {
+    if (terminalRef.current) {
+      terminalRef.current.selectAll()
+    }
+  }, [])
+
+  // Memoized context menu handlers to prevent unnecessary re-renders
+  const contextMenuHandlers = useMemo(() => ({
+    copy: copySelection,
+    paste: pasteFromClipboard,
+    selectAll: handleSelectAll
+  }), [copySelection, pasteFromClipboard, handleSelectAll])
+
   return (
-    <div ref={containerRef} className={`w-full h-full ${className}`} style={{ padding: '8px' }} />
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={containerRef}
+          className={`w-full h-full ${className}`}
+          style={{ padding: '8px' }}
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem
+          onClick={contextMenuHandlers.copy}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+          aria-label="Copy selected text"
+          aria-keyshortcuts="Ctrl+C"
+        >
+          Copy
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+C</span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={contextMenuHandlers.paste}
+          className="cursor-pointer"
+          aria-label="Paste from clipboard"
+          aria-keyshortcuts="Ctrl+V"
+        >
+          Paste
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+V</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={contextMenuHandlers.selectAll}
+          className="cursor-pointer"
+          aria-label="Select all text"
+          aria-keyshortcuts="Ctrl+A"
+        >
+          Select All
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+A</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

@@ -6,6 +6,7 @@ import { registerDialogIpc } from './ipc/dialog.ipc'
 import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
+import { registerClipboardIpc } from './ipc/clipboard.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
@@ -102,6 +103,7 @@ export function initializeApp(): void {
     registerShellIpc()
     registerPersistenceIpc()
     registerSystemIpc()
+    registerClipboardIpc() // Register clipboard IPC handlers
     initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window

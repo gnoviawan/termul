@@ -19,7 +19,8 @@ import type {
   PersistenceApi,
   SystemApi,
   KeyboardApi,
-  KeyboardShortcutCallback
+  KeyboardShortcutCallback,
+  ClipboardApi
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -213,6 +214,17 @@ const keyboardApi: KeyboardApi = {
   }
 }
 
+// Clipboard API for renderer
+const clipboardApi: ClipboardApi = {
+  readText: (): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('clipboard:readText')
+  },
+
+  writeText: (text: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('clipboard:writeText', text)
+  }
+}
+
 // Updater API for renderer
 const updaterApi: UpdaterApi = {
   checkForUpdates: (): Promise<IpcResult<UpdateInfo | null>> => {
@@ -283,7 +295,8 @@ const api = {
   persistence: persistenceApi,
   system: systemApi,
   keyboard: keyboardApi,
-  updater: updaterApi
+  updater: updaterApi,
+  clipboard: clipboardApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
