@@ -74,21 +74,36 @@ export function useTerminalClipboard(
     }
   }, [])
 
+  // Track if paste is in progress to prevent double-paste
+  const isPastingRef = useRef(false)
+
   // Paste from clipboard to terminal
   const pasteFromClipboard = useCallback(async (): Promise<void> => {
+    // Prevent concurrent paste operations
+    if (isPastingRef.current) return
+    
     const currentTerminal = terminalRef.current
     if (!currentTerminal) return
 
-    const result = await window.api.clipboard.readText()
-    if (result.success && result.data) {
-      // Validate clipboard content size
-      if (result.data.length > MAX_CLIPBOARD_SIZE) {
-        console.error('Clipboard content too large')
-        return
+    isPastingRef.current = true
+    
+    try {
+      const result = await window.api.clipboard.readText()
+      if (result.success && result.data) {
+        // Validate clipboard content size
+        if (result.data.length > MAX_CLIPBOARD_SIZE) {
+          console.error('Clipboard content too large')
+          return
+        }
+        currentTerminal.paste(result.data)
+      } else if (!result.success) {
+        console.error('Failed to read from clipboard:', result.error)
       }
-      currentTerminal.paste(result.data)
-    } else if (!result.success) {
-      console.error('Failed to read from clipboard:', result.error)
+    } finally {
+      // Reset after a short delay to prevent rapid successive calls
+      setTimeout(() => {
+        isPastingRef.current = false
+      }, 100)
     }
   }, [])
 

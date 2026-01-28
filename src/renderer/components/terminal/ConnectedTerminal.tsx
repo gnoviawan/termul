@@ -295,6 +295,7 @@ function ConnectedTerminalComponent({
             // Copy: if selection exists, copy and prevent xterm handling
             // Otherwise allow xterm to handle (for interrupt signal)
             if (terminal.hasSelection()) {
+              event.preventDefault()
               const selection = terminal.getSelection()
               if (selection) {
                 lastClipboardOpRef.current = now
@@ -308,6 +309,7 @@ function ConnectedTerminalComponent({
 
           case 'v':
             // Paste: read clipboard and paste to terminal
+            event.preventDefault()
             lastClipboardOpRef.current = now
             // Use the hook's pasteFromClipboard for consistency
             void pasteFromClipboard()
