@@ -30,8 +30,8 @@ function validateTextInput(text: unknown): { valid: boolean; error?: string } {
     return { valid: false, error: 'Invalid input: text cannot be null' }
   }
 
-  // Check text length
-  if (text.length > MAX_CLIPBOARD_SIZE) {
+  // Check text byte length (UTF-8) to properly handle multibyte characters
+  if (Buffer.byteLength(text, 'utf8') > MAX_CLIPBOARD_SIZE) {
     return {
       valid: false,
       error: `Text exceeds maximum size of ${MAX_CLIPBOARD_SIZE} bytes`
