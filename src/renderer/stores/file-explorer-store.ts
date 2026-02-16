@@ -95,23 +95,15 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
           const newContents = new Map(currentContents)
           newContents.set(path, result.data)
 
-          const newLoadingDone = new Set(get().loadingDirs)
-          newLoadingDone.delete(path)
-
           set({
             expandedDirs: newExpanded,
-            directoryContents: newContents,
-            loadingDirs: newLoadingDone
+            directoryContents: newContents
           })
 
           // Watch this directory for changes (fire-and-forget)
           window.api.filesystem.watchDirectory(path)
-        } else {
-          const newLoadingDone = new Set(get().loadingDirs)
-          newLoadingDone.delete(path)
-          set({ loadingDirs: newLoadingDone })
         }
-      } catch {
+      } finally {
         const newLoadingDone = new Set(get().loadingDirs)
         newLoadingDone.delete(path)
         set({ loadingDirs: newLoadingDone })

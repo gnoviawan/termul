@@ -106,7 +106,7 @@ export function FileExplorer(): React.JSX.Element {
     setContextMenu(null)
     const normalizedPath = entry.path.replace(/\\/g, '/')
     const lastSlash = normalizedPath.lastIndexOf('/')
-    const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : normalizedPath
+    const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
     setInlineInput({
       parentPath,
       type: entry.type === 'directory' ? 'folder' : 'file',
@@ -127,10 +127,12 @@ export function FileExplorer(): React.JSX.Element {
   }, [])
 
   const isSubmittingRef = useRef(false)
+  const submitFailedRef = useRef(false)
 
   const handleInlineInputSubmit = useCallback(async () => {
     if (isSubmittingRef.current) return
     isSubmittingRef.current = true
+    submitFailedRef.current = false
 
     if (!inlineInput || !inputValue.trim()) {
       setInlineInput(null)
@@ -161,17 +163,21 @@ export function FileExplorer(): React.JSX.Element {
         }
       }
       await refreshDirectory(inlineInput.parentPath)
+      setInlineInput(null)
+      setInputValue('')
     } catch {
-      // Operation failed
+      submitFailedRef.current = true
     }
 
-    setInlineInput(null)
-    setInputValue('')
     isSubmittingRef.current = false
   }, [inlineInput, inputValue, refreshDirectory])
 
   const handleInlineInputCancel = useCallback(() => {
     if (isSubmittingRef.current) return
+    if (submitFailedRef.current) {
+      submitFailedRef.current = false
+      return
+    }
     setInlineInput(null)
     setInputValue('')
   }, [])

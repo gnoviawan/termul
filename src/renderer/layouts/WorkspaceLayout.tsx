@@ -515,6 +515,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setDirtyCloseFilePath(null)
   }, [])
 
+  // Handle Escape key for dirty-close dialog
+  useEffect(() => {
+    if (dirtyCloseFilePath === null) return
+
+    const handleEscape = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setDirtyCloseFilePath(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [dirtyCloseFilePath])
+
   // Terminal search handlers
   const handleTerminalSearchClose = useCallback(() => {
     setIsTerminalSearchOpen(false)
@@ -844,6 +859,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
               transition={{ duration: 0.15 }}
               className="bg-card rounded-lg shadow-2xl w-[400px] border border-border overflow-hidden"
               onClick={(e) => e.stopPropagation()}
+              tabIndex={-1}
+              ref={(el) => el?.focus()}
             >
               <div className="p-6">
                 <h3 className="text-sm font-semibold text-foreground mb-1">Unsaved Changes</h3>
