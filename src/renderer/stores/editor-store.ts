@@ -69,6 +69,7 @@ export interface EditorState {
   updateScrollTop: (path: string, scrollTop: number) => void
   reloadFile: (path: string) => Promise<void>
   setActiveFilePath: (path: string | null) => void
+  clearAllFiles: () => void
   hasDirtyFiles: () => boolean
   getOpenFilePaths: () => string[]
 }
@@ -269,6 +270,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ activeFilePath: path })
   },
 
+  clearAllFiles: (): void => {
+    set({ openFiles: new Map(), activeFilePath: null })
+  },
+
   hasDirtyFiles: (): boolean => {
     const { openFiles } = get()
     let hasDirty = false
@@ -321,6 +326,7 @@ export function useEditorActions(): Pick<
   | 'updateScrollTop'
   | 'reloadFile'
   | 'setActiveFilePath'
+  | 'clearAllFiles'
 > {
   return useEditorStore(
     useShallow((state) => ({
@@ -333,7 +339,8 @@ export function useEditorActions(): Pick<
       updateCursorPosition: state.updateCursorPosition,
       updateScrollTop: state.updateScrollTop,
       reloadFile: state.reloadFile,
-      setActiveFilePath: state.setActiveFilePath
+      setActiveFilePath: state.setActiveFilePath,
+      clearAllFiles: state.clearAllFiles
     }))
   )
 }

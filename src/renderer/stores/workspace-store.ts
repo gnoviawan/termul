@@ -16,6 +16,8 @@ export interface WorkspaceState {
   reorderTabs: (orderedIds: string[]) => void
   getActiveTab: () => WorkspaceTab | undefined
   syncTerminalTabs: (terminalIds: string[]) => void
+  clearEditorTabs: () => void
+  syncEditorTabs: (filePaths: string[], activeTabId?: string | null) => void
   getNextTabId: (direction: 1 | -1) => string | null
 }
 
@@ -135,6 +137,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ tabs: newTabs, activeTabId: newActive })
   },
 
+  clearEditorTabs: (): void => {
+    const { tabs, activeTabId } = get()
+    const newTabs = tabs.filter((t) => t.type !== 'editor')
+    let newActive = activeTabId
+    if (activeTabId && !newTabs.some((t) => t.id === activeTabId)) {
+      newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
+    }
+    set({ tabs: newTabs, activeTabId: newActive })
+  },
+
+  syncEditorTabs: (filePaths: string[], restoredActiveTabId?: string | null): void => {
+    const { tabs } = get()
+    const terminalTabs = tabs.filter((t) => t.type === 'terminal')
+    const editorTabs: WorkspaceTab[] = filePaths.map((fp) => ({
+      type: 'editor' as const,
+      id: editorTabId(fp),
+      filePath: fp
+    }))
+    const newTabs = [...terminalTabs, ...editorTabs]
+    let newActive = restoredActiveTabId
+    if (!newActive || !newTabs.some((t) => t.id === newActive)) {
+      newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
+    }
+    set({ tabs: newTabs, activeTabId: newActive })
+  },
+
   getNextTabId: (direction: 1 | -1): string | null => {
     const { tabs, activeTabId } = get()
     if (tabs.length === 0) return null
@@ -171,6 +199,8 @@ export function useWorkspaceActions(): Pick<
   | 'setActiveTab'
   | 'reorderTabs'
   | 'syncTerminalTabs'
+  | 'clearEditorTabs'
+  | 'syncEditorTabs'
   | 'getNextTabId'
 > {
   return useWorkspaceStore(
@@ -181,6 +211,8 @@ export function useWorkspaceActions(): Pick<
       setActiveTab: state.setActiveTab,
       reorderTabs: state.reorderTabs,
       syncTerminalTabs: state.syncTerminalTabs,
+      clearEditorTabs: state.clearEditorTabs,
+      syncEditorTabs: state.syncEditorTabs,
       getNextTabId: state.getNextTabId
     }))
   )

@@ -515,21 +515,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setDirtyCloseFilePath(null)
   }, [])
 
-  // Handle Escape key for dirty-close dialog
-  useEffect(() => {
-    if (dirtyCloseFilePath === null) return
-
-    const handleEscape = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setDirtyCloseFilePath(null)
-      }
-    }
-
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [dirtyCloseFilePath])
-
   // Terminal search handlers
   const handleTerminalSearchClose = useCallback(() => {
     setIsTerminalSearchOpen(false)
@@ -843,55 +828,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
       />
 
       {/* Dirty File Close Confirmation */}
-      <AnimatePresence>
-        {dirtyCloseFilePath !== null && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
-            onClick={handleCancelDirtyClose}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              transition={{ duration: 0.15 }}
-              className="bg-card rounded-lg shadow-2xl w-[400px] border border-border overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-              tabIndex={-1}
-              ref={(el) => el?.focus()}
-            >
-              <div className="p-6">
-                <h3 className="text-sm font-semibold text-foreground mb-1">Unsaved Changes</h3>
-                <p className="text-sm text-muted-foreground">
-                  Save changes to &quot;{dirtyCloseFilePath.split(/[\\/]/).pop()}&quot; before closing?
-                </p>
-              </div>
-              <div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-                <button
-                  onClick={handleCancelDirtyClose}
-                  className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDiscardAndClose}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                >
-                  Discard
-                </button>
-                <button
-                  onClick={handleSaveThenClose}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  Save
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ConfirmDialog
+        isOpen={dirtyCloseFilePath !== null}
+        title="Unsaved Changes"
+        message={`Save changes to "${dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''}" before closing?`}
+        confirmLabel="Save"
+        cancelLabel="Cancel"
+        secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
+        onConfirm={handleSaveThenClose}
+        onCancel={handleCancelDirtyClose}
+      />
     </div>
   )
 }

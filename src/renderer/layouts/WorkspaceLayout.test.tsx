@@ -121,7 +121,9 @@ const mockApi = {
     onFileChanged: vi.fn(() => vi.fn()),
     onFileCreated: vi.fn(() => vi.fn()),
     onFileDeleted: vi.fn(() => vi.fn()),
-    watchDirectory: vi.fn().mockResolvedValue({ success: true })
+    watchDirectory: vi.fn().mockResolvedValue({ success: true }),
+    unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
+    readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
   },
   system: {
     getHomeDirectory: vi.fn().mockResolvedValue({ success: true, data: '/home/user' }),
