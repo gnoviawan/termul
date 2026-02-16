@@ -20,7 +20,14 @@ import type {
   SystemApi,
   KeyboardApi,
   KeyboardShortcutCallback,
-  ClipboardApi
+  ClipboardApi,
+  FilesystemApi,
+  FileChangeCallback,
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  ReadDirectoryOptions,
+  FileChangeEvent
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -287,6 +294,82 @@ const updaterApi: UpdaterApi = {
   }
 }
 
+// Filesystem API for renderer
+const filesystemApi: FilesystemApi = {
+  readDirectory: (
+    dirPath: string,
+    options?: ReadDirectoryOptions
+  ): Promise<IpcResult<DirectoryEntry[]>> => {
+    return ipcRenderer.invoke('filesystem:readDirectory', dirPath, options)
+  },
+
+  readFile: (filePath: string): Promise<IpcResult<FileContent>> => {
+    return ipcRenderer.invoke('filesystem:readFile', filePath)
+  },
+
+  getFileInfo: (filePath: string): Promise<IpcResult<FileInfo>> => {
+    return ipcRenderer.invoke('filesystem:getFileInfo', filePath)
+  },
+
+  writeFile: (filePath: string, content: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:writeFile', filePath, content)
+  },
+
+  createFile: (filePath: string, content?: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:createFile', filePath, content)
+  },
+
+  createDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:createDirectory', dirPath)
+  },
+
+  deleteFile: (filePath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:deleteFile', filePath)
+  },
+
+  renameFile: (oldPath: string, newPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:renameFile', oldPath, newPath)
+  },
+
+  watchDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:watchDirectory', dirPath)
+  },
+
+  unwatchDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:unwatchDirectory', dirPath)
+  },
+
+  onFileChanged: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-changed', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-changed', listener)
+    }
+  },
+
+  onFileCreated: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-created', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-created', listener)
+    }
+  },
+
+  onFileDeleted: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-deleted', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-deleted', listener)
+    }
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -296,7 +379,8 @@ const api = {
   system: systemApi,
   keyboard: keyboardApi,
   updater: updaterApi,
-  clipboard: clipboardApi
+  clipboard: clipboardApi,
+  filesystem: filesystemApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

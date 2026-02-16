@@ -9,6 +9,10 @@ interface ConfirmDialogProps {
   message: string
   confirmLabel?: string
   cancelLabel?: string
+  secondaryAction?: {
+    label: string
+    onClick: () => void
+  }
   variant?: 'default' | 'danger'
   onConfirm: () => void
   onCancel: () => void
@@ -20,6 +24,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  secondaryAction,
   variant = 'default',
   onConfirm,
   onCancel
@@ -95,6 +100,14 @@ export function ConfirmDialog({
               >
                 {cancelLabel}
               </button>
+              {secondaryAction && (
+                <button
+                  onClick={secondaryAction.onClick}
+                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                >
+                  {secondaryAction.label}
+                </button>
+              )}
               <button
                 onClick={onConfirm}
                 className={cn(

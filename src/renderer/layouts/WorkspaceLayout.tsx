@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { FolderKanban, Terminal } from 'lucide-react'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
-import { TerminalTabBar } from '@/components/TerminalTabBar'
+import { WorkspaceTabBar } from '@/components/workspace/WorkspaceTabBar'
 import { ConnectedTerminal, TerminalSearchHandle } from '@/components/terminal/ConnectedTerminal'
 import { TerminalSearchBar } from '@/components/terminal/TerminalSearchBar'
 import { StatusBar } from '@/components/StatusBar'
@@ -12,6 +12,13 @@ import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { FileExplorer } from '@/components/file-explorer/FileExplorer'
+import { EditorPanel } from '@/components/editor/EditorPanel'
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle
+} from '@/components/ui/resizable'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { EnvVariable } from '@/types/project'
 import {
@@ -28,6 +35,14 @@ import {
   useActiveTerminalId,
   useTerminalActions
 } from '@/stores/terminal-store'
+import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useEditorStore, useOpenFilePaths } from '@/stores/editor-store'
+import {
+  useWorkspaceStore,
+  useActiveTab,
+  useActiveTabId,
+  editorTabId
+} from '@/stores/workspace-store'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import {
@@ -42,6 +57,8 @@ import {
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
+import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
 
@@ -62,6 +79,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
   const [closeConfirmTerminalId, setCloseConfirmTerminalId] = useState<string | null>(null)
+  const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isTerminalSearchOpen, setIsTerminalSearchOpen] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
 
@@ -93,6 +111,109 @@ export default function WorkspaceLayout(): React.JSX.Element {
     reorderTerminals,
     setTerminalPtyId
   } = useTerminalActions()
+
+  // File explorer & editor state
+  const isExplorerVisible = useFileExplorerVisible()
+  const openFilePaths = useOpenFilePaths()
+  const activeTabId = useActiveTabId()
+  const activeTab = useActiveTab()
+  const prevProjectIdRef = useRef<string>('')
+  const watchedRootPathRef = useRef<string | null>(null)
+  const projectSwitchRequestIdRef = useRef(0)
+
+  // File watcher hook
+  useFileWatcher()
+
+  // Sync file explorer root path and register project root watcher when project changes
+  useEffect(() => {
+    const nextRootPathCandidate = activeProject?.path
+    if (typeof nextRootPathCandidate !== 'string' || activeProjectId === prevProjectIdRef.current) {
+      return
+    }
+
+    const nextRootPath = nextRootPathCandidate
+
+    const switchRequestId = ++projectSwitchRequestIdRef.current
+    const previousWatchedRoot = watchedRootPathRef.current
+
+    let cancelled = false
+
+    async function applyProjectSwitch(): Promise<void> {
+      try {
+        const watchResult = await window.api.filesystem.watchDirectory(nextRootPath)
+
+        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
+          window.api.filesystem.unwatchDirectory(nextRootPath)
+          return
+        }
+
+        if (!watchResult.success) {
+          useFileExplorerStore.getState().setRootPath(nextRootPath)
+          useFileExplorerStore.getState().setRootLoadError({
+            message: watchResult.error,
+            code: watchResult.code
+          })
+          return
+        }
+
+        useFileExplorerStore.getState().setRootPath(nextRootPath)
+
+        if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
+          window.api.filesystem.unwatchDirectory(previousWatchedRoot)
+        }
+
+        watchedRootPathRef.current = nextRootPath
+        prevProjectIdRef.current = activeProjectId
+      } catch (error) {
+        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to watch project directory'
+        useFileExplorerStore.getState().setRootPath(nextRootPath)
+        useFileExplorerStore.getState().setRootLoadError({
+          message,
+          code: 'WATCH_FAILED'
+        })
+      }
+    }
+
+    void applyProjectSwitch()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject?.path, activeProjectId])
+
+  // Editor state persistence
+  useEditorPersistence(activeProjectId)
+
+  useEffect(() => {
+    return () => {
+      if (watchedRootPathRef.current) {
+        window.api.filesystem.unwatchDirectory(watchedRootPathRef.current)
+      }
+    }
+  }, [])
+
+  // Sync terminal tabs with workspace store
+  useEffect(() => {
+    const terminalIds = terminals.map((t) => t.id)
+    useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
+  }, [terminals])
+
+  // Warn before closing if dirty files exist
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent): string | undefined => {
+      if (useEditorStore.getState().hasDirtyFiles()) {
+        e.preventDefault()
+        return ''
+      }
+      return undefined
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -135,31 +256,73 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Determine if we should show the terminal area (only on workspace dashboard)
   const isWorkspaceRoute = location.pathname === '/'
 
-  // Shared terminal cycling logic used by both keydown handler and IPC listener
-  const cycleTerminal = useCallback(
+  // Unified tab cycling - cycles through ALL workspace tabs
+  const cycleTab = useCallback(
     (direction: 'next' | 'prev') => {
-      if (!isWorkspaceRoute || terminals.length <= 1 || !activeTerminalId) return
-
-      const currentIndex = terminals.findIndex((t) => t.id === activeTerminalId)
-      if (currentIndex === -1) return
-
-      const offset = direction === 'next' ? 1 : -1
-      const nextIndex = (currentIndex + offset + terminals.length) % terminals.length
-      selectTerminal(terminals[nextIndex].id)
+      if (!isWorkspaceRoute) return
+      const nextTabId = useWorkspaceStore.getState().getNextTabId(direction === 'next' ? 1 : -1)
+      if (nextTabId) {
+        useWorkspaceStore.getState().setActiveTab(nextTabId)
+        // If it's a terminal tab, also select the terminal
+        const tab = useWorkspaceStore.getState().tabs.find((t) => t.id === nextTabId)
+        if (tab?.type === 'terminal') {
+          selectTerminal(tab.terminalId)
+        } else if (tab?.type === 'editor') {
+          useEditorStore.getState().setActiveFilePath(tab.filePath)
+        }
+      }
     },
-    [isWorkspaceRoute, terminals, activeTerminalId, selectTerminal]
+    [isWorkspaceRoute, selectTerminal]
   )
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
       const target = e.target as HTMLElement
-      if (
+      const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
+      const isInInput =
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
         target.isContentEditable ||
         target.closest('[contenteditable="true"]')
-      ) {
+
+      // Ctrl+S should work even in editors
+      if (e.ctrlKey && e.key === 's' && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        if (activeTab?.type === 'editor') {
+          useEditorStore.getState().saveFile(activeTab.filePath)
+        }
+        return
+      }
+
+      // Ctrl+W - close tab
+      if (e.ctrlKey && e.key === 'w' && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        if (activeTab?.type === 'editor') {
+          const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
+          if (fileState?.isDirty) {
+            setDirtyCloseFilePath(activeTab.filePath)
+          } else {
+            useEditorStore.getState().closeFile(activeTab.filePath)
+            useWorkspaceStore.getState().removeTab(activeTab.id)
+          }
+        } else if (activeTab?.type === 'terminal') {
+          setCloseConfirmTerminalId(activeTab.terminalId)
+        }
+        return
+      }
+
+      // Ctrl+B - toggle file explorer (skip when in editor/input so BlockNote bold works)
+      if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
+        if (!isInEditor && !isInInput) {
+          e.preventDefault()
+          useFileExplorerStore.getState().toggleVisibility()
+        }
+        return
+      }
+
+      // Skip other shortcuts if typing in input or editor
+      if (isInInput || isInEditor) {
         return
       }
 
@@ -228,7 +391,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
-        cycleTerminal('next')
+        cycleTab('next')
         return
       }
 
@@ -236,7 +399,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
-        cycleTerminal('prev')
+        cycleTab('prev')
         return
       }
 
@@ -300,19 +463,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
     appDefaultShell,
     maxTerminals,
     isWorkspaceRoute,
-    cycleTerminal
+    cycleTab,
+    activeTab
   ])
 
   // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
-  // These are intercepted at the Electron level because Chromium reserves them
   useEffect(() => {
     return window.api.keyboard.onShortcut((shortcut) => {
       switch (shortcut) {
         case 'nextTerminal':
-          cycleTerminal('next')
+          cycleTab('next')
           break
         case 'prevTerminal':
-          cycleTerminal('prev')
+          cycleTab('prev')
           break
         case 'zoomIn': {
           const newSize = Math.min(fontSize + 1, 24)
@@ -335,7 +498,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
       }
     })
-  }, [cycleTerminal, fontSize, updateAppSetting])
+  }, [cycleTab, fontSize, updateAppSetting])
 
   const handleNewTerminal = useCallback(() => {
     if (terminals.length >= maxTerminals) {
@@ -360,7 +523,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   const handleCloseTerminal = useCallback((id: string) => {
-    // Show confirmation dialog - terminal always has a running shell process
     setCloseConfirmTerminalId(id)
   }, [])
 
@@ -373,6 +535,43 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleCancelCloseTerminal = useCallback(() => {
     setCloseConfirmTerminalId(null)
+  }, [])
+
+  // Dirty file close handlers
+  const handleCloseEditorTab = useCallback((filePath: string) => {
+    const fileState = useEditorStore.getState().openFiles.get(filePath)
+    if (fileState?.isDirty) {
+      setDirtyCloseFilePath(filePath)
+    } else {
+      useEditorStore.getState().closeFile(filePath)
+      useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+    }
+  }, [])
+
+  const handleSaveThenClose = useCallback(async () => {
+    if (dirtyCloseFilePath) {
+      const saved = await useEditorStore.getState().saveFile(dirtyCloseFilePath)
+      if (!saved) {
+        toast.error('Failed to save file. Changes were not discarded.')
+        setDirtyCloseFilePath(null)
+        return
+      }
+      useEditorStore.getState().closeFile(dirtyCloseFilePath)
+      useWorkspaceStore.getState().removeTab(editorTabId(dirtyCloseFilePath))
+      setDirtyCloseFilePath(null)
+    }
+  }, [dirtyCloseFilePath])
+
+  const handleDiscardAndClose = useCallback(() => {
+    if (dirtyCloseFilePath) {
+      useEditorStore.getState().closeFile(dirtyCloseFilePath)
+      useWorkspaceStore.getState().removeTab(editorTabId(dirtyCloseFilePath))
+      setDirtyCloseFilePath(null)
+    }
+  }, [dirtyCloseFilePath])
+
+  const handleCancelDirtyClose = useCallback(() => {
+    setDirtyCloseFilePath(null)
   }, [])
 
   // Terminal search handlers
@@ -407,26 +606,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   // Create stable callback factory for terminal spawn handling
-  // Use ref to store handlers so they're stable across renders (prevents ConnectedTerminal re-mount)
   const spawnedHandlersRef = useRef<Map<string, (ptyId: string) => Promise<void>>>(new Map())
   const setTerminalPtyIdRef = useRef(setTerminalPtyId)
   setTerminalPtyIdRef.current = setTerminalPtyId
 
-  // Get or create a stable handler for a terminal
   const getTerminalSpawnedHandler = useCallback((terminalStoreId: string) => {
     let handler = spawnedHandlersRef.current.get(terminalStoreId)
     if (!handler) {
       handler = async (ptyId: string) => {
-        // Sync PTY ID to store
         setTerminalPtyIdRef.current(terminalStoreId, ptyId)
-        // Re-fetch git state to eliminate race condition gap
         try {
           await Promise.all([
             window.api.terminal.getGitBranch(ptyId),
             window.api.terminal.getGitStatus(ptyId)
           ])
         } catch {
-          // Ignore errors - git data will be populated by polling
+          // Ignore errors
         }
       }
       spawnedHandlersRef.current.set(terminalStoreId, handler)
@@ -436,11 +631,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
 
-  // Memoize project env vars to avoid unnecessary re-renders
   const projectEnv = useMemo(
     () => envVarsToRecord(activeProject?.envVars),
     [activeProject?.envVars]
   )
+
+  // Determine which terminal is active based on workspace tab
+  const isTerminalTabActive = activeTab?.type === 'terminal'
+  const isEditorTabActive = activeTab?.type === 'editor'
+  const activeEditorFilePath = isEditorTabActive ? activeTab.filePath : null
+  const activeTerminalTabId = isTerminalTabActive ? activeTab.terminalId : null
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
@@ -496,101 +696,142 @@ export default function WorkspaceLayout(): React.JSX.Element {
           </div>
         ) : (
           <>
-            {/* Tab Bar */}
-            {isWorkspaceRoute && (
-              <TerminalTabBar
-                terminals={terminals}
-                activeTerminalId={activeTerminalId}
-                onSelectTerminal={selectTerminal}
-                onCloseTerminal={handleCloseTerminal}
-                onNewTerminal={handleNewTerminal}
-                onNewTerminalWithShell={handleNewTerminalWithShell}
-                onRenameTerminal={renameTerminal}
-                onReorderTerminals={(orderedIds) => reorderTerminals(activeProjectId, orderedIds)}
-                defaultShell={activeProject?.defaultShell}
-              />
-            )}
+            {isWorkspaceRoute ? (
+              <div className="flex-1 flex min-h-0">
+                <ResizablePanelGroup direction="horizontal">
+                  {/* Center Panel: TabBar + Content */}
+                  <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
+                    <div className="flex flex-col h-full">
+                      {/* Tab Bar */}
+                      <WorkspaceTabBar
+                        onNewTerminal={handleNewTerminal}
+                        onNewTerminalWithShell={handleNewTerminalWithShell}
+                        onCloseTerminal={handleCloseTerminal}
+                        onRenameTerminal={renameTerminal}
+                        onSelectTerminal={selectTerminal}
+                        onCloseEditorTab={handleCloseEditorTab}
+                        defaultShell={activeProject?.defaultShell}
+                      />
 
-            {/* Terminal Area / Route Content */}
-            <div className="flex-1 overflow-hidden bg-terminal-bg relative">
-              {/* Render ALL terminals to keep PTYs alive - use CSS to hide/show */}
-              {allTerminals.map((terminal) => {
-                const isActiveTerminal =
-                  terminal.id === activeTerminalId && terminal.projectId === activeProjectId
-                // Terminal is only visible if we're on a workspace route AND it's the active terminal
-                const isVisible = isWorkspaceRoute && isActiveTerminal
-                return (
-                  <div
-                    key={terminal.id}
-                    className={
-                      isVisible ? 'w-full h-full' : 'w-full h-full absolute inset-0 invisible'
-                    }
-                  >
-                    <ConnectedTerminal
-                      spawnOptions={{
-                        shell: terminal.shell,
-                        cwd: terminal.cwd,
-                        env: projectEnv
-                      }}
-                      initialScrollback={terminal.pendingScrollback}
-                      className="w-full h-full"
-                      searchRef={isVisible ? terminalSearchRef : undefined}
-                      onCommand={isVisible ? handleCommand : undefined}
-                      onSpawned={getTerminalSpawnedHandler(terminal.id)}
-                      isVisible={isVisible}
-                    />
-                  </div>
-                )
-              })}
+                      {/* Content Area */}
+                      <div className="flex-1 overflow-hidden bg-terminal-bg relative">
+                        <div className="w-full h-full relative">
+                          {/* Render ALL terminals - use CSS to hide/show */}
+                          {allTerminals.map((terminal) => {
+                            const isVisible =
+                              isWorkspaceRoute &&
+                              isTerminalTabActive &&
+                              activeTerminalTabId === terminal.id &&
+                              terminal.projectId === activeProjectId
+                            return (
+                              <div
+                                key={terminal.id}
+                                className={
+                                  isVisible
+                                    ? 'w-full h-full'
+                                    : 'w-full h-full absolute inset-0 invisible'
+                                }
+                              >
+                                <ConnectedTerminal
+                                  spawnOptions={{
+                                    shell: terminal.shell,
+                                    cwd: terminal.cwd,
+                                    env: projectEnv
+                                  }}
+                                  initialScrollback={terminal.pendingScrollback}
+                                  className="w-full h-full"
+                                  searchRef={isVisible ? terminalSearchRef : undefined}
+                                  onCommand={isVisible ? handleCommand : undefined}
+                                  onSpawned={getTerminalSpawnedHandler(terminal.id)}
+                                  isVisible={isVisible}
+                                />
+                              </div>
+                            )
+                          })}
 
-              {/* Show empty state only when current project has no terminals AND we're on workspace route */}
-              {isWorkspaceRoute && terminals.length === 0 && (
-                <div className="absolute inset-0 flex items-center justify-center px-6">
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.4, ease: 'easeOut' }}
-                    className="flex flex-col items-center text-center max-w-md"
-                  >
-                    <div className="mb-6">
-                      <Terminal className="w-24 h-24 text-muted-foreground/50" />
+                          {/* Render ALL open editor tabs - use CSS to hide/show */}
+                          {openFilePaths.map((filePath) => {
+                            const isVisible =
+                              isEditorTabActive && activeEditorFilePath === filePath
+                            return (
+                              <div
+                                key={filePath}
+                                className={
+                                  isVisible
+                                    ? 'w-full h-full'
+                                    : 'w-full h-full absolute inset-0 invisible'
+                                }
+                              >
+                                <EditorPanel
+                                  filePath={filePath}
+                                  isVisible={isVisible}
+                                />
+                              </div>
+                            )
+                          })}
+
+                          {/* Empty state when no terminals and no editors */}
+                          {terminals.length === 0 && openFilePaths.length === 0 && (
+                            <div className="absolute inset-0 flex items-center justify-center px-6">
+                              <motion.div
+                                initial={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ duration: 0.4, ease: 'easeOut' }}
+                                className="flex flex-col items-center text-center max-w-md"
+                              >
+                                <div className="mb-6">
+                                  <Terminal className="w-24 h-24 text-muted-foreground/50" />
+                                </div>
+                                <h2 className="text-xl font-semibold text-foreground mb-2">
+                                  No Terminals Yet
+                                </h2>
+                                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                                  Create a terminal to start running commands and managing your project
+                                </p>
+                                <button
+                                  onClick={handleNewTerminal}
+                                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                                >
+                                  Create Your First Terminal
+                                </button>
+                              </motion.div>
+                            </div>
+                          )}
+
+                          {/* Terminal search bar */}
+                          {terminals.length > 0 && (
+                            <TerminalSearchBar
+                              isOpen={isTerminalSearchOpen}
+                              onClose={handleTerminalSearchClose}
+                              onFindNext={handleTerminalFindNext}
+                              onFindPrevious={handleTerminalFindPrevious}
+                              onClearDecorations={handleTerminalClearDecorations}
+                            />
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <h2 className="text-xl font-semibold text-foreground mb-2">
-                      No Terminals Yet
-                    </h2>
-                    <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                      Create a terminal to start running commands and managing your project
-                    </p>
-                    <button
-                      onClick={handleNewTerminal}
-                      className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                    >
-                      Create Your First Terminal
-                    </button>
-                  </motion.div>
-                </div>
-              )}
+                  </ResizablePanel>
 
-              {/* Render child routes (Settings, Preferences, Snapshots) in an overlay */}
-              <div
-                className={
-                  isWorkspaceRoute ? 'hidden' : 'w-full h-full absolute inset-0 bg-background'
-                }
-              >
-                <Outlet />
+                  {/* File Explorer Panel (Right, full height) */}
+                  {isExplorerVisible && (
+                    <>
+                      <ResizableHandle />
+                      <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
+                        <FileExplorer />
+                      </ResizablePanel>
+                    </>
+                  )}
+                </ResizablePanelGroup>
+
               </div>
-
-              {/* Terminal search bar - only visible on workspace routes */}
-              {isWorkspaceRoute && terminals.length > 0 && (
-                <TerminalSearchBar
-                  isOpen={isTerminalSearchOpen}
-                  onClose={handleTerminalSearchClose}
-                  onFindNext={handleTerminalFindNext}
-                  onFindPrevious={handleTerminalFindPrevious}
-                  onClearDecorations={handleTerminalClearDecorations}
-                />
-              )}
-            </div>
+            ) : (
+              <div className="flex-1 overflow-hidden bg-terminal-bg relative">
+                <div className="w-full h-full">
+                  <Outlet />
+                </div>
+              </div>
+            )}
 
             {/* Status Bar */}
             <StatusBar project={activeProject} />
@@ -639,6 +880,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         variant="danger"
         onConfirm={handleConfirmCloseTerminal}
         onCancel={handleCancelCloseTerminal}
+      />
+
+      {/* Dirty File Close Confirmation */}
+      <ConfirmDialog
+        isOpen={dirtyCloseFilePath !== null}
+        title="Unsaved Changes"
+        message={`Save changes to "${dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''}" before closing?`}
+        confirmLabel="Save"
+        cancelLabel="Cancel"
+        secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
+        onConfirm={handleSaveThenClose}
+        onCancel={handleCancelDirtyClose}
       />
     </div>
   )

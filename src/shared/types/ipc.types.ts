@@ -71,7 +71,16 @@ export const IpcErrorCodes = {
   KILL_FAILED: 'KILL_FAILED',
   DIALOG_CANCELED: 'DIALOG_CANCELED',
   VALIDATION_ERROR: 'VALIDATION_ERROR',
-  UNKNOWN_ERROR: 'UNKNOWN_ERROR'
+  UNKNOWN_ERROR: 'UNKNOWN_ERROR',
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  BINARY_FILE: 'BINARY_FILE',
+  PERMISSION_DENIED: 'PERMISSION_DENIED',
+  WATCH_FAILED: 'WATCH_FAILED',
+  PATH_INVALID: 'PATH_INVALID',
+  FILE_EXISTS: 'FILE_EXISTS',
+  DELETE_FAILED: 'DELETE_FAILED',
+  RENAME_FAILED: 'RENAME_FAILED'
 } as const
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
@@ -123,4 +132,46 @@ export interface KeyboardApi {
 export interface ClipboardApi {
   readText: () => Promise<IpcResult<string>>
   writeText: (text: string) => Promise<IpcResult<void>>
+}
+
+// Filesystem types re-exported for convenience
+import type {
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  FileChangeEvent,
+  ReadDirectoryOptions
+} from './filesystem.types'
+
+export type FileChangeCallback = (event: FileChangeEvent) => void
+
+// Filesystem API for renderer
+export interface FilesystemApi {
+  readDirectory: (
+    dirPath: string,
+    options?: ReadDirectoryOptions
+  ) => Promise<IpcResult<DirectoryEntry[]>>
+  readFile: (filePath: string) => Promise<IpcResult<FileContent>>
+  getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
+  writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>
+  createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>
+  createDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  deleteFile: (filePath: string) => Promise<IpcResult<void>>
+  renameFile: (
+    oldPath: string,
+    newPath: string
+  ) => Promise<IpcResult<void>>
+  watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  onFileChanged: (callback: FileChangeCallback) => () => void
+  onFileCreated: (callback: FileChangeCallback) => () => void
+  onFileDeleted: (callback: FileChangeCallback) => () => void
+}
+
+export type {
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  FileChangeEvent,
+  ReadDirectoryOptions
 }
