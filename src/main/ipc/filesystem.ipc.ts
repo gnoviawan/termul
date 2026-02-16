@@ -249,7 +249,7 @@ export function registerFilesystemIpc(): void {
       try {
         // Register each watched project root so unrelated projects can be opened in-session.
         addAllowedRoot(normalizedPath)
-        service.watchDirectory(normalizedPath)
+        await service.watchDirectory(normalizedPath)
         return createSuccessResult(undefined)
       } catch (error) {
         return handleError(error)

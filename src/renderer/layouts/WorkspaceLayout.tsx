@@ -185,12 +185,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [activeProject?.path, activeProjectId])
 
-  useEffect(() => {
-    if (activeProjectId && activeProjectId !== prevProjectIdRef.current) {
-      prevProjectIdRef.current = activeProjectId
-    }
-  }, [activeProjectId])
-
   // Editor state persistence
   useEditorPersistence(activeProjectId)
 
@@ -830,10 +824,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   )}
                 </ResizablePanelGroup>
 
-                {/* Render child routes as overlay when on workspace route */}
-                <div className="hidden">
-                  <Outlet />
-                </div>
               </div>
             ) : (
               <div className="flex-1 overflow-hidden bg-terminal-bg relative">

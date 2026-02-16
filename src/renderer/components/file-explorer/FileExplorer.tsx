@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { ChevronsDownUp } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { FileTreeNodeWrapper } from './FileTreeNode'
 import { FileTreeContextMenu } from './FileTreeContextMenu'
 import {
@@ -11,6 +10,7 @@ import {
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { toast } from 'sonner'
 
 interface ContextMenuState {
   x: number
@@ -206,11 +206,11 @@ export function FileExplorer(): React.JSX.Element {
         normalizedDeletePath.lastIndexOf('/')
       )
       await refreshDirectory(parentPath)
-    } catch {
-      // Delete failed
+      setDeleteConfirm(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      toast.error(`Failed to delete ${deleteConfirm.path}: ${message}`)
     }
-
-    setDeleteConfirm(null)
   }, [deleteConfirm, refreshDirectory])
 
   const handleRootRetry = useCallback(() => {
@@ -291,7 +291,9 @@ export function FileExplorer(): React.JSX.Element {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  handleInlineInputSubmit()
+                  void handleInlineInputSubmit().catch((error) => {
+                    console.error('Inline input submit failed:', error)
+                  })
                 } else if (e.key === 'Escape') {
                   handleInlineInputCancel()
                 }

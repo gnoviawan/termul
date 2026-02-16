@@ -97,7 +97,8 @@ export function useEditorPersistence(projectId: string): void {
               editorStore.setViewMode(file.filePath, file.viewMode)
             }
             if (file.isDirty && file.draftContent) {
-              const currentState = editorStore.openFiles.get(file.filePath)
+              const freshEditorState = useEditorStore.getState()
+              const currentState = freshEditorState.openFiles.get(file.filePath)
               if (currentState) {
                 if (currentState.lastModified <= file.lastModified) {
                   editorStore.updateContent(file.filePath, file.draftContent)
@@ -195,8 +196,7 @@ function persistState(projectId: string): void {
     openFiles.push(persisted)
   })
 
-  const expandedDirs: string[] = []
-  explorerState.expandedDirs.forEach((dir) => expandedDirs.push(dir))
+  const expandedDirs = Array.from(explorerState.expandedDirs)
 
   const data: PersistedEditorState = {
     openFiles,

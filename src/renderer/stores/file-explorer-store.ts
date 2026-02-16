@@ -168,7 +168,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   selectPath: (path: string | null): void => {
-    set({ selectedPath: path })
+    set({ selectedPath: path ? normalizePath(path) : null })
   },
 
   toggleVisibility: (): void => {
@@ -196,14 +196,16 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   setDirectoryContents: (path: string, entries: DirectoryEntry[]): void => {
+    const normalized = normalizePath(path)
     const newContents = new Map(get().directoryContents)
-    newContents.set(path, entries)
+    newContents.set(normalized, entries)
     set({ directoryContents: newContents })
   },
 
   removeDirectoryContents: (path: string): void => {
+    const normalized = normalizePath(path)
     const newContents = new Map(get().directoryContents)
-    newContents.delete(path)
+    newContents.delete(normalized)
     set({ directoryContents: newContents })
   },
 
