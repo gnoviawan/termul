@@ -134,14 +134,14 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   },
   nextTerminal: {
     id: 'nextTerminal',
-    label: 'Next Terminal',
-    description: 'Switch to next terminal tab',
+    label: 'Next Tab',
+    description: 'Switch to next tab (terminal or editor)',
     defaultKey: 'ctrl+tab'
   },
   prevTerminal: {
     id: 'prevTerminal',
-    label: 'Previous Terminal',
-    description: 'Switch to previous terminal tab',
+    label: 'Previous Tab',
+    description: 'Switch to previous tab (terminal or editor)',
     defaultKey: 'ctrl+shift+tab'
   },
   zoomIn: {

@@ -7,9 +7,11 @@ import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
 import { registerClipboardIpc } from './ipc/clipboard.ipc'
+import { registerFilesystemIpc } from './ipc/filesystem.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
+import { resetDefaultFilesystemService } from './services/filesystem-service'
 import type { WindowState } from '../shared/types/persistence.types'
 import { loadWindowState, trackWindowState } from './services/window-state'
 import { setupMenu, setMainWindow } from './menu'
@@ -104,6 +106,7 @@ export function initializeApp(): void {
     registerPersistenceIpc()
     registerSystemIpc()
     registerClipboardIpc() // Register clipboard IPC handlers
+    registerFilesystemIpc() // Register filesystem IPC handlers
     initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window
@@ -132,6 +135,7 @@ app.on('window-all-closed', () => {
 // Flush pending writes and cleanup PTY processes before quitting
 app.on('before-quit', async () => {
   resetDefaultPtyManager()
+  await resetDefaultFilesystemService()
   await flushPendingWrites()
 })
 
