@@ -55,12 +55,14 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
         extension = rust()
         break
       }
-      case 'yaml':
-      case 'toml': {
+      case 'yaml': {
         const { yaml } = await import('@codemirror/lang-yaml')
         extension = yaml()
         break
       }
+      case 'toml':
+        // No built-in CodeMirror TOML support; fall through to plain text
+        return null
       default:
         return null
     }
@@ -191,6 +193,11 @@ export function useCodeMirror(
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
+        debounceTimerRef.current = null
+        // Flush the pending change so the last edit isn't lost
+        if (viewRef.current) {
+          onChangeRef.current(viewRef.current.state.doc.toString())
+        }
       }
       if (scrollDebounceRef.current) {
         clearTimeout(scrollDebounceRef.current)

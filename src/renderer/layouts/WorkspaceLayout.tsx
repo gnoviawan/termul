@@ -36,7 +36,7 @@ import {
   useTerminalActions
 } from '@/stores/terminal-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
-import { useEditorStore } from '@/stores/editor-store'
+import { useEditorStore, useOpenFilePaths } from '@/stores/editor-store'
 import {
   useWorkspaceStore,
   useActiveTab,
@@ -114,7 +114,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // File explorer & editor state
   const isExplorerVisible = useFileExplorerVisible()
-  const openFiles = useEditorStore((state) => state.openFiles)
+  const openFilePaths = useOpenFilePaths()
   const activeTabId = useActiveTabId()
   const activeTab = useActiveTab()
   const prevProjectIdRef = useRef<string>('')
@@ -580,9 +580,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isEditorTabActive = activeTab?.type === 'editor'
   const activeEditorFilePath = isEditorTabActive ? activeTab.filePath : null
   const activeTerminalTabId = isTerminalTabActive ? activeTab.terminalId : null
-
-  // Collect open file paths for editor rendering
-  const openFilePaths = useMemo(() => Array.from(openFiles.keys()), [openFiles])
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {

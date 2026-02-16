@@ -78,6 +78,9 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         window.api.filesystem.unwatchDirectory(dir)
       }
     } else {
+      // Prevent duplicate expand work if already loading
+      if (loadingDirs.has(path)) return
+
       // Expand - load contents
       const newLoading = new Set(loadingDirs)
       newLoading.add(path)

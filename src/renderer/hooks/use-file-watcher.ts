@@ -8,7 +8,8 @@ import type { FileChangeEvent } from '@shared/types/filesystem.types'
 function getDirname(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')
   const lastSlash = normalized.lastIndexOf('/')
-  if (lastSlash <= 0) return normalized
+  if (lastSlash < 0) return normalized
+  if (lastSlash === 0) return '/'
   return normalized.slice(0, lastSlash)
 }
 

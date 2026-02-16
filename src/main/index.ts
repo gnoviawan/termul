@@ -133,10 +133,19 @@ app.on('window-all-closed', () => {
 })
 
 // Flush pending writes and cleanup PTY processes before quitting
-app.on('before-quit', async () => {
+let isQuitting = false
+app.on('before-quit', (e) => {
+  if (isQuitting) return
+  isQuitting = true
+  e.preventDefault()
+
   resetDefaultPtyManager()
-  await resetDefaultFilesystemService()
-  await flushPendingWrites()
+  Promise.all([
+    resetDefaultFilesystemService(),
+    flushPendingWrites()
+  ]).finally(() => {
+    app.quit()
+  })
 })
 
 // Only initialize if not in test environment

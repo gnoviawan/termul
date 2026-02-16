@@ -86,11 +86,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const tabMap = new Map<string, WorkspaceTab>()
     tabs.forEach((t) => tabMap.set(t.id, t))
 
+    const orderedSet = new Set(orderedIds)
     const reordered = orderedIds
       .map((id) => tabMap.get(id))
       .filter((t): t is WorkspaceTab => t !== undefined)
 
-    set({ tabs: reordered })
+    // Append any tabs whose IDs were not in orderedIds
+    const missingTabs = tabs.filter((t) => !orderedSet.has(t.id))
+    set({ tabs: [...reordered, ...missingTabs] })
   },
 
   getActiveTab: (): WorkspaceTab | undefined => {

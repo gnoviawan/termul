@@ -279,7 +279,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
 // Selector hooks
 export function useOpenFiles(): Map<string, EditorFileState> {
-  return useEditorStore(useShallow((state) => state.openFiles))
+  return useEditorStore((state) => state.openFiles)
+}
+
+export function useOpenFilePaths(): string[] {
+  return useEditorStore(
+    useShallow((state) => Array.from(state.openFiles.keys()))
+  )
+}
+
+export function useOpenFile(filePath: string): EditorFileState | undefined {
+  return useEditorStore((state) => state.openFiles.get(filePath))
 }
 
 export function useActiveFile(): EditorFileState | undefined {

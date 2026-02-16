@@ -13,7 +13,6 @@ import type { Terminal } from '@/types/project'
 import { editorTabId } from '@/stores/workspace-store'
 
 // Inline TerminalTab matching the style from TerminalTabBar
-import { useState as useStateInline, useRef as useRefInline, useEffect as useEffectInline, useCallback as useCallbackInline } from 'react'
 import { X, Edit2, Skull } from 'lucide-react'
 import { ContextMenu } from '@/components/ContextMenu'
 import type { ContextMenuItem } from '@/components/ContextMenu'
@@ -27,24 +26,24 @@ interface TerminalTabInlineProps {
 }
 
 function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: TerminalTabInlineProps): React.JSX.Element {
-  const [isEditing, setIsEditing] = useStateInline(false)
-  const [editName, setEditName] = useStateInline(terminal.name)
-  const [contextMenu, setContextMenu] = useStateInline<{ x: number; y: number } | null>(null)
-  const inputRef = useRefInline<HTMLInputElement>(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editName, setEditName] = useState(terminal.name)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffectInline(() => {
+  useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus()
       inputRef.current.select()
     }
   }, [isEditing])
 
-  const handleDoubleClick = useCallbackInline(() => {
+  const handleDoubleClick = useCallback(() => {
     setEditName(terminal.name)
     setIsEditing(true)
   }, [terminal.name])
 
-  const handleSave = useCallbackInline(() => {
+  const handleSave = useCallback(() => {
     const trimmedName = editName.trim()
     if (trimmedName && trimmedName !== terminal.name) {
       onRename(trimmedName)
@@ -52,7 +51,7 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
     setIsEditing(false)
   }, [editName, terminal.name, onRename])
 
-  const handleCancel = useCallbackInline(() => {
+  const handleCancel = useCallback(() => {
     setEditName(terminal.name)
     setIsEditing(false)
   }, [terminal.name])
@@ -128,6 +127,32 @@ interface WorkspaceTabBarProps {
   onSelectTerminal: (id: string) => void
   onCloseEditorTab: (filePath: string) => void
   defaultShell?: string
+}
+
+interface EditorTabWrapperProps {
+  tab: { type: 'editor'; id: string; filePath: string }
+  isActive: boolean
+  onSelect: () => void
+  onClose: () => void
+  onCloseOthers: () => void
+  onCloseAll: () => void
+  onCopyPath: () => void
+}
+
+function EditorTabWrapper({ tab, isActive, onSelect, onClose, onCloseOthers, onCloseAll, onCopyPath }: EditorTabWrapperProps): React.JSX.Element {
+  const isDirty = useEditorStore((state) => state.openFiles.get(tab.filePath)?.isDirty ?? false)
+  return (
+    <EditorTab
+      filePath={tab.filePath}
+      isActive={isActive}
+      isDirty={isDirty}
+      onSelect={onSelect}
+      onClose={onClose}
+      onCloseOthers={onCloseOthers}
+      onCloseAll={onCloseAll}
+      onCopyPath={onCopyPath}
+    />
+  )
 }
 
 export function WorkspaceTabBar({
@@ -285,10 +310,9 @@ export function WorkspaceTabBar({
                     )
                   })()
                 ) : (
-                  <EditorTab
-                    filePath={tab.filePath}
+                  <EditorTabWrapper
+                    tab={tab as { type: 'editor'; id: string; filePath: string }}
                     isActive={tab.id === activeTabId}
-                    isDirty={useEditorStore.getState().openFiles.get(tab.filePath)?.isDirty ?? false}
                     onSelect={() => {
                       setActiveTab(tab.id)
                       useEditorStore.getState().setActiveFilePath(tab.filePath)

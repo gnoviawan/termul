@@ -104,7 +104,9 @@ export function FileExplorer(): React.JSX.Element {
 
   const handleRename = useCallback((entry: DirectoryEntry) => {
     setContextMenu(null)
-    const parentPath = entry.path.substring(0, entry.path.lastIndexOf('/'))
+    const normalizedPath = entry.path.replace(/\\/g, '/')
+    const lastSlash = normalizedPath.lastIndexOf('/')
+    const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : normalizedPath
     setInlineInput({
       parentPath,
       type: entry.type === 'directory' ? 'folder' : 'file',
@@ -187,9 +189,10 @@ export function FileExplorer(): React.JSX.Element {
         useWorkspaceStore.getState().removeTab(editorTabId(deleteConfirm.path))
       }
 
-      const parentPath = deleteConfirm.path.substring(
+      const normalizedDeletePath = deleteConfirm.path.replace(/\\/g, '/')
+      const parentPath = normalizedDeletePath.substring(
         0,
-        deleteConfirm.path.lastIndexOf('/')
+        normalizedDeletePath.lastIndexOf('/')
       )
       await refreshDirectory(parentPath)
     } catch {

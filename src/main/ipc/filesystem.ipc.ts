@@ -243,6 +243,14 @@ export function registerFilesystemIpc(): void {
         return createErrorResult('Invalid path', IpcErrorCodes.PATH_INVALID)
       }
       try {
+        // Only allow watching if path is already within an approved root,
+        // or if no roots exist yet (first project root registration)
+        if (allowedRoots.size > 0 && !isPathAllowed(dirPath)) {
+          return createErrorResult(
+            'Path is outside allowed project directories',
+            IpcErrorCodes.PATH_INVALID
+          )
+        }
         // Register as allowed root when watching begins
         addAllowedRoot(dirPath)
         service.watchDirectory(dirPath)
