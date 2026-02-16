@@ -42,6 +42,7 @@ vi.mock('@/stores/project-store', () => ({
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
+  useTerminalStore: vi.fn((selector) => selector({ terminals: [] })),
   useTerminals: () => mockUseTerminals(),
   useAllTerminals: () => mockUseAllTerminals(),
   useActiveTerminal: () => mockUseActiveTerminal(),
@@ -116,11 +117,19 @@ const mockApi = {
     kill: vi.fn().mockResolvedValue({ success: true }),
     write: vi.fn().mockResolvedValue({ success: true })
   },
+  filesystem: {
+    onFileChanged: vi.fn(() => vi.fn()),
+    onFileCreated: vi.fn(() => vi.fn()),
+    onFileDeleted: vi.fn(() => vi.fn()),
+    watchDirectory: vi.fn().mockResolvedValue({ success: true })
+  },
   system: {
-    getHomeDirectory: vi.fn().mockResolvedValue({ success: true, data: '/home/user' })
+    getHomeDirectory: vi.fn().mockResolvedValue({ success: true, data: '/home/user' }),
+    getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: [] })
   },
   persistence: {
-    writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+    writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    read: vi.fn(() => Promise.resolve({ success: true, data: null }))
   }
 }
 

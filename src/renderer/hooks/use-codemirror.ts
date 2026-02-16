@@ -165,9 +165,14 @@ export function useCodeMirror(
       extensions.push(EditorState.readOnly.of(true))
     }
 
+    // Cancellation flag to prevent stale async completions from leaking EditorViews
+    let cancelled = false
+
     // Load language asynchronously
     const initEditor = async (): Promise<void> => {
       const langExtension = await loadLanguage(options.language)
+      if (cancelled) return
+
       if (langExtension) {
         extensions.push(langExtension)
       }
@@ -179,10 +184,17 @@ export function useCodeMirror(
         extensions
       })
 
+      if (cancelled) return
+
       const view = new EditorView({
         state,
         parent: containerRef.current
       })
+
+      if (cancelled) {
+        view.destroy()
+        return
+      }
 
       viewRef.current = view
       setViewReady(true)
@@ -191,6 +203,7 @@ export function useCodeMirror(
     initEditor()
 
     return () => {
+      cancelled = true
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
         debounceTimerRef.current = null

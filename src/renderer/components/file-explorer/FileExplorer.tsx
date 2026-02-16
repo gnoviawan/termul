@@ -43,7 +43,7 @@ export function FileExplorer(): React.JSX.Element {
     if (rootPath && !directoryContents.has(rootPath)) {
       toggleDirectory(rootPath)
     }
-  }, [rootPath])
+  }, [rootPath, directoryContents, toggleDirectory])
 
   // Focus inline input when it appears
   useEffect(() => {

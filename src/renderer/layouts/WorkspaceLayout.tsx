@@ -253,10 +253,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Ctrl+B - toggle file explorer
+      // Ctrl+B - toggle file explorer (skip when in editor/input so BlockNote bold works)
       if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
-        e.preventDefault()
-        useFileExplorerStore.getState().toggleVisibility()
+        if (!isInEditor && !isInInput) {
+          e.preventDefault()
+          useFileExplorerStore.getState().toggleVisibility()
+        }
         return
       }
 
