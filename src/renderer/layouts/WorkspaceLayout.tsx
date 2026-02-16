@@ -118,24 +118,89 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeTabId = useActiveTabId()
   const activeTab = useActiveTab()
   const prevProjectIdRef = useRef<string>('')
+  const watchedRootPathRef = useRef<string | null>(null)
+  const projectSwitchRequestIdRef = useRef(0)
 
   // File watcher hook
   useFileWatcher()
 
+  // Sync file explorer root path and register project root watcher when project changes
+  useEffect(() => {
+    const nextRootPathCandidate = activeProject?.path
+    if (typeof nextRootPathCandidate !== 'string' || activeProjectId === prevProjectIdRef.current) {
+      return
+    }
+
+    const nextRootPath = nextRootPathCandidate
+
+    const switchRequestId = ++projectSwitchRequestIdRef.current
+    const previousWatchedRoot = watchedRootPathRef.current
+
+    let cancelled = false
+
+    async function applyProjectSwitch(): Promise<void> {
+      try {
+        const watchResult = await window.api.filesystem.watchDirectory(nextRootPath)
+
+        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
+          window.api.filesystem.unwatchDirectory(nextRootPath)
+          return
+        }
+
+        if (!watchResult.success) {
+          useFileExplorerStore.getState().setRootPath(nextRootPath)
+          useFileExplorerStore.getState().setRootLoadError({
+            message: watchResult.error,
+            code: watchResult.code
+          })
+          return
+        }
+
+        useFileExplorerStore.getState().setRootPath(nextRootPath)
+
+        if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
+          window.api.filesystem.unwatchDirectory(previousWatchedRoot)
+        }
+
+        watchedRootPathRef.current = nextRootPath
+        prevProjectIdRef.current = activeProjectId
+      } catch (error) {
+        if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to watch project directory'
+        useFileExplorerStore.getState().setRootPath(nextRootPath)
+        useFileExplorerStore.getState().setRootLoadError({
+          message,
+          code: 'WATCH_FAILED'
+        })
+      }
+    }
+
+    void applyProjectSwitch()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject?.path, activeProjectId])
+
+  useEffect(() => {
+    if (activeProjectId && activeProjectId !== prevProjectIdRef.current) {
+      prevProjectIdRef.current = activeProjectId
+    }
+  }, [activeProjectId])
+
   // Editor state persistence
   useEditorPersistence(activeProjectId)
 
-  // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
-    if (activeProject?.path && activeProjectId !== prevProjectIdRef.current) {
-      useFileExplorerStore.getState().setRootPath(activeProject.path)
-
-      // Watch root directory - this also registers it as an allowed root for path validation
-      window.api.filesystem.watchDirectory(activeProject.path)
-
-      prevProjectIdRef.current = activeProjectId
+    return () => {
+      if (watchedRootPathRef.current) {
+        window.api.filesystem.unwatchDirectory(watchedRootPathRef.current)
+      }
     }
-  }, [activeProject?.path, activeProjectId])
+  }, [])
 
   // Sync terminal tabs with workspace store
   useEffect(() => {

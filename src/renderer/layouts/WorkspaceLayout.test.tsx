@@ -1,9 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
-import type { Project, Terminal } from '@/types/project'
+import type { Project, Terminal, ProjectColor } from '@/types/project'
+
+function createProject(id: string, path: string, color: ProjectColor): Project {
+  return {
+    id,
+    name: id.toUpperCase(),
+    color,
+    path,
+    gitBranch: 'main',
+    isActive: true
+  }
+}
 
 // Mock the store hooks
 const mockUseProjectsLoaded = vi.fn(() => true)
@@ -146,6 +157,13 @@ beforeEach(() => {
   mockUseAllTerminals.mockReturnValue([])
   mockUseActiveTerminal.mockReturnValue(null)
   mockUseActiveTerminalId.mockReturnValue('')
+  mockApi.filesystem.watchDirectory.mockReset()
+  mockApi.filesystem.unwatchDirectory.mockReset()
+  mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+})
+
+afterEach(() => {
+  vi.clearAllTimers()
 })
 
 // Helper to render with router
@@ -425,6 +443,93 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
       expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Project switch watcher orchestration', () => {
+    it('watches unrelated roots across project switches and unwatches old root', async () => {
+      const projects = [
+        createProject('a', '/workspace/a', 'blue'),
+        createProject('b', '/outside/b', 'green')
+      ]
+
+      mockUseProjects.mockReturnValue(projects)
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      const view = renderWithRouter()
+
+      await waitFor(() => {
+        expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
+      })
+
+      mockUseActiveProject.mockReturnValue(projects[1])
+      mockUseActiveProjectId.mockReturnValue('b')
+      view.rerender(
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      await waitFor(() => {
+        expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/outside/b')
+      })
+
+      expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/workspace/a')
+    })
+
+    it('ignores stale async watch completion from older project switch', async () => {
+      let resolveFirstWatch: (value: { success: boolean }) => void = () => undefined
+      mockApi.filesystem.watchDirectory
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ success: boolean }>((resolve) => {
+              resolveFirstWatch = resolve
+            })
+        )
+        .mockResolvedValueOnce({ success: true })
+
+      const projects = [
+        createProject('a', '/workspace/a', 'blue'),
+        createProject('c', '/workspace/c', 'purple')
+      ]
+
+      mockUseProjects.mockReturnValue(projects)
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+      const view = renderWithRouter()
+
+      mockUseActiveProject.mockReturnValue(projects[1])
+      mockUseActiveProjectId.mockReturnValue('c')
+      view.rerender(
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      await waitFor(() => {
+        expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/c')
+      })
+
+      resolveFirstWatch({ success: true })
+
+      await waitFor(() => {
+        expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/workspace/a')
+      })
     })
   })
 })

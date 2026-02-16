@@ -26,9 +26,14 @@ interface InlineInputState {
 }
 
 export function FileExplorer(): React.JSX.Element {
-  const { rootPath, directoryContents, isVisible } = useFileExplorer()
-  const { toggleDirectory, selectPath, collapseAll, refreshDirectory } =
-    useFileExplorerActions()
+  const { rootPath, directoryContents, isVisible, rootLoadError } = useFileExplorer()
+  const {
+    toggleDirectory,
+    selectPath,
+    collapseAll,
+    refreshDirectory,
+    setRootLoadError
+  } = useFileExplorerActions()
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [inlineInput, setInlineInput] = useState<InlineInputState | null>(null)
@@ -40,10 +45,10 @@ export function FileExplorer(): React.JSX.Element {
 
   // Auto-expand root directory on mount
   useEffect(() => {
-    if (rootPath && !directoryContents.has(rootPath)) {
+    if (rootPath && !directoryContents.has(rootPath) && !rootLoadError) {
       toggleDirectory(rootPath)
     }
-  }, [rootPath, directoryContents, toggleDirectory])
+  }, [rootPath, directoryContents, rootLoadError, toggleDirectory])
 
   // Focus inline input when it appears
   useEffect(() => {
@@ -208,6 +213,12 @@ export function FileExplorer(): React.JSX.Element {
     setDeleteConfirm(null)
   }, [deleteConfirm, refreshDirectory])
 
+  const handleRootRetry = useCallback(() => {
+    if (!rootPath) return
+    setRootLoadError(null)
+    void toggleDirectory(rootPath)
+  }, [rootPath, setRootLoadError, toggleDirectory])
+
   if (!isVisible) return <></>
 
   return (
@@ -234,7 +245,24 @@ export function FileExplorer(): React.JSX.Element {
           </div>
         )}
 
-        {rootPath && rootEntries && (
+        {rootPath && rootLoadError && (
+          <div className="px-3 py-4 space-y-2">
+            <p className="text-sm text-red-400">Failed to load project files.</p>
+            <p className="text-xs text-muted-foreground break-words">{rootLoadError.message}</p>
+            <button
+              onClick={handleRootRetry}
+              className="px-2 py-1 text-xs rounded bg-secondary text-foreground hover:bg-secondary/80"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {rootPath && !rootEntries && !rootLoadError && (
+          <div className="px-3 py-4 text-sm text-muted-foreground">Loading...</div>
+        )}
+
+        {rootPath && rootEntries && !rootLoadError && (
           <>
             {rootEntries.map((entry) => (
               <FileTreeNodeWrapper
@@ -247,10 +275,6 @@ export function FileExplorer(): React.JSX.Element {
               />
             ))}
           </>
-        )}
-
-        {rootPath && !rootEntries && (
-          <div className="px-3 py-4 text-sm text-muted-foreground">Loading...</div>
         )}
 
         {/* Inline input for new file/folder/rename */}

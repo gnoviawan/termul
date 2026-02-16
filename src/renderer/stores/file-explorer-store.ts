@@ -2,6 +2,19 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+function isPathWithinRoot(path: string, rootPath: string): boolean {
+  return path === rootPath || path.startsWith(rootPath + '/')
+}
+
+export interface FileExplorerRootError {
+  message: string
+  code?: string
+}
+
 export interface FileExplorerState {
   rootPath: string | null
   expandedDirs: Set<string>
@@ -9,6 +22,7 @@ export interface FileExplorerState {
   selectedPath: string | null
   isVisible: boolean
   loadingDirs: Set<string>
+  rootLoadError: FileExplorerRootError | null
 
   setRootPath: (path: string | null) => void
   toggleDirectory: (path: string) => Promise<void>
@@ -20,6 +34,8 @@ export interface FileExplorerState {
   removeDirectoryContents: (path: string) => void
   setVisible: (visible: boolean) => void
   setExpandedDirs: (dirs: Set<string>) => void
+  setRootLoadError: (error: FileExplorerRootError | null) => void
+  restoreExpandedDirs: (dirs: string[]) => Promise<void>
 }
 
 export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
@@ -29,6 +45,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   selectedPath: null,
   isVisible: true,
   loadingDirs: new Set<string>(),
+  rootLoadError: null,
 
   setRootPath: (path: string | null): void => {
     // Unwatch all previously expanded directories
@@ -37,33 +54,36 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       window.api.filesystem.unwatchDirectory(dir)
     })
     set({
-      rootPath: path,
+      rootPath: path ? normalizePath(path) : null,
       expandedDirs: new Set<string>(),
       directoryContents: new Map<string, DirectoryEntry[]>(),
       selectedPath: null,
-      loadingDirs: new Set<string>()
+      loadingDirs: new Set<string>(),
+      rootLoadError: null
     })
   },
 
   toggleDirectory: async (path: string): Promise<void> => {
-    const { expandedDirs, directoryContents, loadingDirs } = get()
+    const normalized = normalizePath(path)
+    const { expandedDirs, directoryContents, loadingDirs, rootPath } = get()
+    const isRootLoad = rootPath === normalized
 
-    if (expandedDirs.has(path)) {
+    if (expandedDirs.has(normalized)) {
       // Collapse
       const newExpanded = new Set(expandedDirs)
-      newExpanded.delete(path)
+      newExpanded.delete(normalized)
 
       // Remove contents of this dir and any nested expanded dirs
       const newContents = new Map(directoryContents)
-      newContents.delete(path)
+      newContents.delete(normalized)
 
       // Collect dirs to unwatch (this dir + any nested expanded children)
-      const dirsToUnwatch: string[] = [path]
+      const dirsToUnwatch: string[] = [normalized]
 
       // Also collapse any child directories
       const newExpandedFiltered = new Set<string>()
       newExpanded.forEach((dir) => {
-        if (!dir.startsWith(path + '/')) {
+        if (!dir.startsWith(normalized + '/')) {
           newExpandedFiltered.add(dir)
         } else {
           newContents.delete(dir)
@@ -79,46 +99,68 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       }
     } else {
       // Prevent duplicate expand work if already loading
-      if (loadingDirs.has(path)) return
+      if (loadingDirs.has(normalized)) return
 
       // Expand - load contents
       const newLoading = new Set(loadingDirs)
-      newLoading.add(path)
+      newLoading.add(normalized)
       set({ loadingDirs: newLoading })
 
       try {
-        const result = await window.api.filesystem.readDirectory(path, { showHidden: false })
+        const result = await window.api.filesystem.readDirectory(normalized, { showHidden: false })
         if (result.success) {
           const { expandedDirs: currentExpanded, directoryContents: currentContents } = get()
           const newExpanded = new Set(currentExpanded)
-          newExpanded.add(path)
+          newExpanded.add(normalized)
           const newContents = new Map(currentContents)
-          newContents.set(path, result.data)
+          newContents.set(normalized, result.data)
 
           set({
             expandedDirs: newExpanded,
-            directoryContents: newContents
+            directoryContents: newContents,
+            rootLoadError: isRootLoad ? null : get().rootLoadError
           })
 
           // Watch this directory for changes (fire-and-forget)
-          window.api.filesystem.watchDirectory(path)
+          window.api.filesystem.watchDirectory(normalized)
+        } else if (isRootLoad) {
+          set({
+            rootLoadError: {
+              message: result.error,
+              code: result.code
+            }
+          })
+        }
+      } catch (error) {
+        if (isRootLoad) {
+          const message = error instanceof Error ? error.message : 'Failed to load project files'
+          set({
+            rootLoadError: {
+              message,
+              code: 'UNKNOWN_ERROR'
+            }
+          })
         }
       } finally {
         const newLoadingDone = new Set(get().loadingDirs)
-        newLoadingDone.delete(path)
+        newLoadingDone.delete(normalized)
         set({ loadingDirs: newLoadingDone })
       }
     }
   },
 
   refreshDirectory: async (path: string): Promise<void> => {
+    const normalized = normalizePath(path)
     try {
-      const result = await window.api.filesystem.readDirectory(path, { showHidden: false })
+      const result = await window.api.filesystem.readDirectory(normalized, { showHidden: false })
       if (result.success) {
-        const { directoryContents } = get()
+        const { directoryContents, rootPath } = get()
         const newContents = new Map(directoryContents)
-        newContents.set(path, result.data)
-        set({ directoryContents: newContents })
+        newContents.set(normalized, result.data)
+        set({
+          directoryContents: newContents,
+          rootLoadError: rootPath === normalized ? null : get().rootLoadError
+        })
       }
     } catch {
       // Silently fail on refresh
@@ -171,13 +213,48 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
   setExpandedDirs: (dirs: Set<string>): void => {
     set({ expandedDirs: dirs })
+  },
+
+  setRootLoadError: (error: FileExplorerRootError | null): void => {
+    set({ rootLoadError: error })
+  },
+
+  restoreExpandedDirs: async (dirs: string[]): Promise<void> => {
+    const { rootPath } = get()
+    if (!rootPath || dirs.length === 0) return
+
+    const normalizedRoot = normalizePath(rootPath)
+
+    for (const dir of dirs) {
+      const normalizedDir = normalizePath(dir)
+
+      if (normalizedDir === normalizedRoot) {
+        continue
+      }
+
+      if (!isPathWithinRoot(normalizedDir, normalizedRoot)) {
+        continue
+      }
+
+      try {
+        await get().toggleDirectory(normalizedDir)
+      } catch {
+        // Skip invalid/missing directories during restore
+      }
+    }
   }
 }))
 
 // Selector hooks
 export function useFileExplorer(): Pick<
   FileExplorerState,
-  'rootPath' | 'expandedDirs' | 'directoryContents' | 'selectedPath' | 'isVisible' | 'loadingDirs'
+  'rootPath'
+  | 'expandedDirs'
+  | 'directoryContents'
+  | 'selectedPath'
+  | 'isVisible'
+  | 'loadingDirs'
+  | 'rootLoadError'
 > {
   return useFileExplorerStore(
     useShallow((state) => ({
@@ -186,7 +263,8 @@ export function useFileExplorer(): Pick<
       directoryContents: state.directoryContents,
       selectedPath: state.selectedPath,
       isVisible: state.isVisible,
-      loadingDirs: state.loadingDirs
+      loadingDirs: state.loadingDirs,
+      rootLoadError: state.rootLoadError
     }))
   )
 }
@@ -201,6 +279,8 @@ export function useFileExplorerActions(): Pick<
   | 'collapseAll'
   | 'setVisible'
   | 'setExpandedDirs'
+  | 'setRootLoadError'
+  | 'restoreExpandedDirs'
 > {
   return useFileExplorerStore(
     useShallow((state) => ({
@@ -211,7 +291,9 @@ export function useFileExplorerActions(): Pick<
       toggleVisibility: state.toggleVisibility,
       collapseAll: state.collapseAll,
       setVisible: state.setVisible,
-      setExpandedDirs: state.setExpandedDirs
+      setExpandedDirs: state.setExpandedDirs,
+      setRootLoadError: state.setRootLoadError,
+      restoreExpandedDirs: state.restoreExpandedDirs
     }))
   )
 }

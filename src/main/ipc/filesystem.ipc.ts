@@ -44,7 +44,8 @@ function mapErrorCode(code: string): IpcErrorCode {
 const allowedRoots = new Set<string>()
 
 function addAllowedRoot(root: string): void {
-  allowedRoots.add(normalize(resolve(root)))
+  const normalizedRoot = normalize(resolve(root))
+  allowedRoots.add(normalizedRoot)
 }
 
 function isPathAllowed(p: string): boolean {
@@ -242,18 +243,13 @@ export function registerFilesystemIpc(): void {
       if (!dirPath || typeof dirPath !== 'string') {
         return createErrorResult('Invalid path', IpcErrorCodes.PATH_INVALID)
       }
+
+      const normalizedPath = normalize(resolve(dirPath))
+
       try {
-        // Only allow watching if path is already within an approved root,
-        // or if no roots exist yet (first project root registration)
-        if (allowedRoots.size > 0 && !isPathAllowed(dirPath)) {
-          return createErrorResult(
-            'Path is outside allowed project directories',
-            IpcErrorCodes.PATH_INVALID
-          )
-        }
-        // Register as allowed root when watching begins
-        addAllowedRoot(dirPath)
-        service.watchDirectory(dirPath)
+        // Register each watched project root so unrelated projects can be opened in-session.
+        addAllowedRoot(normalizedPath)
+        service.watchDirectory(normalizedPath)
         return createSuccessResult(undefined)
       } catch (error) {
         return handleError(error)

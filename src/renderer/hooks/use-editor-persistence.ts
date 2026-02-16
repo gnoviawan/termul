@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { EditorFileState } from '@/stores/editor-store'
 
@@ -24,6 +25,21 @@ interface PersistedEditorState {
 
 function editorStateKey(projectId: string): string {
   return 'editor-state/' + projectId
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
+function filterExpandedDirsByRoot(expandedDirs: string[], rootPath?: string): string[] {
+  if (!rootPath) {
+    return []
+  }
+
+  const normalizedRoot = normalizePath(rootPath)
+  return expandedDirs
+    .map((dir) => normalizePath(dir))
+    .filter((dir) => dir === normalizedRoot || dir.startsWith(normalizedRoot + '/'))
 }
 
 export function useEditorPersistence(projectId: string): void {
@@ -59,15 +75,16 @@ export function useEditorPersistence(projectId: string): void {
 
         const persisted = result.data
 
-        // Restore file explorer state
+        // Restore file explorer visibility and expanded dirs for this project root
         const explorerStore = useFileExplorerStore.getState()
         explorerStore.setVisible(persisted.fileExplorerVisible)
-        if (persisted.expandedDirs.length > 0) {
-          explorerStore.setExpandedDirs(new Set(persisted.expandedDirs))
-          for (const dir of persisted.expandedDirs) {
-            await explorerStore.refreshDirectory(dir)
-          }
-        }
+
+        const rootPath = useProjectStore
+          .getState()
+          .projects.find((project) => project.id === projectId)?.path
+
+        const filteredExpandedDirs = filterExpandedDirsByRoot(persisted.expandedDirs, rootPath)
+        explorerStore.setExpandedDirs(new Set(filteredExpandedDirs))
 
         // Restore open files
         const editorStore = useEditorStore.getState()
@@ -100,6 +117,9 @@ export function useEditorPersistence(projectId: string): void {
         // Sync workspace editor tabs from restored files
         const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
         useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
+
+        // Restore expanded directory tree after root initialization.
+        await explorerStore.restoreExpandedDirs(filteredExpandedDirs)
       } finally {
         isRestoringRef.current = false
       }
