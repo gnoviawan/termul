@@ -1,8 +1,61 @@
 import { EditorView } from '@codemirror/view'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import type { Extension } from '@codemirror/state'
 
-export function createTermulTheme(isDark: boolean): Extension {
-  return EditorView.theme(
+const darkHighlightStyle = HighlightStyle.define([
+  { tag: tags.keyword, color: '#c586c0' },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: '#6a9955', fontStyle: 'italic' },
+  { tag: [tags.string, tags.special(tags.string)], color: '#ce9178' },
+  { tag: [tags.number, tags.integer, tags.float], color: '#b5cea8' },
+  { tag: tags.bool, color: '#569cd6' },
+  { tag: tags.null, color: '#569cd6' },
+  { tag: tags.variableName, color: '#9cdcfe' },
+  { tag: tags.definition(tags.variableName), color: '#4fc1ff' },
+  { tag: tags.function(tags.variableName), color: '#dcdcaa' },
+  { tag: [tags.typeName, tags.className], color: '#4ec9b0' },
+  { tag: tags.propertyName, color: '#9cdcfe' },
+  { tag: tags.operator, color: '#d4d4d4' },
+  { tag: tags.punctuation, color: '#d4d4d4' },
+  { tag: tags.meta, color: '#d7ba7d' },
+  { tag: tags.regexp, color: '#d16969' },
+  { tag: tags.tagName, color: '#569cd6' },
+  { tag: tags.attributeName, color: '#9cdcfe' },
+  { tag: tags.attributeValue, color: '#ce9178' },
+  { tag: tags.heading, color: '#569cd6', fontWeight: 'bold' },
+  { tag: tags.link, color: '#9cdcfe', textDecoration: 'underline' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strong, fontWeight: 'bold' }
+])
+
+const lightHighlightStyle = HighlightStyle.define([
+  { tag: tags.keyword, color: '#af00db' },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: '#008000', fontStyle: 'italic' },
+  { tag: [tags.string, tags.special(tags.string)], color: '#a31515' },
+  { tag: [tags.number, tags.integer, tags.float], color: '#098658' },
+  { tag: tags.bool, color: '#0000ff' },
+  { tag: tags.null, color: '#0000ff' },
+  { tag: tags.variableName, color: '#001080' },
+  { tag: tags.definition(tags.variableName), color: '#0070c1' },
+  { tag: tags.function(tags.variableName), color: '#795e26' },
+  { tag: [tags.typeName, tags.className], color: '#267f99' },
+  { tag: tags.propertyName, color: '#001080' },
+  { tag: tags.operator, color: '#000000' },
+  { tag: tags.punctuation, color: '#000000' },
+  { tag: tags.meta, color: '#af00db' },
+  { tag: tags.regexp, color: '#811f3f' },
+  { tag: tags.tagName, color: '#800000' },
+  { tag: tags.attributeName, color: '#e50000' },
+  { tag: tags.attributeValue, color: '#0000ff' },
+  { tag: tags.heading, color: '#0000ff', fontWeight: 'bold' },
+  { tag: tags.link, color: '#0070c1', textDecoration: 'underline' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strong, fontWeight: 'bold' }
+])
+
+export function createTermulTheme(isDark: boolean): Extension[] {
+  const highlightStyle = isDark ? darkHighlightStyle : lightHighlightStyle
+  return [EditorView.theme(
     {
       '&': {
         backgroundColor: 'hsl(var(--background))',
@@ -86,5 +139,5 @@ export function createTermulTheme(isDark: boolean): Extension {
       }
     },
     { dark: isDark }
-  )
+  ), syntaxHighlighting(highlightStyle)]
 }

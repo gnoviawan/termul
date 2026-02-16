@@ -45,6 +45,22 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
         extension = markdown()
         break
       }
+      case 'python': {
+        const { python } = await import('@codemirror/lang-python')
+        extension = python()
+        break
+      }
+      case 'rust': {
+        const { rust } = await import('@codemirror/lang-rust')
+        extension = rust()
+        break
+      }
+      case 'yaml':
+      case 'toml': {
+        const { yaml } = await import('@codemirror/lang-yaml')
+        extension = yaml()
+        break
+      }
       default:
         return null
     }

@@ -1,5 +1,11 @@
 import { useRef, useEffect, useMemo, useCallback } from 'react'
-import { BlockNoteEditor } from '@blocknote/core'
+import {
+  BlockNoteEditor,
+  BlockNoteSchema,
+  defaultBlockSpecs,
+  createCodeBlockSpec
+} from '@blocknote/core'
+import { codeBlockOptions } from '@blocknote/code-block'
 
 interface UseBlockNoteOptions {
   initialMarkdown: string
@@ -20,7 +26,13 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   onChangeRef.current = options.onChange
 
   const editor = useMemo(() => {
-    return BlockNoteEditor.create()
+    const schema = BlockNoteSchema.create({
+      blockSpecs: {
+        ...defaultBlockSpecs,
+        codeBlock: createCodeBlockSpec(codeBlockOptions)
+      }
+    })
+    return BlockNoteEditor.create({ schema })
   }, [])
 
   // Load initial markdown content
