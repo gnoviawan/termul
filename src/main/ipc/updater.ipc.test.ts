@@ -30,7 +30,8 @@ vi.mock('../services/persistence-service', () => ({
 import { initRegisterUpdaterIpc, unregisterUpdaterIpc } from './updater.ipc'
 
 // Capture registered handlers
-type IpcHandler = (event: unknown, ...args: unknown[]) => unknown
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type IpcHandler = (...args: any[]) => any
 const registeredHandlers = new Map<string, IpcHandler>()
 
 beforeEach(() => {
