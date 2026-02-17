@@ -84,6 +84,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isTerminalSearchOpen, setIsTerminalSearchOpen] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
+  const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
+  const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
   const terminalSearchRef = useRef<TerminalSearchHandle>(null)
 
@@ -205,17 +207,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
     useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
   }, [terminals])
 
-  // Warn before closing if dirty files exist
+  // Intercept app close to check for unsaved files
   useEffect(() => {
-    const handler = (e: BeforeUnloadEvent): string | undefined => {
-      if (useEditorStore.getState().hasDirtyFiles()) {
-        e.preventDefault()
-        return ''
+    return window.api.window.onCloseRequested(() => {
+      const dirtyCount = useEditorStore.getState().getDirtyFileCount()
+      if (dirtyCount > 0) {
+        setAppCloseDirtyCount(dirtyCount)
+        setIsAppCloseDialogOpen(true)
+      } else {
+        window.api.window.respondToClose('close')
       }
-      return undefined
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
+    })
   }, [])
 
   // Load snapshots when project changes
@@ -577,6 +579,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setDirtyCloseFilePath(null)
   }, [])
 
+  // App close dialog handlers
+  const handleSaveAllAndClose = useCallback(async () => {
+    await useEditorStore.getState().saveAllDirty()
+    window.api.window.respondToClose('close')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
+  const handleDiscardAllAndClose = useCallback(() => {
+    window.api.window.respondToClose('close')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
+  const handleCancelAppClose = useCallback(() => {
+    window.api.window.respondToClose('cancel')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
   // Terminal search handlers
   const handleTerminalSearchClose = useCallback(() => {
     setIsTerminalSearchOpen(false)
@@ -904,6 +923,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
         onConfirm={handleSaveThenClose}
         onCancel={handleCancelDirtyClose}
+      />
+
+      {/* App Close Unsaved Files Confirmation */}
+      <ConfirmDialog
+        isOpen={isAppCloseDialogOpen}
+        title="Unsaved Changes"
+        message={`You have ${appCloseDirtyCount} unsaved file${appCloseDirtyCount !== 1 ? 's' : ''}. Save changes before closing?`}
+        confirmLabel="Save All"
+        cancelLabel="Cancel"
+        secondaryAction={{ label: "Don't Save", onClick: handleDiscardAllAndClose }}
+        onConfirm={handleSaveAllAndClose}
+        onCancel={handleCancelAppClose}
       />
     </div>
   )

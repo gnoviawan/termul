@@ -29,7 +29,9 @@ import type {
   ReadDirectoryOptions,
   FileChangeEvent,
   WindowApi,
-  WindowMaximizeChangedCallback
+  WindowMaximizeChangedCallback,
+  AppCloseRequestedCallback,
+  AppCloseResponse
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -397,6 +399,20 @@ const windowApi: WindowApi = {
     return () => {
       ipcRenderer.off('window:maximize-changed', listener)
     }
+  },
+
+  onCloseRequested: (callback: AppCloseRequestedCallback): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('app:close-requested', listener)
+    return () => {
+      ipcRenderer.off('app:close-requested', listener)
+    }
+  },
+
+  respondToClose: (response: AppCloseResponse): void => {
+    ipcRenderer.send('app:close-response', response)
   }
 }
 
