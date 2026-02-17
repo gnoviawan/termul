@@ -8,6 +8,7 @@ import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
 import { registerClipboardIpc } from './ipc/clipboard.ipc'
 import { registerFilesystemIpc } from './ipc/filesystem.ipc'
+import { registerWindowIpc } from './ipc/window.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
@@ -24,6 +25,7 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
     height: windowState?.height ?? 800,
     minWidth: 800,
     minHeight: 600,
+    frame: false,
     show: false,
     backgroundColor: '#0f0f0f',
     webPreferences: {
@@ -113,6 +115,9 @@ export function initializeApp(): void {
     const windowState = await loadWindowState()
     const mainWindow = createWindow(windowState)
 
+    // Register window IPC handlers (needs mainWindow reference)
+    registerWindowIpc(mainWindow)
+
     // Set updater window reference
     await setUpdaterWindow(mainWindow)
 
@@ -120,6 +125,7 @@ export function initializeApp(): void {
       if (BrowserWindow.getAllWindows().length === 0) {
         const state = await loadWindowState()
         const mainWindow = createWindow(state)
+        registerWindowIpc(mainWindow)
         await setUpdaterWindow(mainWindow) // Only update window reference, don't re-register handlers
       }
     })
