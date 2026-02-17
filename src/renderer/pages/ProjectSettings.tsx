@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Settings, Save, Info, Plus, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
   useProjects,
@@ -13,25 +12,21 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
-  const projects = useProjects()
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
   const {
-    selectProject,
     addProject,
-    updateProject,
-    deleteProject,
-    archiveProject,
-    restoreProject,
-    reorderProjects
+    updateProject
   } = useProjectActions()
 
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
+  const [rootPath, setRootPath] = useState(activeProject?.path || '')
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
   const [startupCommand, setStartupCommand] = useState('')
@@ -65,6 +60,7 @@ export default function ProjectSettings() {
     if (activeProject) {
       setProjectName(activeProject.name)
       setSelectedColor(activeProject.color)
+      setRootPath(activeProject.path || '')
       setEnvVars(activeProject.envVars || [])
       setShell(activeProject.defaultShell || availableShells?.default?.name || fallbackShell)
       setHasChanges(false)
@@ -76,6 +72,7 @@ export default function ProjectSettings() {
       updateProject(activeProject.id, {
         name: projectName,
         color: selectedColor,
+        path: rootPath,
         envVars: envVars.filter((v) => v.key.trim() !== ''),
         defaultShell: shell
       })
@@ -94,22 +91,7 @@ export default function ProjectSettings() {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-background">
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={(id) => {
-          selectProject(id)
-          navigate('/')
-        }}
-        onNewProject={() => setIsNewProjectModalOpen(true)}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-
+    <>
       <main className="flex-1 flex flex-col min-w-0 h-full relative">
         {/* Header */}
         <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
@@ -166,42 +148,55 @@ export default function ProjectSettings() {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        value={activeProject?.path || ''}
-                        readOnly
-                        className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-muted-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
+                        value={rootPath}
+                        onChange={(e) => {
+                          setRootPath(e.target.value)
+                          setHasChanges(true)
+                        }}
+                        className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
                       />
-                      <button className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm">
+                      <button
+                        onClick={async () => {
+                          const result = await window.api.dialog.selectDirectory()
+                          if (result.success) {
+                            setRootPath(result.data)
+                            setHasChanges(true)
+                          }
+                        }}
+                        className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm"
+                      >
                         Browse
                       </button>
                     </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Changing the root directory only affects new terminals.
+                    </p>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-secondary-foreground mb-3">
                       Color & Appearance
                     </label>
-                    <div className="flex gap-4 items-center">
-                      <div className="flex gap-2 p-1 bg-secondary/50 rounded-full border border-border">
-                        {availableColors.slice(0, 5).map((color) => {
-                          const colors = getColorClasses(color)
-                          return (
-                            <button
-                              key={color}
-                              onClick={() => {
-                                setSelectedColor(color)
-                                setHasChanges(true)
-                              }}
-                              className={cn(
-                                'w-7 h-7 rounded-full transition-all',
-                                colors.bg,
-                                selectedColor === color
-                                  ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
-                                  : 'border-2 border-transparent hover:opacity-80'
-                              )}
-                            />
-                          )
-                        })}
-                      </div>
+                    <div className="flex gap-2 flex-wrap">
+                      {availableColors.map((color) => {
+                        const colors = getColorClasses(color)
+                        return (
+                          <button
+                            key={color}
+                            onClick={() => {
+                              setSelectedColor(color)
+                              setHasChanges(true)
+                            }}
+                            className={cn(
+                              'w-8 h-8 rounded-full transition-all',
+                              colors.bg,
+                              selectedColor === color
+                                ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
+                                : 'border-2 border-transparent hover:opacity-80'
+                            )}
+                          />
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
@@ -300,32 +295,33 @@ export default function ProjectSettings() {
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
                       Default Shell
                     </label>
-                    <div className="relative">
-                      <select
-                        value={shell}
-                        onChange={(e) => {
-                          setShell(e.target.value)
-                          setHasChanges(true)
-                        }}
-                        disabled={shellsLoading}
-                        className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm disabled:opacity-50"
-                      >
-                        {shellsLoading ? (
-                          <option value="">Loading shells...</option>
-                        ) : availableShells?.available && availableShells.available.length > 0 ? (
-                          availableShells.available.map((s) => (
-                            <option key={s.name} value={s.name}>
-                              {s.displayName}
-                            </option>
-                          ))
-                        ) : (
-                          <option value="">No shells detected</option>
-                        )}
-                      </select>
-                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
-                        <ChevronDown size={14} />
+                    {shellsLoading ? (
+                      <Skeleton className="w-full h-10" />
+                    ) : (
+                      <div className="relative">
+                        <select
+                          value={shell}
+                          onChange={(e) => {
+                            setShell(e.target.value)
+                            setHasChanges(true)
+                          }}
+                          className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm"
+                        >
+                          {availableShells?.available && availableShells.available.length > 0 ? (
+                            availableShells.available.map((s) => (
+                              <option key={s.name} value={s.name}>
+                                {s.displayName}
+                              </option>
+                            ))
+                          ) : (
+                            <option value="">No shells detected</option>
+                          )}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
+                          <ChevronDown size={14} />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   <div>
@@ -381,6 +377,6 @@ export default function ProjectSettings() {
         onClose={() => setIsNewProjectModalOpen(false)}
         onCreateProject={addProject}
       />
-    </div>
+    </>
   )
 }

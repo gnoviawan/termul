@@ -39,3 +39,7 @@ export const useTerminalBufferSize = () =>
   useAppSettingsStore((state) => state.settings.terminalBufferSize)
 export const useMaxTerminalsPerProject = () =>
   useAppSettingsStore((state) => state.settings.maxTerminalsPerProject)
+export const useOrphanDetectionEnabled = () =>
+  useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
+export const useOrphanDetectionTimeout = () =>
+  useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)

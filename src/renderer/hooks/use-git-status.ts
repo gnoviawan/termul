@@ -8,13 +8,18 @@ import type { GitStatus } from '@/types/project'
  */
 export function useGitStatus(): void {
   const updateTerminalGitStatus = useTerminalStore((state) => state.updateTerminalGitStatus)
+  const findTerminalByPtyId = useTerminalStore((state) => state.findTerminalByPtyId)
   const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     // Subscribe to git status changed events from main process
     const cleanup = window.api.terminal.onGitStatusChanged(
-      (terminalId: string, status: GitStatus | null) => {
-        updateTerminalGitStatus(terminalId, status)
+      (ptyId: string, status: GitStatus | null) => {
+        // Look up terminal by ptyId and update using store id
+        const terminal = findTerminalByPtyId(ptyId)
+        if (terminal) {
+          updateTerminalGitStatus(terminal.id, status)
+        }
       }
     )
 
@@ -26,5 +31,5 @@ export function useGitStatus(): void {
         cleanupRef.current = null
       }
     }
-  }, [updateTerminalGitStatus])
+  }, [updateTerminalGitStatus, findTerminalByPtyId])
 }

@@ -6,10 +6,16 @@ import { registerDialogIpc } from './ipc/dialog.ipc'
 import { registerShellIpc } from './ipc/shell.ipc'
 import { registerPersistenceIpc } from './ipc/persistence.ipc'
 import { registerSystemIpc } from './ipc/system.ipc'
+import { registerClipboardIpc } from './ipc/clipboard.ipc'
+import { registerFilesystemIpc } from './ipc/filesystem.ipc'
+import { registerWindowIpc } from './ipc/window.ipc'
+import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
+import { resetDefaultFilesystemService } from './services/filesystem-service'
 import type { WindowState } from '../shared/types/persistence.types'
 import { loadWindowState, trackWindowState } from './services/window-state'
+import { setupMenu, setMainWindow } from './menu'
 
 export function createWindow(windowState?: WindowState): BrowserWindow {
   const mainWindow = new BrowserWindow({
@@ -19,8 +25,8 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
     height: windowState?.height ?? 800,
     minWidth: 800,
     minHeight: 600,
+    frame: false,
     show: false,
-    autoHideMenuBar: true,
     backgroundColor: '#0f0f0f',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -29,6 +35,9 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
       nodeIntegration: false
     }
   })
+
+  // Set main window reference for menu
+  setMainWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     // Restore maximized state if saved
@@ -44,6 +53,32 @@ export function createWindow(windowState?: WindowState): BrowserWindow {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  // Intercept Ctrl+Tab and Ctrl+Shift+Tab before Chromium handles them
+  // These are reserved browser shortcuts that don't reach JavaScript keydown handlers
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.alt) return
+
+    // Handle Ctrl+Tab / Ctrl+Shift+Tab
+    if (input.key === 'Tab') {
+      event.preventDefault()
+      const shortcut = input.shift ? 'prevTerminal' : 'nextTerminal'
+      mainWindow.webContents.send('keyboard:shortcut', shortcut)
+      return
+    }
+
+    // Handle zoom shortcuts (Ctrl+-, Ctrl+=, Ctrl+0)
+    // These are browser zoom shortcuts that Chromium blocks
+    if (input.key === '-' || input.key === '=' || input.key === '0') {
+      event.preventDefault()
+      let shortcut = ''
+      if (input.key === '-') shortcut = 'zoomOut'
+      else if (input.key === '=') shortcut = 'zoomIn'
+      else if (input.key === '0') shortcut = 'zoomReset'
+      mainWindow.webContents.send('keyboard:shortcut', shortcut)
+      return
+    }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -63,21 +98,35 @@ export function initializeApp(): void {
       optimizer.watchWindowShortcuts(window)
     })
 
-    // Register IPC handlers before creating window
+    // Setup application menu
+    setupMenu()
+
+    // Register IPC handlers
     registerTerminalIpc()
     registerDialogIpc()
     registerShellIpc()
     registerPersistenceIpc()
     registerSystemIpc()
+    registerClipboardIpc() // Register clipboard IPC handlers
+    registerFilesystemIpc() // Register filesystem IPC handlers
+    initRegisterUpdaterIpc() // Register updater IPC handlers once
 
     // Load persisted window state and create window
     const windowState = await loadWindowState()
-    createWindow(windowState)
+    const mainWindow = createWindow(windowState)
+
+    // Register window IPC handlers (needs mainWindow reference)
+    registerWindowIpc(mainWindow)
+
+    // Set updater window reference
+    await setUpdaterWindow(mainWindow)
 
     app.on('activate', async function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         const state = await loadWindowState()
-        createWindow(state)
+        const mainWindow = createWindow(state)
+        registerWindowIpc(mainWindow)
+        await setUpdaterWindow(mainWindow) // Only update window reference, don't re-register handlers
       }
     })
   })
@@ -90,9 +139,19 @@ app.on('window-all-closed', () => {
 })
 
 // Flush pending writes and cleanup PTY processes before quitting
-app.on('before-quit', async () => {
+let isQuitting = false
+app.on('before-quit', (e) => {
+  if (isQuitting) return
+  isQuitting = true
+  e.preventDefault()
+
   resetDefaultPtyManager()
-  await flushPendingWrites()
+  Promise.all([
+    resetDefaultFilesystemService(),
+    flushPendingWrites()
+  ]).finally(() => {
+    app.quit()
+  })
 })
 
 // Only initialize if not in test environment

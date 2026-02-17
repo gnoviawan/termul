@@ -81,7 +81,9 @@ describe('app-settings-store', () => {
         defaultShell: 'bash',
         terminalBufferSize: 10000,
         defaultProjectColor: 'blue',
-        maxTerminalsPerProject: 10
+        maxTerminalsPerProject: 10,
+        orphanDetectionEnabled: true,
+        orphanDetectionTimeout: 600000
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -103,7 +105,9 @@ describe('app-settings-store', () => {
           defaultShell: 'zsh',
           terminalBufferSize: 5000,
           defaultProjectColor: 'red',
-          maxTerminalsPerProject: 5
+          maxTerminalsPerProject: 5,
+          orphanDetectionEnabled: false,
+          orphanDetectionTimeout: 300000
         },
         isLoaded: true
       })
@@ -113,6 +117,35 @@ describe('app-settings-store', () => {
 
       const { settings } = useAppSettingsStore.getState()
       expect(settings).toEqual(DEFAULT_APP_SETTINGS)
+    })
+  })
+
+  describe('orphan detection settings', () => {
+    it('should have correct default values', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.orphanDetectionEnabled).toBe(true)
+      expect(settings.orphanDetectionTimeout).toBe(600000)
+    })
+
+    it('should update orphanDetectionEnabled', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('orphanDetectionEnabled', false)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.orphanDetectionEnabled).toBe(false)
+    })
+
+    it('should update orphanDetectionTimeout', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('orphanDetectionTimeout', 300000)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.orphanDetectionTimeout).toBe(300000)
+    })
+
+    it('should update orphanDetectionTimeout to null', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('orphanDetectionTimeout', null)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.orphanDetectionTimeout).toBe(null)
     })
   })
 

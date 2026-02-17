@@ -29,8 +29,11 @@ export interface GitStatus {
   hasChanges: boolean
 }
 
+export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'
+
 export interface Terminal {
   id: string
+  ptyId?: string
   name: string
   projectId: string
   shell: string
@@ -41,6 +44,11 @@ export interface Terminal {
   isActive?: boolean
   output?: TerminalLine[]
   pendingScrollback?: string[] // Scrollback to restore on terminal mount
+  healthStatus?: TerminalHealthStatus // Terminal health status
+  isHidden?: boolean // Whether terminal is currently hidden (on another route)
+  hiddenSince?: number // Timestamp when terminal was hidden (for buffer truncation)
+  hasActivity?: boolean // Whether terminal has recent output activity
+  lastActivityTimestamp?: number // Timestamp when last activity occurred
 }
 
 export interface TerminalLine {

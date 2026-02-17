@@ -7,13 +7,18 @@ import { useTerminalStore } from '@/stores/terminal-store'
  */
 export function useGitBranch(): void {
   const updateTerminalGitBranch = useTerminalStore((state) => state.updateTerminalGitBranch)
+  const findTerminalByPtyId = useTerminalStore((state) => state.findTerminalByPtyId)
   const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     // Subscribe to git branch changed events from main process
     const cleanup = window.api.terminal.onGitBranchChanged(
-      (terminalId: string, branch: string | null) => {
-        updateTerminalGitBranch(terminalId, branch)
+      (ptyId: string, branch: string | null) => {
+        // Look up terminal by ptyId and update using store id
+        const terminal = findTerminalByPtyId(ptyId)
+        if (terminal) {
+          updateTerminalGitBranch(terminal.id, branch)
+        }
       }
     )
 
@@ -25,5 +30,5 @@ export function useGitBranch(): void {
         cleanupRef.current = null
       }
     }
-  }, [updateTerminalGitBranch])
+  }, [updateTerminalGitBranch, findTerminalByPtyId])
 }

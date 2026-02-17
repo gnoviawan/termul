@@ -1,4 +1,4 @@
-import { useEffect, useRef, memo, useCallback, useMemo, useImperativeHandle } from 'react'
+import { useEffect, useRef, memo, useCallback, useMemo, useImperativeHandle, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -13,6 +13,19 @@ import {
   restoreScrollback
 } from '../../utils/terminal-registry'
 import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
+import {
+  useKeyboardShortcutsStore,
+  normalizeKeyEvent
+} from '@/stores/keyboard-shortcuts-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
+import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -57,6 +70,12 @@ function ConnectedTerminalComponent({
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
+
+  // Get keyboard shortcuts to intercept app shortcuts before xterm handles them
+  const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
+  // Use ref to avoid stale closure in attachCustomKeyEventHandler
+  const shortcutsRef = useRef(shortcuts)
+  shortcutsRef.current = shortcuts
   const cleanupDataListenerRef = useRef<(() => void) | null>(null)
   const cleanupExitListenerRef = useRef<(() => void) | null>(null)
   // Use ref to track current PTY ID for listener callbacks to avoid stale closures
@@ -70,6 +89,20 @@ function ConnectedTerminalComponent({
   const currentLineRef = useRef<string>('')
   // Resize debounce timer ref
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Activity timeout timer ref
+  const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Rate limiting for clipboard operations
+  const lastClipboardOpRef = useRef<number>(0)
+  const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
+
+  // State to track terminal instance for clipboard hook
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+
+  // Clipboard functionality
+  const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({
+    terminal: terminalInstance
+  })
 
   // Sync ptyIdRef with external terminal ID when provided
   useEffect(() => {
@@ -213,6 +246,7 @@ function ConnectedTerminalComponent({
     }
     const terminal = new Terminal(terminalOptions)
     terminalRef.current = terminal
+    setTerminalInstance(terminal)
 
     const fitAddon = new FitAddon()
     fitAddonRef.current = fitAddon
@@ -227,6 +261,69 @@ function ConnectedTerminalComponent({
     terminal.loadAddon(searchAddon)
 
     terminal.open(containerRef.current)
+
+    // Intercept keyboard shortcuts before xterm processes them
+    // Return false to prevent xterm from handling, true to let xterm handle
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type !== 'keydown') return true
+
+      const normalized = normalizeKeyEvent(event)
+      const shortcuts = shortcutsRef.current
+
+      // Check if this key matches any app shortcut
+      for (const shortcut of Object.values(shortcuts)) {
+        const activeKey = shortcut.customKey ?? shortcut.defaultKey
+        if (normalized === activeKey) {
+          // Don't call stopPropagation() - let event bubble to window handler
+          // Return false to prevent xterm from handling the event
+          return false
+        }
+      }
+
+      // Handle copy/paste/select all keyboard shortcuts
+      const isCtrlOrCmd = event.ctrlKey || event.metaKey
+
+      if (isCtrlOrCmd) {
+        // Rate limit check
+        const now = Date.now()
+        if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) {
+          return false // Rate limited - prevent xterm handling but don't process
+        }
+
+        switch (event.key.toLowerCase()) {
+          case 'c':
+            // Copy: if selection exists, copy and prevent xterm handling
+            // Otherwise allow xterm to handle (for interrupt signal)
+            if (terminal.hasSelection()) {
+              event.preventDefault()
+              const selection = terminal.getSelection()
+              if (selection) {
+                lastClipboardOpRef.current = now
+                // Use the hook's copySelection for consistency
+                void copySelection()
+              }
+              return false
+            }
+            // No selection - allow xterm to send Ctrl+C (interrupt signal)
+            return true
+
+          case 'v':
+            // Paste: read clipboard and paste to terminal
+            event.preventDefault()
+            lastClipboardOpRef.current = now
+            // Use the hook's pasteFromClipboard for consistency
+            void pasteFromClipboard()
+            return false
+
+          case 'a':
+            // Select all
+            terminal.selectAll()
+            return false
+        }
+      }
+
+      return true
+    })
 
     try {
       const webglAddon = new WebglAddon()
@@ -268,6 +365,22 @@ function ConnectedTerminalComponent({
     cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
+        // Update activity state in store
+        const terminal = useTerminalStore.getState().findTerminalByPtyId(id)
+        if (terminal) {
+          useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
+          useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, Date.now())
+
+          // Clear existing activity timeout and set new one
+          if (activityTimeoutRef.current) {
+            clearTimeout(activityTimeoutRef.current)
+          }
+          activityTimeoutRef.current = setTimeout(() => {
+            // Clear activity after 2 seconds of inactivity
+            useTerminalStore.getState().updateTerminalActivity(terminal.id, false)
+            activityTimeoutRef.current = null
+          }, 2000)
+        }
       }
     })
 
@@ -359,12 +472,18 @@ function ConnectedTerminalComponent({
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current)
       }
+      // Clean up activity timeout timer
+      if (activityTimeoutRef.current) {
+        clearTimeout(activityTimeoutRef.current)
+      }
       terminal.dispose()
       terminalRef.current = null
+      setTerminalInstance(null)
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [
     externalTerminalId,
     memoizedSpawnOptions,
@@ -373,7 +492,8 @@ function ConnectedTerminalComponent({
     autoFocus,
     handleTerminalData,
     handleResize,
-    initialScrollback
+    initialScrollback,
+    bufferSize
   ])
 
   // Update terminal font settings when app settings change (without recreating terminal)
@@ -406,8 +526,61 @@ function ConnectedTerminalComponent({
     }
   }, [isVisible])
 
+  // Handle Select All
+  const handleSelectAll = useCallback((): void => {
+    if (terminalRef.current) {
+      terminalRef.current.selectAll()
+    }
+  }, [])
+
+  // Memoized context menu handlers to prevent unnecessary re-renders
+  const contextMenuHandlers = useMemo(() => ({
+    copy: copySelection,
+    paste: pasteFromClipboard,
+    selectAll: handleSelectAll
+  }), [copySelection, pasteFromClipboard, handleSelectAll])
+
   return (
-    <div ref={containerRef} className={`w-full h-full ${className}`} style={{ padding: '8px' }} />
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={containerRef}
+          className={`w-full h-full ${className}`}
+          style={{ padding: '8px' }}
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem
+          onClick={contextMenuHandlers.copy}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+          aria-label="Copy selected text"
+          aria-keyshortcuts="Ctrl+C"
+        >
+          Copy
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+C</span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={contextMenuHandlers.paste}
+          className="cursor-pointer"
+          aria-label="Paste from clipboard"
+          aria-keyshortcuts="Ctrl+V"
+        >
+          Paste
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+V</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={contextMenuHandlers.selectAll}
+          className="cursor-pointer"
+          aria-label="Select all text"
+          aria-keyshortcuts="Ctrl+A"
+        >
+          Select All
+          <span className="ml-auto text-xs text-muted-foreground">Ctrl+A</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

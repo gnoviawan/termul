@@ -1,0 +1,31 @@
+{
+  "_comment": "Claude Code settings template - Copy to .claude_settings.json for local use",
+  "_security_note": "Default settings use SAFE, READ-ONLY permissions. Enable additional permissions below as needed.",
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false
+  },
+  "permissions": {
+    "_defaultMode_note": "Safe default: read-only access. Change to 'edit' to allow code modifications.",
+    "defaultMode": "view",
+    "allow": [
+      "Read(./**)",
+      "Glob(./**)",
+      "Grep(./**)"
+    ],
+    "_full_permissions_example": {
+      "_note": "Uncomment the array below to ENABLE FULL PERMISSIONS for code editing, bash commands, and web access",
+      "allow_full": [
+        "Read(./**)",
+        "Write(./**)",
+        "Edit(./**)",
+        "Glob(./**)",
+        "Grep(./**)",
+        "Bash(*)",
+        "WebFetch(*)",
+        "WebSearch(*)"
+      ],
+      "_instructions": "To enable full permissions: 1) Remove 'allow_full' and '_instructions' keys, 2) Replace 'allow' array with 'allow_full' contents, 3) Set 'defaultMode' to 'edit'"
+    }
+  }
+}

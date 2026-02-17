@@ -426,7 +426,7 @@ describe('snapshot-store', () => {
       })
 
       // Get the full snapshot
-      let fullSnapshot: Awaited<ReturnType<typeof actionsResult.current.getSnapshot>>
+      let fullSnapshot: Awaited<ReturnType<typeof actionsResult.current.getSnapshot>> = null
       await act(async () => {
         fullSnapshot = await actionsResult.current.getSnapshot(snapshotId!)
       })
@@ -441,7 +441,7 @@ describe('snapshot-store', () => {
     it('should return null if snapshot not found in store', async () => {
       const { result } = renderHook(() => useSnapshotActions())
 
-      let fullSnapshot: Awaited<ReturnType<typeof result.current.getSnapshot>>
+      let fullSnapshot: Awaited<ReturnType<typeof result.current.getSnapshot>> = null
       await act(async () => {
         fullSnapshot = await result.current.getSnapshot('non-existent-id')
       })
@@ -471,7 +471,7 @@ describe('snapshot-store', () => {
       // Mock persistence to return empty
       mockPersistence.read.mockResolvedValue({ success: false })
 
-      let fullSnapshot: Awaited<ReturnType<typeof actionsResult.current.getSnapshot>>
+      let fullSnapshot: Awaited<ReturnType<typeof actionsResult.current.getSnapshot>> = null
       await act(async () => {
         fullSnapshot = await actionsResult.current.getSnapshot(snapshotId!)
       })

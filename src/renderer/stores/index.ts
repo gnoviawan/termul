@@ -17,3 +17,22 @@ export {
 } from './terminal-store'
 
 export type { TerminalState } from './terminal-store'
+
+export {
+  useUpdaterStore,
+  useUpdateAvailable,
+  useUpdateVersion,
+  useUpdateDownloaded,
+  useDownloadProgress,
+  useIsChecking,
+  useIsDownloading,
+  useUpdaterError,
+  useLastChecked,
+  useAutoUpdateEnabled,
+  useSkippedVersion,
+  useUpdaterState,
+  useUpdaterActions,
+  useUpdaterInternalActions
+} from './updater-store'
+
+export type { UpdaterStoreState } from './updater-store'

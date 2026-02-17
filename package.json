@@ -1,6 +1,6 @@
 {
   "name": "termul-manager",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "main": "./out/main/index.js",
   "author": {
@@ -15,17 +15,34 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
-    "build:win": "electron-vite build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux",
+    "build:win": "electron-vite build && electron-builder --win --publish never",
+    "build:mac": "electron-vite build && electron-builder --mac --publish never",
+    "build:linux": "electron-vite build && electron-builder --linux --publish never",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "prepare": "husky"
   },
   "dependencies": {
+    "@blocknote/code-block": "^0.46.2",
+    "@blocknote/core": "^0.46.2",
+    "@blocknote/react": "^0.46.2",
+    "@codemirror/commands": "^6.10.2",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.4",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/lang-yaml": "^6.1.2",
+    "@codemirror/language": "^6.12.1",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.5.4",
+    "@codemirror/view": "^6.39.14",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
@@ -60,10 +77,12 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
+    "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "electron-updater": "^6.7.3",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.25.0",
     "input-otp": "^1.4.2",
@@ -76,6 +95,7 @@
     "react-hook-form": "^7.61.1",
     "react-resizable-panels": "^2.1.9",
     "react-router-dom": "^6.30.1",
+    "react-virtuoso": "^4.18.1",
     "recharts": "^2.15.4",
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.6.0",
@@ -103,7 +123,9 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
+    "husky": "^9.1.7",
     "jsdom": "^27.4.0",
+    "lint-staged": "^16.2.7",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
@@ -115,7 +137,11 @@
     "appId": "com.termul-manager.app",
     "productName": "Termul Manager",
     "npmRebuild": false,
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "gnoviawan",
+      "repo": "termul"
+    },
     "directories": {
       "output": "dist"
     },
@@ -123,13 +149,22 @@
       "out/**/*"
     ],
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "mac": {
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     }
   }
 }

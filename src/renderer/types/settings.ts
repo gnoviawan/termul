@@ -25,6 +25,8 @@ export interface AppSettings {
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
   maxTerminalsPerProject: number // Maximum terminals allowed per project
+  orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
+  orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
 }
 
 // Terminal buffer size options
@@ -56,6 +58,15 @@ export const MAX_TERMINALS_OPTIONS = [
   { value: 50, label: '50 terminals' }
 ]
 
+// Orphan detection timeout options
+export const ORPHAN_TIMEOUT_OPTIONS = [
+  { value: 60000, label: '1 minute' },
+  { value: 300000, label: '5 minutes' },
+  { value: 600000, label: '10 minutes' },
+  { value: 1800000, label: '30 minutes' },
+  { value: 3600000, label: '1 hour' }
+]
+
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -63,7 +74,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalBufferSize: 10000,
   defaultShell: '',
   defaultProjectColor: 'blue',
-  maxTerminalsPerProject: 10
+  maxTerminalsPerProject: 10,
+  orphanDetectionEnabled: true,
+  orphanDetectionTimeout: 600000 // 10 minutes
 }
 
 // Persistence key for app settings
@@ -121,14 +134,14 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   },
   nextTerminal: {
     id: 'nextTerminal',
-    label: 'Next Terminal',
-    description: 'Switch to next terminal tab',
+    label: 'Next Tab',
+    description: 'Switch to next tab (terminal or editor)',
     defaultKey: 'ctrl+tab'
   },
   prevTerminal: {
     id: 'prevTerminal',
-    label: 'Previous Terminal',
-    description: 'Switch to previous terminal tab',
+    label: 'Previous Tab',
+    description: 'Switch to previous tab (terminal or editor)',
     defaultKey: 'ctrl+shift+tab'
   },
   zoomIn: {

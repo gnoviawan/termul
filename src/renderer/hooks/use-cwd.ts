@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useTerminalActions } from '@/stores/terminal-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 // Cache for home directory to avoid repeated IPC calls
 let cachedHomeDir: string | null = null
@@ -13,13 +13,18 @@ const TRUNCATE_ELLIPSIS_LENGTH = 3 // '...'
  * Updates the terminal store with the latest CWD for each terminal
  */
 export function useCwd(): void {
-  const { updateTerminalCwd } = useTerminalActions()
+  const updateTerminalCwd = useTerminalStore((state) => state.updateTerminalCwd)
+  const findTerminalByPtyId = useTerminalStore((state) => state.findTerminalByPtyId)
   const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     // Subscribe to CWD changed events from main process
-    const cleanup = window.api.terminal.onCwdChanged((terminalId: string, cwd: string) => {
-      updateTerminalCwd(terminalId, cwd)
+    const cleanup = window.api.terminal.onCwdChanged((ptyId: string, cwd: string) => {
+      // Look up terminal by ptyId and update using store id
+      const terminal = findTerminalByPtyId(ptyId)
+      if (terminal) {
+        updateTerminalCwd(terminal.id, cwd)
+      }
     })
 
     cleanupRef.current = cleanup
@@ -30,7 +35,7 @@ export function useCwd(): void {
         cleanupRef.current = null
       }
     }
-  }, [updateTerminalCwd])
+  }, [updateTerminalCwd, findTerminalByPtyId])
 }
 
 /**

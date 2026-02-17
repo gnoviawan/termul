@@ -1,14 +1,11 @@
 import { useState, useCallback } from 'react'
 import { Camera, Clock, Cpu, Grid3X3, Edit2, Trash2, RotateCcw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { ProjectSidebar } from '@/components/ProjectSidebar'
-import { StatusBar } from '@/components/StatusBar'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { RestoreSnapshotModal } from '@/components/RestoreSnapshotModal'
 import { DeleteSnapshotModal } from '@/components/DeleteSnapshotModal'
 import {
-  useProjects,
   useActiveProject,
   useActiveProjectId,
   useProjectActions,
@@ -32,17 +29,10 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
   const [isDeleting, setIsDeleting] = useState(false)
 
   const isLoaded = useProjectsLoaded()
-  const projects = useProjects()
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
   const {
-    selectProject,
-    addProject,
-    updateProject,
-    deleteProject,
-    archiveProject,
-    restoreProject,
-    reorderProjects
+    addProject
   } = useProjectActions()
 
   // Load snapshots when project changes
@@ -145,22 +135,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-background">
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={(id) => {
-          selectProject(id)
-          navigate('/')
-        }}
-        onNewProject={() => setIsNewProjectModalOpen(true)}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-
+    <>
       <main className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <div className="h-14 bg-card border-b border-border flex items-center justify-between px-6">
@@ -212,8 +187,6 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
             )}
           </div>
         </div>
-
-        <StatusBar project={activeProject} />
       </main>
 
       <NewProjectModal
@@ -244,7 +217,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
         onDelete={handleDelete}
         isDeleting={isDeleting}
       />
-    </div>
+    </>
   )
 }
 

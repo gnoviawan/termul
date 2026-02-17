@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react'
-import { Settings, ArrowLeft, RotateCcw, Keyboard } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle } from 'lucide-react'
 import {
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalBufferSize,
   useDefaultShell,
   useDefaultProjectColor,
-  useMaxTerminalsPerProject
+  useMaxTerminalsPerProject,
+  useOrphanDetectionEnabled,
+  useOrphanDetectionTimeout
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
-import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS } from '@/types/settings'
+import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -23,15 +24,17 @@ import {
   useResetShortcut,
   useResetAllShortcuts
 } from '@/hooks/use-keyboard-shortcuts'
+import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
 
 export default function AppPreferences(): React.JSX.Element {
-  const navigate = useNavigate()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
+  const orphanDetectionEnabled = useOrphanDetectionEnabled()
+  const orphanDetectionTimeout = useOrphanDetectionTimeout()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -45,6 +48,10 @@ export default function AppPreferences(): React.JSX.Element {
   const updateShortcut = useUpdateShortcut()
   const resetShortcut = useResetShortcut()
   const resetAllShortcuts = useResetAllShortcuts()
+
+  // Updater state
+  const { isChecking, updateAvailable, version, lastChecked, autoUpdateEnabled, skippedVersion, error: updateError } = useUpdaterState()
+  const { checkForUpdates, setAutoUpdateEnabled } = useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -85,6 +92,26 @@ export default function AppPreferences(): React.JSX.Element {
     updateSetting('maxTerminalsPerProject', value)
   }
 
+  const handleOrphanDetectionToggle = async (enabled: boolean) => {
+    await updateSetting('orphanDetectionEnabled', enabled)
+    // Apply to PtyManager immediately
+    try {
+      await window.api.terminal.updateOrphanDetection(enabled, orphanDetectionTimeout)
+    } catch (error) {
+      console.error('Failed to update orphan detection:', error)
+    }
+  }
+
+  const handleOrphanTimeoutChange = async (value: number | null) => {
+    await updateSetting('orphanDetectionTimeout', value)
+    // Apply to PtyManager immediately
+    try {
+      await window.api.terminal.updateOrphanDetection(orphanDetectionEnabled, value)
+    } catch (error) {
+      console.error('Failed to update orphan detection timeout:', error)
+    }
+  }
+
   const handleResetConfirm = async () => {
     await resetSettings()
     await resetAllShortcuts()
@@ -96,21 +123,23 @@ export default function AppPreferences(): React.JSX.Element {
     setIsResetShortcutsDialogOpen(false)
   }
 
+  const handleAutoUpdateToggle = async (enabled: boolean) => {
+    await setAutoUpdateEnabled(enabled)
+  }
+
+  const formatLastChecked = (date: Date | null): string => {
+    if (!date) return 'Never'
+    return new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(date)
+  }
+
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background">
-      {/* Header */}
-      <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/')}
-            className="p-2 hover:bg-secondary rounded transition-colors"
-            title="Back to Dashboard"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div className="p-2 bg-primary/10 rounded text-primary">
-            <Settings size={20} />
-          </div>
+    <>
+      <main className="flex-1 flex flex-col min-w-0 h-full relative">
+        {/* Header */}
+        <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
           <div>
             <h1 className="text-xl font-semibold text-foreground leading-tight">
               Application Preferences
@@ -120,11 +149,10 @@ export default function AppPreferences(): React.JSX.Element {
             </p>
           </div>
         </div>
-      </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-8 pb-32">
-        <div className="max-w-4xl mx-auto space-y-12">
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-8 pb-32">
+          <div className="max-w-4xl mx-auto space-y-12">
           {/* Terminal Appearance Section */}
           <section>
             <div className="flex items-start gap-6 border-b border-border pb-8">
@@ -278,6 +306,70 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </section>
 
+          {/* Terminal Behavior Section */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Configure how inactive terminals are managed.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-6">
+                {/* Orphan Detection Toggle */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Orphan Detection
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Enable orphan detection</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Automatically clean up terminals that have been inactive
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        orphanDetectionEnabled ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Timeout Dropdown */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Timeout Before Cleanup
+                  </label>
+                  <select
+                    value={orphanDetectionTimeout ?? 600000}
+                    onChange={(e) => handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value) : null)}
+                    disabled={!orphanDetectionEnabled}
+                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Terminals inactive for this duration will be cleaned up (only if not displayed).
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
           {/* New Project Defaults Section */}
           <section>
             <div className="flex items-start gap-6 border-b border-border pb-8">
@@ -352,6 +444,131 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </section>
 
+          {/* Updates Section */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <div className="flex items-center gap-2">
+                  <Download size={18} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">Updates</h2>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Manage application updates and version information.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-6">
+                {/* Current Version */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Current Version
+                  </label>
+                  <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <span className="text-sm font-mono text-foreground">v{import.meta.env.PACKAGE_VERSION || '0.1.0'}</span>
+                  </div>
+                </div>
+
+                {/* Update Status */}
+                {updateAvailable && version && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Update Available
+                    </label>
+                    <div className="bg-green-500/10 border border-green-500/20 rounded-md px-4 py-3 flex items-center gap-3">
+                      <CheckCircle2 size={18} className="text-green-500 flex-shrink-0" />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-foreground">Version {version} is available!</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          A new version is ready to download.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Update Error */}
+                {updateError && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Update Error
+                    </label>
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-md px-4 py-3 flex items-center gap-3">
+                      <AlertCircle size={18} className="text-red-500 flex-shrink-0" />
+                      <div className="flex-1">
+                        <div className="text-sm text-foreground">{updateError}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Check for Updates Button */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Check for Updates
+                  </label>
+                  <button
+                    onClick={checkForUpdates}
+                    disabled={isChecking}
+                    className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-md text-sm text-primary-foreground transition-colors"
+                  >
+                    <Download size={16} />
+                    {isChecking ? 'Checking for updates...' : 'Check for Updates'}
+                  </button>
+                  {lastChecked && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Last checked: {formatLastChecked(lastChecked)}
+                    </p>
+                  )}
+                </div>
+
+                {/* Auto-update Toggle */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Auto-update
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Automatically check for updates</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        When enabled, the app will periodically check for new versions
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        autoUpdateEnabled ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          autoUpdateEnabled ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Skipped Version */}
+                {skippedVersion && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Skipped Version
+                    </label>
+                    <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
+                      <div className="text-sm text-foreground">
+                        You are currently skipping version <span className="font-mono">{skippedVersion}</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        This version will not be offered again until a newer version is available.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
           {/* Reset Section */}
           <section>
             <div className="flex items-start gap-6 pb-8">
@@ -374,6 +591,7 @@ export default function AppPreferences(): React.JSX.Element {
           </section>
         </div>
       </div>
+      </main>
 
       {/* Reset Confirmation Dialog */}
       <ConfirmDialog
@@ -398,6 +616,6 @@ export default function AppPreferences(): React.JSX.Element {
         onConfirm={handleResetShortcutsConfirm}
         onCancel={() => setIsResetShortcutsDialogOpen(false)}
       />
-    </div>
+    </>
   )
 }

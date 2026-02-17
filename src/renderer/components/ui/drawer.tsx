@@ -11,11 +11,11 @@ const Drawer = ({
 )
 Drawer.displayName = 'Drawer'
 
-const DrawerTrigger = DrawerPrimitive.Trigger
+const DrawerTrigger: React.ComponentType<React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Trigger>> = DrawerPrimitive.Trigger
 
 const DrawerPortal = DrawerPrimitive.Portal
 
-const DrawerClose = DrawerPrimitive.Close
+const DrawerClose: React.ComponentType<React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Close>> = DrawerPrimitive.Close
 
 const DrawerOverlay = React.forwardRef<
   React.ElementRef<typeof DrawerPrimitive.Overlay>,
@@ -26,12 +26,13 @@ const DrawerOverlay = React.forwardRef<
     className={cn('fixed inset-0 z-50 bg-black/80', className)}
     {...props}
   />
-))
+)) as unknown as typeof DrawerPrimitive.Overlay
+
 DrawerOverlay.displayName = DrawerPrimitive.Overlay.displayName
 
 const DrawerContent = React.forwardRef<
   React.ElementRef<typeof DrawerPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content>
+  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content> & { children?: React.ReactNode }
 >(({ className, children, ...props }, ref) => (
   <DrawerPortal>
     <DrawerOverlay />
@@ -47,7 +48,8 @@ const DrawerContent = React.forwardRef<
       {children}
     </DrawerPrimitive.Content>
   </DrawerPortal>
-))
+)) as unknown as typeof DrawerPrimitive.Content
+
 DrawerContent.displayName = 'DrawerContent'
 
 const DrawerHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
@@ -69,7 +71,8 @@ const DrawerTitle = React.forwardRef<
     className={cn('text-lg font-semibold leading-none tracking-tight', className)}
     {...props}
   />
-))
+)) as unknown as typeof DrawerPrimitive.Title
+
 DrawerTitle.displayName = DrawerPrimitive.Title.displayName
 
 const DrawerDescription = React.forwardRef<
@@ -81,7 +84,8 @@ const DrawerDescription = React.forwardRef<
     className={cn('text-sm text-muted-foreground', className)}
     {...props}
   />
-))
+)) as unknown as typeof DrawerPrimitive.Description
+
 DrawerDescription.displayName = DrawerPrimitive.Description.displayName
 
 export {

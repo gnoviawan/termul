@@ -203,6 +203,71 @@ describe('terminal-store', () => {
     })
   })
 
+  describe('setTerminalPtyId', () => {
+    it('should set ptyId on existing terminal', () => {
+      const { setTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.ptyId).toBe('terminal-123-1')
+    })
+
+    it('should not affect other terminals', () => {
+      const { setTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal2 = terminals.find((t) => t.id === 't2')
+      expect(terminal2?.ptyId).toBeUndefined()
+    })
+
+    it('should update ptyId on terminal that already has one', () => {
+      const { setTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-old')
+      setTerminalPtyId('t1', 'terminal-new')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.ptyId).toBe('terminal-new')
+    })
+  })
+
+  describe('findTerminalByPtyId', () => {
+    it('should find terminal by ptyId', () => {
+      const { setTerminalPtyId, findTerminalByPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+      const terminal = findTerminalByPtyId('terminal-123-1')
+
+      expect(terminal).toBeDefined()
+      expect(terminal?.id).toBe('t1')
+    })
+
+    it('should return undefined when ptyId not found', () => {
+      const { findTerminalByPtyId } = useTerminalStore.getState()
+
+      const terminal = findTerminalByPtyId('non-existent')
+      expect(terminal).toBeUndefined()
+    })
+
+    it('should find correct terminal when multiple have ptyIds', () => {
+      const { setTerminalPtyId, findTerminalByPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+      setTerminalPtyId('t2', 'terminal-123-2')
+
+      const terminal1 = findTerminalByPtyId('terminal-123-1')
+      const terminal2 = findTerminalByPtyId('terminal-123-2')
+
+      expect(terminal1?.id).toBe('t1')
+      expect(terminal2?.id).toBe('t2')
+    })
+  })
+
   describe('updateTerminalExitCode', () => {
     it('should update exit code for existing terminal', () => {
       const { updateTerminalExitCode } = useTerminalStore.getState()
@@ -247,6 +312,82 @@ describe('terminal-store', () => {
 
       expect(terminal1?.lastExitCode).toBe(42)
       expect(terminal2?.lastExitCode).toBeUndefined()
+    })
+  })
+
+  describe('updateTerminalActivity', () => {
+    it('should set hasActivity to true', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      updateTerminalActivity('t1', true)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.hasActivity).toBe(true)
+    })
+
+    it('should set hasActivity to false', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      // First set to true
+      updateTerminalActivity('t1', true)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(true)
+
+      // Then set to false
+      updateTerminalActivity('t1', false)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(false)
+    })
+
+    it('should not affect other terminals', () => {
+      const { updateTerminalActivity } = useTerminalStore.getState()
+
+      updateTerminalActivity('t1', true)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(terminal1?.hasActivity).toBe(true)
+      expect(terminal2?.hasActivity).toBeUndefined()
+    })
+  })
+
+  describe('updateTerminalLastActivityTimestamp', () => {
+    it('should update the lastActivityTimestamp', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const timestamp = Date.now()
+
+      updateTerminalLastActivityTimestamp('t1', timestamp)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.lastActivityTimestamp).toBe(timestamp)
+    })
+
+    it('should not affect other terminals', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const timestamp = Date.now()
+
+      updateTerminalLastActivityTimestamp('t1', timestamp)
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(terminal1?.lastActivityTimestamp).toBe(timestamp)
+      expect(terminal2?.lastActivityTimestamp).toBeUndefined()
+    })
+
+    it('should overwrite existing timestamp', () => {
+      const { updateTerminalLastActivityTimestamp } = useTerminalStore.getState()
+      const firstTimestamp = 1000000
+      const secondTimestamp = 2000000
+
+      updateTerminalLastActivityTimestamp('t1', firstTimestamp)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(firstTimestamp)
+
+      updateTerminalLastActivityTimestamp('t1', secondTimestamp)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(secondTimestamp)
     })
   })
 })

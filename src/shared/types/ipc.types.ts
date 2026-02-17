@@ -59,6 +59,7 @@ export interface TerminalApi {
   getGitStatus: (terminalId: string) => Promise<IpcResult<GitStatus | null>>
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
+  updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
 }
 
 // Error codes
@@ -69,7 +70,17 @@ export const IpcErrorCodes = {
   RESIZE_FAILED: 'RESIZE_FAILED',
   KILL_FAILED: 'KILL_FAILED',
   DIALOG_CANCELED: 'DIALOG_CANCELED',
-  UNKNOWN_ERROR: 'UNKNOWN_ERROR'
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  UNKNOWN_ERROR: 'UNKNOWN_ERROR',
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  BINARY_FILE: 'BINARY_FILE',
+  PERMISSION_DENIED: 'PERMISSION_DENIED',
+  WATCH_FAILED: 'WATCH_FAILED',
+  PATH_INVALID: 'PATH_INVALID',
+  FILE_EXISTS: 'FILE_EXISTS',
+  DELETE_FAILED: 'DELETE_FAILED',
+  RENAME_FAILED: 'RENAME_FAILED'
 } as const
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
@@ -107,4 +118,77 @@ export interface PersistenceApi {
 // System API for renderer
 export interface SystemApi {
   getHomeDirectory: () => Promise<IpcResult<string>>
+}
+
+// Keyboard shortcut callback for main -> renderer communication
+export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset') => void
+
+// Keyboard API for renderer
+export interface KeyboardApi {
+  onShortcut: (callback: KeyboardShortcutCallback) => () => void
+}
+
+// Window maximize state callback for main -> renderer communication
+export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
+
+// App close coordination types
+export type AppCloseResponse = 'close' | 'cancel'
+export type AppCloseRequestedCallback = () => void
+
+// Window API for renderer
+export interface WindowApi {
+  minimize: () => void
+  toggleMaximize: () => Promise<IpcResult<boolean>>
+  close: () => void
+  onMaximizeChange: (callback: WindowMaximizeChangedCallback) => () => void
+  onCloseRequested: (callback: AppCloseRequestedCallback) => () => void
+  respondToClose: (response: AppCloseResponse) => void
+}
+
+// Clipboard API for renderer
+export interface ClipboardApi {
+  readText: () => Promise<IpcResult<string>>
+  writeText: (text: string) => Promise<IpcResult<void>>
+}
+
+// Filesystem types re-exported for convenience
+import type {
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  FileChangeEvent,
+  ReadDirectoryOptions
+} from './filesystem.types'
+
+export type FileChangeCallback = (event: FileChangeEvent) => void
+
+// Filesystem API for renderer
+export interface FilesystemApi {
+  readDirectory: (
+    dirPath: string,
+    options?: ReadDirectoryOptions
+  ) => Promise<IpcResult<DirectoryEntry[]>>
+  readFile: (filePath: string) => Promise<IpcResult<FileContent>>
+  getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
+  writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>
+  createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>
+  createDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  deleteFile: (filePath: string) => Promise<IpcResult<void>>
+  renameFile: (
+    oldPath: string,
+    newPath: string
+  ) => Promise<IpcResult<void>>
+  watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
+  onFileChanged: (callback: FileChangeCallback) => () => void
+  onFileCreated: (callback: FileChangeCallback) => () => void
+  onFileDeleted: (callback: FileChangeCallback) => () => void
+}
+
+export type {
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  FileChangeEvent,
+  ReadDirectoryOptions
 }

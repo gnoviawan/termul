@@ -29,6 +29,31 @@ const mockApi = {
     getHomeDirectory: vi.fn(() => Promise.resolve({ success: true, data: '/home/user' })),
     read: vi.fn(() => Promise.resolve({ success: true, data: null })),
     writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  },
+  updater: {
+    checkForUpdates: vi.fn(() => Promise.resolve({ success: true, data: null })),
+    downloadUpdate: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    installAndRestart: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    skipVersion: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    getState: vi.fn(() => Promise.resolve({
+      success: true,
+      data: {
+        updateAvailable: false,
+        downloaded: false,
+        version: null,
+        isChecking: false,
+        isDownloading: false,
+        downloadProgress: null,
+        error: null,
+        lastChecked: null
+      }
+    })),
+    setAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    getAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: true })),
+    onUpdateAvailable: vi.fn(() => () => {}),
+    onUpdateDownloaded: vi.fn(() => () => {}),
+    onDownloadProgress: vi.fn(() => () => {}),
+    onError: vi.fn(() => () => {})
   }
 }
 
@@ -59,5 +84,30 @@ describe('App Routes', () => {
     // WorkspaceDashboard should be rendered by default
     // Check for presence of rendered content (indicates route matched)
     expect(document.body.innerHTML).toBeTruthy()
+  })
+})
+
+describe('App Updater Integration', () => {
+  it('should register updater event listeners on mount', () => {
+    render(<App />)
+    // useUpdateCheck mounts globally and registers IPC listeners
+    expect(mockApi.updater.onUpdateAvailable).toHaveBeenCalled()
+    expect(mockApi.updater.onUpdateDownloaded).toHaveBeenCalled()
+    expect(mockApi.updater.onDownloadProgress).toHaveBeenCalled()
+    expect(mockApi.updater.onError).toHaveBeenCalled()
+  })
+
+  it('should initialize updater state from main process', () => {
+    render(<App />)
+    expect(mockApi.updater.getState).toHaveBeenCalled()
+    expect(mockApi.updater.getAutoUpdateEnabled).toHaveBeenCalled()
+  })
+
+  it('should auto-check for updates on mount', async () => {
+    render(<App />)
+    // After initialization completes, auto-check triggers
+    await vi.waitFor(() => {
+      expect(mockApi.updater.checkForUpdates).toHaveBeenCalled()
+    })
   })
 })

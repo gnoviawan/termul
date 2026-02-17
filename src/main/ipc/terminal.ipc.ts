@@ -48,6 +48,11 @@ export function registerTerminalIpc(ptyManager?: PtyManager): void {
     ): Promise<IpcResult<TerminalInfo>> => {
       try {
         const terminalId = manager.spawn(options || {})
+
+        if (terminalId === null) {
+          return createErrorResult('Terminal limit reached (max 30 terminals)', IpcErrorCodes.SPAWN_FAILED)
+        }
+
         const instance = manager.get(terminalId)
 
         if (!instance) {
@@ -296,6 +301,24 @@ export function registerTerminalIpc(ptyManager?: PtyManager): void {
       }
     }
   )
+
+  // terminal:updateOrphanDetection - Update orphan detection settings
+  ipcMain.handle(
+    'terminal:updateOrphanDetection',
+    async (
+      _event: IpcMainInvokeEvent,
+      enabled: boolean,
+      timeout: number | null
+    ): Promise<IpcResult<void>> => {
+      try {
+        manager.updateOrphanDetectionSettings(enabled, timeout)
+        return createSuccessResult(undefined)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error updating orphan detection'
+        return createErrorResult(message, IpcErrorCodes.UNKNOWN_ERROR)
+      }
+    }
+  )
 }
 
 export function unregisterTerminalIpc(): void {
@@ -307,6 +330,7 @@ export function unregisterTerminalIpc(): void {
   ipcMain.removeHandler('terminal:getGitBranch')
   ipcMain.removeHandler('terminal:getGitStatus')
   ipcMain.removeHandler('terminal:getExitCode')
+  ipcMain.removeHandler('terminal:updateOrphanDetection')
 
   // Clean up event listeners
   if (cleanupDataListener) {

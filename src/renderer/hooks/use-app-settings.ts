@@ -9,11 +9,25 @@ export function useAppSettingsLoader(): void {
   useEffect(() => {
     async function load(): Promise<void> {
       const result = await window.api.persistence.read<AppSettings>(APP_SETTINGS_KEY)
+      let settings: AppSettings
+
       if (result.success && result.data) {
         // Merge with defaults to handle any missing keys from older versions
-        setSettings({ ...DEFAULT_APP_SETTINGS, ...result.data })
+        settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
+        setSettings(settings)
       } else {
-        setSettings(DEFAULT_APP_SETTINGS)
+        settings = DEFAULT_APP_SETTINGS
+        setSettings(settings)
+      }
+
+      // Apply orphan detection settings to PtyManager after settings load
+      try {
+        await window.api.terminal.updateOrphanDetection(
+          settings.orphanDetectionEnabled,
+          settings.orphanDetectionTimeout
+        )
+      } catch (error) {
+        console.error('Failed to apply orphan detection settings:', error)
       }
     }
     load()

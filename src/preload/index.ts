@@ -17,8 +17,33 @@ import type {
   ShellApi,
   DetectedShells,
   PersistenceApi,
-  SystemApi
+  SystemApi,
+  KeyboardApi,
+  KeyboardShortcutCallback,
+  ClipboardApi,
+  FilesystemApi,
+  FileChangeCallback,
+  DirectoryEntry,
+  FileContent,
+  FileInfo,
+  ReadDirectoryOptions,
+  FileChangeEvent,
+  WindowApi,
+  WindowMaximizeChangedCallback,
+  AppCloseRequestedCallback,
+  AppCloseResponse
 } from '../shared/types/ipc.types'
+import type {
+  UpdateInfo,
+  UpdateState,
+  DownloadProgress,
+  UpdaterApi,
+  UpdateAvailableCallback,
+  UpdateDownloadedCallback,
+  DownloadProgressCallback,
+  UpdaterErrorCallback,
+  UpdaterErrorCode
+} from '../shared/types/updater.types'
 
 // Terminal API for renderer
 const terminalApi: TerminalApi = {
@@ -137,6 +162,10 @@ const terminalApi: TerminalApi = {
 
   getExitCode: (terminalId: string): Promise<IpcResult<number | null>> => {
     return ipcRenderer.invoke('terminal:getExitCode', terminalId)
+  },
+
+  updateOrphanDetection: (enabled: boolean, timeout: number | null): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('terminal:updateOrphanDetection', enabled, timeout)
   }
 }
 
@@ -180,13 +209,225 @@ const systemApi: SystemApi = {
   }
 }
 
+// Keyboard API for renderer - handles shortcuts intercepted at main process level
+const keyboardApi: KeyboardApi = {
+  onShortcut: (callback: KeyboardShortcutCallback): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset'
+    ): void => {
+      callback(shortcut)
+    }
+    ipcRenderer.on('keyboard:shortcut', listener)
+    return () => {
+      ipcRenderer.off('keyboard:shortcut', listener)
+    }
+  }
+}
+
+// Clipboard API for renderer
+const clipboardApi: ClipboardApi = {
+  readText: (): Promise<IpcResult<string>> => {
+    return ipcRenderer.invoke('clipboard:readText')
+  },
+
+  writeText: (text: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('clipboard:writeText', text)
+  }
+}
+
+// Updater API for renderer
+const updaterApi: UpdaterApi = {
+  checkForUpdates: (): Promise<IpcResult<UpdateInfo | null>> => {
+    return ipcRenderer.invoke('updater:checkForUpdates')
+  },
+  downloadUpdate: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:downloadUpdate')
+  },
+  installAndRestart: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:installAndRestart')
+  },
+  skipVersion: (version: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:skipVersion', version)
+  },
+  getState: (): Promise<IpcResult<UpdateState>> => {
+    return ipcRenderer.invoke('updater:getState')
+  },
+  setAutoUpdateEnabled: (enabled: boolean): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('updater:setAutoUpdateEnabled', enabled)
+  },
+  getAutoUpdateEnabled: (): Promise<IpcResult<boolean>> => {
+    return ipcRenderer.invoke('updater:getAutoUpdateEnabled')
+  },
+  onUpdateAvailable: (callback: UpdateAvailableCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, info: UpdateInfo): void => {
+      callback(info)
+    }
+    ipcRenderer.on('updater:update-available', listener)
+    return () => {
+      ipcRenderer.off('updater:update-available', listener)
+    }
+  },
+  onUpdateDownloaded: (callback: UpdateDownloadedCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, info: UpdateInfo): void => {
+      callback(info)
+    }
+    ipcRenderer.on('updater:update-downloaded', listener)
+    return () => {
+      ipcRenderer.off('updater:update-downloaded', listener)
+    }
+  },
+  onDownloadProgress: (callback: DownloadProgressCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, progress: DownloadProgress): void => {
+      callback(progress)
+    }
+    ipcRenderer.on('updater:download-progress', listener)
+    return () => {
+      ipcRenderer.off('updater:download-progress', listener)
+    }
+  },
+  onError: (callback: UpdaterErrorCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, error: { code: string; message: string }): void => {
+      // Note: IPC sends { code, message } but callback expects (error: string, code: UpdaterErrorCode)
+      callback(error.message, error.code as UpdaterErrorCode)
+    }
+    ipcRenderer.on('updater:error', listener)
+    return () => {
+      ipcRenderer.off('updater:error', listener)
+    }
+  }
+}
+
+// Filesystem API for renderer
+const filesystemApi: FilesystemApi = {
+  readDirectory: (
+    dirPath: string,
+    options?: ReadDirectoryOptions
+  ): Promise<IpcResult<DirectoryEntry[]>> => {
+    return ipcRenderer.invoke('filesystem:readDirectory', dirPath, options)
+  },
+
+  readFile: (filePath: string): Promise<IpcResult<FileContent>> => {
+    return ipcRenderer.invoke('filesystem:readFile', filePath)
+  },
+
+  getFileInfo: (filePath: string): Promise<IpcResult<FileInfo>> => {
+    return ipcRenderer.invoke('filesystem:getFileInfo', filePath)
+  },
+
+  writeFile: (filePath: string, content: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:writeFile', filePath, content)
+  },
+
+  createFile: (filePath: string, content?: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:createFile', filePath, content)
+  },
+
+  createDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:createDirectory', dirPath)
+  },
+
+  deleteFile: (filePath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:deleteFile', filePath)
+  },
+
+  renameFile: (oldPath: string, newPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:renameFile', oldPath, newPath)
+  },
+
+  watchDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:watchDirectory', dirPath)
+  },
+
+  unwatchDirectory: (dirPath: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('filesystem:unwatchDirectory', dirPath)
+  },
+
+  onFileChanged: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-changed', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-changed', listener)
+    }
+  },
+
+  onFileCreated: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-created', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-created', listener)
+    }
+  },
+
+  onFileDeleted: (callback: FileChangeCallback): (() => void) => {
+    const listener = (_event: IpcRendererEvent, event: FileChangeEvent): void => {
+      callback(event)
+    }
+    ipcRenderer.on('filesystem:file-deleted', listener)
+    return () => {
+      ipcRenderer.off('filesystem:file-deleted', listener)
+    }
+  }
+}
+
+// Window API for renderer
+const windowApi: WindowApi = {
+  minimize: (): void => {
+    ipcRenderer.send('window:minimize')
+  },
+
+  toggleMaximize: (): Promise<IpcResult<boolean>> => {
+    return ipcRenderer.invoke('window:toggleMaximize')
+  },
+
+  close: (): void => {
+    ipcRenderer.send('window:close')
+  },
+
+  onMaximizeChange: (callback: WindowMaximizeChangedCallback): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      isMaximized: boolean
+    ): void => {
+      callback(isMaximized)
+    }
+    ipcRenderer.on('window:maximize-changed', listener)
+    return () => {
+      ipcRenderer.off('window:maximize-changed', listener)
+    }
+  },
+
+  onCloseRequested: (callback: AppCloseRequestedCallback): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('app:close-requested', listener)
+    return () => {
+      ipcRenderer.off('app:close-requested', listener)
+    }
+  },
+
+  respondToClose: (response: AppCloseResponse): void => {
+    ipcRenderer.send('app:close-response', response)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
   dialog: dialogApi,
   shell: shellApi,
   persistence: persistenceApi,
-  system: systemApi
+  system: systemApi,
+  keyboard: keyboardApi,
+  updater: updaterApi,
+  clipboard: clipboardApi,
+  filesystem: filesystemApi,
+  window: windowApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
@@ -200,8 +441,8 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (define in dts)
+  // @ts-expect-error (define in dts)
   window.electron = electronAPI
-  // @ts-ignore (define in dts)
+  // @ts-expect-error (define in dts)
   window.api = api
 }
