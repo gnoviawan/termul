@@ -2,7 +2,11 @@ import { BrowserWindow, app } from 'electron'
 import { createRequire } from 'node:module'
 import type { ProgressInfo, UpdateInfo as ElectronUpdateInfo } from 'electron-updater'
 import type { IpcResult } from '../../shared/types/ipc.types'
-import { read, write } from './persistence-service'
+import {
+  skipVersion as persistSkipVersion,
+  getSkippedVersion,
+  shouldShowUpdate
+} from './version-skip-service'
 
 // Lazy load electron-updater with error handling
 // This prevents app crash if electron-updater fails to load
@@ -71,10 +75,6 @@ export interface UpdaterState {
   skippedVersion: string | null
 }
 
-// Persistence keys
-const SKIPPED_VERSION_KEY = 'updater/skipped-version'
-const UPDATE_CHECK_INTERVAL_KEY = 'updater/last-check-time'
-
 // Constants
 const BASE_CHECK_INTERVAL = 12 * 60 * 60 * 1000 // 12 hours
 const STAGGER_RANGE = 2 * 60 * 60 * 1000 // ±1 hour (with Math.random() * STAGGER_RANGE - STAGGER_RANGE / 2)
@@ -104,7 +104,9 @@ export class UpdaterService {
   private currentError: string | null = null
   private skippedVersion: string | null = null
   private checkTimer: NodeJS.Timeout | null = null
+  private initialCheckTimer: NodeJS.Timeout | null = null
   private isDownloading = false
+  private isCheckingForUpdates = false
   private retryCount = 0
   private isInitialized = false
 
@@ -126,6 +128,16 @@ export class UpdaterService {
     this.isInitialized = true
     await this.loadSkippedVersion()
     this.startPeriodicChecks()
+
+    // Perform an initial update check shortly after startup
+    // Delay allows the renderer to set up its event listeners first
+    this.initialCheckTimer = setTimeout(async () => {
+      try {
+        await this.checkForUpdates()
+      } catch (error) {
+        console.error('Initial update check failed:', error)
+      }
+    }, 10000) // 10 seconds after init
   }
 
   /**
@@ -160,6 +172,15 @@ export class UpdaterService {
       }
     }
 
+    if (this.isCheckingForUpdates) {
+      return {
+        success: false,
+        error: 'Update check already in progress',
+        code: UpdaterErrorCodes.ALREADY_RUNNING
+      }
+    }
+
+    this.isCheckingForUpdates = true
     this.setState('checking')
 
     try {
@@ -173,6 +194,8 @@ export class UpdaterService {
         error: errorMsg,
         code: UpdaterErrorCodes.NETWORK_ERROR
       }
+    } finally {
+      this.isCheckingForUpdates = false
     }
   }
 
@@ -291,7 +314,7 @@ export class UpdaterService {
   async skipVersion(version: string): Promise<IpcResult<void>> {
     try {
       this.skippedVersion = version
-      await write(SKIPPED_VERSION_KEY, version)
+      await persistSkipVersion(version)
       return { success: true, data: undefined }
     } catch (error) {
       return {
@@ -322,6 +345,10 @@ export class UpdaterService {
     if (this.checkTimer) {
       clearInterval(this.checkTimer)
       this.checkTimer = null
+    }
+    if (this.initialCheckTimer) {
+      clearTimeout(this.initialCheckTimer)
+      this.initialCheckTimer = null
     }
     this.isInitialized = false
     this.mainWindow = null
@@ -355,22 +382,34 @@ export class UpdaterService {
       console.log('Update available:', info.version)
       this.currentUpdateInfo = info
 
-      // Check if version is skipped
-      if (info.version === this.skippedVersion) {
-        console.log(`Version ${info.version} is skipped, ignoring`)
-        this.setState('idle')
-        return
-      }
+      // Check if version should be shown using unified skip service
+      shouldShowUpdate(info.version)
+        .then((show) => {
+          if (!show) {
+            console.log(`Version ${info.version} is skipped, ignoring`)
+            this.setState('idle')
+            return
+          }
 
-      // Pre-update compatibility check
-      if (!this.isVersionCompatible(info)) {
-        console.warn('Update version is not compatible, ignoring')
-        this.setState('idle')
-        return
-      }
+          // Auto-clear may have happened — sync local state
+          this.skippedVersion = null
 
-      this.setState('available')
-      this.sendEvent('update-available', info)
+          // Pre-update compatibility check
+          if (!this.isVersionCompatible(info)) {
+            console.warn('Update version is not compatible, ignoring')
+            this.setState('idle')
+            return
+          }
+
+          this.setState('available')
+          this.sendEvent('update-available', info)
+        })
+        .catch((error) => {
+          console.error('Failed to check skip status for update:', error)
+          // On error, show the update anyway
+          this.setState('available')
+          this.sendEvent('update-available', info)
+        })
     })
 
     updater.on('update-not-available', (info: ElectronUpdateInfo) => {
@@ -526,9 +565,9 @@ export class UpdaterService {
    */
   private async loadSkippedVersion(): Promise<void> {
     try {
-      const result = await read<string>(SKIPPED_VERSION_KEY)
-      if (result.success && result.data) {
-        this.skippedVersion = result.data
+      const skipped = await getSkippedVersion()
+      if (skipped) {
+        this.skippedVersion = skipped.version
       }
     } catch (error) {
       console.warn('Failed to load skipped version:', error)
