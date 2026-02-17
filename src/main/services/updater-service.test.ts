@@ -43,6 +43,18 @@ vi.mock('./persistence-service', () => ({
 
 import { getUpdaterService, resetUpdaterService } from './updater-service'
 
+interface MockBrowserWindow {
+  isDestroyed: () => boolean
+  webContents: { send: ReturnType<typeof vi.fn> }
+}
+
+function createMockWindow(): MockBrowserWindow {
+  return {
+    isDestroyed: () => false,
+    webContents: { send: vi.fn() }
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers()
@@ -80,15 +92,13 @@ describe('UpdaterService', () => {
 
     it('should call autoUpdater.checkForUpdates when initialized', async () => {
       const service = getUpdaterService()
-      const mockWindow = {
-        isDestroyed: () => false,
-        webContents: { send: vi.fn() }
-      }
+      const mockWindow = createMockWindow()
       mockAutoUpdater.checkForUpdates.mockResolvedValue({
         updateInfo: { version: '2.0.0' }
       })
 
-      await service.initialize(mockWindow as any)
+      await service.initialize(mockWindow as never)
+      await vi.advanceTimersByTimeAsync(10000)
       const result = await service.checkForUpdates()
 
       expect(result.success).toBe(true)
@@ -99,34 +109,34 @@ describe('UpdaterService', () => {
 
     it('should reject concurrent checks with ALREADY_RUNNING', async () => {
       const service = getUpdaterService()
-      const mockWindow = {
-        isDestroyed: () => false,
-        webContents: { send: vi.fn() }
-      }
+      const mockWindow = createMockWindow()
 
       // Make checkForUpdates hang
-      let resolveCheck: (v: unknown) => void
-      mockAutoUpdater.checkForUpdates.mockReturnValue(
-        new Promise((resolve) => {
-          resolveCheck = resolve
-        })
+      const pendingChecks: Array<(v: unknown) => void> = []
+      mockAutoUpdater.checkForUpdates.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            pendingChecks.push(resolve)
+          })
       )
 
-      await service.initialize(mockWindow as any)
+      await service.initialize(mockWindow as never)
 
-      // Start first check (will hang)
-      const firstCheck = service.checkForUpdates()
+      // Advance to fire the initial 10s check (which will hang)
+      await vi.advanceTimersByTimeAsync(10000)
 
-      // Second check should fail immediately
+      // The initial timer-triggered check is now in-flight and hanging.
+      // A second check should fail immediately with ALREADY_RUNNING.
       const secondResult = await service.checkForUpdates()
       expect(secondResult.success).toBe(false)
       if (!secondResult.success) {
         expect(secondResult.code).toBe('ALREADY_RUNNING')
       }
 
-      // Clean up the first check
-      resolveCheck!({ updateInfo: { version: '2.0.0' } })
-      await firstCheck
+      // Clean up all pending checks
+      for (const resolve of pendingChecks) {
+        resolve({ updateInfo: { version: '2.0.0' } })
+      }
     })
   })
 
@@ -160,26 +170,22 @@ describe('UpdaterService', () => {
       })
 
       const service = getUpdaterService()
-      const mockWindow = {
-        isDestroyed: () => false,
-        webContents: { send: vi.fn() }
-      }
+      const mockWindow = createMockWindow()
 
-      await service.initialize(mockWindow as any)
+      await service.initialize(mockWindow as never)
+      await vi.advanceTimersByTimeAsync(10000)
 
       expect(mockGetSkippedVersion).toHaveBeenCalled()
     })
 
     it('should not re-initialize if already initialized', async () => {
       const service = getUpdaterService()
-      const mockWindow = {
-        isDestroyed: () => false,
-        webContents: { send: vi.fn() }
-      }
+      const mockWindow = createMockWindow()
 
-      await service.initialize(mockWindow as any)
+      await service.initialize(mockWindow as never)
+      await vi.advanceTimersByTimeAsync(10000)
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      await service.initialize(mockWindow as any)
+      await service.initialize(mockWindow as never)
 
       expect(warnSpy).toHaveBeenCalledWith('UpdaterService already initialized')
       warnSpy.mockRestore()

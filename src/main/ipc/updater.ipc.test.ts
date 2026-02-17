@@ -30,7 +30,8 @@ vi.mock('../services/persistence-service', () => ({
 import { initRegisterUpdaterIpc, unregisterUpdaterIpc } from './updater.ipc'
 
 // Capture registered handlers
-const registeredHandlers = new Map<string, Function>()
+type IpcHandler = (event: unknown, ...args: unknown[]) => unknown
+const registeredHandlers = new Map<string, IpcHandler>()
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -38,7 +39,7 @@ beforeEach(() => {
 
   // Capture ipcMain.handle calls
   const { ipcMain } = globalThis.mockElectron
-  ipcMain.handle.mockImplementation((channel: string, handler: Function) => {
+  ipcMain.handle.mockImplementation((channel: string, handler: IpcHandler) => {
     registeredHandlers.set(channel, handler)
   })
   ipcMain.removeHandler.mockImplementation((channel: string) => {
@@ -154,8 +155,19 @@ describe('updater.ipc', () => {
       initRegisterUpdaterIpc()
       unregisterUpdaterIpc()
 
-      expect(globalThis.mockElectron.ipcMain.removeHandler).toHaveBeenCalledWith('updater:checkForUpdates')
-      expect(globalThis.mockElectron.ipcMain.removeHandler).toHaveBeenCalledWith('updater:downloadUpdate')
+      const expectedChannels = [
+        'updater:checkForUpdates',
+        'updater:downloadUpdate',
+        'updater:installAndRestart',
+        'updater:skipVersion',
+        'updater:getState',
+        'updater:setAutoUpdateEnabled',
+        'updater:getAutoUpdateEnabled'
+      ]
+
+      for (const channel of expectedChannels) {
+        expect(globalThis.mockElectron.ipcMain.removeHandler).toHaveBeenCalledWith(channel)
+      }
     })
   })
 })
