@@ -71,6 +71,7 @@ export interface EditorState {
   setActiveFilePath: (path: string | null) => void
   clearAllFiles: () => void
   hasDirtyFiles: () => boolean
+  getDirtyFileCount: () => number
   getOpenFilePaths: () => string[]
 }
 
@@ -281,6 +282,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (file.isDirty) hasDirty = true
     })
     return hasDirty
+  },
+
+  getDirtyFileCount: (): number => {
+    const { openFiles } = get()
+    let count = 0
+    openFiles.forEach((file) => {
+      if (file.isDirty) count++
+    })
+    return count
   },
 
   getOpenFilePaths: (): string[] => {

@@ -36,6 +36,7 @@ import {
   useTerminalActions
 } from '@/stores/terminal-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useEditorStore, useOpenFilePaths } from '@/stores/editor-store'
 import {
   useWorkspaceStore,
@@ -61,6 +62,7 @@ import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
+import { TitleBar } from '@/components/TitleBar'
 
 function envVarsToRecord(envVars?: EnvVariable[]): Record<string, string> | undefined {
   if (!envVars || envVars.length === 0) return undefined
@@ -82,6 +84,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isTerminalSearchOpen, setIsTerminalSearchOpen] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
+  const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
+  const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
   const terminalSearchRef = useRef<TerminalSearchHandle>(null)
 
@@ -114,6 +118,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // File explorer & editor state
   const isExplorerVisible = useFileExplorerVisible()
+  const isSidebarVisible = useSidebarVisible()
   const openFilePaths = useOpenFilePaths()
   const activeTabId = useActiveTabId()
   const activeTab = useActiveTab()
@@ -202,17 +207,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
     useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
   }, [terminals])
 
-  // Warn before closing if dirty files exist
+  // Intercept app close to check for unsaved files
   useEffect(() => {
-    const handler = (e: BeforeUnloadEvent): string | undefined => {
-      if (useEditorStore.getState().hasDirtyFiles()) {
-        e.preventDefault()
-        return ''
+    return window.api.window.onCloseRequested(() => {
+      const dirtyCount = useEditorStore.getState().getDirtyFileCount()
+      if (dirtyCount > 0) {
+        setAppCloseDirtyCount(dirtyCount)
+        setIsAppCloseDialogOpen(true)
+      } else {
+        window.api.window.respondToClose('close')
       }
-      return undefined
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
+    })
   }, [])
 
   // Load snapshots when project changes
@@ -574,6 +579,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setDirtyCloseFilePath(null)
   }, [])
 
+  // App close dialog handlers
+  const handleSaveAllAndClose = useCallback(async () => {
+    await useEditorStore.getState().saveAllDirty()
+    const remaining = useEditorStore.getState().getDirtyFileCount()
+    if (remaining > 0) {
+      toast.error('Some files failed to save. Please try again or discard changes.')
+      return
+    }
+    window.api.window.respondToClose('close')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
+  const handleDiscardAllAndClose = useCallback(() => {
+    window.api.window.respondToClose('close')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
+  const handleCancelAppClose = useCallback(() => {
+    window.api.window.respondToClose('cancel')
+    setIsAppCloseDialogOpen(false)
+  }, [])
+
   // Terminal search handlers
   const handleTerminalSearchClose = useCallback(() => {
     setIsTerminalSearchOpen(false)
@@ -645,15 +672,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Show loading state while projects are being loaded
   if (!isLoaded) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-muted-foreground text-sm">Loading...</div>
+      <div className="h-screen flex flex-col overflow-hidden bg-background">
+        <TitleBar />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-muted-foreground text-sm">Loading...</div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-background">
+    <div className="h-screen flex flex-col overflow-hidden bg-background">
+      <TitleBar />
+
+      <div className="flex-1 flex overflow-hidden min-h-0">
       {/* Sidebar */}
+      {isSidebarVisible && (
       <ProjectSidebar
         projects={projects}
         activeProjectId={activeProjectId}
@@ -665,6 +699,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onRestoreProject={restoreProject}
         onReorderProjects={reorderProjects}
       />
+      )}
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">
@@ -838,6 +873,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           </>
         )}
       </main>
+      </div>
 
       {/* Modals */}
       <NewProjectModal
@@ -892,6 +928,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
         onConfirm={handleSaveThenClose}
         onCancel={handleCancelDirtyClose}
+      />
+
+      {/* App Close Unsaved Files Confirmation */}
+      <ConfirmDialog
+        isOpen={isAppCloseDialogOpen}
+        title="Unsaved Changes"
+        message={`You have ${appCloseDirtyCount} unsaved file${appCloseDirtyCount !== 1 ? 's' : ''}. Save changes before closing?`}
+        confirmLabel="Save All"
+        cancelLabel="Cancel"
+        secondaryAction={{ label: "Don't Save", onClick: handleDiscardAllAndClose }}
+        onConfirm={handleSaveAllAndClose}
+        onCancel={handleCancelAppClose}
       />
     </div>
   )

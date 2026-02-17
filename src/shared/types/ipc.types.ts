@@ -128,6 +128,23 @@ export interface KeyboardApi {
   onShortcut: (callback: KeyboardShortcutCallback) => () => void
 }
 
+// Window maximize state callback for main -> renderer communication
+export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
+
+// App close coordination types
+export type AppCloseResponse = 'close' | 'cancel'
+export type AppCloseRequestedCallback = () => void
+
+// Window API for renderer
+export interface WindowApi {
+  minimize: () => void
+  toggleMaximize: () => Promise<IpcResult<boolean>>
+  close: () => void
+  onMaximizeChange: (callback: WindowMaximizeChangedCallback) => () => void
+  onCloseRequested: (callback: AppCloseRequestedCallback) => () => void
+  respondToClose: (response: AppCloseResponse) => void
+}
+
 // Clipboard API for renderer
 export interface ClipboardApi {
   readText: () => Promise<IpcResult<string>>

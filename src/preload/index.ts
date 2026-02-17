@@ -27,7 +27,11 @@ import type {
   FileContent,
   FileInfo,
   ReadDirectoryOptions,
-  FileChangeEvent
+  FileChangeEvent,
+  WindowApi,
+  WindowMaximizeChangedCallback,
+  AppCloseRequestedCallback,
+  AppCloseResponse
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -370,6 +374,48 @@ const filesystemApi: FilesystemApi = {
   }
 }
 
+// Window API for renderer
+const windowApi: WindowApi = {
+  minimize: (): void => {
+    ipcRenderer.send('window:minimize')
+  },
+
+  toggleMaximize: (): Promise<IpcResult<boolean>> => {
+    return ipcRenderer.invoke('window:toggleMaximize')
+  },
+
+  close: (): void => {
+    ipcRenderer.send('window:close')
+  },
+
+  onMaximizeChange: (callback: WindowMaximizeChangedCallback): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      isMaximized: boolean
+    ): void => {
+      callback(isMaximized)
+    }
+    ipcRenderer.on('window:maximize-changed', listener)
+    return () => {
+      ipcRenderer.off('window:maximize-changed', listener)
+    }
+  },
+
+  onCloseRequested: (callback: AppCloseRequestedCallback): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('app:close-requested', listener)
+    return () => {
+      ipcRenderer.off('app:close-requested', listener)
+    }
+  },
+
+  respondToClose: (response: AppCloseResponse): void => {
+    ipcRenderer.send('app:close-response', response)
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -380,7 +426,8 @@ const api = {
   keyboard: keyboardApi,
   updater: updaterApi,
   clipboard: clipboardApi,
-  filesystem: filesystemApi
+  filesystem: filesystemApi,
+  window: windowApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
