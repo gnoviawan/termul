@@ -13,7 +13,6 @@ import {
 
 // Local storage keys
 const UPDATE_REMINDER_KEY = 'update-reminder-timestamp'
-const SKIPPED_VERSION_KEY = 'skipped-update-version'
 
 /**
  * Check if the user has asked to be reminded tomorrow
@@ -35,21 +34,6 @@ function shouldShowReminder(): boolean {
 function setReminderForTomorrow(): void {
   const now = new Date()
   localStorage.setItem(UPDATE_REMINDER_KEY, now.toISOString())
-}
-
-/**
- * Check if a version was skipped
- */
-function isVersionSkipped(version: string): boolean {
-  const skippedVersion = localStorage.getItem(SKIPPED_VERSION_KEY)
-  return skippedVersion === version
-}
-
-/**
- * Skip a version
- */
-function skipVersionLocally(version: string): void {
-  localStorage.setItem(SKIPPED_VERSION_KEY, version)
 }
 
 /**
@@ -136,12 +120,11 @@ function dismissDownloadProgressToast(version: string): void {
  * Listens to updater state changes and shows appropriate toasts
  */
 export function useUpdateToast(): void {
-  const { updateAvailable, downloaded, isDownloading } = useUpdaterState()
+  const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
   const version = useUpdateVersion()
   const updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
   const downloadProgress = useDownloadProgress()
-  const { skipVersion } = useUpdaterActions()
 
   // Track if we've already shown a toast for the current update
   const hasShownAvailableToast = useRef(false)
@@ -156,21 +139,12 @@ export function useUpdateToast(): void {
       !hasShownAvailableToast.current &&
       !downloading &&
       shouldShowReminder() &&
-      !isVersionSkipped(version)
+      skippedVersion !== version
     ) {
-      // Get release notes from store if available
-      // Note: We'll need to add releaseNotes to the store state
       showUpdateToast(version)
       hasShownAvailableToast.current = true
-
-      // Reset flag when update is no longer available
-      return () => {
-        if (!updateAvailable) {
-          hasShownAvailableToast.current = false
-        }
-      }
     }
-  }, [updateAvailable, version, downloaded, downloading])
+  }, [updateAvailable, version, downloaded, downloading, skippedVersion])
 
   // Show toast when update is downloaded and ready to install
   useEffect(() => {
@@ -222,7 +196,6 @@ export function useManualUpdateToast() {
 
   const skip = () => {
     if (version) {
-      skipVersionLocally(version)
       skipVersion(version)
       toast.info(`Skipped version ${version}`, {
         description: 'You will not be notified about this version again.'

@@ -25,7 +25,6 @@ import {
   useResetAllShortcuts
 } from '@/hooks/use-keyboard-shortcuts'
 import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
-import { useUpdateCheck } from '@/hooks/use-updater'
 
 export default function AppPreferences(): React.JSX.Element {
   const fontFamily = useTerminalFontFamily()
@@ -53,7 +52,6 @@ export default function AppPreferences(): React.JSX.Element {
   // Updater state
   const { isChecking, updateAvailable, version, lastChecked, autoUpdateEnabled, skippedVersion, error: updateError } = useUpdaterState()
   const { checkForUpdates, setAutoUpdateEnabled } = useUpdaterActions()
-  useUpdateCheck(false) // Initialize updater without auto-check
 
   // Load available shells
   useEffect(() => {
