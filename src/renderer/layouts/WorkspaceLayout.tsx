@@ -582,6 +582,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // App close dialog handlers
   const handleSaveAllAndClose = useCallback(async () => {
     await useEditorStore.getState().saveAllDirty()
+    const remaining = useEditorStore.getState().getDirtyFileCount()
+    if (remaining > 0) {
+      toast.error('Some files failed to save. Please try again or discard changes.')
+      setIsAppCloseDialogOpen(false)
+      return
+    }
     window.api.window.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])

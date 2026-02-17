@@ -143,6 +143,14 @@ const mockApi = {
   persistence: {
     writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
     read: vi.fn(() => Promise.resolve({ success: true, data: null }))
+  },
+  window: {
+    minimize: vi.fn(),
+    toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
+    close: vi.fn(),
+    onMaximizeChange: vi.fn(() => vi.fn()),
+    onCloseRequested: vi.fn(() => vi.fn()),
+    respondToClose: vi.fn()
   }
 }
 
