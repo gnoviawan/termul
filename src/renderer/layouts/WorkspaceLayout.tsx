@@ -585,7 +585,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const remaining = useEditorStore.getState().getDirtyFileCount()
     if (remaining > 0) {
       toast.error('Some files failed to save. Please try again or discard changes.')
-      setIsAppCloseDialogOpen(false)
       return
     }
     window.api.window.respondToClose('close')
