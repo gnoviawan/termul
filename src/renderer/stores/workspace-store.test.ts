@@ -11,6 +11,14 @@ function createEditorTab(id: string): { type: 'editor'; id: string; filePath: st
   }
 }
 
+function createTerminalTab(terminalId: string): { type: 'terminal'; id: string; terminalId: string } {
+  return {
+    type: 'terminal',
+    id: `term-${terminalId}`,
+    terminalId
+  }
+}
+
 function getLeavesFromNode(node: WorkspaceState['root']): LeafNode[] {
   if (node.type === 'leaf') return [node]
   return node.children.flatMap(getLeavesFromNode)
@@ -140,5 +148,57 @@ describe('workspace-store split/move invariants', () => {
     expect(split.children[0].type).toBe('leaf')
     expect((split.children[0] as LeafNode).tabs[0]?.id).toBe(tab.id)
     expect(useWorkspaceStore.getState().activePaneId).toBe((split.children[0] as LeafNode).id)
+  })
+
+  it('remaps restored terminal ids without changing pane placement', () => {
+    const store = useWorkspaceStore.getState()
+    const terminalA = createTerminalTab('old-a')
+    const terminalB = createTerminalTab('old-b')
+
+    store.addTabToPane('pane-root', terminalA)
+    store.splitPane('pane-root', 'horizontal', terminalB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const left = split.children[0] as LeafNode
+    const right = split.children[1] as LeafNode
+
+    store.setActiveTab(right.id, terminalB.id)
+    store.remapTerminalTabs({ 'old-a': 'new-a', 'old-b': 'new-b' })
+
+    const remappedRoot = useWorkspaceStore.getState().root
+    expect(remappedRoot.type).toBe('split')
+
+    const remappedSplit = remappedRoot as SplitNode
+    const remappedLeft = remappedSplit.children[0] as LeafNode
+    const remappedRight = remappedSplit.children[1] as LeafNode
+
+    expect(remappedLeft.tabs).toEqual([
+      { type: 'terminal', id: 'term-new-a', terminalId: 'new-a' }
+    ])
+    expect(remappedRight.tabs).toEqual([
+      { type: 'terminal', id: 'term-new-b', terminalId: 'new-b' }
+    ])
+    expect(remappedRight.activeTabId).toBe('term-new-b')
+  })
+
+  it('syncTerminalTabs prunes orphan tabs and preserves split shape', () => {
+    const store = useWorkspaceStore.getState()
+    const terminalA = createTerminalTab('a')
+    const terminalB = createTerminalTab('b')
+
+    store.addTabToPane('pane-root', terminalA)
+    store.splitPane('pane-root', 'horizontal', terminalB, 'right')
+
+    store.syncTerminalTabs(['a'])
+
+    const rootAfter = useWorkspaceStore.getState().root
+    expect(rootAfter.type).toBe('split')
+
+    const split = rootAfter as SplitNode
+    const left = split.children[0] as LeafNode
+    const right = split.children[1] as LeafNode
+
+    expect(left.tabs).toEqual([{ type: 'terminal', id: 'term-a', terminalId: 'a' }])
+    expect(right.tabs).toEqual([])
   })
 })

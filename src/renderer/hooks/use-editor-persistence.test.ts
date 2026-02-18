@@ -1,12 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useEditorPersistence } from './use-editor-persistence'
+import { useEditorPersistence, persistState } from './use-editor-persistence'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 
 const mockPersistenceRead = vi.fn()
 const mockPersistenceWriteDebounced = vi.fn()
 
+function createEditorFileState(filePath: string): {
+  filePath: string
+  content: string
+  originalContent: string
+  isDirty: boolean
+  language: string
+  lastModified: number
+  viewMode: 'code' | 'markdown'
+  cursorPosition: { line: number; col: number }
+  scrollTop: number
+} {
+  return {
+    filePath,
+    content: '',
+    originalContent: '',
+    isDirty: false,
+    language: 'typescript',
+    lastModified: Date.now(),
+    viewMode: 'code',
+    cursorPosition: { line: 1, col: 1 },
+    scrollTop: 0
+  }
+}
+
 const mockEditorState = {
-  openFiles: new Map(),
+  openFiles: new Map<string, ReturnType<typeof createEditorFileState>>(),
   activeFilePath: null as string | null,
   clearAllFiles: vi.fn(),
   openFile: vi.fn().mockResolvedValue(undefined),
@@ -27,15 +52,18 @@ const mockExplorerState = {
 
 const mockWorkspaceState = {
   root: {
-    type: 'leaf',
+    type: 'leaf' as const,
     id: 'pane-root',
     tabs: [],
     activeTabId: null as string | null
   },
   activePaneId: 'pane-root',
   activeTabId: null as string | null,
+  syncEditorTabs: vi.fn(),
+  remapTerminalTabs: vi.fn(),
+  syncTerminalTabs: vi.fn(),
   clearEditorTabs: vi.fn(),
-  syncEditorTabs: vi.fn()
+  resetLayout: vi.fn()
 }
 
 const mockProjectState = {
@@ -60,11 +88,14 @@ vi.mock('@/stores/file-explorer-store', () => ({
 }))
 
 vi.mock('@/stores/workspace-store', async () => {
-  const actual = await vi.importActual<typeof import('@/stores/workspace-store')>('@/stores/workspace-store')
+  const actual = await vi.importActual<typeof import('@/stores/workspace-store')>(
+    '@/stores/workspace-store'
+  )
   return {
     ...actual,
     useWorkspaceStore: {
       getState: vi.fn(() => mockWorkspaceState),
+      setState: vi.fn(),
       subscribe: vi.fn(() => vi.fn())
     }
   }
@@ -79,13 +110,44 @@ vi.mock('@/stores/project-store', () => ({
 beforeEach(() => {
   mockPersistenceRead.mockReset()
   mockPersistenceWriteDebounced.mockReset()
+
+  mockEditorState.openFiles = new Map<string, ReturnType<typeof createEditorFileState>>()
+  mockEditorState.activeFilePath = null
   mockEditorState.clearAllFiles.mockReset()
-  mockWorkspaceState.clearEditorTabs.mockReset()
-  mockWorkspaceState.syncEditorTabs.mockReset()
+  mockEditorState.clearAllFiles.mockImplementation(() => {
+    mockEditorState.openFiles.clear()
+    mockEditorState.activeFilePath = null
+  })
+  mockEditorState.openFile.mockReset()
+  mockEditorState.openFile.mockImplementation(async (filePath: string) => {
+    mockEditorState.openFiles.set(filePath, createEditorFileState(filePath))
+  })
+  mockEditorState.updateCursorPosition.mockReset()
+  mockEditorState.updateScrollTop.mockReset()
+  mockEditorState.setViewMode.mockReset()
+  mockEditorState.updateContent.mockReset()
+  mockEditorState.setActiveFilePath.mockReset()
+
+  mockExplorerState.expandedDirs = new Set<string>()
+  mockExplorerState.isVisible = true
   mockExplorerState.setVisible.mockReset()
   mockExplorerState.setExpandedDirs.mockReset()
   mockExplorerState.restoreExpandedDirs.mockReset()
   mockExplorerState.restoreExpandedDirs.mockResolvedValue(undefined)
+
+  mockWorkspaceState.root = {
+    type: 'leaf',
+    id: 'pane-root',
+    tabs: [],
+    activeTabId: null
+  }
+  mockWorkspaceState.activePaneId = 'pane-root'
+  mockWorkspaceState.activeTabId = null
+  mockWorkspaceState.syncEditorTabs.mockReset()
+  mockWorkspaceState.remapTerminalTabs.mockReset()
+  mockWorkspaceState.syncTerminalTabs.mockReset()
+  mockWorkspaceState.clearEditorTabs.mockReset()
+  mockWorkspaceState.resetLayout.mockReset()
 
   vi.stubGlobal('api', {
     persistence: {
@@ -160,6 +222,251 @@ describe('useEditorPersistence', () => {
 
     await waitFor(() => {
       expect(mockExplorerState.restoreExpandedDirs).toHaveBeenCalledWith(['/projects/b/docs'])
+    })
+  })
+
+  it('persists pane layout with mixed editor and terminal tabs', () => {
+    mockEditorState.openFiles.set('/projects/a/src/index.ts', createEditorFileState('/projects/a/src/index.ts'))
+    mockEditorState.openFiles.set('/projects/a/README.md', createEditorFileState('/projects/a/README.md'))
+    mockEditorState.activeFilePath = '/projects/a/src/index.ts'
+    mockExplorerState.expandedDirs = new Set(['/projects/a', '/projects/a/src'])
+
+    mockWorkspaceState.root = {
+      type: 'split',
+      id: 'split-root',
+      direction: 'horizontal',
+      sizes: [55, 45],
+      children: [
+        {
+          type: 'leaf',
+          id: 'pane-left',
+          tabs: [
+            { type: 'terminal', id: 'term-old-1', terminalId: 'old-1' },
+            {
+              type: 'editor',
+              id: 'edit-/projects/a/src/index.ts',
+              filePath: '/projects/a/src/index.ts'
+            }
+          ],
+          activeTabId: 'term-old-1'
+        },
+        {
+          type: 'leaf',
+          id: 'pane-right',
+          tabs: [
+            {
+              type: 'editor',
+              id: 'edit-/projects/a/README.md',
+              filePath: '/projects/a/README.md'
+            }
+          ],
+          activeTabId: 'edit-/projects/a/README.md'
+        }
+      ]
+    }
+    mockWorkspaceState.activePaneId = 'pane-left'
+
+    persistState('project-a')
+
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      'editor-state/project-a',
+      expect.objectContaining({
+        activePaneId: 'pane-left',
+        paneLayout: expect.objectContaining({
+          type: 'split',
+          id: 'split-root',
+          direction: 'horizontal'
+        })
+      })
+    )
+
+    const payload = mockPersistenceWriteDebounced.mock.calls[0][1]
+    const leftLeaf = payload.paneLayout.children[0]
+    expect(leftLeaf.tabs).toEqual([
+      { type: 'terminal', terminalId: 'old-1' },
+      { type: 'editor', filePath: '/projects/a/src/index.ts' }
+    ])
+  })
+
+  it('restores pane layout, keeps terminal tabs, and prunes missing editor tabs', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [
+          {
+            filePath: '/projects/a/src/existing.ts',
+            cursorPosition: { line: 1, col: 1 },
+            scrollTop: 0,
+            viewMode: 'code',
+            isDirty: false,
+            lastModified: 10
+          }
+        ],
+        activeFilePath: '/projects/a/src/existing.ts',
+        expandedDirs: ['/projects/a/src'],
+        fileExplorerVisible: true,
+        activeTabId: null,
+        activePaneId: 'pane-drop',
+        paneLayout: {
+          type: 'split',
+          id: 'split-1',
+          direction: 'horizontal',
+          sizes: [50, 50],
+          children: [
+            {
+              type: 'leaf',
+              id: 'pane-keep',
+              tabs: [
+                { type: 'terminal', terminalId: 'old-1' },
+                { type: 'editor', filePath: '/projects/a/src/existing.ts' }
+              ],
+              activeTabId: 'term-old-1'
+            },
+            {
+              type: 'leaf',
+              id: 'pane-drop',
+              tabs: [{ type: 'editor', filePath: '/projects/a/src/missing.ts' }],
+              activeTabId: 'edit-/projects/a/src/missing.ts'
+            }
+          ]
+        }
+      }
+    })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    const workspaceStoreSetState = vi.mocked(useWorkspaceStore.setState)
+
+    await waitFor(() => {
+      expect(workspaceStoreSetState).toHaveBeenCalled()
+    })
+
+    const workspaceStateUpdate = workspaceStoreSetState.mock.calls
+      .map((call) => call[0])
+      .find((arg) => arg && typeof arg === 'object' && 'root' in arg)
+
+    expect(workspaceStateUpdate).toBeTruthy()
+    expect(workspaceStateUpdate.activePaneId).toBe('pane-drop')
+
+    const restoredRoot = workspaceStateUpdate.root
+    expect(restoredRoot.type).toBe('split')
+
+    const leftLeaf = restoredRoot.children[0]
+    const rightLeaf = restoredRoot.children[1]
+
+    expect(leftLeaf.type).toBe('leaf')
+    expect(leftLeaf.id).toBe('pane-keep')
+    expect(leftLeaf.tabs).toEqual([
+      { type: 'terminal', id: 'term-old-1', terminalId: 'old-1' },
+      {
+        type: 'editor',
+        id: 'edit-/projects/a/src/existing.ts',
+        filePath: '/projects/a/src/existing.ts'
+      }
+    ])
+
+    expect(rightLeaf.type).toBe('leaf')
+    expect(rightLeaf.id).toBe('pane-drop')
+    expect(rightLeaf.tabs).toEqual([])
+  })
+
+  it('restores legacy pane layout entries that use editorFilePaths', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [
+          {
+            filePath: '/projects/a/src/legacy.ts',
+            cursorPosition: { line: 1, col: 1 },
+            scrollTop: 0,
+            viewMode: 'code',
+            isDirty: false,
+            lastModified: 10
+          }
+        ],
+        activeFilePath: '/projects/a/src/legacy.ts',
+        expandedDirs: ['/projects/a/src'],
+        fileExplorerVisible: true,
+        activeTabId: null,
+        activePaneId: 'pane-legacy',
+        paneLayout: {
+          type: 'leaf',
+          id: 'pane-legacy',
+          editorFilePaths: ['/projects/a/src/legacy.ts'],
+          activeTabId: 'edit-/projects/a/src/legacy.ts'
+        }
+      }
+    })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    const workspaceStoreSetState = vi.mocked(useWorkspaceStore.setState)
+
+    await waitFor(() => {
+      expect(workspaceStoreSetState).toHaveBeenCalled()
+    })
+
+    const workspaceStateUpdate = workspaceStoreSetState.mock.calls
+      .map((call) => call[0])
+      .find((arg) => arg && typeof arg === 'object' && 'root' in arg)
+
+    expect(workspaceStateUpdate).toBeTruthy()
+    expect(workspaceStateUpdate.activePaneId).toBe('pane-legacy')
+    expect(workspaceStateUpdate.root).toEqual({
+      type: 'leaf',
+      id: 'pane-legacy',
+      tabs: [
+        {
+          type: 'editor',
+          id: 'edit-/projects/a/src/legacy.ts',
+          filePath: '/projects/a/src/legacy.ts'
+        }
+      ],
+      activeTabId: 'edit-/projects/a/src/legacy.ts'
+    })
+  })
+
+  it('resets pane layout when destination project has no persisted state', async () => {
+    mockWorkspaceState.root = {
+      type: 'split' as const,
+      id: 'split-old',
+      direction: 'horizontal',
+      sizes: [50, 50],
+      children: [
+        {
+          type: 'leaf' as const,
+          id: 'pane-left',
+          tabs: [
+            { type: 'terminal', id: 'term-old-1', terminalId: 'old-1' }
+          ],
+          activeTabId: 'term-old-1'
+        },
+        {
+          type: 'leaf' as const,
+          id: 'pane-right',
+          tabs: [
+            {
+              type: 'editor',
+              id: 'edit-/projects/a/src/leftover.ts',
+              filePath: '/projects/a/src/leftover.ts'
+            }
+          ],
+          activeTabId: 'edit-/projects/a/src/leftover.ts'
+        }
+      ]
+    }
+    mockWorkspaceState.activePaneId = 'pane-left'
+
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: null
+    })
+
+    renderHook(() => useEditorPersistence('project-b'))
+
+    await waitFor(() => {
+      expect(mockWorkspaceState.resetLayout).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -182,7 +182,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Sync terminal tabs with workspace store
   useEffect(() => {
-    const terminalIds = terminals.map((t) => t.id)
+    const terminalIds = terminals.map((terminal) => terminal.id)
     useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
   }, [terminals])
 

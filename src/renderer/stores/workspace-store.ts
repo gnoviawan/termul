@@ -153,7 +153,9 @@ export interface WorkspaceState {
   getActivePaneLeaf: () => LeafNode | null
   syncTerminalTabs: (terminalIds: string[]) => void
   clearEditorTabs: () => void
+  resetLayout: () => void
   syncEditorTabs: (filePaths: string[], activeTabId?: string | null) => void
+  remapTerminalTabs: (idMap: Record<string, string>) => void
 
   // New tab helpers
   addTerminalTab: (terminalId: string, targetPaneId?: string) => void
@@ -168,6 +170,43 @@ function terminalTabId(terminalId: string): string {
 
 function editorTabId(filePath: string): string {
   return 'edit-' + filePath
+}
+
+function normalizePaneTree(root: PaneNode): PaneNode {
+  const collapse = (node: PaneNode): PaneNode | null => {
+    if (node.type === 'leaf') {
+      return node
+    }
+
+    const collapsedChildren = node.children
+      .map(collapse)
+      .filter((child): child is PaneNode => child !== null)
+
+    if (collapsedChildren.length === 0) {
+      return null
+    }
+
+    if (collapsedChildren.length === 1) {
+      return collapsedChildren[0]
+    }
+
+    const originalSizes = node.sizes
+    const validSizes = collapsedChildren.map((_, index) => {
+      const raw = originalSizes[index]
+      return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1
+    })
+
+    const total = validSizes.reduce((sum, size) => sum + size, 0)
+    const normalizedSizes = validSizes.map((size) => (size / total) * 100)
+
+    return {
+      ...node,
+      children: collapsedChildren,
+      sizes: normalizedSizes
+    }
+  }
+
+  return collapse(root) ?? createLeaf()
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
@@ -541,17 +580,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
       }
 
-      // Clean up empty panes (except the last one)
-      let emptyLeaf: LeafNode | undefined
-      while (
-        (emptyLeaf = getAllLeafPanes(newRoot).find(
-          (l) => l.tabs.length === 0 && getAllLeafPanes(newRoot).length > 1
-        ))
-      ) {
-        newRoot = removeNode(newRoot, emptyLeaf.id) ?? createLeaf()
-      }
-
-      set({ root: newRoot })
+      set({ root: normalizePaneTree(newRoot) })
     },
 
     clearEditorTabs: (): void => {
@@ -573,17 +602,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
       }
 
-      // Clean up empty panes
-      let emptyLeafAfter: LeafNode | undefined
-      while (
-        (emptyLeafAfter = getAllLeafPanes(newRoot).find(
-          (l) => l.tabs.length === 0 && getAllLeafPanes(newRoot).length > 1
-        ))
-      ) {
-        newRoot = removeNode(newRoot, emptyLeafAfter.id) ?? createLeaf()
-      }
-
       set({ root: newRoot })
+    },
+
+    resetLayout: (): void => {
+      const leaf = createLeaf()
+      set({ root: leaf, activePaneId: leaf.id })
     },
 
     syncEditorTabs: (filePaths: string[], restoredActiveTabId?: string | null): void => {
@@ -622,7 +646,82 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
 
-      set({ root: newRoot })
+      set({ root: normalizePaneTree(newRoot) })
+    },
+
+    remapTerminalTabs: (idMap: Record<string, string>): void => {
+      const { root, activePaneId } = get()
+      const mappedEntries = Object.entries(idMap).filter(([oldId, newId]) => oldId && newId)
+      if (mappedEntries.length === 0) {
+        return
+      }
+
+      const byOldId = new Map(mappedEntries)
+      const byOldTabId = new Map(mappedEntries.map(([oldId, newId]) => [terminalTabId(oldId), terminalTabId(newId)]))
+
+      const remapNode = (node: PaneNode): PaneNode => {
+        if (node.type === 'leaf') {
+          const remappedTabs = node.tabs.flatMap((tab): WorkspaceTab[] => {
+            if (tab.type !== 'terminal') {
+              return [tab]
+            }
+
+            const mappedTerminalId = byOldId.get(tab.terminalId)
+            if (!mappedTerminalId) {
+              return [tab]
+            }
+
+            const mappedTabId = terminalTabId(mappedTerminalId)
+
+            if (
+              node.tabs.some(
+                (existing) =>
+                  existing.type === 'terminal' &&
+                  existing.id === mappedTabId &&
+                  existing.terminalId === mappedTerminalId
+              )
+            ) {
+              return []
+            }
+
+            return [
+              {
+                type: 'terminal',
+                id: mappedTabId,
+                terminalId: mappedTerminalId
+              }
+            ]
+          })
+
+          let activeTabId = node.activeTabId
+          if (activeTabId && byOldTabId.has(activeTabId)) {
+            activeTabId = byOldTabId.get(activeTabId)!
+          }
+
+          if (activeTabId && !remappedTabs.some((tab) => tab.id === activeTabId)) {
+            activeTabId = remappedTabs.length > 0 ? remappedTabs[remappedTabs.length - 1].id : null
+          }
+
+          return {
+            ...node,
+            tabs: remappedTabs,
+            activeTabId
+          }
+        }
+
+        return {
+          ...node,
+          children: node.children.map(remapNode)
+        }
+      }
+
+      const remappedRoot = normalizePaneTree(remapNode(root))
+      const leaves = getAllLeafPanes(remappedRoot)
+      const nextActivePaneId = leaves.some((leaf) => leaf.id === activePaneId)
+        ? activePaneId
+        : leaves[0]?.id ?? remappedRoot.id
+
+      set({ root: remappedRoot, activePaneId: nextActivePaneId })
     },
 
     getNextTabId: (direction: 1 | -1): string | null => {
