@@ -9,6 +9,16 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
+let terminalRestoreInProgress = false
+
+export function setTerminalRestoreInProgress(isRestoring: boolean): void {
+  terminalRestoreInProgress = isRestoring
+}
+
+export function isTerminalRestoreInProgress(): boolean {
+  return terminalRestoreInProgress
+}
+
 /**
  * Serialize terminal store state for persistence
  * Includes scrollback extraction from terminal registry
@@ -28,7 +38,7 @@ export function serializeTerminalsForProject(
         name: t.name,
         shell: t.shell,
         cwd: t.cwd,
-        scrollback: extractScrollback(t.id)
+        scrollback: extractScrollback(t.ptyId ?? t.id)
       })
     ),
     updatedAt: new Date().toISOString()
@@ -61,6 +71,10 @@ export function useTerminalAutoSave(): void {
         state.terminals === prevState.terminals &&
         state.activeTerminalId === prevState.activeTerminalId
       ) {
+        return
+      }
+
+      if (isTerminalRestoreInProgress()) {
         return
       }
 

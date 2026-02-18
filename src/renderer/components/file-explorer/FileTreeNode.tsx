@@ -1,6 +1,7 @@
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileIcon } from './file-icon-map'
+import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 
 interface FileTreeNodeProps {
@@ -28,6 +29,7 @@ export function FileTreeNode({
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const Icon = getFileIcon(entry.extension, isDir, isExpanded)
+  const { startFileDrag } = usePaneDnd()
 
   const handleClick = (): void => {
     if (isDir) {
@@ -35,6 +37,14 @@ export function FileTreeNode({
     } else {
       onSelect(entry.path)
     }
+  }
+
+  const handleDragStart = (e: React.DragEvent): void => {
+    if (isDir) {
+      e.preventDefault()
+      return
+    }
+    startFileDrag(entry.path, e)
   }
 
   return (
@@ -47,6 +57,8 @@ export function FileTreeNode({
         style={{ paddingLeft: depth * 16 + 4 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, entry)}
+        draggable={!isDir}
+        onDragStart={handleDragStart}
       >
         {isDir && (
           <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">

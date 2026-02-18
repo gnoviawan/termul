@@ -268,6 +268,42 @@ describe('terminal-store', () => {
     })
   })
 
+  describe('clearTerminalPtyId', () => {
+    it('should clear ptyId from matching terminal', () => {
+      const { setTerminalPtyId, clearTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+      clearTerminalPtyId('terminal-123-1')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.ptyId).toBeUndefined()
+    })
+
+    it('should not affect terminals with different ptyId', () => {
+      const { setTerminalPtyId, clearTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+      setTerminalPtyId('t2', 'terminal-123-2')
+      clearTerminalPtyId('terminal-123-1')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal2 = terminals.find((t) => t.id === 't2')
+      expect(terminal2?.ptyId).toBe('terminal-123-2')
+    })
+
+    it('should be a no-op when ptyId does not exist', () => {
+      const { setTerminalPtyId, clearTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'terminal-123-1')
+      clearTerminalPtyId('non-existent')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      expect(terminal1?.ptyId).toBe('terminal-123-1')
+    })
+  })
+
   describe('updateTerminalExitCode', () => {
     it('should update exit code for existing terminal', () => {
       const { updateTerminalExitCode } = useTerminalStore.getState()

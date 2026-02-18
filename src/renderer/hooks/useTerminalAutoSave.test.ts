@@ -1,13 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { serializeTerminalsForProject } from './useTerminalAutoSave'
+import { extractScrollback } from '../utils/terminal-registry'
 import type { Terminal } from '@/types/project'
 
 // Mock terminal-registry
 vi.mock('../utils/terminal-registry', () => ({
   extractScrollback: vi.fn((terminalId: string) => {
     // Return mock scrollback for testing
-    if (terminalId === '1') return ['line 1', 'line 2']
+    if (terminalId === '1' || terminalId === 'pty-1') return ['line 1', 'line 2']
     return undefined
   })
 }))
@@ -98,6 +98,7 @@ describe('useTerminalAutoSave', () => {
       const terminals: Terminal[] = [
         {
           id: '1',
+          ptyId: 'pty-1',
           name: 'Terminal 1',
           projectId: 'proj-1',
           shell: 'powershell',
@@ -112,6 +113,22 @@ describe('useTerminalAutoSave', () => {
       expect(result.terminals[0]).not.toHaveProperty('isActive')
       // scrollback should be included from the registry
       expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2'])
+    })
+
+    it('should prefer ptyId when extracting scrollback', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(extractScrollback).toHaveBeenCalledWith('pty-1')
     })
   })
 })

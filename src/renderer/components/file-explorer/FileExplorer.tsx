@@ -77,7 +77,6 @@ export function FileExplorer(): React.JSX.Element {
       try {
         await useEditorStore.getState().openFile(path)
         useWorkspaceStore.getState().addEditorTab(path)
-        useWorkspaceStore.getState().setActiveTab(editorTabId(path))
       } catch {
         // File couldn't be opened (binary, too large, etc.)
       }

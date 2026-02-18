@@ -35,6 +35,7 @@ export interface TerminalState {
   setTerminalHidden: (id: string, isHidden: boolean) => void
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number) => void
+  clearTerminalPtyId: (ptyId: string) => void
   truncateHiddenTerminalBuffers: () => void
   getTerminalCount: () => number
   isTerminalLimitReached: () => boolean
@@ -188,6 +189,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  clearTerminalPtyId: (ptyId: string): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.ptyId === ptyId ? { ...t, ptyId: undefined } : t))
+    }))
+  },
+
   truncateHiddenTerminalBuffers: (): void => {
     const now = Date.now()
     set((state) => ({
@@ -250,7 +257,14 @@ export function useActiveTerminalId(): string {
 
 export function useTerminalActions(): Pick<
   TerminalState,
-  'selectTerminal' | 'addTerminal' | 'closeTerminal' | 'renameTerminal' | 'reorderTerminals' | 'updateTerminalCwd' | 'setTerminalPtyId'
+  | 'selectTerminal'
+  | 'addTerminal'
+  | 'closeTerminal'
+  | 'renameTerminal'
+  | 'reorderTerminals'
+  | 'updateTerminalCwd'
+  | 'setTerminalPtyId'
+  | 'clearTerminalPtyId'
 > {
   return useTerminalStore(
     useShallow((state) => ({
@@ -260,7 +274,8 @@ export function useTerminalActions(): Pick<
       renameTerminal: state.renameTerminal,
       reorderTerminals: state.reorderTerminals,
       updateTerminalCwd: state.updateTerminalCwd,
-      setTerminalPtyId: state.setTerminalPtyId
+      setTerminalPtyId: state.setTerminalPtyId,
+      clearTerminalPtyId: state.clearTerminalPtyId
     }))
   )
 }
