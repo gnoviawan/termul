@@ -2,21 +2,16 @@ import { useState, useCallback, useRef, useEffect, KeyboardEvent } from 'react'
 import { Reorder } from 'framer-motion'
 import {
   Plus,
-  FolderOpen,
-  Upload,
   Archive,
-  Settings,
-  Camera,
   Terminal,
   Edit2,
   Palette,
   Trash2,
   RotateCcw,
   ChevronDown,
-  ChevronRight,
-  SlidersHorizontal
+  ChevronRight
 } from 'lucide-react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import type { Project, ProjectColor } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { getColorClasses } from '@/lib/colors'
@@ -70,7 +65,6 @@ export function ProjectSidebar({
   onReorderProjects
 }: ProjectSidebarProps): React.JSX.Element {
   const navigate = useNavigate()
-  const location = useLocation()
 
   // Show archived toggle state
   const [showArchived, setShowArchived] = useState(false)
@@ -299,11 +293,20 @@ export function ProjectSidebar({
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col flex-shrink-0">
-      {/* Header */}
-      <div className="h-10 flex items-center px-4 border-b border-border">
+      {/* Header with inline + button */}
+      <div className="h-10 flex items-center justify-between px-4 border-b border-border">
         <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
           Projects
         </span>
+        <button
+          onClick={onNewProject}
+          className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          title="New Project"
+          aria-label="Create new project"
+          data-testid="header-new-project"
+        >
+          <Plus size={14} className="text-muted-foreground hover:text-foreground" />
+        </button>
       </div>
 
       {/* Project List */}
@@ -354,11 +357,13 @@ export function ProjectSidebar({
               <div className="mt-2">
                 <button
                   onClick={() => setShowArchived(!showArchived)}
-                  className="w-full flex items-center px-4 py-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase hover:bg-secondary/50 transition-colors"
+                  className="w-full flex items-center px-4 py-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase hover:bg-secondary/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  aria-expanded={showArchived}
+                  aria-label={`Archived projects (${archivedProjects.length})`}
                 >
                   {showArchived
-                  ? <ChevronDown size={14} className="mr-2" />
-                  : <ChevronRight size={14} className="mr-2" />}
+                    ? <ChevronDown size={14} className="mr-2" />
+                    : <ChevronRight size={14} className="mr-2" />}
                   Archived ({archivedProjects.length})
                 </button>
                 {showArchived && archivedProjects.map((project) => (
@@ -378,45 +383,17 @@ export function ProjectSidebar({
         )}
       </div>
 
-      {/* Quick Navigation */}
-      <div className="border-t border-border py-2">
-        <NavItem
-          icon={<Terminal size={16} />}
-          isActive={location.pathname === '/'}
-          onClick={() => navigate('/')}
+      {/* Bottom toolbar - New Project only */}
+      <div className="border-t border-border p-2">
+        <button
+          onClick={onNewProject}
+          className="w-full h-8 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          title="New Project"
+          aria-label="Create new project"
+          data-testid="bottom-new-project"
         >
-          Workspace
-        </NavItem>
-        <NavItem
-          icon={<Camera size={16} />}
-          isActive={location.pathname === '/snapshots'}
-          onClick={() => navigate('/snapshots')}
-        >
-          Snapshots
-        </NavItem>
-        <NavItem
-          icon={<Settings size={16} />}
-          isActive={location.pathname === '/settings'}
-          onClick={() => navigate('/settings')}
-        >
-          Settings
-        </NavItem>
-        <NavItem
-          icon={<SlidersHorizontal size={16} />}
-          isActive={location.pathname === '/preferences'}
-          onClick={() => navigate('/preferences')}
-        >
-          Preferences
-        </NavItem>
-      </div>
-
-      {/* Actions */}
-      <div className="border-t border-border pt-1 pb-2">
-        <SidebarAction icon={<Plus size={16} />} onClick={onNewProject}>
-          New Project
-        </SidebarAction>
-        <SidebarAction icon={<FolderOpen size={16} />}>Scan Directories</SidebarAction>
-        <SidebarAction icon={<Upload size={16} />}>Import Config</SidebarAction>
+          <Plus size={16} className="text-muted-foreground hover:text-foreground" />
+        </button>
       </div>
 
       {/* Context Menu */}
@@ -501,22 +478,37 @@ function ProjectItem({
     }
   }
 
+  // Get first letter, handling empty strings and emoji
+  const getFirstLetter = (name: string): string => {
+    if (!name) return '?'
+    // Try to get first alphabetic character, fallback to first char
+    const match = name.match(/[a-zA-Z]/)
+    return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
+  }
+  const firstLetter = getFirstLetter(project.name)
+
   return (
     <button
       onClick={isEditing ? undefined : onClick}
       onContextMenu={onContextMenu}
       className={cn(
-        'w-full flex items-center px-4 py-2 transition-colors group text-left',
-        isActive ? 'bg-secondary' : 'hover:bg-secondary/50'
+        'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2',
+        isActive ? `${colors.border} bg-secondary` : `border-opacity-40 ${colors.border} hover:bg-secondary/50`
       )}
+      aria-current={isActive ? 'page' : undefined}
+      aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
+      data-testid={`project-item-${project.id}`}
     >
-      <span
+      {/* Circular avatar with first letter */}
+      <div
         className={cn(
-          'w-2.5 h-2.5 rounded-full mr-3 flex-shrink-0',
-          colors.bg,
-          isActive && `shadow-sm ${colors.shadow}`
+          'w-5 h-5 rounded-full flex items-center justify-center ml-3 mr-3 flex-shrink-0',
+          colors.bg
         )}
-      />
+        aria-hidden="true"
+      >
+        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">{firstLetter}</span>
+      </div>
       {isEditing ? (
         <input
           ref={inputRef}
@@ -525,13 +517,13 @@ function ProjectItem({
           onChange={(e) => onEditNameChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={onSaveRename}
-          className="flex-1 bg-secondary border border-border rounded px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-secondary border border-border rounded px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
         <span
           className={cn(
-            'text-sm font-medium transition-colors flex-1',
+            'text-sm font-medium transition-colors flex-1 mr-2',
             isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
           )}
         >
@@ -541,7 +533,7 @@ function ProjectItem({
       {!isEditing && (
         <span
           className={cn(
-            'ml-auto text-xs font-mono text-muted-foreground transition-opacity',
+            'text-xs font-mono text-muted-foreground transition-opacity mr-3',
             isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           )}
         >
@@ -564,65 +556,40 @@ function ArchivedProjectItem({
   onContextMenu
 }: ArchivedProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
+  // Get first letter, handling empty strings and emoji
+  const getFirstLetter = (name: string): string => {
+    if (!name) return '?'
+    // Try to get first alphabetic character, fallback to first char
+    const match = name.match(/[a-zA-Z]/)
+    return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
+  }
+  const firstLetter = getFirstLetter(project.name)
 
   return (
     <button
       onClick={onClick}
       onContextMenu={onContextMenu}
-      className="w-full flex items-center px-4 py-2 transition-colors group text-left opacity-60 hover:opacity-100"
+      className={cn(
+        'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
+        `border-opacity-40 ${colors.border}`
+      )}
+      aria-label={`Archived project: ${project.name}`}
+      data-testid={`archived-project-item-${project.id}`}
     >
-      <span
+      {/* Circular avatar with first letter */}
+      <div
         className={cn(
-          'w-2.5 h-2.5 rounded-full mr-3 flex-shrink-0',
+          'w-5 h-5 rounded-full flex items-center justify-center ml-3 mr-3 flex-shrink-0',
           colors.bg
         )}
-      />
+        aria-hidden="true"
+      >
+        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">{firstLetter}</span>
+      </div>
       <span className="text-sm font-medium text-muted-foreground group-hover:text-foreground flex-1">
         {project.name}
       </span>
-      <Archive size={12} className="text-muted-foreground" />
-    </button>
-  )
-}
-
-interface NavItemProps {
-  icon: React.ReactNode
-  children: React.ReactNode
-  isActive?: boolean
-  onClick?: () => void
-}
-
-function NavItem({ icon, children, isActive, onClick }: NavItemProps): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'w-full flex items-center px-4 py-2 text-sm transition-colors',
-        isActive
-          ? 'bg-secondary text-foreground'
-          : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
-      )}
-    >
-      <span className="mr-3">{icon}</span>
-      {children}
-    </button>
-  )
-}
-
-interface SidebarActionProps {
-  icon: React.ReactNode
-  children: React.ReactNode
-  onClick?: () => void
-}
-
-function SidebarAction({ icon, children, onClick }: SidebarActionProps): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center px-4 py-2 text-sm text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors"
-    >
-      <span className="mr-3">{icon}</span>
-      {children}
+      <Archive size={12} className="text-muted-foreground mr-3" />
     </button>
   )
 }
