@@ -41,7 +41,8 @@ const mockUseTerminalActions = vi.fn(() => ({
   closeTerminal: vi.fn(),
   renameTerminal: vi.fn(),
   reorderTerminals: vi.fn(),
-  setTerminalPtyId: vi.fn()
+  setTerminalPtyId: vi.fn(),
+  clearTerminalPtyId: vi.fn()
 }))
 
 vi.mock('@/stores/project-store', () => ({

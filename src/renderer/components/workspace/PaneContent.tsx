@@ -5,7 +5,7 @@ import { DropZoneOverlay } from './DropZoneOverlay'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
 import { EditorPanel } from '@/components/editor/EditorPanel'
 import { useWorkspaceStore, getAllLeafPanes } from '@/stores/workspace-store'
-import { useTerminalStore } from '@/stores/terminal-store'
+import { useTerminalStore, useTerminalActions } from '@/stores/terminal-store'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import type { LeafNode } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
@@ -36,6 +36,7 @@ export function PaneContent({
   )
   const setActivePane = useWorkspaceStore((state) => state.setActivePane)
   const allTerminals = useTerminalStore((state) => state.terminals)
+  const { setTerminalPtyId } = useTerminalActions()
   const { isDragging, previewTarget } = usePaneDnd()
 
   const isActivePane = activePaneId === pane.id
@@ -140,9 +141,15 @@ export function PaneContent({
                     }
                   >
                     <ConnectedTerminal
+                      terminalId={terminal.ptyId}
                       spawnOptions={{
                         shell: terminal.shell,
                         cwd: terminal.cwd
+                      }}
+                      onBoundToStoreTerminal={(ptyId) => {
+                        if (terminal.ptyId !== ptyId) {
+                          setTerminalPtyId(terminal.id, ptyId)
+                        }
                       }}
                       initialScrollback={terminal.pendingScrollback}
                       className="w-full h-full"

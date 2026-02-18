@@ -525,12 +525,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setCloseConfirmTerminalId(id)
   }, [])
 
-  const handleConfirmCloseTerminal = useCallback(() => {
-    if (closeConfirmTerminalId) {
-      closeTerminal(closeConfirmTerminalId, activeProjectId)
-      setCloseConfirmTerminalId(null)
+  const handleConfirmCloseTerminal = useCallback(async () => {
+    if (!closeConfirmTerminalId) {
+      return
     }
-  }, [closeTerminal, activeProjectId, closeConfirmTerminalId])
+
+    const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
+    if (terminalToClose?.ptyId) {
+      try {
+        await window.api.terminal.kill(terminalToClose.ptyId)
+      } catch {
+        // Continue close flow even if PTY termination fails
+      }
+    }
+
+    closeTerminal(closeConfirmTerminalId, activeProjectId)
+    setCloseConfirmTerminalId(null)
+  }, [closeTerminal, activeProjectId, closeConfirmTerminalId, terminals])
 
   const handleCancelCloseTerminal = useCallback(() => {
     setCloseConfirmTerminalId(null)

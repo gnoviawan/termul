@@ -38,6 +38,7 @@ export interface ConnectedTerminalProps {
   terminalId?: string
   spawnOptions?: TerminalSpawnOptions
   onSpawned?: (terminalId: string) => void
+  onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
   onError?: (error: string) => void
   onCommand?: (command: string) => void
@@ -55,6 +56,7 @@ function ConnectedTerminalComponent({
   onExit,
   onError,
   onCommand,
+  onBoundToStoreTerminal,
   className = '',
   autoFocus = true,
   initialScrollback,
@@ -85,6 +87,8 @@ function ConnectedTerminalComponent({
   onExitRef.current = onExit
   const onCommandRef = useRef(onCommand)
   onCommandRef.current = onCommand
+  const onBoundToStoreTerminalRef = useRef(onBoundToStoreTerminal)
+  onBoundToStoreTerminalRef.current = onBoundToStoreTerminal
   // Track current input line for command history
   const currentLineRef = useRef<string>('')
   // Resize debounce timer ref
@@ -422,6 +426,9 @@ function ConnectedTerminalComponent({
             if (onSpawned) {
               onSpawned(result.data.id)
             }
+            if (onBoundToStoreTerminalRef.current) {
+              onBoundToStoreTerminalRef.current(result.data.id)
+            }
           } else if (onError) {
             onError(result.error)
           }
@@ -436,6 +443,9 @@ function ConnectedTerminalComponent({
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
         }
+        if (onBoundToStoreTerminalRef.current) {
+          onBoundToStoreTerminalRef.current(externalTerminalId)
+        }
       }
     }
 
@@ -448,15 +458,8 @@ function ConnectedTerminalComponent({
       } else if (externalTerminalId) {
         unregisterTerminal(externalTerminalId)
       }
-      // Kill PTY process on unmount to prevent orphaned shell processes
-      if (ptyIdRef.current) {
-        const killPromise = window.api.terminal.kill(ptyIdRef.current)
-        if (killPromise && typeof killPromise.catch === 'function') {
-          killPromise.catch(() => {
-            // Ignore kill errors during cleanup
-          })
-        }
-      }
+
+      // PTY lifecycle is handled by explicit terminal close, not component unmount
       resizeObserver.disconnect()
       dataDisposable.dispose()
       resizeDisposable.dispose()
@@ -485,14 +488,11 @@ function ConnectedTerminalComponent({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [
-    externalTerminalId,
-    memoizedSpawnOptions,
     onSpawned,
     onError,
     autoFocus,
     handleTerminalData,
     handleResize,
-    initialScrollback,
     bufferSize
   ])
 
@@ -512,7 +512,7 @@ function ConnectedTerminalComponent({
     }
   }, [fontFamily, fontSize])
 
-  // Trigger fit when terminal becomes visible
+  // Trigger fit + PTY resize when terminal becomes visible
   useEffect(() => {
     if (isVisible && fitAddonRef.current && terminalRef.current) {
       // Use requestAnimationFrame to ensure container dimensions are updated
@@ -521,6 +521,17 @@ function ConnectedTerminalComponent({
           fitAddonRef.current?.fit()
         } catch {
           // Ignore fit errors
+        }
+
+        const terminal = terminalRef.current
+        const ptyId = ptyIdRef.current
+        if (terminal && ptyId) {
+          const resizePromise = window.api.terminal.resize(ptyId, terminal.cols, terminal.rows)
+          if (resizePromise && typeof resizePromise.catch === 'function') {
+            resizePromise.catch(() => {
+              // Ignore resize errors when toggling visibility
+            })
+          }
         }
       })
     }

@@ -137,6 +137,16 @@ Object.defineProperty(window, 'api', {
 
 import { ConnectedTerminal } from './ConnectedTerminal'
 
+vi.mock('@/stores/terminal-store', () => ({
+  useTerminalStore: {
+    getState: () => ({
+      findTerminalByPtyId: vi.fn(),
+      updateTerminalActivity: vi.fn(),
+      updateTerminalLastActivityTimestamp: vi.fn()
+    })
+  }
+}))
+
 describe('ConnectedTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -187,6 +197,29 @@ describe('ConnectedTerminal', () => {
 
     await vi.waitFor(() => {
       expect(onSpawned).toHaveBeenCalledWith('terminal-123')
+    })
+  })
+
+  it('should call onBoundToStoreTerminal callback when spawned', async () => {
+    const onBoundToStoreTerminal = vi.fn()
+    render(<ConnectedTerminal onBoundToStoreTerminal={onBoundToStoreTerminal} />)
+
+    await vi.waitFor(() => {
+      expect(onBoundToStoreTerminal).toHaveBeenCalledWith('terminal-123')
+    })
+  })
+
+  it('should call onBoundToStoreTerminal callback when external terminalId is provided', async () => {
+    const onBoundToStoreTerminal = vi.fn()
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        onBoundToStoreTerminal={onBoundToStoreTerminal}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(onBoundToStoreTerminal).toHaveBeenCalledWith('external-123')
     })
   })
 
@@ -392,7 +425,7 @@ describe('ConnectedTerminal', () => {
     })
   })
 
-  it('should kill PTY process on unmount', async () => {
+  it('should not kill PTY process on unmount', async () => {
     const { unmount } = render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
@@ -401,7 +434,7 @@ describe('ConnectedTerminal', () => {
 
     unmount()
 
-    expect(mockTerminalApi.kill).toHaveBeenCalledWith('terminal-123')
+    expect(mockTerminalApi.kill).not.toHaveBeenCalled()
   })
 
   describe('Windows ConPTY support', () => {
