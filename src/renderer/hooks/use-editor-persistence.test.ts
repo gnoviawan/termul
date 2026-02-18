@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useEditorPersistence, persistState } from './use-editor-persistence'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import type { PaneNode, SplitNode } from '@/types/workspace.types'
+import type { PaneNode, SplitNode, LeafNode } from '@/types/workspace.types'
 
 const mockPersistenceRead = vi.fn()
 const mockPersistenceWriteDebounced = vi.fn()
@@ -364,8 +364,8 @@ describe('useEditorPersistence', () => {
     const restoredRoot = workspaceStateUpdate.root as SplitNode
     expect(restoredRoot.type).toBe('split')
 
-    const leftLeaf = restoredRoot.children[0]
-    const rightLeaf = restoredRoot.children[1]
+    const leftLeaf = restoredRoot.children[0] as LeafNode
+    const rightLeaf = restoredRoot.children[1] as LeafNode
 
     expect(leftLeaf.type).toBe('leaf')
     expect(leftLeaf.id).toBe('pane-keep')
