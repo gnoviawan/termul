@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useEditorPersistence, persistState } from './use-editor-persistence'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import type { PaneNode, SplitNode } from '@/types/workspace.types'
 
 const mockPersistenceRead = vi.fn()
 const mockPersistenceWriteDebounced = vi.fn()
@@ -50,15 +51,24 @@ const mockExplorerState = {
   restoreExpandedDirs: vi.fn().mockResolvedValue(undefined)
 }
 
-const mockWorkspaceState = {
+const mockWorkspaceState: {
+  root: PaneNode
+  activePaneId: string
+  activeTabId: string | null
+  syncEditorTabs: ReturnType<typeof vi.fn>
+  remapTerminalTabs: ReturnType<typeof vi.fn>
+  syncTerminalTabs: ReturnType<typeof vi.fn>
+  clearEditorTabs: ReturnType<typeof vi.fn>
+  resetLayout: ReturnType<typeof vi.fn>
+} = {
   root: {
-    type: 'leaf' as const,
+    type: 'leaf',
     id: 'pane-root',
     tabs: [],
-    activeTabId: null as string | null
+    activeTabId: null
   },
   activePaneId: 'pane-root',
-  activeTabId: null as string | null,
+  activeTabId: null,
   syncEditorTabs: vi.fn(),
   remapTerminalTabs: vi.fn(),
   syncTerminalTabs: vi.fn(),
@@ -347,9 +357,11 @@ describe('useEditorPersistence', () => {
       .find((arg) => arg && typeof arg === 'object' && 'root' in arg)
 
     expect(workspaceStateUpdate).toBeTruthy()
+    if (!workspaceStateUpdate) throw new Error('workspaceStateUpdate is undefined')
+
     expect(workspaceStateUpdate.activePaneId).toBe('pane-drop')
 
-    const restoredRoot = workspaceStateUpdate.root
+    const restoredRoot = workspaceStateUpdate.root as SplitNode
     expect(restoredRoot.type).toBe('split')
 
     const leftLeaf = restoredRoot.children[0]
@@ -412,6 +424,8 @@ describe('useEditorPersistence', () => {
       .find((arg) => arg && typeof arg === 'object' && 'root' in arg)
 
     expect(workspaceStateUpdate).toBeTruthy()
+    if (!workspaceStateUpdate) throw new Error('workspaceStateUpdate is undefined')
+
     expect(workspaceStateUpdate.activePaneId).toBe('pane-legacy')
     expect(workspaceStateUpdate.root).toEqual({
       type: 'leaf',
@@ -429,13 +443,13 @@ describe('useEditorPersistence', () => {
 
   it('resets pane layout when destination project has no persisted state', async () => {
     mockWorkspaceState.root = {
-      type: 'split' as const,
+      type: 'split',
       id: 'split-old',
       direction: 'horizontal',
       sizes: [50, 50],
       children: [
         {
-          type: 'leaf' as const,
+          type: 'leaf',
           id: 'pane-left',
           tabs: [
             { type: 'terminal', id: 'term-old-1', terminalId: 'old-1' }
@@ -443,7 +457,7 @@ describe('useEditorPersistence', () => {
           activeTabId: 'term-old-1'
         },
         {
-          type: 'leaf' as const,
+          type: 'leaf',
           id: 'pane-right',
           tabs: [
             {
