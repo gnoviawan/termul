@@ -26,6 +26,13 @@ const mockExplorerState = {
 }
 
 const mockWorkspaceState = {
+  root: {
+    type: 'leaf',
+    id: 'pane-root',
+    tabs: [],
+    activeTabId: null as string | null
+  },
+  activePaneId: 'pane-root',
   activeTabId: null as string | null,
   clearEditorTabs: vi.fn(),
   syncEditorTabs: vi.fn()
@@ -52,12 +59,16 @@ vi.mock('@/stores/file-explorer-store', () => ({
   }
 }))
 
-vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: {
-    getState: vi.fn(() => mockWorkspaceState),
-    subscribe: vi.fn(() => vi.fn())
+vi.mock('@/stores/workspace-store', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/workspace-store')>('@/stores/workspace-store')
+  return {
+    ...actual,
+    useWorkspaceStore: {
+      getState: vi.fn(() => mockWorkspaceState),
+      subscribe: vi.fn(() => vi.fn())
+    }
   }
-}))
+})
 
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: {

@@ -76,9 +76,9 @@ export function EditorTab({
         onClick={onSelect}
         onContextMenu={handleContextMenu}
         className={cn(
-          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors',
+          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors border-b-2 border-b-transparent',
           isActive
-            ? 'bg-background border-t-2 border-t-primary'
+            ? 'bg-background border-b-primary'
             : 'hover:bg-secondary/50 text-muted-foreground'
         )}
       >

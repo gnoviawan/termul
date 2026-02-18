@@ -2,8 +2,15 @@ import { useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  useWorkspaceStore,
+  findPaneById,
+  getAllLeafPanes,
+  editorTabId
+} from '@/stores/workspace-store'
 import type { EditorFileState } from '@/stores/editor-store'
+import type { PaneNode, SplitNode, PaneDirection } from '@/types/workspace.types'
+import type { WorkspaceTab } from '@/stores/workspace-store'
 
 interface PersistedEditorFile {
   filePath: string
@@ -15,12 +22,33 @@ interface PersistedEditorFile {
   lastModified: number
 }
 
+// Serialized pane tree for persistence
+interface PersistedLeafNode {
+  type: 'leaf'
+  id: string
+  editorFilePaths: string[]
+  activeTabId: string | null
+}
+
+interface PersistedSplitNode {
+  type: 'split'
+  id: string
+  direction: PaneDirection
+  children: PersistedPaneNode[]
+  sizes: number[]
+}
+
+type PersistedPaneNode = PersistedLeafNode | PersistedSplitNode
+
 interface PersistedEditorState {
   openFiles: PersistedEditorFile[]
   activeFilePath: string | null
   expandedDirs: string[]
   fileExplorerVisible: boolean
   activeTabId: string | null
+  // v2: pane layout
+  paneLayout?: PersistedPaneNode
+  activePaneId?: string
 }
 
 function editorStateKey(projectId: string): string {
@@ -40,6 +68,52 @@ function filterExpandedDirsByRoot(expandedDirs: string[], rootPath?: string): st
   return expandedDirs
     .map((dir) => normalizePath(dir))
     .filter((dir) => dir === normalizedRoot || dir.startsWith(normalizedRoot + '/'))
+}
+
+// Serialize pane tree for persistence (strip terminal tabs — they're managed by syncTerminalTabs)
+function serializePaneTree(node: PaneNode): PersistedPaneNode {
+  if (node.type === 'leaf') {
+    const editorFilePaths = node.tabs
+      .filter((t): t is WorkspaceTab & { type: 'editor' } => t.type === 'editor')
+      .map((t) => t.filePath)
+    return {
+      type: 'leaf',
+      id: node.id,
+      editorFilePaths,
+      activeTabId: node.activeTabId
+    }
+  }
+  return {
+    type: 'split',
+    id: node.id,
+    direction: node.direction,
+    children: node.children.map(serializePaneTree),
+    sizes: node.sizes
+  }
+}
+
+// Deserialize pane tree — reconstructs editor tabs, terminal tabs added later by syncTerminalTabs
+function deserializePaneTree(persisted: PersistedPaneNode): PaneNode {
+  if (persisted.type === 'leaf') {
+    const tabs: WorkspaceTab[] = persisted.editorFilePaths.map((fp) => ({
+      type: 'editor' as const,
+      id: editorTabId(fp),
+      filePath: fp
+    }))
+    return {
+      type: 'leaf',
+      id: persisted.id,
+      tabs,
+      activeTabId: persisted.activeTabId
+    }
+  }
+  return {
+    type: 'split',
+    id: persisted.id,
+    direction: persisted.direction,
+    children: persisted.children.map(deserializePaneTree),
+    sizes: persisted.sizes
+  }
 }
 
 export function useEditorPersistence(projectId: string): void {
@@ -115,9 +189,38 @@ export function useEditorPersistence(projectId: string): void {
           editorStore.setActiveFilePath(persisted.activeFilePath)
         }
 
-        // Sync workspace editor tabs from restored files
-        const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
-        useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
+        // Restore pane layout if available
+        if (persisted.paneLayout) {
+          const restoredTree = deserializePaneTree(persisted.paneLayout)
+
+          // Filter out editor tabs for files that failed to open
+          const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
+          const filterDeadEditorTabs = (node: PaneNode): PaneNode => {
+            if (node.type === 'leaf') {
+              const validTabs = node.tabs.filter(
+                (t) => t.type !== 'editor' || openFilePaths.has(t.filePath)
+              )
+              let activeTabId = node.activeTabId
+              if (activeTabId && !validTabs.some((t) => t.id === activeTabId)) {
+                activeTabId = validTabs.length > 0 ? validTabs[validTabs.length - 1].id : null
+              }
+              return { ...node, tabs: validTabs, activeTabId }
+            }
+            return {
+              ...node,
+              children: node.children.map(filterDeadEditorTabs)
+            } as SplitNode
+          }
+
+          const cleanTree = filterDeadEditorTabs(restoredTree)
+          const activePaneId = persisted.activePaneId || getAllLeafPanes(cleanTree)[0]?.id || cleanTree.id
+
+          useWorkspaceStore.setState({ root: cleanTree, activePaneId })
+        } else {
+          // Legacy fallback: sync workspace editor tabs from restored files (flat layout)
+          const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
+          useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
+        }
 
         // Restore expanded directory tree after root initialization.
         await explorerStore.restoreExpandedDirs(filteredExpandedDirs)
@@ -203,7 +306,12 @@ function persistState(projectId: string): void {
     activeFilePath: editorState.activeFilePath,
     expandedDirs,
     fileExplorerVisible: explorerState.isVisible,
-    activeTabId: workspaceState.activeTabId
+    activeTabId: (() => {
+      const pane = findPaneById(workspaceState.root, workspaceState.activePaneId)
+      return pane && pane.type === 'leaf' ? pane.activeTabId : null
+    })(),
+    paneLayout: serializePaneTree(workspaceState.root),
+    activePaneId: workspaceState.activePaneId
   }
 
   window.api.persistence.writeDebounced(editorStateKey(projectId), data)
