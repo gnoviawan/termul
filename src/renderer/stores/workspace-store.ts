@@ -178,21 +178,25 @@ function normalizePaneTree(root: PaneNode): PaneNode {
       return node
     }
 
-    const collapsedChildren = node.children
-      .map(collapse)
-      .filter((child): child is PaneNode => child !== null)
+    // Track original indices to correctly map sizes after filtering
+    const survivingEntries = node.children
+      .map((child, originalIndex) => ({
+        child: collapse(child),
+        originalIndex
+      }))
+      .filter((entry): entry is { child: PaneNode; originalIndex: number } => entry.child !== null)
 
-    if (collapsedChildren.length === 0) {
+    if (survivingEntries.length === 0) {
       return null
     }
 
-    if (collapsedChildren.length === 1) {
-      return collapsedChildren[0]
+    if (survivingEntries.length === 1) {
+      return survivingEntries[0].child
     }
 
     const originalSizes = node.sizes
-    const validSizes = collapsedChildren.map((_, index) => {
-      const raw = originalSizes[index]
+    const validSizes = survivingEntries.map((entry) => {
+      const raw = originalSizes[entry.originalIndex]
       return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1
     })
 
@@ -201,7 +205,7 @@ function normalizePaneTree(root: PaneNode): PaneNode {
 
     return {
       ...node,
-      children: collapsedChildren,
+      children: survivingEntries.map((entry) => entry.child),
       sizes: normalizedSizes
     }
   }

@@ -129,28 +129,32 @@ function sanitizePaneNode(node: PaneNode): PaneNode | null {
     return node
   }
 
-  const cleanedChildren = node.children
-    .map(sanitizePaneNode)
-    .filter((child): child is PaneNode => child !== null)
+  // Track original indices to correctly map sizes after filtering
+  const survivingEntries = node.children
+    .map((child, originalIndex) => ({
+      child: sanitizePaneNode(child),
+      originalIndex
+    }))
+    .filter((entry): entry is { child: PaneNode; originalIndex: number } => entry.child !== null)
 
-  if (cleanedChildren.length === 0) {
+  if (survivingEntries.length === 0) {
     return null
   }
 
-  if (cleanedChildren.length === 1) {
-    return cleanedChildren[0]
+  if (survivingEntries.length === 1) {
+    return survivingEntries[0].child
   }
 
   const rawSizes = node.sizes
-  const validSizes = cleanedChildren.map((_, index) => {
-    const value = rawSizes[index]
+  const validSizes = survivingEntries.map((entry) => {
+    const value = rawSizes[entry.originalIndex]
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1
   })
   const total = validSizes.reduce((sum, value) => sum + value, 0)
 
   return {
     ...node,
-    children: cleanedChildren,
+    children: survivingEntries.map((entry) => entry.child),
     sizes: validSizes.map((value) => (value / total) * 100)
   }
 }
