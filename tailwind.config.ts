@@ -17,11 +17,11 @@ export default {
     },
     extend: {
       colors: {
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
+        border: 'hsl(var(--border) / <alpha-value>)',
+        input: 'hsl(var(--input) / <alpha-value>)',
+        ring: 'hsl(var(--ring) / <alpha-value>)',
+        background: 'hsl(var(--background) / <alpha-value>)',
+        foreground: 'hsl(var(--foreground) / <alpha-value>)',
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))'
@@ -72,14 +72,14 @@ export default {
           bar: 'hsl(var(--status-bar))'
         },
         project: {
-          blue: 'hsl(var(--project-blue))',
-          purple: 'hsl(var(--project-purple))',
-          green: 'hsl(var(--project-green))',
-          yellow: 'hsl(var(--project-yellow))',
-          red: 'hsl(var(--project-red))',
-          cyan: 'hsl(var(--project-cyan))',
-          pink: 'hsl(var(--project-pink))',
-          orange: 'hsl(var(--project-orange))'
+          blue: 'hsl(var(--project-blue) / <alpha-value>)',
+          purple: 'hsl(var(--project-purple) / <alpha-value>)',
+          green: 'hsl(var(--project-green) / <alpha-value>)',
+          yellow: 'hsl(var(--project-yellow) / <alpha-value>)',
+          red: 'hsl(var(--project-red) / <alpha-value>)',
+          cyan: 'hsl(var(--project-cyan) / <alpha-value>)',
+          pink: 'hsl(var(--project-pink) / <alpha-value>)',
+          orange: 'hsl(var(--project-orange) / <alpha-value>)'
         }
       },
       fontFamily: {

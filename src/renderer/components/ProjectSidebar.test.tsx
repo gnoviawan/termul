@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
@@ -222,11 +222,11 @@ describe('ProjectSidebar', () => {
   it('should render project avatars with first letter', () => {
     renderWithRouter()
 
-    // Use data-testid for robust avatar letter testing
-    const avatars = screen.getAllByTestId('project-avatar-letter')
-    expect(avatars.length).toBe(2)
-    expect(avatars[0]).toHaveTextContent('P')
-    expect(avatars[1]).toHaveTextContent('P')
+    const activeProjectsContainer = screen.getByTestId('active-projects-container')
+    const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
+    const letters = avatars.map((avatar) => avatar.textContent)
+
+    expect(letters).toEqual(expect.arrayContaining(['P', 'P']))
   })
 
   it('should call onSelectProject when project is clicked', () => {

@@ -21,6 +21,12 @@ import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
 
+function getFirstLetter(name: string): string {
+  if (!name) return '?'
+  const match = name.match(/[a-zA-Z]/)
+  return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
+}
+
 interface ContextMenuState {
   isOpen: boolean
   x: number
@@ -300,12 +306,12 @@ export function ProjectSidebar({
         </span>
         <button
           onClick={onNewProject}
-          className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="group h-6 w-6 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           title="New Project"
-          aria-label="Create new project"
+          aria-label="Create new project from header"
           data-testid="header-new-project"
         >
-          <Plus size={14} className="text-muted-foreground hover:text-foreground" />
+          <Plus size={14} className="text-muted-foreground group-hover:text-foreground" />
         </button>
       </div>
 
@@ -325,6 +331,7 @@ export function ProjectSidebar({
               values={activeProjects}
               onReorder={(reordered) => onReorderProjects(reordered.map((p) => p.id))}
               className="flex flex-col"
+              data-testid="active-projects-container"
             >
               {activeProjects.map((project, index) => (
                 <Reorder.Item
@@ -387,12 +394,12 @@ export function ProjectSidebar({
       <div className="border-t border-border p-2">
         <button
           onClick={onNewProject}
-          className="w-full h-8 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="group w-full h-8 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           title="New Project"
-          aria-label="Create new project"
+          aria-label="Create new project from toolbar"
           data-testid="bottom-new-project"
         >
-          <Plus size={16} className="text-muted-foreground hover:text-foreground" />
+          <Plus size={16} className="text-muted-foreground group-hover:text-foreground" />
         </button>
       </div>
 
@@ -478,13 +485,6 @@ function ProjectItem({
     }
   }
 
-  // Get first letter, handling empty strings and emoji
-  const getFirstLetter = (name: string): string => {
-    if (!name) return '?'
-    // Try to get first alphabetic character, fallback to first char
-    const match = name.match(/[a-zA-Z]/)
-    return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
-  }
   const firstLetter = getFirstLetter(project.name)
 
   return (
@@ -556,13 +556,6 @@ function ArchivedProjectItem({
   onContextMenu
 }: ArchivedProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
-  // Get first letter, handling empty strings and emoji
-  const getFirstLetter = (name: string): string => {
-    if (!name) return '?'
-    // Try to get first alphabetic character, fallback to first char
-    const match = name.match(/[a-zA-Z]/)
-    return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
-  }
   const firstLetter = getFirstLetter(project.name)
 
   return (
