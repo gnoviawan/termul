@@ -24,7 +24,8 @@ import { ColorPickerPopover } from './ColorPickerPopover'
 function getFirstLetter(name: string): string {
   if (!name) return '?'
   const match = name.match(/[a-zA-Z]/)
-  return match ? match[0].toUpperCase() : name.charAt(0).toUpperCase() || '?'
+  const first = Array.from(name)[0]
+  return match ? match[0].toUpperCase() : (first ? first.toUpperCase() : '?')
 }
 
 interface ContextMenuState {
@@ -345,7 +346,7 @@ export function ProjectSidebar({
                     isActive={project.id === activeProjectId}
                     isEditing={editingId === project.id}
                     editName={editName}
-                    shortcut={`Ctrl+${index + 1}`}
+                    shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
                     onClick={() => {
                       onSelectProject(project.id)
                       navigate('/')
@@ -444,7 +445,7 @@ interface ProjectItemProps {
   isActive: boolean
   isEditing: boolean
   editName: string
-  shortcut: string
+  shortcut?: string
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onEditNameChange: (name: string) => void
@@ -493,7 +494,7 @@ function ProjectItem({
       onContextMenu={onContextMenu}
       className={cn(
         'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2',
-        isActive ? `${colors.border} bg-secondary` : `border-opacity-40 ${colors.border} hover:bg-secondary/50`
+        isActive ? `${colors.border} bg-secondary` : `${colors.borderMuted} hover:bg-secondary/50`
       )}
       aria-current={isActive ? 'page' : undefined}
       aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -530,7 +531,7 @@ function ProjectItem({
           {project.name}
         </span>
       )}
-      {!isEditing && (
+      {!isEditing && shortcut && (
         <span
           className={cn(
             'text-xs font-mono text-muted-foreground transition-opacity mr-3',
@@ -564,7 +565,7 @@ function ArchivedProjectItem({
       onContextMenu={onContextMenu}
       className={cn(
         'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
-        `border-opacity-40 ${colors.border}`
+        colors.borderMuted
       )}
       aria-label={`Archived project: ${project.name}`}
       data-testid={`archived-project-item-${project.id}`}

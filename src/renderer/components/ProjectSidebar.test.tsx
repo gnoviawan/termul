@@ -226,7 +226,7 @@ describe('ProjectSidebar', () => {
     const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
     const letters = avatars.map((avatar) => avatar.textContent)
 
-    expect(letters).toEqual(expect.arrayContaining(['P', 'P']))
+    expect(letters).toStrictEqual(['P', 'P'])
   })
 
   it('should call onSelectProject when project is clicked', () => {
@@ -304,6 +304,17 @@ describe('ProjectSidebar', () => {
     // Should extract 'R' from Rocket, not the emoji
     const avatar = screen.getByTestId('project-avatar-letter')
     expect(avatar).toHaveTextContent('R')
+  })
+
+  it('should preserve emoji-only project names in avatar fallback', () => {
+    const projectsWithEmojiOnlyName: Project[] = [
+      { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
+    ]
+    renderWithRouter({ projects: projectsWithEmojiOnlyName })
+
+    // Should keep full emoji grapheme as fallback, not a surrogate fragment
+    const avatar = screen.getByTestId('project-avatar-letter')
+    expect(avatar).toHaveTextContent('🚀')
   })
 })
 
