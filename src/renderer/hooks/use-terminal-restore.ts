@@ -2,7 +2,12 @@ import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
-import { loadPersistedTerminals, saveTerminalLayout } from './useTerminalAutoSave'
+import { useWorkspaceStore } from '../stores/workspace-store'
+import {
+  loadPersistedTerminals,
+  saveTerminalLayout,
+  setTerminalRestoreInProgress
+} from './useTerminalAutoSave'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
 
 /**
@@ -27,6 +32,7 @@ export function useTerminalRestore(): void {
 
     const restoreTerminals = async (): Promise<void> => {
       isRestoringRef.current = true
+      setTerminalRestoreInProgress(true)
       const projectIdToRestore = activeProjectId
 
       try {
@@ -63,6 +69,7 @@ export function useTerminalRestore(): void {
         createDefaultTerminal(projectIdToRestore)
       } finally {
         isRestoringRef.current = false
+        setTerminalRestoreInProgress(false)
         previousProjectIdRef.current = projectIdToRestore
       }
     }
@@ -136,7 +143,7 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
     pendingScrollback?: string[]
   }> = []
 
-  // Map old IDs to new IDs for active terminal selection
+  // Map old IDs to new IDs for active terminal selection and pane remapping
   const idMap = new Map<string, string>()
 
   for (const persistedTerminal of layout.terminals) {
@@ -156,6 +163,10 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
   // Add all terminals at once
   const existingTerminals = terminalStore.terminals
   terminalStore.setTerminals([...existingTerminals, ...newTerminals])
+
+  if (idMap.size > 0) {
+    useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))
+  }
 
   // Determine which terminal should be active
   let activeId = newTerminals[0]?.id || ''

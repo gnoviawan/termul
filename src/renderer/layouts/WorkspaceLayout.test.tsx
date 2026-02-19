@@ -41,7 +41,8 @@ const mockUseTerminalActions = vi.fn(() => ({
   closeTerminal: vi.fn(),
   renameTerminal: vi.fn(),
   reorderTerminals: vi.fn(),
-  setTerminalPtyId: vi.fn()
+  setTerminalPtyId: vi.fn(),
+  clearTerminalPtyId: vi.fn()
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -116,6 +117,9 @@ vi.mock('@/hooks/use-app-settings', () => ({
 const mockApi = {
   keyboard: {
     onShortcut: vi.fn(() => vi.fn())
+  },
+  shell: {
+    getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
   },
   terminal: {
     getGitBranch: vi.fn().mockResolvedValue({ success: true, data: 'main' }),
@@ -229,9 +233,9 @@ describe('WorkspaceLayout - Empty States', () => {
     })
   })
 
-  describe('No Terminals Empty State', () => {
+  describe('Empty Workspace Pane State', () => {
     beforeEach(() => {
-      // Set up a project but no terminals
+      // Set up a project but no terminals/tabs
       mockUseProjects.mockReturnValue([
         {
           id: '1',
@@ -257,26 +261,23 @@ describe('WorkspaceLayout - Empty States', () => {
       mockUseActiveTerminalId.mockReturnValue('')
     })
 
-    it('should render no terminals empty state when project exists but has no terminals', () => {
+    it('should render empty pane hint when project exists but has no tabs', () => {
       renderWithRouter()
 
-      expect(screen.getByText('No Terminals Yet')).toBeInTheDocument()
+      expect(screen.getByText('Drag a tab or file here')).toBeInTheDocument()
     })
 
-    it('should show descriptive message about creating first terminal', () => {
+    it('should show pane-level new terminal action', () => {
       renderWithRouter()
 
-      expect(
-        screen.getByText('Create a terminal to start running commands and managing your project')
-      ).toBeInTheDocument()
+      expect(screen.getByTitle('New terminal (default shell)')).toBeInTheDocument()
     })
 
-    it('should have a button to create first terminal', () => {
+    it('should not show legacy terminal empty-state CTA', () => {
       renderWithRouter()
 
-      const button = screen.getByText('Create Your First Terminal')
-      expect(button).toBeInTheDocument()
-      expect(button.tagName).toBe('BUTTON')
+      expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
+      expect(screen.queryByText('Create Your First Terminal')).not.toBeInTheDocument()
     })
 
     it('should not show no projects empty state when project exists', () => {
@@ -299,7 +300,7 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(emptyStateContainer?.className).toContain('justify-center')
     })
 
-    it('should center no terminals empty state', () => {
+    it('should center empty pane hint in workspace area', () => {
       mockUseProjects.mockReturnValue([
         {
           id: '1',
@@ -326,7 +327,8 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      const emptyStateContainer = screen.getByText('No Terminals Yet').closest('div')?.parentElement
+      const emptyHint = screen.getByText('Drag a tab or file here')
+      const emptyStateContainer = emptyHint.closest('div')
       expect(emptyStateContainer?.className).toContain('items-center')
       expect(emptyStateContainer?.className).toContain('justify-center')
     })
@@ -369,7 +371,7 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
     })
 
-    it('should show no terminals state when project exists but has no terminals', () => {
+    it('should show empty pane hint when project exists but has no tabs', () => {
       mockUseProjects.mockReturnValue([
         {
           id: '1',
@@ -397,7 +399,7 @@ describe('WorkspaceLayout - Empty States', () => {
       renderWithRouter()
 
       expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
-      expect(screen.getByText('No Terminals Yet')).toBeInTheDocument()
+      expect(screen.getByText('Drag a tab or file here')).toBeInTheDocument()
     })
 
     it('should not show empty states when terminals exist', () => {

@@ -1,21 +1,27 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Terminal as TerminalIcon, ChevronDown } from 'lucide-react'
+import {
+  Plus,
+  Terminal as TerminalIcon,
+  ChevronDown,
+  X as XIcon,
+  Edit2,
+  Skull
+} from 'lucide-react'
 import { Reorder } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { EditorTab } from './EditorTab'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useWorkspaceTabs, useActiveTabId, useWorkspaceActions } from '@/stores/workspace-store'
+import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import type { Terminal } from '@/types/project'
-import { editorTabId } from '@/stores/workspace-store'
-
-// Inline TerminalTab matching the style from TerminalTabBar
-import { X, Edit2, Skull } from 'lucide-react'
 import { ContextMenu } from '@/components/ContextMenu'
 import type { ContextMenuItem } from '@/components/ContextMenu'
+
+// Inline TerminalTab matching the style from TerminalTabBar
 
 interface TerminalTabInlineProps {
   terminal: Terminal
@@ -23,9 +29,10 @@ interface TerminalTabInlineProps {
   onSelect: () => void
   onClose: () => void
   onRename: (name: string) => void
+  onDragStart: (e: React.DragEvent) => void
 }
 
-function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: TerminalTabInlineProps): React.JSX.Element {
+function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, onDragStart }: TerminalTabInlineProps): React.JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(terminal.name)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -59,6 +66,8 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
   return (
     <>
       <div
+        draggable={!isEditing}
+        onDragStart={onDragStart}
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -66,9 +75,9 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
           setContextMenu({ x: e.clientX, y: e.clientY })
         }}
         className={cn(
-          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors',
+          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors border-b-2 border-b-transparent',
           isActive
-            ? 'bg-background border-t-2 border-t-primary'
+            ? 'bg-background border-b-primary'
             : 'hover:bg-secondary/50 text-muted-foreground'
         )}
       >
@@ -99,7 +108,7 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
           onClick={(e) => { e.stopPropagation(); onClose() }}
           className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <X size={12} />
+          <XIcon size={12} />
         </button>
       </div>
 
@@ -107,7 +116,7 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
         <ContextMenu
           items={[
             { label: 'Rename', icon: <Edit2 size={14} />, onClick: () => { setEditName(terminal.name); setIsEditing(true) } },
-            { label: 'Close', icon: <X size={14} />, onClick: onClose },
+            { label: 'Close', icon: <XIcon size={14} />, onClick: onClose },
             { label: 'Kill Process', icon: <Skull size={14} />, onClick: onClose, variant: 'danger' }
           ]}
           x={contextMenu.x}
@@ -120,12 +129,14 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename }: 
 }
 
 interface WorkspaceTabBarProps {
-  onNewTerminal: () => void
+  paneId: string
+  tabs: WorkspaceTab[]
+  activeTabId: string | null
+  onNewTerminal?: () => void
   onNewTerminalWithShell?: (shell: ShellInfo) => void
-  onCloseTerminal: (id: string) => void
-  onRenameTerminal: (id: string, name: string) => void
-  onSelectTerminal: (id: string) => void
-  onCloseEditorTab: (filePath: string) => void
+  onCloseTerminal?: (id: string) => void
+  onRenameTerminal?: (id: string, name: string) => void
+  onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
 }
 
@@ -137,36 +148,43 @@ interface EditorTabWrapperProps {
   onCloseOthers: () => void
   onCloseAll: () => void
   onCopyPath: () => void
+  onDragStart: (e: React.DragEvent) => void
 }
 
-function EditorTabWrapper({ tab, isActive, onSelect, onClose, onCloseOthers, onCloseAll, onCopyPath }: EditorTabWrapperProps): React.JSX.Element {
+function EditorTabWrapper({ tab, isActive, onSelect, onClose, onCloseOthers, onCloseAll, onCopyPath, onDragStart }: EditorTabWrapperProps): React.JSX.Element {
   const isDirty = useEditorStore((state) => state.openFiles.get(tab.filePath)?.isDirty ?? false)
   return (
-    <EditorTab
-      filePath={tab.filePath}
-      isActive={isActive}
-      isDirty={isDirty}
-      onSelect={onSelect}
-      onClose={onClose}
-      onCloseOthers={onCloseOthers}
-      onCloseAll={onCloseAll}
-      onCopyPath={onCopyPath}
-    />
+    <div draggable onDragStart={onDragStart} className="h-full">
+      <EditorTab
+        filePath={tab.filePath}
+        isActive={isActive}
+        isDirty={isDirty}
+        onSelect={onSelect}
+        onClose={onClose}
+        onCloseOthers={onCloseOthers}
+        onCloseAll={onCloseAll}
+        onCopyPath={onCopyPath}
+      />
+    </div>
   )
 }
 
 export function WorkspaceTabBar({
+  paneId,
+  tabs,
+  activeTabId,
   onNewTerminal,
   onNewTerminalWithShell,
   onCloseTerminal,
   onRenameTerminal,
-  onSelectTerminal,
   onCloseEditorTab,
   defaultShell
 }: WorkspaceTabBarProps): React.JSX.Element {
-  const tabs = useWorkspaceTabs()
-  const activeTabId = useActiveTabId()
-  const { setActiveTab, reorderTabs, removeTab } = useWorkspaceActions()
+  const setActiveTab = useWorkspaceStore((state) => state.setActiveTab)
+  const setActivePane = useWorkspaceStore((state) => state.setActivePane)
+  const reorderTabsInPane = useWorkspaceStore((state) => state.reorderTabsInPane)
+  const { startTabDrag, dragPayload } = usePaneDnd()
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [loading, setLoading] = useState(true)
@@ -235,31 +253,44 @@ export function WorkspaceTabBar({
 
   const handleCloseEditorTab = useCallback(
     (filePath: string) => {
-      onCloseEditorTab(filePath)
+      if (onCloseEditorTab) {
+        onCloseEditorTab(filePath)
+      } else {
+        // Fallback: close from store directly
+        useEditorStore.getState().closeFile(filePath)
+        useWorkspaceStore.getState().closeTab(paneId, editorTabId(filePath))
+      }
     },
-    [onCloseEditorTab]
+    [onCloseEditorTab, paneId]
   )
 
   const handleCloseOtherEditorTabs = useCallback(
     (filePath: string) => {
-      const editorState = useEditorStore.getState()
-      const allPaths = Array.from(editorState.openFiles.keys())
-      for (const path of allPaths) {
-        if (path !== filePath) {
-          onCloseEditorTab(path)
-        }
+      const editorTabs = tabs.filter(
+        (t): t is WorkspaceTab & { type: 'editor' } => t.type === 'editor' && t.filePath !== filePath
+      )
+      for (const tab of editorTabs) {
+        handleCloseEditorTab(tab.filePath)
       }
     },
-    [onCloseEditorTab]
+    [tabs, handleCloseEditorTab]
   )
 
   const handleCloseAllEditorTabs = useCallback(() => {
-    const editorState = useEditorStore.getState()
-    const allPaths = Array.from(editorState.openFiles.keys())
-    for (const path of allPaths) {
-      onCloseEditorTab(path)
+    const editorTabs = tabs.filter(
+      (t): t is WorkspaceTab & { type: 'editor' } => t.type === 'editor'
+    )
+    for (const tab of editorTabs) {
+      handleCloseEditorTab(tab.filePath)
     }
-  }, [onCloseEditorTab])
+  }, [tabs, handleCloseEditorTab])
+
+  const handleTabDragStart = useCallback(
+    (tabId: string, e: React.DragEvent) => {
+      startTabDrag(tabId, paneId, e)
+    },
+    [startTabDrag, paneId]
+  )
 
   const sortedShells = shells?.available?.slice().sort((a, b) => {
     if (defaultShell) {
@@ -282,7 +313,10 @@ export function WorkspaceTabBar({
           <Reorder.Group
             axis="x"
             values={tabs}
-            onReorder={(reordered: WorkspaceTab[]) => reorderTabs(reordered.map((t) => t.id))}
+            onReorder={(reordered: WorkspaceTab[]) => {
+              if (dragPayload) return
+              reorderTabsInPane(paneId, reordered.map((t) => t.id))
+            }}
             className="flex items-center h-full"
           >
             {tabs.map((tab) => (
@@ -301,11 +335,16 @@ export function WorkspaceTabBar({
                         terminal={terminal}
                         isActive={tab.id === activeTabId}
                         onSelect={() => {
-                          setActiveTab(tab.id)
-                          onSelectTerminal(tab.terminalId)
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
                         }}
-                        onClose={() => onCloseTerminal(tab.terminalId)}
-                        onRename={(name) => onRenameTerminal(tab.terminalId, name)}
+                        onClose={() => {
+                          if (onCloseTerminal) onCloseTerminal(tab.terminalId)
+                        }}
+                        onRename={(name) => {
+                          if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
+                        }}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       />
                     )
                   })()
@@ -314,13 +353,14 @@ export function WorkspaceTabBar({
                     tab={tab as { type: 'editor'; id: string; filePath: string }}
                     isActive={tab.id === activeTabId}
                     onSelect={() => {
-                      setActiveTab(tab.id)
-                      useEditorStore.getState().setActiveFilePath(tab.filePath)
+                      setActiveTab(paneId, tab.id)
+                      setActivePane(paneId)
                     }}
                     onClose={() => handleCloseEditorTab(tab.filePath)}
                     onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
                     onCloseAll={handleCloseAllEditorTabs}
                     onCopyPath={() => window.api.clipboard.writeText(tab.filePath)}
+                    onDragStart={(e) => handleTabDragStart(tab.id, e)}
                   />
                 )}
               </Reorder.Item>
@@ -334,59 +374,61 @@ export function WorkspaceTabBar({
       </div>
 
       {/* Split Button: New Terminal */}
-      <div ref={dropdownRef} className="relative flex items-center ml-1 shrink-0">
-        <button
-          onClick={onNewTerminal}
-          className="h-8 w-8 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
-          title="New terminal (default shell)"
-        >
-          <Plus size={14} />
-        </button>
-        {onNewTerminalWithShell && (
-          <>
-            <button
-              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="h-8 w-6 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              title="Select shell"
-            >
-              <ChevronDown size={12} />
-            </button>
+      {onNewTerminal && (
+        <div ref={dropdownRef} className="relative flex items-center ml-1 shrink-0">
+          <button
+            onClick={onNewTerminal}
+            className="h-8 w-8 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
+            title="New terminal (default shell)"
+          >
+            <Plus size={14} />
+          </button>
+          {onNewTerminalWithShell && (
+            <>
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="h-8 w-6 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                title="Select shell"
+              >
+                <ChevronDown size={12} />
+              </button>
 
-            {isDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
-                {loading ? (
-                  <div className="py-1 px-3 space-y-2">
-                    <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-8 w-full" />
-                  </div>
-                ) : sortedShells && sortedShells.length > 0 ? (
-                  <div className="py-1">
-                    {sortedShells.map((shell) => (
-                      <button
-                        key={shell.name}
-                        onClick={() => handleSelectShell(shell)}
-                        className={cn(
-                          'w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2',
-                          shell.name === defaultShell && 'text-primary'
-                        )}
-                      >
-                        <TerminalIcon size={14} />
-                        <span>{shell.displayName}</span>
-                        {shell.name === defaultShell && (
-                          <span className="ml-auto text-xs text-muted-foreground">(default)</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="px-3 py-2 text-sm text-muted-foreground">No shells detected</div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+              {isDropdownOpen && (
+                <div className="absolute top-full left-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
+                  {loading ? (
+                    <div className="py-1 px-3 space-y-2">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-8 w-full" />
+                    </div>
+                  ) : sortedShells && sortedShells.length > 0 ? (
+                    <div className="py-1">
+                      {sortedShells.map((shell) => (
+                        <button
+                          key={shell.name}
+                          onClick={() => handleSelectShell(shell)}
+                          className={cn(
+                            'w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2',
+                            shell.name === defaultShell && 'text-primary'
+                          )}
+                        >
+                          <TerminalIcon size={14} />
+                          <span>{shell.displayName}</span>
+                          {shell.name === defaultShell && (
+                            <span className="ml-auto text-xs text-muted-foreground">(default)</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No shells detected</div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Spacer */}
       <div className="flex-1" />

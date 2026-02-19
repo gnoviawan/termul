@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
@@ -219,6 +219,16 @@ describe('ProjectSidebar', () => {
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
+  it('should render project avatars with first letter', () => {
+    renderWithRouter()
+
+    const activeProjectsContainer = screen.getByTestId('active-projects-container')
+    const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
+    const letters = avatars.map((avatar) => avatar.textContent)
+
+    expect(letters).toStrictEqual(['P', 'P'])
+  })
+
   it('should call onSelectProject when project is clicked', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
@@ -228,11 +238,24 @@ describe('ProjectSidebar', () => {
     expect(onSelectProject).toHaveBeenCalledWith('2')
   })
 
-  it('should call onNewProject when New Project is clicked', () => {
+  it('should call onNewProject when header + button is clicked', () => {
     const onNewProject = vi.fn()
     renderWithRouter({ onNewProject })
 
-    fireEvent.click(screen.getByText('New Project'))
+    // Use data-testid for robust button selection
+    const headerButton = screen.getByTestId('header-new-project')
+    fireEvent.click(headerButton)
+
+    expect(onNewProject).toHaveBeenCalled()
+  })
+
+  it('should call onNewProject when bottom + button is clicked', () => {
+    const onNewProject = vi.fn()
+    renderWithRouter({ onNewProject })
+
+    // Use data-testid for robust button selection
+    const bottomButton = screen.getByTestId('bottom-new-project')
+    fireEvent.click(bottomButton)
 
     expect(onNewProject).toHaveBeenCalled()
   })
@@ -241,6 +264,57 @@ describe('ProjectSidebar', () => {
     renderWithRouter({ projects: [] })
 
     expect(screen.getByText('No projects yet')).toBeInTheDocument()
+  })
+
+  it('should not render removed navigation items', () => {
+    renderWithRouter()
+
+    // These items were removed from the sidebar
+    expect(screen.queryByText('Workspace')).not.toBeInTheDocument()
+    expect(screen.queryByText('Snapshots')).not.toBeInTheDocument()
+    expect(screen.queryByText('Settings')).not.toBeInTheDocument()
+    expect(screen.queryByText('Preferences')).not.toBeInTheDocument()
+  })
+
+  it('should not render removed action items', () => {
+    renderWithRouter()
+
+    // These actions were removed from the sidebar
+    expect(screen.queryByText('Scan Directories')).not.toBeInTheDocument()
+    expect(screen.queryByText('Import Config')).not.toBeInTheDocument()
+  })
+
+  it('should handle project with empty name gracefully', () => {
+    const projectsWithEmptyName: Project[] = [
+      { id: '1', name: '', color: 'blue', gitBranch: 'main' }
+    ]
+    renderWithRouter({ projects: projectsWithEmptyName })
+
+    // Should show fallback character '?' for empty name
+    const avatar = screen.getByTestId('project-avatar-letter')
+    expect(avatar).toHaveTextContent('?')
+  })
+
+  it('should extract first alphabetic character for emoji project names', () => {
+    const projectsWithEmoji: Project[] = [
+      { id: '1', name: '🚀Rocket', color: 'blue', gitBranch: 'main' }
+    ]
+    renderWithRouter({ projects: projectsWithEmoji })
+
+    // Should extract 'R' from Rocket, not the emoji
+    const avatar = screen.getByTestId('project-avatar-letter')
+    expect(avatar).toHaveTextContent('R')
+  })
+
+  it('should preserve emoji-only project names in avatar fallback', () => {
+    const projectsWithEmojiOnlyName: Project[] = [
+      { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
+    ]
+    renderWithRouter({ projects: projectsWithEmojiOnlyName })
+
+    // Should keep full emoji grapheme as fallback, not a surrogate fragment
+    const avatar = screen.getByTestId('project-avatar-letter')
+    expect(avatar).toHaveTextContent('🚀')
   })
 })
 
