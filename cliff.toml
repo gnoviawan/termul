@@ -17,9 +17,11 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits %}
+        {%- set msg = commit.message | upper_first -%}
+        {%- set pr_in_msg = msg is containing("(#" ) -%}
         - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
-            {{ commit.message | upper_first }}\
-            {% if commit.github.pr_number %} ([#{{ commit.github.pr_number }}](https://github.com/{{ get_env(name="GITHUB_REPO", default="OWNER/REPO") }}/pull/{{ commit.github.pr_number }})){% endif %}\
+            {{ msg }}\
+            {% if commit.remote.pr_number and not pr_in_msg %} ([#{{ commit.remote.pr_number }}](https://github.com/{{ get_env(name="GITHUB_REPO", default="OWNER/REPO") }}/pull/{{ commit.remote.pr_number }})){% endif %}\
     {% endfor %}
 {% endfor %}
 """
