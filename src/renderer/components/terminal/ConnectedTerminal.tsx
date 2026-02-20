@@ -601,6 +601,10 @@ function ConnectedTerminalComponent({
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
+      // Reset WebGL recovery state for next terminal creation
+      webglRecoveryAttemptsRef.current = 0
+      webglContextLostRef.current = false
+      loadWebglAddonRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [

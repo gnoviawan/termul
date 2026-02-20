@@ -901,7 +901,12 @@ describe('ConnectedTerminal', () => {
   })
 
   describe('WebGL context loss recovery', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('should create a new WebGL addon when context loss fires', async () => {
+      vi.useFakeTimers()
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
@@ -921,8 +926,6 @@ describe('ConnectedTerminal', () => {
 
       // A second WebGL addon should have been created
       expect(webglAddonCreateCount).toBe(2)
-
-      vi.useRealTimers()
     })
 
     it('should load the WebGL addon on terminal during init', async () => {
@@ -972,7 +975,6 @@ describe('ConnectedTerminal', () => {
         'WebGL recovery attempts exhausted, falling back to canvas renderer'
       )
 
-      vi.useRealTimers()
       warnSpy.mockRestore()
     })
   })
