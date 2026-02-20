@@ -3,11 +3,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // We need to test the CwdTracker class directly without module reset
 // Import the functions we need to test
 
+// Create a mock function for visibility state that can be controlled
+const mockGetVisibilityState = vi.fn(() => true)
+
+// Mock the visibility IPC module before any imports
+vi.mock('../ipc/visibility.ipc', () => ({
+  getVisibilityState: () => mockGetVisibilityState()
+}))
+
 describe('cwd-tracker', () => {
   let cwdTrackerModule: typeof import('./cwd-tracker')
+  let originalPlatform: PropertyDescriptor | undefined
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    // Reset visibility mock to default (visible)
+    mockGetVisibilityState.mockReturnValue(true)
+    // Save original platform descriptor
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     // Import fresh module
     cwdTrackerModule = await import('./cwd-tracker')
     // Reset any existing tracker
@@ -15,6 +28,10 @@ describe('cwd-tracker', () => {
   })
 
   afterEach(() => {
+    // Restore original platform
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform)
+    }
     if (cwdTrackerModule) {
       cwdTrackerModule.resetCwdTracker()
     }
@@ -81,6 +98,106 @@ describe('cwd-tracker', () => {
       const newTracker = cwdTrackerModule.getDefaultCwdTracker()
       const cwd = await newTracker.getCwd('term-1')
       expect(cwd).toBeNull()
+    })
+  })
+
+  describe('visibility state handling', () => {
+    it('should skip polling when app is not visible (non-Windows)', async () => {
+      // Mock Unix platform
+      Object.defineProperty(process, 'platform', {
+        value: 'linux',
+        writable: true,
+        configurable: true
+      })
+
+      // Mock visibility state as hidden
+      mockGetVisibilityState.mockReturnValue(false)
+
+      // Reset and reimport to pick up platform change
+      cwdTrackerModule.resetCwdTracker()
+      const tracker = cwdTrackerModule.getDefaultCwdTracker()
+      const callback = vi.fn()
+      tracker.onCwdChanged(callback)
+
+      // Start tracking
+      tracker.startTracking('term-1', 12345, '/home/user')
+
+      // Wait longer than the poll interval
+      await new Promise((resolve) => setTimeout(resolve, 600))
+
+      // Callback should not be called since app is not visible
+      expect(callback).not.toHaveBeenCalled()
+
+      // But getCwd should still return the initial CWD
+      const cwd = await tracker.getCwd('term-1')
+      expect(cwd).toBe('/home/user')
+    })
+
+    it('should poll when app is visible (non-Windows)', async () => {
+      // Mock Unix platform
+      Object.defineProperty(process, 'platform', {
+        value: 'linux',
+        writable: true,
+        configurable: true
+      })
+
+      // Mock visibility state as visible
+      mockGetVisibilityState.mockReturnValue(true)
+
+      const tracker = cwdTrackerModule.getDefaultCwdTracker()
+
+      // Start tracking
+      tracker.startTracking('term-1', 12345, '/home/user')
+
+      // The tracker should be tracking the terminal
+      const cwd = await tracker.getCwd('term-1')
+      expect(cwd).toBe('/home/user')
+    })
+  })
+
+  describe('Windows optimization', () => {
+    it('should skip polling on Windows since CWD detection returns null', async () => {
+      // Mock Windows platform
+      Object.defineProperty(process, 'platform', {
+        value: 'win32',
+        writable: true,
+        configurable: true
+      })
+
+      const tracker = cwdTrackerModule.getDefaultCwdTracker()
+      const callback = vi.fn()
+      tracker.onCwdChanged(callback)
+
+      // Start tracking - on Windows, this should not start polling
+      tracker.startTracking('term-1', 12345, 'C:\\Users\\test')
+
+      // Wait longer than the poll interval
+      await new Promise((resolve) => setTimeout(resolve, 600))
+
+      // Callback should never be called since polling is skipped on Windows
+      expect(callback).not.toHaveBeenCalled()
+
+      // But getCwd should still return the initial CWD
+      const cwd = await tracker.getCwd('term-1')
+      expect(cwd).toBe('C:\\Users\\test')
+    })
+
+    it('should start polling on non-Windows platforms', async () => {
+      // Mock Unix platform
+      Object.defineProperty(process, 'platform', {
+        value: 'linux',
+        writable: true,
+        configurable: true
+      })
+
+      const tracker = cwdTrackerModule.getDefaultCwdTracker()
+
+      // Start tracking - on non-Windows, this should start polling
+      tracker.startTracking('term-1', 12345, '/home/user')
+
+      // The tracker should be tracking the terminal
+      const cwd = await tracker.getCwd('term-1')
+      expect(cwd).toBe('/home/user')
     })
   })
 })

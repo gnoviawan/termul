@@ -236,6 +236,13 @@ const clipboardApi: ClipboardApi = {
   }
 }
 
+// Visibility API for renderer
+const visibilityApi: VisibilityApi = {
+  setVisibilityState: (isVisible: boolean): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('visibility:setState', isVisible)
+  }
+}
+
 // Updater API for renderer
 const updaterApi: UpdaterApi = {
   checkForUpdates: (): Promise<IpcResult<UpdateInfo | null>> => {
@@ -427,7 +434,8 @@ const api = {
   updater: updaterApi,
   clipboard: clipboardApi,
   filesystem: filesystemApi,
-  window: windowApi
+  window: windowApi,
+  visibility: visibilityApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

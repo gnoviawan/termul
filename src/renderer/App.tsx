@@ -23,6 +23,7 @@ import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-per
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { useVisibilityState } from './hooks/use-visibility-state'
 
 // Hook to prevent Alt key from showing the default browser menu bar
 function usePreventAltMenu(): void {
@@ -70,6 +71,7 @@ function AppEffects(): null {
   useMenuUpdaterListener()
   useUpdateCheck()
   useUpdateToast()
+  useVisibilityState()
   return null
 }
 

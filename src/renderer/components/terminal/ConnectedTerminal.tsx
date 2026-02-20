@@ -95,6 +95,13 @@ function ConnectedTerminalComponent({
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Activity timeout timer ref
   const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // WebGL addon ref for recovery
+  const webglAddonRef = useRef<WebglAddon | null>(null)
+  // Recovery debounce timer ref
+  const recoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Activity state throttle - track last update time
+  const lastActivityUpdateRef = useRef<number>(0)
+  const ACTIVITY_THROTTLE_MS = 100 // Minimum ms between activity state updates
 
   // Rate limiting for clipboard operations
   const lastClipboardOpRef = useRef<number>(0)
@@ -332,9 +339,12 @@ function ConnectedTerminalComponent({
     try {
       const webglAddon = new WebglAddon()
       webglAddon.onContextLoss(() => {
+        // Dispose the lost context - recovery will be attempted on visibility change
         webglAddon.dispose()
+        webglAddonRef.current = null
       })
       terminal.loadAddon(webglAddon)
+      webglAddonRef.current = webglAddon
     } catch {
       console.warn('WebGL addon failed to load, falling back to canvas renderer')
     }
@@ -369,11 +379,16 @@ function ConnectedTerminalComponent({
     cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
-        // Update activity state in store
+        // Update activity state in store with throttling to reduce CPU usage
         const terminal = useTerminalStore.getState().findTerminalByPtyId(id)
         if (terminal) {
-          useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
-          useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, Date.now())
+          const now = Date.now()
+          // Throttle activity state updates to reduce store update frequency
+          if (now - lastActivityUpdateRef.current >= ACTIVITY_THROTTLE_MS) {
+            useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
+            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, now)
+            lastActivityUpdateRef.current = now
+          }
 
           // Clear existing activity timeout and set new one
           if (activityTimeoutRef.current) {
@@ -479,6 +494,10 @@ function ConnectedTerminalComponent({
       if (activityTimeoutRef.current) {
         clearTimeout(activityTimeoutRef.current)
       }
+      // Clean up recovery timeout timer
+      if (recoveryTimeoutRef.current) {
+        clearTimeout(recoveryTimeoutRef.current)
+      }
       terminal.dispose()
       terminalRef.current = null
       setTerminalInstance(null)
@@ -536,6 +555,46 @@ function ConnectedTerminalComponent({
       })
     }
   }, [isVisible])
+
+  // Debounced WebGL recovery when app becomes visible after being idle
+  useEffect(() => {
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        // Clear any pending recovery attempt
+        if (recoveryTimeoutRef.current) {
+          clearTimeout(recoveryTimeoutRef.current)
+        }
+
+        // Debounce recovery attempt with 300ms delay to avoid false triggers
+        recoveryTimeoutRef.current = setTimeout(() => {
+          // Only attempt recovery if WebGL addon was lost
+          if (!webglAddonRef.current && terminalRef.current) {
+            try {
+              const newWebglAddon = new WebglAddon()
+              newWebglAddon.onContextLoss(() => {
+                newWebglAddon.dispose()
+                webglAddonRef.current = null
+              })
+              terminalRef.current.loadAddon(newWebglAddon)
+              webglAddonRef.current = newWebglAddon
+            } catch {
+              // WebGL recovery failed - continue with canvas renderer
+            }
+          }
+          recoveryTimeoutRef.current = null
+        }, 300)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      if (recoveryTimeoutRef.current) {
+        clearTimeout(recoveryTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Handle Select All
   const handleSelectAll = useCallback((): void => {

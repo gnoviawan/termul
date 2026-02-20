@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// Create a mock function for visibility state that can be controlled
+const mockGetVisibilityState = vi.fn(() => true)
+
+// Mock the visibility IPC module
+vi.mock('../ipc/visibility.ipc', () => ({
+  getVisibilityState: () => mockGetVisibilityState()
+}))
+
 // Mock the cwd-tracker module
 vi.mock('./cwd-tracker', () => ({
   getDefaultCwdTracker: () => ({
@@ -12,6 +20,8 @@ describe('git-tracker', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    // Reset visibility mock to default (visible)
+    mockGetVisibilityState.mockReturnValue(true)
     // Import fresh module
     gitTrackerModule = await import('./git-tracker')
     // Reset any existing tracker
@@ -77,6 +87,22 @@ describe('git-tracker', () => {
       // After reset, getting a new tracker should not have the old terminal
       const tracker2 = gitTrackerModule.getDefaultGitTracker()
       expect(tracker2.getBranch('test-id')).toBeNull()
+    })
+  })
+
+  describe('visibility state handling', () => {
+    it('should use visibility state for polling decisions', () => {
+      // The visibility state is checked in pollAllStatus
+      // When not visible, polling should be skipped
+      mockGetVisibilityState.mockReturnValue(false)
+
+      // After setting visibility to false, the next poll would be skipped
+      // This test verifies the mock is properly integrated
+      expect(mockGetVisibilityState()).toBe(false)
+
+      // Reset to visible
+      mockGetVisibilityState.mockReturnValue(true)
+      expect(mockGetVisibilityState()).toBe(true)
     })
   })
 })

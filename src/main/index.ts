@@ -9,6 +9,7 @@ import { registerSystemIpc } from './ipc/system.ipc'
 import { registerClipboardIpc } from './ipc/clipboard.ipc'
 import { registerFilesystemIpc } from './ipc/filesystem.ipc'
 import { registerWindowIpc } from './ipc/window.ipc'
+import { registerVisibilityIpc } from './ipc/visibility.ipc'
 import { initRegisterUpdaterIpc, setUpdaterWindow } from './ipc/updater.ipc'
 import { flushPendingWrites } from './services/persistence-service'
 import { resetDefaultPtyManager } from './services/pty-manager'
@@ -110,6 +111,7 @@ export function initializeApp(): void {
     registerClipboardIpc() // Register clipboard IPC handlers
     registerFilesystemIpc() // Register filesystem IPC handlers
     initRegisterUpdaterIpc() // Register updater IPC handlers once
+    registerVisibilityIpc() // Register visibility IPC handlers
 
     // Load persisted window state and create window
     const windowState = await loadWindowState()

@@ -151,6 +151,11 @@ export interface ClipboardApi {
   writeText: (text: string) => Promise<IpcResult<void>>
 }
 
+// Visibility API for renderer to notify main process of visibility changes
+export interface VisibilityApi {
+  setVisibilityState: (isVisible: boolean) => Promise<IpcResult<void>>
+}
+
 // Filesystem types re-exported for convenience
 import type {
   DirectoryEntry,
