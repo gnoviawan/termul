@@ -359,48 +359,29 @@ export function useEditorPersistence(projectId: string): void {
     restore()
   }, [projectId])
 
-  // Save state on changes (debounced)
+  // Save state on changes (debounced) - coalesced across all store subscriptions
   useEffect(() => {
     if (!projectId) return
 
-    let editorTimeoutId: ReturnType<typeof setTimeout> | null = null
-    let explorerTimeoutId: ReturnType<typeof setTimeout> | null = null
-    let workspaceTimeoutId: ReturnType<typeof setTimeout> | null = null
+    let persistTimeoutId: ReturnType<typeof setTimeout> | null = null
 
-    const unsubEditor = useEditorStore.subscribe(() => {
+    const schedulePersist = (): void => {
       if (isRestoringRef.current) return
-
-      if (editorTimeoutId) clearTimeout(editorTimeoutId)
-      editorTimeoutId = setTimeout(() => {
+      if (persistTimeoutId) clearTimeout(persistTimeoutId)
+      persistTimeoutId = setTimeout(() => {
         persistState(projectId)
       }, 500)
-    })
+    }
 
-    const unsubExplorer = useFileExplorerStore.subscribe(() => {
-      if (isRestoringRef.current) return
-
-      if (explorerTimeoutId) clearTimeout(explorerTimeoutId)
-      explorerTimeoutId = setTimeout(() => {
-        persistState(projectId)
-      }, 500)
-    })
-
-    const unsubWorkspace = useWorkspaceStore.subscribe(() => {
-      if (isRestoringRef.current) return
-
-      if (workspaceTimeoutId) clearTimeout(workspaceTimeoutId)
-      workspaceTimeoutId = setTimeout(() => {
-        persistState(projectId)
-      }, 500)
-    })
+    const unsubEditor = useEditorStore.subscribe(schedulePersist)
+    const unsubExplorer = useFileExplorerStore.subscribe(schedulePersist)
+    const unsubWorkspace = useWorkspaceStore.subscribe(schedulePersist)
 
     return () => {
       unsubEditor()
       unsubExplorer()
       unsubWorkspace()
-      if (editorTimeoutId) clearTimeout(editorTimeoutId)
-      if (explorerTimeoutId) clearTimeout(explorerTimeoutId)
-      if (workspaceTimeoutId) clearTimeout(workspaceTimeoutId)
+      if (persistTimeoutId) clearTimeout(persistTimeoutId)
     }
   }, [projectId])
 }

@@ -9,7 +9,7 @@ export type GitBranchChangedCallback = (terminalId: string, branch: string | nul
 export type GitStatusChangedCallback = (terminalId: string, status: GitStatus | null) => void
 
 const GIT_COMMAND_TIMEOUT_MS = 5000
-const STATUS_POLL_INTERVAL_MS = 2000
+const STATUS_POLL_INTERVAL_MS = 5000
 
 export interface GitStatus {
   modified: number
@@ -75,6 +75,7 @@ class GitTracker {
   private statusCallbacks: Set<GitStatusChangedCallback> = new Set()
   private cwdCleanup: (() => void) | null = null
   private statusPollInterval: NodeJS.Timeout | null = null
+  private isPolling = false
 
   constructor() {
     // Listen for CWD changes to update git info
@@ -179,15 +180,25 @@ class GitTracker {
       return
     }
 
-    const promises = Array.from(this.terminalGitState.values()).map(async (state) => {
-      try {
-        await this.checkStatus(state.terminalId, state.lastKnownCwd)
-      } catch {
-        // Ignore errors during polling
-      }
-    })
+    // Guard against concurrent polls
+    if (this.isPolling) {
+      return
+    }
+    this.isPolling = true
 
-    await Promise.allSettled(promises)
+    try {
+      const promises = Array.from(this.terminalGitState.values()).map(async (state) => {
+        try {
+          await this.checkStatus(state.terminalId, state.lastKnownCwd)
+        } catch {
+          // Ignore errors during polling
+        }
+      })
+
+      await Promise.allSettled(promises)
+    } finally {
+      this.isPolling = false
+    }
   }
 
   private notifyBranchChanged(terminalId: string, branch: string | null): void {

@@ -416,47 +416,48 @@ function ConnectedTerminalComponent({
     })
 
     // Set up IPC listeners BEFORE spawning to avoid missing data
+    // Cache ptyId -> terminalId mapping to avoid repeated store lookups
+    let cachedTerminalId: string | null = null
     cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
-        // Update activity state in store with debouncing
-        const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
-        if (terminalRecord) {
+        // Resolve terminal record ID (cached to avoid linear scan)
+        if (!cachedTerminalId) {
+          const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
+          if (terminalRecord) {
+            cachedTerminalId = terminalRecord.id
+          }
+        }
+        if (cachedTerminalId) {
           const now = Date.now()
           const timeSinceLastUpdate = now - lastActivityUpdateRef.current
 
           // If enough time has passed since last update, update immediately
           if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
-            useTerminalStore.getState().updateTerminalActivity(terminalRecord.id, true)
-            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminalRecord.id, now)
+            useTerminalStore.getState().updateTerminalActivityBatch(cachedTerminalId, true, now)
             lastActivityUpdateRef.current = now
           } else {
             // Otherwise, store pending update for later
-            pendingActivityUpdateRef.current = { id: terminalRecord.id, hasActivity: true }
+            pendingActivityUpdateRef.current = { id: cachedTerminalId, hasActivity: true }
           }
 
           // Clear existing activity timeout and set new one
           if (activityTimeoutRef.current) {
             clearTimeout(activityTimeoutRef.current)
           }
+          const termId = cachedTerminalId
           activityTimeoutRef.current = setTimeout(() => {
             // Flush any pending activity update
             if (pendingActivityUpdateRef.current) {
-              useTerminalStore.getState().updateTerminalActivity(
+              useTerminalStore.getState().updateTerminalActivityBatch(
                 pendingActivityUpdateRef.current.id,
-                false
-              )
-              useTerminalStore.getState().updateTerminalLastActivityTimestamp(
-                pendingActivityUpdateRef.current.id,
+                false,
                 Date.now()
               )
               pendingActivityUpdateRef.current = null
             } else {
               // Clear activity after 2 seconds of inactivity
-              const term = useTerminalStore.getState().findTerminalByPtyId(id)
-              if (term) {
-                useTerminalStore.getState().updateTerminalActivity(term.id, false)
-              }
+              useTerminalStore.getState().updateTerminalActivityBatch(termId, false, Date.now())
             }
             activityTimeoutRef.current = null
             lastActivityUpdateRef.current = 0
@@ -568,12 +569,9 @@ function ConnectedTerminalComponent({
       }
       // Flush pending activity update on unmount
       if (pendingActivityUpdateRef.current) {
-        useTerminalStore.getState().updateTerminalActivity(
+        useTerminalStore.getState().updateTerminalActivityBatch(
           pendingActivityUpdateRef.current.id,
-          pendingActivityUpdateRef.current.hasActivity
-        )
-        useTerminalStore.getState().updateTerminalLastActivityTimestamp(
-          pendingActivityUpdateRef.current.id,
+          pendingActivityUpdateRef.current.hasActivity,
           Date.now()
         )
         pendingActivityUpdateRef.current = null

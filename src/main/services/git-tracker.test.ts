@@ -137,8 +137,8 @@ describe('git-tracker', () => {
         // Spy on checkStatus to verify it's called during polling
         checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
 
-        // Advance timers past the poll interval
-        await vi.advanceTimersByTimeAsync(2500)
+        // Advance timers past the poll interval (5000ms)
+        await vi.advanceTimersByTimeAsync(5500)
 
         // checkStatus should have been called since app is visible
         expect(checkStatusSpy).toHaveBeenCalled()
