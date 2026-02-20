@@ -150,9 +150,25 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
+    },
+    "nsis": {
+      "artifactName": "Termul-Manager-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Termul-Manager-${version}.${ext}"
     },
     "mac": {
       "target": [
