@@ -93,52 +93,62 @@ describe('git-tracker', () => {
   describe('visibility state handling', () => {
     it('should skip polling when app is not visible', async () => {
       vi.useFakeTimers()
+      let checkStatusSpy: ReturnType<typeof vi.spyOn> | null = null
 
-      // Mock visibility state as hidden
-      mockGetVisibilityState.mockReturnValue(false)
+      try {
+        // Mock visibility state as hidden
+        mockGetVisibilityState.mockReturnValue(false)
 
-      const tracker = gitTrackerModule.getDefaultGitTracker()
+        const tracker = gitTrackerModule.getDefaultGitTracker()
 
-      // Initialize terminal to start polling
-      await tracker.initializeTerminal('test-id', '/tmp')
+        // Initialize terminal to start polling
+        await tracker.initializeTerminal('test-id', '/tmp')
 
-      // Spy on checkStatus to verify it's not called during polling
-      const checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
+        // Spy on checkStatus to verify it's not called during polling
+        checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
 
-      // Advance timers past the poll interval
-      await vi.advanceTimersByTimeAsync(2500)
+        // Advance timers past the poll interval
+        await vi.advanceTimersByTimeAsync(2500)
 
-      // checkStatus should not have been called since app is not visible
-      expect(checkStatusSpy).not.toHaveBeenCalled()
-
-      // Clean up
-      checkStatusSpy.mockRestore()
-      vi.useRealTimers()
+        // checkStatus should not have been called since app is not visible
+        expect(checkStatusSpy).not.toHaveBeenCalled()
+      } finally {
+        // Clean up - always restore even if assertion fails
+        if (checkStatusSpy) {
+          checkStatusSpy.mockRestore()
+        }
+        vi.useRealTimers()
+      }
     })
 
     it('should poll when app is visible', async () => {
       vi.useFakeTimers()
+      let checkStatusSpy: ReturnType<typeof vi.spyOn> | null = null
 
-      // Mock visibility state as visible
-      mockGetVisibilityState.mockReturnValue(true)
+      try {
+        // Mock visibility state as visible
+        mockGetVisibilityState.mockReturnValue(true)
 
-      const tracker = gitTrackerModule.getDefaultGitTracker()
+        const tracker = gitTrackerModule.getDefaultGitTracker()
 
-      // Initialize terminal to start polling
-      await tracker.initializeTerminal('test-id', '/tmp')
+        // Initialize terminal to start polling
+        await tracker.initializeTerminal('test-id', '/tmp')
 
-      // Spy on checkStatus to verify it's called during polling
-      const checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
+        // Spy on checkStatus to verify it's called during polling
+        checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
 
-      // Advance timers past the poll interval
-      await vi.advanceTimersByTimeAsync(2500)
+        // Advance timers past the poll interval
+        await vi.advanceTimersByTimeAsync(2500)
 
-      // checkStatus should have been called since app is visible
-      expect(checkStatusSpy).toHaveBeenCalled()
-
-      // Clean up
-      checkStatusSpy.mockRestore()
-      vi.useRealTimers()
+        // checkStatus should have been called since app is visible
+        expect(checkStatusSpy).toHaveBeenCalled()
+      } finally {
+        // Clean up - always restore even if assertion fails
+        if (checkStatusSpy) {
+          checkStatusSpy.mockRestore()
+        }
+        vi.useRealTimers()
+      }
     })
   })
 })

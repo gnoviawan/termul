@@ -29,6 +29,14 @@ import {
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 
+// Module-level constants - defined once per module
+const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
+const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100 // GPU driver recovery time
+const VISIBILITY_RECOVERY_DELAY_MS = 150 // DOM reflow after tab becomes visible
+const POWER_RESUME_RECOVERY_DELAY_MS = 300 // System stabilize after wake
+const ACTIVITY_DEBOUNCE_MS = 1000 // Debounce activity updates to max 1 per second
+const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
+
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
   findPrevious: (term: string) => boolean
@@ -72,12 +80,9 @@ function ConnectedTerminalComponent({
   const webglAddonRef = useRef<WebglAddon | null>(null)
   const webglRecoveryAttemptsRef = useRef<number>(0)
   const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const loadWebglAddonRef = useRef<((term: Terminal) => void) | null>(null)
-  const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
-  // Recovery delay constants - allow GPU/rendering pipeline to stabilize
-  const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100 // GPU driver recovery time
-  const VISIBILITY_RECOVERY_DELAY_MS = 150 // DOM reflow after tab becomes visible
-  const POWER_RESUME_RECOVERY_DELAY_MS = 300 // System stabilize after wake
+  const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null)
+  // Track WebGL context loss for recovery decisions
+  const webglContextLostRef = useRef<boolean>(false)
 
   // Get font settings from app settings store
   const fontFamily = useTerminalFontFamily()
@@ -109,11 +114,9 @@ function ConnectedTerminalComponent({
   // Debounced activity tracking refs
   const lastActivityUpdateRef = useRef<number>(0)
   const pendingActivityUpdateRef = useRef<{ id: string; hasActivity: boolean } | null>(null)
-  const ACTIVITY_DEBOUNCE_MS = 1000 // Debounce activity updates to max 1 per second
 
   // Rate limiting for clipboard operations
   const lastClipboardOpRef = useRef<number>(0)
-  const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
 
   // State to track terminal instance for clipboard hook
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
@@ -345,7 +348,7 @@ function ConnectedTerminalComponent({
     })
 
     // WebGL addon loading with context loss recovery
-    const loadWebglAddon = (term: Terminal): void => {
+    const loadWebglAddon = (term: Terminal, isRecovery: boolean = false): void => {
       if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
         console.warn('WebGL recovery attempts exhausted, falling back to canvas renderer')
         return
@@ -355,6 +358,8 @@ function ConnectedTerminalComponent({
         webglAddon.onContextLoss(() => {
           webglAddon.dispose()
           webglAddonRef.current = null
+          // Mark context as lost for recovery decisions
+          webglContextLostRef.current = true
           // Increment recovery counter BEFORE scheduling recovery
           webglRecoveryAttemptsRef.current++
           // Clear any pending recovery timeout
@@ -364,11 +369,13 @@ function ConnectedTerminalComponent({
           // Delay before recovery to avoid rapid-fire loops
           webglRecoveryTimeoutRef.current = setTimeout(() => {
             webglRecoveryTimeoutRef.current = null
-            loadWebglAddon(term)
+            loadWebglAddon(term, true)
           }, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS)
         })
         term.loadAddon(webglAddon)
         webglAddonRef.current = webglAddon
+        // Clear context lost flag on successful load
+        webglContextLostRef.current = false
         // Note: Counter NOT reset here - only increments on context loss or failure
         // This prevents infinite recovery loops on persistent GPU issues
       } catch (error) {
@@ -420,7 +427,8 @@ function ConnectedTerminalComponent({
 
           // If enough time has passed since last update, update immediately
           if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
-            useTerminalStore.getState().updateTerminalActivityBatched(terminal.id, true, now)
+            useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
+            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, now)
             lastActivityUpdateRef.current = now
           } else {
             // Otherwise, store pending update for later
@@ -434,9 +442,12 @@ function ConnectedTerminalComponent({
           activityTimeoutRef.current = setTimeout(() => {
             // Flush any pending activity update
             if (pendingActivityUpdateRef.current) {
-              useTerminalStore.getState().updateTerminalActivityBatched(
+              useTerminalStore.getState().updateTerminalActivity(
                 pendingActivityUpdateRef.current.id,
-                false,
+                false
+              )
+              useTerminalStore.getState().updateTerminalLastActivityTimestamp(
+                pendingActivityUpdateRef.current.id,
                 Date.now()
               )
               pendingActivityUpdateRef.current = null
@@ -557,9 +568,12 @@ function ConnectedTerminalComponent({
       }
       // Flush pending activity update on unmount
       if (pendingActivityUpdateRef.current) {
-        useTerminalStore.getState().updateTerminalActivityBatched(
+        useTerminalStore.getState().updateTerminalActivity(
           pendingActivityUpdateRef.current.id,
-          pendingActivityUpdateRef.current.hasActivity,
+          pendingActivityUpdateRef.current.hasActivity
+        )
+        useTerminalStore.getState().updateTerminalLastActivityTimestamp(
+          pendingActivityUpdateRef.current.id,
           Date.now()
         )
         pendingActivityUpdateRef.current = null
@@ -651,18 +665,16 @@ function ConnectedTerminalComponent({
   const performTerminalRecovery = useCallback((): void => {
     if (!fitAddonRef.current || !terminalRef.current) return
 
-    // Check if WebGL context is still valid and recover if needed
-    // Note: We cannot reliably check isContextLost() because canvas.getContext()
-    // returns null when a context already exists. Instead, we dispose and recreate
-    // the WebGL addon on every visibility/power resume to ensure fresh state.
-    if (webglAddonRef.current) {
+    // Only recreate WebGL addon if context was actually lost
+    // This prevents incrementing the recovery counter on every visibility/power resume
+    if (webglContextLostRef.current && webglAddonRef.current) {
       try {
-        console.warn('Recreating WebGL addon during recovery')
+        console.warn('WebGL context was lost, recreating addon during recovery')
         webglAddonRef.current.dispose()
         webglAddonRef.current = null
-        // Use shared loadWebglAddon for proper recovery with counter
+        // Use shared loadWebglAddon for proper recovery
         if (loadWebglAddonRef.current && terminalRef.current) {
-          loadWebglAddonRef.current(terminalRef.current)
+          loadWebglAddonRef.current(terminalRef.current, true)
         }
       } catch (error) {
         console.warn('WebGL context recovery failed:', error)

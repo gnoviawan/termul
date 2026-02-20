@@ -8,7 +8,8 @@ import type {
   KeyboardApi,
   ClipboardApi,
   FilesystemApi,
-  WindowApi
+  WindowApi,
+  VisibilityApi
 } from '@shared/types/ipc.types'
 import type { UpdaterApi } from '@shared/types/updater.types'
 
@@ -26,6 +27,7 @@ declare global {
       clipboard: ClipboardApi
       filesystem: FilesystemApi
       window: WindowApi
+      visibility: VisibilityApi
     }
   }
 }

@@ -207,6 +207,15 @@ const persistenceApi: PersistenceApi = {
 const systemApi: SystemApi = {
   getHomeDirectory: (): Promise<IpcResult<string>> => {
     return ipcRenderer.invoke('system:getHomeDirectory')
+  },
+  onPowerResume: (callback: () => void): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('system:power-resume', listener)
+    return () => {
+      ipcRenderer.off('system:power-resume', listener)
+    }
   }
 }
 

@@ -118,6 +118,7 @@ export interface PersistenceApi {
 // System API for renderer
 export interface SystemApi {
   getHomeDirectory: () => Promise<IpcResult<string>>
+  onPowerResume: (callback: () => void) => () => void
 }
 
 // Keyboard shortcut callback for main -> renderer communication

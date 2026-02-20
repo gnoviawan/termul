@@ -166,8 +166,7 @@ vi.mock('@/stores/terminal-store', () => ({
     getState: () => ({
       findTerminalByPtyId: vi.fn(),
       updateTerminalActivity: vi.fn(),
-      updateTerminalLastActivityTimestamp: vi.fn(),
-      updateTerminalActivityBatched: vi.fn()
+      updateTerminalLastActivityTimestamp: vi.fn()
     })
   }
 }))
