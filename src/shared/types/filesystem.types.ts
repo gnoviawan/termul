@@ -28,7 +28,7 @@ export interface FileChangeEvent {
 }
 
 export interface ReadDirectoryOptions {
-  showHidden?: boolean
+  // Reserved for future options
 }
 
 export const FilesystemErrorCodes = {

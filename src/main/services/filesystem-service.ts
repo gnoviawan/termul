@@ -82,9 +82,6 @@ export class FilesystemService {
     for (const entry of entries) {
       const name = entry.name
 
-      // Skip hidden files unless requested
-      if (!options?.showHidden && name.startsWith('.')) continue
-
       // Skip hardcoded ignores
       if (HARDCODED_IGNORES.has(name)) continue
 
