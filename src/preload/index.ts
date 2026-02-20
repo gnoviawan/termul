@@ -31,7 +31,8 @@ import type {
   WindowApi,
   WindowMaximizeChangedCallback,
   AppCloseRequestedCallback,
-  AppCloseResponse
+  AppCloseResponse,
+  VisibilityApi
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,

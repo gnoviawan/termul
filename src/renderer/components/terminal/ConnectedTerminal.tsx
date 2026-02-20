@@ -12,8 +12,7 @@ import {
   unregisterTerminal,
   restoreScrollback,
   captureScrollPosition,
-  restoreScrollPosition,
-  getCachedScrollPosition
+  restoreScrollPosition
 } from '../../utils/terminal-registry'
 import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
 import {
@@ -653,21 +652,20 @@ function ConnectedTerminalComponent({
     if (!fitAddonRef.current || !terminalRef.current) return
 
     // Check if WebGL context is still valid and recover if needed
-    if (webglAddonRef.current && containerRef.current) {
+    // Note: We cannot reliably check isContextLost() because canvas.getContext()
+    // returns null when a context already exists. Instead, we dispose and recreate
+    // the WebGL addon on every visibility/power resume to ensure fresh state.
+    if (webglAddonRef.current) {
       try {
-        const canvas = containerRef.current.querySelector('canvas')
-        const gl = canvas?.getContext('webgl2') || canvas?.getContext('webgl')
-        if (gl && gl.isContextLost()) {
-          console.warn('WebGL context lost during idle, attempting recovery')
-          webglAddonRef.current.dispose()
-          webglAddonRef.current = null
-          // Use shared loadWebglAddon for proper recovery with counter
-          if (loadWebglAddonRef.current && terminalRef.current) {
-            loadWebglAddonRef.current(terminalRef.current)
-          }
+        console.warn('Recreating WebGL addon during recovery')
+        webglAddonRef.current.dispose()
+        webglAddonRef.current = null
+        // Use shared loadWebglAddon for proper recovery with counter
+        if (loadWebglAddonRef.current && terminalRef.current) {
+          loadWebglAddonRef.current(terminalRef.current)
         }
       } catch (error) {
-        console.warn('WebGL context check failed during recovery:', error)
+        console.warn('WebGL context recovery failed:', error)
       }
     }
 
@@ -690,22 +688,52 @@ function ConnectedTerminalComponent({
 
   // Recovery handler for visibility change (app regains focus after idle)
   useEffect(() => {
+    // Track timeout to prevent firing after unmount
+    let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
+
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') {
-        setTimeout(performTerminalRecovery, VISIBILITY_RECOVERY_DELAY_MS)
+        // Clear any pending timeout before scheduling new one
+        if (recoveryTimeoutId) {
+          clearTimeout(recoveryTimeoutId)
+        }
+        recoveryTimeoutId = setTimeout(() => {
+          recoveryTimeoutId = null
+          performTerminalRecovery()
+        }, VISIBILITY_RECOVERY_DELAY_MS)
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [performTerminalRecovery])
 
   // Recovery handler for power resume (wake from sleep, screen unlock)
   useEffect(() => {
+    // Track timeout to prevent firing after unmount
+    let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
+
     const cleanup = window.api.system.onPowerResume(() => {
-      setTimeout(performTerminalRecovery, POWER_RESUME_RECOVERY_DELAY_MS)
+      // Clear any pending timeout before scheduling new one
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      recoveryTimeoutId = setTimeout(() => {
+        recoveryTimeoutId = null
+        performTerminalRecovery()
+      }, POWER_RESUME_RECOVERY_DELAY_MS)
     })
-    return cleanup
+    return () => {
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      cleanup()
+    }
   }, [performTerminalRecovery])
 
   // Handle Select All

@@ -91,18 +91,54 @@ describe('git-tracker', () => {
   })
 
   describe('visibility state handling', () => {
-    it('should use visibility state for polling decisions', () => {
-      // The visibility state is checked in pollAllStatus
-      // When not visible, polling should be skipped
+    it('should skip polling when app is not visible', async () => {
+      vi.useFakeTimers()
+
+      // Mock visibility state as hidden
       mockGetVisibilityState.mockReturnValue(false)
 
-      // After setting visibility to false, the next poll would be skipped
-      // This test verifies the mock is properly integrated
-      expect(mockGetVisibilityState()).toBe(false)
+      const tracker = gitTrackerModule.getDefaultGitTracker()
 
-      // Reset to visible
+      // Initialize terminal to start polling
+      await tracker.initializeTerminal('test-id', '/tmp')
+
+      // Spy on checkStatus to verify it's not called during polling
+      const checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
+
+      // Advance timers past the poll interval
+      await vi.advanceTimersByTimeAsync(2500)
+
+      // checkStatus should not have been called since app is not visible
+      expect(checkStatusSpy).not.toHaveBeenCalled()
+
+      // Clean up
+      checkStatusSpy.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it('should poll when app is visible', async () => {
+      vi.useFakeTimers()
+
+      // Mock visibility state as visible
       mockGetVisibilityState.mockReturnValue(true)
-      expect(mockGetVisibilityState()).toBe(true)
+
+      const tracker = gitTrackerModule.getDefaultGitTracker()
+
+      // Initialize terminal to start polling
+      await tracker.initializeTerminal('test-id', '/tmp')
+
+      // Spy on checkStatus to verify it's called during polling
+      const checkStatusSpy = vi.spyOn(tracker as unknown as { checkStatus: (id: string, cwd: string) => Promise<void> }, 'checkStatus')
+
+      // Advance timers past the poll interval
+      await vi.advanceTimersByTimeAsync(2500)
+
+      // checkStatus should have been called since app is visible
+      expect(checkStatusSpy).toHaveBeenCalled()
+
+      // Clean up
+      checkStatusSpy.mockRestore()
+      vi.useRealTimers()
     })
   })
 })

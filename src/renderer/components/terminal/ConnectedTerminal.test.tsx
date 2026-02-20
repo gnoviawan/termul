@@ -44,6 +44,8 @@ const mockWebglAddonInstance = {
 // Track WebGL addon instances for recovery testing
 let webglAddonCreateCount = 0
 let capturedContextLossCallback: (() => void) | null = null
+// Track the last created WebGL addon instance for disposal order testing
+let lastCreatedWebglInstance: { dispose: ReturnType<typeof vi.fn>; onContextLoss: ReturnType<typeof vi.fn> } | null = null
 
 const mockWebLinksAddonInstance = {
   dispose: vi.fn()
@@ -83,13 +85,18 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class MockWebglAddon {
-    constructor() {
-      webglAddonCreateCount++
-    }
+    dispose = vi.fn()
     onContextLoss = vi.fn((cb: () => void) => {
       capturedContextLossCallback = cb
     })
-    dispose = vi.fn()
+    constructor() {
+      webglAddonCreateCount++
+      // Store reference to this instance for disposal order testing
+      lastCreatedWebglInstance = {
+        dispose: this.dispose,
+        onContextLoss: this.onContextLoss
+      }
+    }
   }
 }))
 
@@ -352,14 +359,19 @@ describe('ConnectedTerminal', () => {
     it('should dispose WebGL addon before terminal disposal', () => {
       const disposalOrder: string[] = []
 
-      ;(mockWebglAddonInstance.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
-        disposalOrder.push('webgl')
-      })
+      // Track disposal on the actual WebGL instance created by the component
       ;(mockTerminalInstance.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
         disposalOrder.push('terminal')
       })
 
       const { unmount } = render(<ConnectedTerminal />)
+
+      // Now set up the spy on the actual WebGL instance that was created
+      expect(lastCreatedWebglInstance).toBeTruthy()
+      ;(lastCreatedWebglInstance!.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+        disposalOrder.push('webgl')
+      })
+
       unmount()
 
       // WebGL should be disposed before terminal

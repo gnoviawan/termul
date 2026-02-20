@@ -103,6 +103,8 @@ describe('cwd-tracker', () => {
 
   describe('visibility state handling', () => {
     it('should skip polling when app is not visible (non-Windows)', async () => {
+      vi.useFakeTimers()
+
       // Mock Unix platform
       Object.defineProperty(process, 'platform', {
         value: 'linux',
@@ -122,8 +124,8 @@ describe('cwd-tracker', () => {
       // Start tracking
       tracker.startTracking('term-1', 12345, '/home/user')
 
-      // Wait longer than the poll interval
-      await new Promise((resolve) => setTimeout(resolve, 600))
+      // Advance timers past the poll interval
+      await vi.advanceTimersByTimeAsync(600)
 
       // Callback should not be called since app is not visible
       expect(callback).not.toHaveBeenCalled()
@@ -131,6 +133,8 @@ describe('cwd-tracker', () => {
       // But getCwd should still return the initial CWD
       const cwd = await tracker.getCwd('term-1')
       expect(cwd).toBe('/home/user')
+
+      vi.useRealTimers()
     })
 
     it('should poll when app is visible (non-Windows)', async () => {
@@ -157,6 +161,8 @@ describe('cwd-tracker', () => {
 
   describe('Windows optimization', () => {
     it('should skip polling on Windows since CWD detection returns null', async () => {
+      vi.useFakeTimers()
+
       // Mock Windows platform
       Object.defineProperty(process, 'platform', {
         value: 'win32',
@@ -171,8 +177,8 @@ describe('cwd-tracker', () => {
       // Start tracking - on Windows, this should not start polling
       tracker.startTracking('term-1', 12345, 'C:\\Users\\test')
 
-      // Wait longer than the poll interval
-      await new Promise((resolve) => setTimeout(resolve, 600))
+      // Advance timers past the poll interval
+      await vi.advanceTimersByTimeAsync(600)
 
       // Callback should never be called since polling is skipped on Windows
       expect(callback).not.toHaveBeenCalled()
@@ -180,6 +186,8 @@ describe('cwd-tracker', () => {
       // But getCwd should still return the initial CWD
       const cwd = await tracker.getCwd('term-1')
       expect(cwd).toBe('C:\\Users\\test')
+
+      vi.useRealTimers()
     })
 
     it('should start polling on non-Windows platforms', async () => {

@@ -104,7 +104,7 @@ class CwdTracker {
   }
 
   private async detectCwd(pid: number): Promise<string | null> {
-    if (process.platform === 'win32') {
+    if (this.isWindows) {
       return this.detectCwdWindows(pid)
     } else {
       return this.detectCwdUnix(pid)

@@ -28,6 +28,15 @@ export function unregisterTerminal(terminalId: string): void {
 }
 
 /**
+ * Destroy a terminal completely - unregister and clean up scroll position cache
+ * Use this for permanent terminal closure. Use unregisterTerminal for transient pane transitions.
+ */
+export function destroyTerminal(terminalId: string): void {
+  terminalRegistry.delete(terminalId)
+  scrollPositionCache.delete(terminalId)
+}
+
+/**
  * Get a terminal instance by ID
  */
 export function getTerminal(terminalId: string): Terminal | undefined {
