@@ -177,6 +177,7 @@ describe('ConnectedTerminal', () => {
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
+    lastCreatedWebglInstance = null
 
     global.ResizeObserver = class MockResizeObserver {
       observe = vi.fn()
@@ -977,6 +978,23 @@ describe('ConnectedTerminal', () => {
   })
 
   describe('Visibility change recovery', () => {
+    let originalVisibilityState: string
+
+    beforeEach(() => {
+      // Capture original visibility state before any test mutates it
+      originalVisibilityState = document.visibilityState
+    })
+
+    afterEach(() => {
+      // Restore original visibility state
+      Object.defineProperty(document, 'visibilityState', {
+        value: originalVisibilityState,
+        writable: true,
+        configurable: true
+      })
+      vi.useRealTimers()
+    })
+
     it('should call fit and resize when visibility changes to visible', async () => {
       vi.useFakeTimers()
 
@@ -1007,8 +1025,6 @@ describe('ConnectedTerminal', () => {
         expect.any(Number),
         expect.any(Number)
       )
-
-      vi.useRealTimers()
     })
 
     it('should not trigger recovery when visibility changes to hidden', async () => {
@@ -1035,8 +1051,6 @@ describe('ConnectedTerminal', () => {
 
       // fit should not be called again for hidden state
       expect(mockFitAddonInstance.fit).not.toHaveBeenCalled()
-
-      vi.useRealTimers()
     })
 
     it('should remove visibilitychange listener on unmount', async () => {

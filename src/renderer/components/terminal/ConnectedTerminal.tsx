@@ -420,19 +420,19 @@ function ConnectedTerminalComponent({
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
         // Update activity state in store with debouncing
-        const terminal = useTerminalStore.getState().findTerminalByPtyId(id)
-        if (terminal) {
+        const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
+        if (terminalRecord) {
           const now = Date.now()
           const timeSinceLastUpdate = now - lastActivityUpdateRef.current
 
           // If enough time has passed since last update, update immediately
           if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
-            useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
-            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, now)
+            useTerminalStore.getState().updateTerminalActivity(terminalRecord.id, true)
+            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminalRecord.id, now)
             lastActivityUpdateRef.current = now
           } else {
             // Otherwise, store pending update for later
-            pendingActivityUpdateRef.current = { id: terminal.id, hasActivity: true }
+            pendingActivityUpdateRef.current = { id: terminalRecord.id, hasActivity: true }
           }
 
           // Clear existing activity timeout and set new one
@@ -665,14 +665,17 @@ function ConnectedTerminalComponent({
   const performTerminalRecovery = useCallback((): void => {
     if (!fitAddonRef.current || !terminalRef.current) return
 
-    // Only recreate WebGL addon if context was actually lost
-    // This prevents incrementing the recovery counter on every visibility/power resume
-    if (webglContextLostRef.current && webglAddonRef.current) {
+    // Only recreate WebGL addon if context was actually lost and not already recovering
+    // webglAddonRef is null after onContextLoss, so check !webglAddonRef.current
+    if (webglContextLostRef.current && !webglAddonRef.current) {
       try {
+        // Cancel any pending auto-recovery timeout to avoid double-creation race
+        if (webglRecoveryTimeoutRef.current) {
+          clearTimeout(webglRecoveryTimeoutRef.current)
+          webglRecoveryTimeoutRef.current = null
+        }
         console.warn('WebGL context was lost, recreating addon during recovery')
-        webglAddonRef.current.dispose()
-        webglAddonRef.current = null
-        // Use shared loadWebglAddon for proper recovery
+        // Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
         if (loadWebglAddonRef.current && terminalRef.current) {
           loadWebglAddonRef.current(terminalRef.current, true)
         }
