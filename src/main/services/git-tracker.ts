@@ -1,6 +1,7 @@
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { getDefaultCwdTracker } from './cwd-tracker'
+import { getVisibilityState } from '../ipc/visibility.ipc'
 
 const execAsync = promisify(exec)
 
@@ -173,6 +174,11 @@ class GitTracker {
   }
 
   private async pollAllStatus(): Promise<void> {
+    // Skip polling when app is not visible to save CPU
+    if (!getVisibilityState()) {
+      return
+    }
+
     const promises = Array.from(this.terminalGitState.values()).map(async (state) => {
       try {
         await this.checkStatus(state.terminalId, state.lastKnownCwd)

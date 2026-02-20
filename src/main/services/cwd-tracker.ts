@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { getDefaultPtyManager } from './pty-manager'
+import { getVisibilityState } from '../ipc/visibility.ipc'
 
 export type CwdChangedCallback = (terminalId: string, cwd: string) => void
 
@@ -15,6 +16,8 @@ class CwdTracker {
   private callbacks: Set<CwdChangedCallback> = new Set()
   private pollInterval: NodeJS.Timeout | null = null
   private readonly POLL_INTERVAL_MS = 500
+  // On Windows, CWD detection returns null, so skip polling to save CPU
+  private readonly isWindows = process.platform === 'win32'
 
   startTracking(terminalId: string, pid: number, initialCwd: string): void {
     this.trackedTerminals.set(terminalId, {
@@ -22,6 +25,11 @@ class CwdTracker {
       pid,
       lastKnownCwd: initialCwd
     })
+
+    // Skip polling on Windows since CWD detection always returns null
+    if (this.isWindows) {
+      return
+    }
 
     if (!this.pollInterval && this.trackedTerminals.size > 0) {
       this.startPolling()
@@ -65,6 +73,11 @@ class CwdTracker {
   }
 
   private async pollAllTerminals(): Promise<void> {
+    // Skip polling when app is not visible to save CPU
+    if (!getVisibilityState()) {
+      return
+    }
+
     const promises = Array.from(this.trackedTerminals.values()).map(async (state) => {
       try {
         const currentCwd = await this.detectCwd(state.pid)
@@ -91,7 +104,7 @@ class CwdTracker {
   }
 
   private async detectCwd(pid: number): Promise<string | null> {
-    if (process.platform === 'win32') {
+    if (this.isWindows) {
       return this.detectCwdWindows(pid)
     } else {
       return this.detectCwdUnix(pid)

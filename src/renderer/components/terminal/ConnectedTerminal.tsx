@@ -10,7 +10,9 @@ import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from './terminal-config'
 import {
   registerTerminal,
   unregisterTerminal,
-  restoreScrollback
+  restoreScrollback,
+  captureScrollPosition,
+  restoreScrollPosition
 } from '../../utils/terminal-registry'
 import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
 import {
@@ -26,6 +28,14 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
+
+// Module-level constants - defined once per module
+const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
+const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100 // GPU driver recovery time
+const VISIBILITY_RECOVERY_DELAY_MS = 150 // DOM reflow after tab becomes visible
+const POWER_RESUME_RECOVERY_DELAY_MS = 300 // System stabilize after wake
+const ACTIVITY_DEBOUNCE_MS = 1000 // Debounce activity updates to max 1 per second
+const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -67,6 +77,12 @@ function ConnectedTerminalComponent({
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
+  const webglAddonRef = useRef<WebglAddon | null>(null)
+  const webglRecoveryAttemptsRef = useRef<number>(0)
+  const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null)
+  // Track WebGL context loss for recovery decisions
+  const webglContextLostRef = useRef<boolean>(false)
 
   // Get font settings from app settings store
   const fontFamily = useTerminalFontFamily()
@@ -95,10 +111,12 @@ function ConnectedTerminalComponent({
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Activity timeout timer ref
   const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Debounced activity tracking refs
+  const lastActivityUpdateRef = useRef<number>(0)
+  const pendingActivityUpdateRef = useRef<{ id: string; hasActivity: boolean } | null>(null)
 
   // Rate limiting for clipboard operations
   const lastClipboardOpRef = useRef<number>(0)
-  const CLIPBOARD_RATE_LIMIT_MS = 100 // Minimum ms between clipboard operations
 
   // State to track terminal instance for clipboard hook
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
@@ -329,15 +347,47 @@ function ConnectedTerminalComponent({
       return true
     })
 
-    try {
-      const webglAddon = new WebglAddon()
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose()
-      })
-      terminal.loadAddon(webglAddon)
-    } catch {
-      console.warn('WebGL addon failed to load, falling back to canvas renderer')
+    // WebGL addon loading with context loss recovery
+    const loadWebglAddon = (term: Terminal, isRecovery: boolean = false): void => {
+      if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
+        console.warn('WebGL recovery attempts exhausted, falling back to canvas renderer')
+        return
+      }
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+          webglAddonRef.current = null
+          // Mark context as lost for recovery decisions
+          webglContextLostRef.current = true
+          // Increment recovery counter BEFORE scheduling recovery
+          webglRecoveryAttemptsRef.current++
+          // Clear any pending recovery timeout
+          if (webglRecoveryTimeoutRef.current) {
+            clearTimeout(webglRecoveryTimeoutRef.current)
+          }
+          // Delay before recovery to avoid rapid-fire loops
+          webglRecoveryTimeoutRef.current = setTimeout(() => {
+            webglRecoveryTimeoutRef.current = null
+            loadWebglAddon(term, true)
+          }, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS)
+        })
+        term.loadAddon(webglAddon)
+        webglAddonRef.current = webglAddon
+        // Clear context lost flag on successful load
+        webglContextLostRef.current = false
+        // Note: Counter NOT reset here - only increments on context loss or failure
+        // This prevents infinite recovery loops on persistent GPU issues
+      } catch (error) {
+        console.warn('WebGL addon failed to load, falling back to canvas renderer:', error)
+        webglAddonRef.current = null
+        webglRecoveryAttemptsRef.current++
+      }
     }
+
+    loadWebglAddon(terminal)
+    // Store reference for recovery handlers to use
+    loadWebglAddonRef.current = loadWebglAddon
 
     fitAddon.fit()
 
@@ -369,20 +419,47 @@ function ConnectedTerminalComponent({
     cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
-        // Update activity state in store
-        const terminal = useTerminalStore.getState().findTerminalByPtyId(id)
-        if (terminal) {
-          useTerminalStore.getState().updateTerminalActivity(terminal.id, true)
-          useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminal.id, Date.now())
+        // Update activity state in store with debouncing
+        const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
+        if (terminalRecord) {
+          const now = Date.now()
+          const timeSinceLastUpdate = now - lastActivityUpdateRef.current
+
+          // If enough time has passed since last update, update immediately
+          if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
+            useTerminalStore.getState().updateTerminalActivity(terminalRecord.id, true)
+            useTerminalStore.getState().updateTerminalLastActivityTimestamp(terminalRecord.id, now)
+            lastActivityUpdateRef.current = now
+          } else {
+            // Otherwise, store pending update for later
+            pendingActivityUpdateRef.current = { id: terminalRecord.id, hasActivity: true }
+          }
 
           // Clear existing activity timeout and set new one
           if (activityTimeoutRef.current) {
             clearTimeout(activityTimeoutRef.current)
           }
           activityTimeoutRef.current = setTimeout(() => {
-            // Clear activity after 2 seconds of inactivity
-            useTerminalStore.getState().updateTerminalActivity(terminal.id, false)
+            // Flush any pending activity update
+            if (pendingActivityUpdateRef.current) {
+              useTerminalStore.getState().updateTerminalActivity(
+                pendingActivityUpdateRef.current.id,
+                false
+              )
+              useTerminalStore.getState().updateTerminalLastActivityTimestamp(
+                pendingActivityUpdateRef.current.id,
+                Date.now()
+              )
+              pendingActivityUpdateRef.current = null
+            } else {
+              // Clear activity after 2 seconds of inactivity
+              const term = useTerminalStore.getState().findTerminalByPtyId(id)
+              if (term) {
+                useTerminalStore.getState().updateTerminalActivity(term.id, false)
+              }
+            }
             activityTimeoutRef.current = null
+            lastActivityUpdateRef.current = 0
           }, 2000)
         }
       }
@@ -423,6 +500,8 @@ function ConnectedTerminalComponent({
             if (initialScrollback && initialScrollback.length > 0) {
               restoreScrollback(terminal, initialScrollback)
             }
+            // Restore scroll position if cached from previous pane
+            restoreScrollPosition(result.data.id, terminal)
             if (onSpawned) {
               onSpawned(result.data.id)
             }
@@ -443,6 +522,8 @@ function ConnectedTerminalComponent({
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
         }
+        // Restore scroll position if cached from previous pane
+        restoreScrollPosition(externalTerminalId, terminal)
         if (onBoundToStoreTerminalRef.current) {
           onBoundToStoreTerminalRef.current(externalTerminalId)
         }
@@ -452,6 +533,12 @@ function ConnectedTerminalComponent({
     initTerminal()
 
     return () => {
+      // Capture scroll position BEFORE unregistering for pane transitions
+      const terminalId = ptyIdRef.current || externalTerminalId
+      if (terminalId && terminalRef.current) {
+        captureScrollPosition(terminalId)
+      }
+
       // Unregister terminal from registry
       if (ptyIdRef.current) {
         unregisterTerminal(ptyIdRef.current)
@@ -479,12 +566,45 @@ function ConnectedTerminalComponent({
       if (activityTimeoutRef.current) {
         clearTimeout(activityTimeoutRef.current)
       }
+      // Flush pending activity update on unmount
+      if (pendingActivityUpdateRef.current) {
+        useTerminalStore.getState().updateTerminalActivity(
+          pendingActivityUpdateRef.current.id,
+          pendingActivityUpdateRef.current.hasActivity
+        )
+        useTerminalStore.getState().updateTerminalLastActivityTimestamp(
+          pendingActivityUpdateRef.current.id,
+          Date.now()
+        )
+        pendingActivityUpdateRef.current = null
+      }
+      // Clean up WebGL recovery timeout to prevent race condition
+      if (webglRecoveryTimeoutRef.current) {
+        clearTimeout(webglRecoveryTimeoutRef.current)
+        webglRecoveryTimeoutRef.current = null
+      }
+
+      // Cursor cleanup: Disable cursor blink before WebGL disposal to prevent ghost cursors
+      if (terminalRef.current) {
+        terminalRef.current.options.cursorBlink = false
+      }
+
+      // Dispose WebGL addon BEFORE terminal disposal for proper cursor layer cleanup
+      if (webglAddonRef.current) {
+        webglAddonRef.current.dispose()
+        webglAddonRef.current = null
+      }
+
       terminal.dispose()
       terminalRef.current = null
       setTerminalInstance(null)
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
+      // Reset WebGL recovery state for next terminal creation
+      webglRecoveryAttemptsRef.current = 0
+      webglContextLostRef.current = false
+      loadWebglAddonRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [
@@ -513,35 +633,138 @@ function ConnectedTerminalComponent({
   }, [fontFamily, fontSize])
 
   // Trigger fit + PTY resize when terminal becomes visible
+  // Uses double requestAnimationFrame for proper timing after pane transitions
   useEffect(() => {
     if (isVisible && fitAddonRef.current && terminalRef.current) {
-      // Use requestAnimationFrame to ensure container dimensions are updated
+      // Double RAF ensures DOM is fully rendered after pane transition
+      // First RAF waits for current frame to complete
+      // Second RAF waits for next frame when layout is settled
       requestAnimationFrame(() => {
-        try {
-          fitAddonRef.current?.fit()
-        } catch {
-          // Ignore fit errors
-        }
-
-        const terminal = terminalRef.current
-        const ptyId = ptyIdRef.current
-        if (terminal && ptyId) {
-          const resizePromise = window.api.terminal.resize(ptyId, terminal.cols, terminal.rows)
-          if (resizePromise && typeof resizePromise.catch === 'function') {
-            resizePromise.catch(() => {
-              // Ignore resize errors when toggling visibility
-            })
+        requestAnimationFrame(() => {
+          try {
+            fitAddonRef.current?.fit()
+          } catch {
+            // Ignore fit errors
           }
-        }
+
+          const terminal = terminalRef.current
+          const ptyId = ptyIdRef.current
+          if (terminal && ptyId) {
+            // Restore scroll position after fit (in case of pane transition)
+            restoreScrollPosition(ptyId, terminal)
+
+            const resizePromise = window.api.terminal.resize(ptyId, terminal.cols, terminal.rows)
+            if (resizePromise && typeof resizePromise.catch === 'function') {
+              resizePromise.catch(() => {
+                // Ignore resize errors when toggling visibility
+              })
+            }
+          }
+        })
       })
     }
   }, [isVisible])
+
+  // Shared terminal recovery logic - re-fit and check WebGL health
+  const performTerminalRecovery = useCallback((): void => {
+    if (!fitAddonRef.current || !terminalRef.current) return
+
+    // Only recreate WebGL addon if context was actually lost and not already recovering
+    // webglAddonRef is null after onContextLoss, so check !webglAddonRef.current
+    if (webglContextLostRef.current && !webglAddonRef.current) {
+      try {
+        // Cancel any pending auto-recovery timeout to avoid double-creation race
+        if (webglRecoveryTimeoutRef.current) {
+          clearTimeout(webglRecoveryTimeoutRef.current)
+          webglRecoveryTimeoutRef.current = null
+        }
+        console.warn('WebGL context was lost, recreating addon during recovery')
+        // Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
+        if (loadWebglAddonRef.current && terminalRef.current) {
+          loadWebglAddonRef.current(terminalRef.current, true)
+        }
+      } catch (error) {
+        console.warn('WebGL context recovery failed:', error)
+      }
+    }
+
+    // Re-fit terminal to current dimensions
+    try {
+      fitAddonRef.current?.fit()
+    } catch (error) {
+      console.warn('Terminal fit failed during recovery:', error)
+    }
+
+    // Sync PTY dimensions
+    const terminal = terminalRef.current
+    const ptyId = ptyIdRef.current
+    if (terminal && ptyId) {
+      window.api.terminal.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
+        // Ignore resize errors - terminal may have been killed
+      })
+    }
+  }, [])
+
+  // Recovery handler for visibility change (app regains focus after idle)
+  useEffect(() => {
+    // Track timeout to prevent firing after unmount
+    let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        // Clear any pending timeout before scheduling new one
+        if (recoveryTimeoutId) {
+          clearTimeout(recoveryTimeoutId)
+        }
+        recoveryTimeoutId = setTimeout(() => {
+          recoveryTimeoutId = null
+          performTerminalRecovery()
+        }, VISIBILITY_RECOVERY_DELAY_MS)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [performTerminalRecovery])
+
+  // Recovery handler for power resume (wake from sleep, screen unlock)
+  useEffect(() => {
+    // Track timeout to prevent firing after unmount
+    let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const cleanup = window.api.system.onPowerResume(() => {
+      // Clear any pending timeout before scheduling new one
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      recoveryTimeoutId = setTimeout(() => {
+        recoveryTimeoutId = null
+        performTerminalRecovery()
+      }, POWER_RESUME_RECOVERY_DELAY_MS)
+    })
+    return () => {
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId)
+      }
+      cleanup()
+    }
+  }, [performTerminalRecovery])
 
   // Handle Select All
   const handleSelectAll = useCallback((): void => {
     if (terminalRef.current) {
       terminalRef.current.selectAll()
     }
+  }, [])
+
+  // Focus terminal when container is clicked (important for split panes)
+  const handleContainerClick = useCallback((): void => {
+    terminalRef.current?.focus()
   }, [])
 
   // Memoized context menu handlers to prevent unnecessary re-renders
@@ -558,6 +781,7 @@ function ConnectedTerminalComponent({
           ref={containerRef}
           className={`w-full h-full ${className}`}
           style={{ padding: '8px' }}
+          onClick={handleContainerClick}
         />
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">

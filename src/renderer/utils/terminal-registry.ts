@@ -8,6 +8,12 @@ import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
 const terminalRegistry = new Map<string, Terminal>()
 
 /**
+ * Cache for scroll positions during pane transitions
+ * Maps terminal ID to scroll position (viewportY offset from buffer base)
+ */
+const scrollPositionCache = new Map<string, number>()
+
+/**
  * Register a terminal instance for scrollback persistence
  */
 export function registerTerminal(terminalId: string, terminal: Terminal): void {
@@ -19,6 +25,15 @@ export function registerTerminal(terminalId: string, terminal: Terminal): void {
  */
 export function unregisterTerminal(terminalId: string): void {
   terminalRegistry.delete(terminalId)
+}
+
+/**
+ * Destroy a terminal completely - unregister and clean up scroll position cache
+ * Use this for permanent terminal closure. Use unregisterTerminal for transient pane transitions.
+ */
+export function destroyTerminal(terminalId: string): void {
+  terminalRegistry.delete(terminalId)
+  scrollPositionCache.delete(terminalId)
 }
 
 /**
@@ -93,4 +108,57 @@ export function getRegistrySize(): number {
  */
 export function clearRegistry(): void {
   terminalRegistry.clear()
+  scrollPositionCache.clear()
+}
+
+/**
+ * Capture the current scroll position of a terminal before unmount
+ * Stores the viewportY position for restoration after remount
+ */
+export function captureScrollPosition(terminalId: string): void {
+  const terminal = terminalRegistry.get(terminalId)
+  if (terminal && terminal.buffer?.active) {
+    const viewportY = terminal.buffer.active.viewportY
+    scrollPositionCache.set(terminalId, viewportY)
+  }
+}
+
+/**
+ * Get cached scroll position for a terminal
+ * Returns undefined if no cached position exists
+ */
+export function getCachedScrollPosition(terminalId: string): number | undefined {
+  return scrollPositionCache.get(terminalId)
+}
+
+/**
+ * Clear cached scroll position for a terminal
+ * Call after successful restoration to prevent stale data
+ */
+export function clearScrollPosition(terminalId: string): void {
+  scrollPositionCache.delete(terminalId)
+}
+
+/**
+ * Restore scroll position to a terminal
+ * Scrolls the terminal to the cached position if available
+ * Returns true if restoration was performed, false otherwise
+ */
+export function restoreScrollPosition(terminalId: string, terminal: Terminal): boolean {
+  const cachedPosition = scrollPositionCache.get(terminalId)
+  if (cachedPosition !== undefined && terminal.scrollToLine) {
+    // Use scrollToLine to restore position
+    // The buffer line index is calculated from the base
+    try {
+      terminal.scrollToLine(cachedPosition)
+      // Clear cache after successful restoration
+      scrollPositionCache.delete(terminalId)
+      return true
+    } catch {
+      // Clear cache on error to prevent stale data
+      scrollPositionCache.delete(terminalId)
+      return false
+    }
+  }
+  return false
 }

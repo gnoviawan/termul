@@ -118,6 +118,7 @@ export interface PersistenceApi {
 // System API for renderer
 export interface SystemApi {
   getHomeDirectory: () => Promise<IpcResult<string>>
+  onPowerResume: (callback: () => void) => () => void
 }
 
 // Keyboard shortcut callback for main -> renderer communication
@@ -149,6 +150,11 @@ export interface WindowApi {
 export interface ClipboardApi {
   readText: () => Promise<IpcResult<string>>
   writeText: (text: string) => Promise<IpcResult<void>>
+}
+
+// Visibility API for renderer to notify main process of visibility changes
+export interface VisibilityApi {
+  setVisibilityState: (isVisible: boolean) => Promise<IpcResult<void>>
 }
 
 // Filesystem types re-exported for convenience
