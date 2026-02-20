@@ -86,8 +86,7 @@ export function useTerminalAutoSave(): void {
             t.shell !== prev.shell ||
             t.cwd !== prev.cwd ||
             t.ptyId !== prev.ptyId ||
-            t.projectId !== prev.projectId ||
-            t.healthStatus !== prev.healthStatus
+            t.projectId !== prev.projectId
           )
         }) || state.terminals.length !== prevState.terminals.length
 

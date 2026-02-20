@@ -35,7 +35,9 @@ export interface TerminalState {
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number) => void
   updateTerminalActivityBatch: (id: string, hasActivity: boolean, timestamp: number) => void
   clearTerminalPtyId: (ptyId: string) => void
@@ -88,12 +90,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   closeTerminal: (id: string, projectId: string): void => {
-    const { terminals, activeTerminalId } = get()
+    const { terminals, activeTerminalId, ptyIdIndex } = get()
     const closedTerminal = terminals.find((t) => t.id === id)
     const remaining = terminals.filter((t) => t.id !== id)
     const projectTerminals = remaining.filter((t) => t.projectId === projectId)
 
-    const newIndex = new Map(get().ptyIdIndex)
+    const newIndex = new Map(ptyIdIndex)
     if (closedTerminal?.ptyId) {
       newIndex.delete(closedTerminal.ptyId)
     }
@@ -203,12 +205,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, hasActivity } : t))
     }))
   },
 
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t))

@@ -113,7 +113,7 @@ function ConnectedTerminalComponent({
   const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Debounced activity tracking refs
   const lastActivityUpdateRef = useRef<number>(0)
-  const pendingActivityUpdateRef = useRef<{ id: string; hasActivity: boolean } | null>(null)
+  const pendingActivityUpdateRef = useRef<{ id: string } | null>(null)
 
   // Rate limiting for clipboard operations
   const lastClipboardOpRef = useRef<number>(0)
@@ -438,7 +438,7 @@ function ConnectedTerminalComponent({
             lastActivityUpdateRef.current = now
           } else {
             // Otherwise, store pending update for later
-            pendingActivityUpdateRef.current = { id: cachedTerminalId, hasActivity: true }
+            pendingActivityUpdateRef.current = { id: cachedTerminalId }
           }
 
           // Clear existing activity timeout and set new one
@@ -571,7 +571,7 @@ function ConnectedTerminalComponent({
       if (pendingActivityUpdateRef.current) {
         useTerminalStore.getState().updateTerminalActivityBatch(
           pendingActivityUpdateRef.current.id,
-          pendingActivityUpdateRef.current.hasActivity,
+          true,
           Date.now()
         )
         pendingActivityUpdateRef.current = null
