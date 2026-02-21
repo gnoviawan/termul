@@ -26,7 +26,6 @@ import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  ReadDirectoryOptions,
   FileChangeEvent,
   WindowApi,
   WindowMaximizeChangedCallback,
@@ -318,10 +317,9 @@ const updaterApi: UpdaterApi = {
 // Filesystem API for renderer
 const filesystemApi: FilesystemApi = {
   readDirectory: (
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ): Promise<IpcResult<DirectoryEntry[]>> => {
-    return ipcRenderer.invoke('filesystem:readDirectory', dirPath, options)
+    return ipcRenderer.invoke('filesystem:readDirectory', dirPath)
   },
 
   readFile: (filePath: string): Promise<IpcResult<FileContent>> => {

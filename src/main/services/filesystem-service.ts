@@ -6,8 +6,7 @@ import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 } from '../../shared/types/filesystem.types'
 
 const MAX_FILE_SIZE = 1 * 1024 * 1024 // 1MB
@@ -62,8 +61,7 @@ export class FilesystemService {
   private changeCallbacks: FileChangeCallback[] = []
 
   async readDirectory(
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ): Promise<DirectoryEntry[]> {
     const normalizedDir = normalize(dirPath)
     const entries = await readdir(normalizedDir, { withFileTypes: true })

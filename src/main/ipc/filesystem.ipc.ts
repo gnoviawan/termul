@@ -10,8 +10,7 @@ import { IpcErrorCodes } from '../../shared/types/ipc.types'
 import type {
   DirectoryEntry,
   FileContent,
-  FileInfo,
-  ReadDirectoryOptions
+  FileInfo
 } from '../../shared/types/filesystem.types'
 
 let cleanupFileChangeListener: (() => void) | null = null
@@ -82,14 +81,13 @@ export function registerFilesystemIpc(): void {
     'filesystem:readDirectory',
     async (
       _event: IpcMainInvokeEvent,
-      dirPath: string,
-      options?: ReadDirectoryOptions
+      dirPath: string
     ): Promise<IpcResult<DirectoryEntry[]>> => {
       if (!isPathAllowed(dirPath)) {
         return createErrorResult('Path is outside allowed project directories', IpcErrorCodes.PATH_INVALID)
       }
       try {
-        const entries = await service.readDirectory(dirPath, options)
+        const entries = await service.readDirectory(dirPath)
         return createSuccessResult(entries)
       } catch (error) {
         return handleError(error)

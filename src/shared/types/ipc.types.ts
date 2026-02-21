@@ -162,8 +162,7 @@ import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -171,8 +170,7 @@ export type FileChangeCallback = (event: FileChangeEvent) => void
 // Filesystem API for renderer
 export interface FilesystemApi {
   readDirectory: (
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
   getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
@@ -195,6 +193,5 @@ export type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 }
