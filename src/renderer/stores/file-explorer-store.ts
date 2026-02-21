@@ -107,7 +107,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       set({ loadingDirs: newLoading })
 
       try {
-        const result = await window.api.filesystem.readDirectory(normalized, { showHidden: false })
+        const result = await window.api.filesystem.readDirectory(normalized)
         if (result.success) {
           const { expandedDirs: currentExpanded, directoryContents: currentContents } = get()
           const newExpanded = new Set(currentExpanded)
@@ -152,7 +152,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   refreshDirectory: async (path: string): Promise<void> => {
     const normalized = normalizePath(path)
     try {
-      const result = await window.api.filesystem.readDirectory(normalized, { showHidden: false })
+      const result = await window.api.filesystem.readDirectory(normalized)
       if (result.success) {
         const { directoryContents, rootPath } = get()
         const newContents = new Map(directoryContents)

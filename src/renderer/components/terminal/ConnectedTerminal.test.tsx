@@ -41,6 +41,12 @@ const mockWebglAddonInstance = {
   dispose: vi.fn()
 }
 
+// Track WebGL addon instances for recovery testing
+let webglAddonCreateCount = 0
+let capturedContextLossCallback: (() => void) | null = null
+// Track the last created WebGL addon instance for disposal order testing
+let lastCreatedWebglInstance: { dispose: ReturnType<typeof vi.fn>; onContextLoss: ReturnType<typeof vi.fn> } | null = null
+
 const mockWebLinksAddonInstance = {
   dispose: vi.fn()
 }
@@ -79,8 +85,18 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class MockWebglAddon {
-    onContextLoss = mockWebglAddonInstance.onContextLoss
-    dispose = mockWebglAddonInstance.dispose
+    dispose = vi.fn()
+    onContextLoss = vi.fn((cb: () => void) => {
+      capturedContextLossCallback = cb
+    })
+    constructor() {
+      webglAddonCreateCount++
+      // Store reference to this instance for disposal order testing
+      lastCreatedWebglInstance = {
+        dispose: this.dispose,
+        onContextLoss: this.onContextLoss
+      }
+    }
   }
 }))
 
@@ -113,6 +129,7 @@ const mockClipboardApi = {
 
 let capturedDataCallback: ((id: string, data: string) => void) | null = null
 let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
+let capturedPowerResumeCallback: (() => void) | null = null
 
 // Cast to any to allow mock methods in tests
 const mockTerminalApiWithMocks = mockTerminalApi as unknown as typeof mockTerminalApi & {
@@ -130,6 +147,13 @@ Object.defineProperty(window, 'api', {
     persistence: {
       read: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
       write: vi.fn(() => Promise.resolve({ success: true }))
+    },
+    system: {
+      getHomeDirectory: vi.fn(() => Promise.resolve({ success: true, data: '/home/user' })),
+      onPowerResume: vi.fn((cb: () => void) => {
+        capturedPowerResumeCallback = cb
+        return vi.fn()
+      })
     }
   } as unknown as Window['api'],
   writable: true
@@ -150,6 +174,10 @@ vi.mock('@/stores/terminal-store', () => ({
 describe('ConnectedTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    webglAddonCreateCount = 0
+    capturedContextLossCallback = null
+    capturedPowerResumeCallback = null
+    lastCreatedWebglInstance = null
 
     global.ResizeObserver = class MockResizeObserver {
       observe = vi.fn()
@@ -318,6 +346,39 @@ describe('ConnectedTerminal', () => {
     const { unmount } = render(<ConnectedTerminal />)
     unmount()
     expect(mockTerminalInstance.dispose).toHaveBeenCalled()
+  })
+
+  describe('Cursor cleanup on unmount', () => {
+    it('should disable cursor blink before disposal', () => {
+      const { unmount } = render(<ConnectedTerminal />)
+      unmount()
+      // Cursor blink should be set to false before terminal disposal
+      expect(mockTerminalInstance.options.cursorBlink).toBe(false)
+    })
+
+    it('should dispose WebGL addon before terminal disposal', () => {
+      const disposalOrder: string[] = []
+
+      // Track disposal on the actual WebGL instance created by the component
+      ;(mockTerminalInstance.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+        disposalOrder.push('terminal')
+      })
+
+      const { unmount } = render(<ConnectedTerminal />)
+
+      // Now set up the spy on the actual WebGL instance that was created
+      expect(lastCreatedWebglInstance).toBeTruthy()
+      ;(lastCreatedWebglInstance!.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+        disposalOrder.push('webgl')
+      })
+
+      unmount()
+
+      // WebGL should be disposed before terminal
+      const webglIndex = disposalOrder.indexOf('webgl')
+      const terminalIndex = disposalOrder.indexOf('terminal')
+      expect(webglIndex).toBeLessThan(terminalIndex)
+    })
   })
 
   it('should pass spawn options including shell to API', async () => {
@@ -836,6 +897,237 @@ describe('ConnectedTerminal', () => {
 
       // Terminal container should be in the DOM
       expect(container.querySelector('div')).toBeTruthy()
+    })
+  })
+
+  describe('WebGL context loss recovery', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('should create a new WebGL addon when context loss fires', async () => {
+      vi.useFakeTimers()
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      // WebGL addon should have been created once during init
+      expect(webglAddonCreateCount).toBe(1)
+      expect(capturedContextLossCallback).toBeTruthy()
+
+      // Simulate context loss
+      vi.useFakeTimers()
+      capturedContextLossCallback!()
+
+      // Advance past the 100ms recovery delay
+      await vi.advanceTimersByTimeAsync(150)
+
+      // A second WebGL addon should have been created
+      expect(webglAddonCreateCount).toBe(2)
+    })
+
+    it('should load the WebGL addon on terminal during init', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      // loadAddon is called for FitAddon, WebLinksAddon, SearchAddon, WebglAddon
+      expect(mockTerminalInstance.loadAddon).toHaveBeenCalled()
+      expect(webglAddonCreateCount).toBe(1)
+    })
+
+    it('should stop recovery after max attempts exhausted', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      // Initial load
+      expect(webglAddonCreateCount).toBe(1)
+
+      vi.useFakeTimers()
+
+      // Simulate 2 context loss events - should recover each time
+      for (let i = 0; i < 2; i++) {
+        capturedContextLossCallback!()
+        await vi.advanceTimersByTimeAsync(150)
+      }
+
+      // Should have 3 total: 1 init + 2 recoveries
+      expect(webglAddonCreateCount).toBe(3)
+
+      // 3rd context loss - counter reaches MAX, should NOT recover
+      capturedContextLossCallback!()
+      await vi.advanceTimersByTimeAsync(150)
+
+      // Should still be 3 - no more recovery attempts
+      expect(webglAddonCreateCount).toBe(3)
+
+      // Should have logged warning about exhausted attempts
+      expect(warnSpy).toHaveBeenCalledWith(
+        'WebGL recovery attempts exhausted, falling back to canvas renderer'
+      )
+
+      warnSpy.mockRestore()
+    })
+  })
+
+  describe('Visibility change recovery', () => {
+    let originalVisibilityState: string
+
+    beforeEach(() => {
+      // Capture original visibility state before any test mutates it
+      originalVisibilityState = document.visibilityState
+    })
+
+    afterEach(() => {
+      // Restore original visibility state
+      Object.defineProperty(document, 'visibilityState', {
+        value: originalVisibilityState,
+        writable: true,
+        configurable: true
+      })
+      vi.useRealTimers()
+    })
+
+    it('should call fit and resize when visibility changes to visible', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      // Clear previous fit/resize calls from init
+      mockFitAddonInstance.fit.mockClear()
+      mockTerminalApi.resize.mockClear()
+
+      // Simulate visibility change to visible
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      // Advance past the 150ms delay
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+      expect(mockTerminalApi.resize).toHaveBeenCalledWith(
+        'terminal-123',
+        expect.any(Number),
+        expect.any(Number)
+      )
+    })
+
+    it('should not trigger recovery when visibility changes to hidden', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      mockTerminalApi.resize.mockClear()
+
+      // Simulate visibility change to hidden
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'hidden',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(200)
+
+      // fit should not be called again for hidden state
+      expect(mockFitAddonInstance.fit).not.toHaveBeenCalled()
+    })
+
+    it('should remove visibilitychange listener on unmount', async () => {
+      const removeEventListenerSpy = vi.spyOn(document, 'removeEventListener')
+
+      const { unmount } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      unmount()
+
+      expect(removeEventListenerSpy).toHaveBeenCalledWith(
+        'visibilitychange',
+        expect.any(Function)
+      )
+
+      removeEventListenerSpy.mockRestore()
+    })
+  })
+
+  describe('Power resume recovery', () => {
+    it('should subscribe to power resume events', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      expect(window.api.system.onPowerResume).toHaveBeenCalled()
+      expect(capturedPowerResumeCallback).toBeTruthy()
+    })
+
+    it('should call fit and resize on power resume', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      mockTerminalApi.resize.mockClear()
+
+      // Simulate power resume
+      capturedPowerResumeCallback!()
+
+      // Advance past the 300ms delay
+      await vi.advanceTimersByTimeAsync(350)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+      expect(mockTerminalApi.resize).toHaveBeenCalledWith(
+        'terminal-123',
+        expect.any(Number),
+        expect.any(Number)
+      )
+
+      vi.useRealTimers()
+    })
+
+    it('should cleanup power resume subscription on unmount', async () => {
+      const cleanupFn = vi.fn()
+      ;(window.api.system.onPowerResume as ReturnType<typeof vi.fn>).mockReturnValue(cleanupFn)
+
+      const { unmount } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(window.api.system.onPowerResume).toHaveBeenCalled()
+      })
+
+      unmount()
+
+      expect(cleanupFn).toHaveBeenCalled()
     })
   })
 })

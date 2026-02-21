@@ -26,12 +26,12 @@ import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  ReadDirectoryOptions,
   FileChangeEvent,
   WindowApi,
   WindowMaximizeChangedCallback,
   AppCloseRequestedCallback,
-  AppCloseResponse
+  AppCloseResponse,
+  VisibilityApi
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -206,6 +206,15 @@ const persistenceApi: PersistenceApi = {
 const systemApi: SystemApi = {
   getHomeDirectory: (): Promise<IpcResult<string>> => {
     return ipcRenderer.invoke('system:getHomeDirectory')
+  },
+  onPowerResume: (callback: () => void): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('system:power-resume', listener)
+    return () => {
+      ipcRenderer.off('system:power-resume', listener)
+    }
   }
 }
 
@@ -233,6 +242,13 @@ const clipboardApi: ClipboardApi = {
 
   writeText: (text: string): Promise<IpcResult<void>> => {
     return ipcRenderer.invoke('clipboard:writeText', text)
+  }
+}
+
+// Visibility API for renderer
+const visibilityApi: VisibilityApi = {
+  setVisibilityState: (isVisible: boolean): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('visibility:setState', isVisible)
   }
 }
 
@@ -301,10 +317,9 @@ const updaterApi: UpdaterApi = {
 // Filesystem API for renderer
 const filesystemApi: FilesystemApi = {
   readDirectory: (
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ): Promise<IpcResult<DirectoryEntry[]>> => {
-    return ipcRenderer.invoke('filesystem:readDirectory', dirPath, options)
+    return ipcRenderer.invoke('filesystem:readDirectory', dirPath)
   },
 
   readFile: (filePath: string): Promise<IpcResult<FileContent>> => {
@@ -427,7 +442,8 @@ const api = {
   updater: updaterApi,
   clipboard: clipboardApi,
   filesystem: filesystemApi,
-  window: windowApi
+  window: windowApi,
+  visibility: visibilityApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

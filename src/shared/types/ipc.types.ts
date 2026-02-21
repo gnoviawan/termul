@@ -118,6 +118,7 @@ export interface PersistenceApi {
 // System API for renderer
 export interface SystemApi {
   getHomeDirectory: () => Promise<IpcResult<string>>
+  onPowerResume: (callback: () => void) => () => void
 }
 
 // Keyboard shortcut callback for main -> renderer communication
@@ -151,13 +152,17 @@ export interface ClipboardApi {
   writeText: (text: string) => Promise<IpcResult<void>>
 }
 
+// Visibility API for renderer to notify main process of visibility changes
+export interface VisibilityApi {
+  setVisibilityState: (isVisible: boolean) => Promise<IpcResult<void>>
+}
+
 // Filesystem types re-exported for convenience
 import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -165,8 +170,7 @@ export type FileChangeCallback = (event: FileChangeEvent) => void
 // Filesystem API for renderer
 export interface FilesystemApi {
   readDirectory: (
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
   getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
@@ -189,6 +193,5 @@ export type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 }

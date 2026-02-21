@@ -74,6 +74,26 @@ export function useTerminalAutoSave(): void {
         return
       }
 
+      // Skip activity-only changes (hasActivity/lastActivityTimestamp)
+      // These create new array refs but don't affect persisted layout
+      if (state.activeTerminalId === prevState.activeTerminalId) {
+        const hasStructuralChange = state.terminals.some((t, i) => {
+          const prev = prevState.terminals[i]
+          if (!prev) return true
+          return (
+            t.id !== prev.id ||
+            t.name !== prev.name ||
+            t.shell !== prev.shell ||
+            t.cwd !== prev.cwd ||
+            t.projectId !== prev.projectId
+          )
+        }) || state.terminals.length !== prevState.terminals.length
+
+        if (!hasStructuralChange) {
+          return
+        }
+      }
+
       if (isTerminalRestoreInProgress()) {
         return
       }
