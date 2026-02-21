@@ -27,9 +27,7 @@ export interface FileChangeEvent {
   path: string
 }
 
-export interface ReadDirectoryOptions {
-  // Reserved for future options
-}
+export type ReadDirectoryOptions = object
 
 export const FilesystemErrorCodes = {
   FILE_NOT_FOUND: 'FILE_NOT_FOUND',
