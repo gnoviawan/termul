@@ -83,14 +83,14 @@ describe('file-explorer-store', () => {
     it('should call readDirectory and watchDirectory on expand', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
 
-      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project', { showHidden: false })
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
       expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/project')
     })
 
     it('should normalize backslash paths on expand', async () => {
       await useFileExplorerStore.getState().toggleDirectory('C:\\Users\\project')
 
-      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('C:/Users/project', { showHidden: false })
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('C:/Users/project')
       expect(useFileExplorerStore.getState().expandedDirs.has('C:/Users/project')).toBe(true)
     })
 
@@ -257,7 +257,7 @@ describe('file-explorer-store', () => {
     it('should normalize path before refresh', async () => {
       await useFileExplorerStore.getState().refreshDirectory('C:\\Users\\project')
 
-      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('C:/Users/project', { showHidden: false })
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('C:/Users/project')
     })
 
     it('should not throw when refresh fails', async () => {
@@ -295,12 +295,8 @@ describe('file-explorer-store', () => {
       const state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project/src')).toBe(true)
       expect(state.expandedDirs.has('/other/src')).toBe(false)
-      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project/src', {
-        showHidden: false
-      })
-      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project/missing', {
-        showHidden: false
-      })
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project/src')
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project/missing')
     })
   })
 

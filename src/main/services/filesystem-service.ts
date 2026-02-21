@@ -6,8 +6,7 @@ import type {
   DirectoryEntry,
   FileContent,
   FileInfo,
-  FileChangeEvent,
-  ReadDirectoryOptions
+  FileChangeEvent
 } from '../../shared/types/filesystem.types'
 
 const MAX_FILE_SIZE = 1 * 1024 * 1024 // 1MB
@@ -62,8 +61,7 @@ export class FilesystemService {
   private changeCallbacks: FileChangeCallback[] = []
 
   async readDirectory(
-    dirPath: string,
-    options?: ReadDirectoryOptions
+    dirPath: string
   ): Promise<DirectoryEntry[]> {
     const normalizedDir = normalize(dirPath)
     const entries = await readdir(normalizedDir, { withFileTypes: true })
@@ -81,9 +79,6 @@ export class FilesystemService {
 
     for (const entry of entries) {
       const name = entry.name
-
-      // Skip hidden files unless requested
-      if (!options?.showHidden && name.startsWith('.')) continue
 
       // Skip hardcoded ignores
       if (HARDCODED_IGNORES.has(name)) continue
