@@ -11,6 +11,8 @@ export interface TerminalState {
   // State
   terminals: Terminal[]
   activeTerminalId: string
+  // Index for O(1) ptyId lookups
+  ptyIdIndex: Map<string, string>
 
   // Actions
   selectTerminal: (id: string) => void
@@ -33,8 +35,11 @@ export interface TerminalState {
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number) => void
+  updateTerminalActivityBatch: (id: string, hasActivity: boolean, timestamp: number) => void
   clearTerminalPtyId: (ptyId: string) => void
   truncateHiddenTerminalBuffers: () => void
   getTerminalCount: () => number
@@ -44,6 +49,7 @@ export interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminals: [],
   activeTerminalId: '',
+  ptyIdIndex: new Map(),
 
   selectTerminal: (id: string): void => {
     set((state) => ({
@@ -84,12 +90,19 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   closeTerminal: (id: string, projectId: string): void => {
-    const { terminals, activeTerminalId } = get()
+    const { terminals, activeTerminalId, ptyIdIndex } = get()
+    const closedTerminal = terminals.find((t) => t.id === id)
     const remaining = terminals.filter((t) => t.id !== id)
     const projectTerminals = remaining.filter((t) => t.projectId === projectId)
 
+    const newIndex = new Map(ptyIdIndex)
+    if (closedTerminal?.ptyId) {
+      newIndex.delete(closedTerminal.ptyId)
+    }
+
     set({
       terminals: remaining,
+      ptyIdIndex: newIndex,
       activeTerminalId:
         activeTerminalId === id && projectTerminals.length > 0
           ? projectTerminals[0].id
@@ -119,17 +132,32 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   setTerminals: (terminals: Terminal[]): void => {
-    set({ terminals })
+    const newIndex = new Map<string, string>()
+    for (const t of terminals) {
+      if (t.ptyId) newIndex.set(t.ptyId, t.id)
+    }
+    set({ terminals, ptyIdIndex: newIndex })
   },
 
   setTerminalPtyId: (id: string, ptyId: string): void => {
-    set((state) => ({
-      terminals: state.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t))
-    }))
+    set((state) => {
+      const newIndex = new Map(state.ptyIdIndex)
+      newIndex.set(ptyId, id)
+      return {
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t)),
+        ptyIdIndex: newIndex
+      }
+    })
   },
 
   findTerminalByPtyId: (ptyId: string): Terminal | undefined => {
-    return get().terminals.find((t) => t.ptyId === ptyId)
+    const state = get()
+    const terminalId = state.ptyIdIndex.get(ptyId)
+    if (terminalId) {
+      return state.terminals.find((t) => t.id === terminalId)
+    }
+    // Fallback to linear scan (for terminals set before index existed)
+    return state.terminals.find((t) => t.ptyId === ptyId)
   },
 
   updateTerminalCwd: (id: string, cwd: string): void => {
@@ -177,22 +205,37 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, hasActivity } : t))
     }))
   },
 
+  /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t))
     }))
   },
 
-  clearTerminalPtyId: (ptyId: string): void => {
+  updateTerminalActivityBatch: (id: string, hasActivity: boolean, timestamp: number): void => {
     set((state) => ({
-      terminals: state.terminals.map((t) => (t.ptyId === ptyId ? { ...t, ptyId: undefined } : t))
+      terminals: state.terminals.map((t) =>
+        t.id === id ? { ...t, hasActivity, lastActivityTimestamp: timestamp } : t
+      )
     }))
+  },
+
+  clearTerminalPtyId: (ptyId: string): void => {
+    set((state) => {
+      const newIndex = new Map(state.ptyIdIndex)
+      newIndex.delete(ptyId)
+      return {
+        terminals: state.terminals.map((t) => (t.ptyId === ptyId ? { ...t, ptyId: undefined } : t)),
+        ptyIdIndex: newIndex
+      }
+    })
   },
 
   truncateHiddenTerminalBuffers: (): void => {
