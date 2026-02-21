@@ -9,7 +9,7 @@ export type GitBranchChangedCallback = (terminalId: string, branch: string | nul
 export type GitStatusChangedCallback = (terminalId: string, status: GitStatus | null) => void
 
 const GIT_COMMAND_TIMEOUT_MS = 5000
-const STATUS_POLL_INTERVAL_MS = 2000
+const STATUS_POLL_INTERVAL_MS = GIT_COMMAND_TIMEOUT_MS + 1000
 
 export interface GitStatus {
   modified: number
@@ -75,6 +75,7 @@ class GitTracker {
   private statusCallbacks: Set<GitStatusChangedCallback> = new Set()
   private cwdCleanup: (() => void) | null = null
   private statusPollInterval: NodeJS.Timeout | null = null
+  private isPolling = false
 
   constructor() {
     // Listen for CWD changes to update git info
@@ -174,20 +175,35 @@ class GitTracker {
   }
 
   private async pollAllStatus(): Promise<void> {
-    // Skip polling when app is not visible to save CPU
-    if (!getVisibilityState()) {
-      return
-    }
-
-    const promises = Array.from(this.terminalGitState.values()).map(async (state) => {
-      try {
-        await this.checkStatus(state.terminalId, state.lastKnownCwd)
-      } catch {
-        // Ignore errors during polling
+    try {
+      // Skip polling when app is not visible to save CPU
+      if (!getVisibilityState()) {
+        return
       }
-    })
 
-    await Promise.allSettled(promises)
+      // Guard against concurrent polls
+      if (this.isPolling) {
+        return
+      }
+      this.isPolling = true
+
+      try {
+        const promises = Array.from(this.terminalGitState.values()).map(async (state) => {
+          try {
+            await this.checkStatus(state.terminalId, state.lastKnownCwd)
+          } catch {
+            // Ignore errors during polling
+          }
+        })
+
+        await Promise.all(promises)
+      } finally {
+        this.isPolling = false
+      }
+    } catch {
+      // Catch any synchronous errors (e.g. from getVisibilityState) to prevent
+      // unhandled rejections from the fire-and-forget setInterval caller
+    }
   }
 
   private notifyBranchChanged(terminalId: string, branch: string | null): void {
