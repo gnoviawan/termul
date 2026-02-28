@@ -1,0 +1,21 @@
+[package]
+name = "termul-manager"
+version = "0.2.3"
+description = "Project-aware terminal that treats workspaces as first-class citizens"
+authors = ["Termul Manager"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "termul_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-pty = "2"
+tauri-plugin-os = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -4,8 +4,13 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
+dist-tauri/
 out/
 *.tsbuildinfo
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
 
 # Logs
 logs/
