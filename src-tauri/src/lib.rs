@@ -152,9 +152,15 @@ fn get_available_shells() -> Vec<ShellInfo> {
 fn is_shell_available(shell_path: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        // Shells without full path (e.g., "powershell.exe") are assumed available on Windows
         if !shell_path.contains('\\') && !shell_path.contains('/') {
-            return true;
+            // Verify PATH-based shells actually exist using `where`
+            return std::process::Command::new("where")
+                .arg(shell_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
         }
         Path::new(shell_path).exists()
     }

@@ -23,7 +23,10 @@ export function TauriTerminal(): React.JSX.Element {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const ptyRef = useRef<ReturnType<typeof spawn> | null>(null)
+  const webglAddonRef = useRef<WebglAddon | null>(null)
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cleanupFnsRef = useRef<Array<{ dispose?: () => void } | (() => void)>>([])
+  const disposedRef = useRef(false)
   const [status, setStatus] = useState<TerminalStatus>('loading')
   const [errorMsg, setErrorMsg] = useState<string>('')
 
@@ -62,14 +65,18 @@ export function TauriTerminal(): React.JSX.Element {
       // WebGL addon with fallback
       let webglAttempts = 0
       const loadWebgl = (): void => {
-        if (webglAttempts >= MAX_WEBGL_RETRIES) {
-          console.warn('[TauriTerminal] WebGL failed after max retries, using canvas renderer')
+        if (disposedRef.current || webglAttempts >= MAX_WEBGL_RETRIES) {
+          if (webglAttempts >= MAX_WEBGL_RETRIES) {
+            console.warn('[TauriTerminal] WebGL failed after max retries, using canvas renderer')
+          }
           return
         }
         try {
           const webglAddon = new WebglAddon()
+          webglAddonRef.current = webglAddon
           webglAddon.onContextLoss(() => {
             webglAddon.dispose()
+            webglAddonRef.current = null
             webglAttempts++
             loadWebgl()
           })
@@ -112,28 +119,33 @@ export function TauriTerminal(): React.JSX.Element {
       ptyRef.current = pty
 
       // Data I/O: PTY → Terminal
-      pty.onData((data) => {
-        term.write(data)
+      const unlistenData = pty.onData((data) => {
+        if (!disposedRef.current) term.write(data)
       })
+      cleanupFnsRef.current.push(unlistenData)
 
       // Data I/O: Terminal → PTY
-      term.onData((data: string) => {
+      const termDataDisposable = term.onData((data: string) => {
         pty.write(data)
       })
+      cleanupFnsRef.current.push(() => termDataDisposable.dispose())
 
       // PTY exit handler
-      pty.onExit(({ exitCode }: { exitCode: number }) => {
+      const unlistenExit = pty.onExit(({ exitCode }: { exitCode: number }) => {
+        if (disposedRef.current) return
         console.log(`[TauriTerminal] PTY exited with code ${exitCode}`)
         term.writeln(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m`)
         term.options.disableStdin = true
         setStatus('exited')
       })
+      cleanupFnsRef.current.push(unlistenExit)
 
       // ResizeObserver for auto-fit
       const resizeObserver = new ResizeObserver(() => {
+        if (disposedRef.current) return
         if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
         resizeTimerRef.current = setTimeout(() => {
-          if (!fitAddonRef.current || !ptyRef.current || !termRef.current) return
+          if (disposedRef.current || !fitAddonRef.current || !ptyRef.current || !termRef.current) return
           try {
             fitAddonRef.current.fit()
             const dims = fitAddonRef.current.proposeDimensions()
@@ -163,13 +175,29 @@ export function TauriTerminal(): React.JSX.Element {
     initTerminal()
 
     return () => {
-      // Cleanup
-      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
+      // Mark as disposed first to prevent callbacks from firing
+      disposedRef.current = true
 
+      // Disconnect observer first to prevent new resize events
       const container = containerRef.current as (HTMLDivElement & { _resizeObserver?: ResizeObserver }) | null
       if (container?._resizeObserver) {
         container._resizeObserver.disconnect()
       }
+
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
+
+      // Unlisten PTY and terminal event handlers
+      for (const fn of cleanupFnsRef.current) {
+        try {
+          if (typeof fn === 'function') fn()
+          else if (fn && typeof fn.dispose === 'function') fn.dispose()
+        } catch { /* ignore */ }
+      }
+      cleanupFnsRef.current = []
+
+      // Dispose WebGL addon explicitly
+      try { webglAddonRef.current?.dispose() } catch { /* ignore */ }
+      webglAddonRef.current = null
 
       try {
         ptyRef.current?.kill()

@@ -15,6 +15,7 @@ export function TauriTitleBar(): React.JSX.Element {
   }, [appWindow])
 
   useEffect(() => {
+    let mounted = true
     checkMaximized()
 
     // Listen for resize events to track maximize state
@@ -22,10 +23,16 @@ export function TauriTitleBar(): React.JSX.Element {
     appWindow.onResized(() => {
       checkMaximized()
     }).then((fn) => {
-      unlisten = fn
+      if (mounted) {
+        unlisten = fn
+      } else {
+        // Component already unmounted, clean up immediately
+        fn()
+      }
     })
 
     return () => {
+      mounted = false
       unlisten?.()
     }
   }, [appWindow, checkMaximized])
