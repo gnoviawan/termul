@@ -5,7 +5,7 @@
   "identifier": "com.termul-manager.app",
   "build": {
     "beforeDevCommand": "npx vite --config vite.config.tauri.ts",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5173/tauri-index.html",
     "beforeBuildCommand": "npx vite build --config vite.config.tauri.ts",
     "frontendDist": "../dist-tauri"
   },
@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "url": "tauri-index.html",
         "title": "Termul Manager",
         "width": 1200,
         "height": 800,
