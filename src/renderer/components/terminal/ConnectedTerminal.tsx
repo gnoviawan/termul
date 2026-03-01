@@ -28,6 +28,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
+import { terminalApi, systemApi } from '@/lib/api'
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
@@ -98,6 +99,8 @@ function ConnectedTerminalComponent({
   const cleanupExitListenerRef = useRef<(() => void) | null>(null)
   // Use ref to track current PTY ID for listener callbacks to avoid stale closures
   const ptyIdRef = useRef<string | null>(null)
+  const spawnInFlightRef = useRef(false)
+  const didInitRef = useRef(false)
   // Use refs for callbacks to avoid dependency changes
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
@@ -175,7 +178,7 @@ function ConnectedTerminalComponent({
       }
 
       try {
-        const result = await window.api.terminal.write(ptyId, data)
+        const result = await terminalApi.write(ptyId, data)
         if (!result.success && onError) {
           onError(result.error)
         }
@@ -204,7 +207,7 @@ function ConnectedTerminalComponent({
       if (!currentPtyId) return
 
       try {
-        await window.api.terminal.resize(currentPtyId, cols, rows)
+        await terminalApi.resize(currentPtyId, cols, rows)
       } catch {
         // Ignore resize errors during rapid resize
       }
@@ -249,7 +252,7 @@ function ConnectedTerminalComponent({
       writeText: (text: string) => {
         const ptyId = ptyIdRef.current
         if (!ptyId) return
-        window.api.terminal.write(ptyId, text)
+        terminalApi.write(ptyId, text)
       }
     }),
     []
@@ -258,6 +261,8 @@ function ConnectedTerminalComponent({
   // Initialize terminal, set up IPC listeners, and spawn PTY
   useEffect(() => {
     if (!containerRef.current) return
+    if (didInitRef.current) return
+    didInitRef.current = true
 
     // Merge platform-aware options with dynamic app settings
     const terminalOptions = {
@@ -418,7 +423,7 @@ function ConnectedTerminalComponent({
     // Set up IPC listeners BEFORE spawning to avoid missing data
     // Cache ptyId -> terminalId mapping to avoid repeated store lookups
     let cachedTerminalId: string | null = null
-    cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
+    cleanupDataListenerRef.current = terminalApi.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
         // Resolve terminal record ID (cached to avoid linear scan)
@@ -466,7 +471,7 @@ function ConnectedTerminalComponent({
       }
     })
 
-    cleanupExitListenerRef.current = window.api.terminal.onExit(
+    cleanupExitListenerRef.current = terminalApi.onExit(
       (id: string, exitCode: number, signal?: number) => {
         if (id === ptyIdRef.current && onExitRef.current) {
           onExitRef.current(exitCode, signal)
@@ -486,8 +491,13 @@ function ConnectedTerminalComponent({
       const spawnRows = terminal.rows
 
       if (!externalTerminalId) {
+        if (spawnInFlightRef.current || ptyIdRef.current) {
+          return
+        }
+
+        spawnInFlightRef.current = true
         try {
-          const result = await window.api.terminal.spawn({
+          const result = await terminalApi.spawn({
             ...memoizedSpawnOptions,
             cols: spawnCols,
             rows: spawnRows
@@ -516,6 +526,8 @@ function ConnectedTerminalComponent({
           if (onError) {
             onError(err instanceof Error ? err.message : 'Spawn failed')
           }
+        } finally {
+          spawnInFlightRef.current = false
         }
       } else {
         // External terminal ID provided - register and restore scrollback
@@ -599,6 +611,8 @@ function ConnectedTerminalComponent({
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
+      spawnInFlightRef.current = false
+      didInitRef.current = false
       // Reset WebGL recovery state for next terminal creation
       webglRecoveryAttemptsRef.current = 0
       webglContextLostRef.current = false
@@ -606,9 +620,12 @@ function ConnectedTerminalComponent({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
   }, [
+    externalTerminalId,
+    initialScrollback,
     onSpawned,
     onError,
     autoFocus,
+    memoizedSpawnOptions,
     handleTerminalData,
     handleResize,
     bufferSize
@@ -651,7 +668,7 @@ function ConnectedTerminalComponent({
             // Restore scroll position after fit (in case of pane transition)
             restoreScrollPosition(ptyId, terminal)
 
-            const resizePromise = window.api.terminal.resize(ptyId, terminal.cols, terminal.rows)
+            const resizePromise = terminalApi.resize(ptyId, terminal.cols, terminal.rows)
             if (resizePromise && typeof resizePromise.catch === 'function') {
               resizePromise.catch(() => {
                 // Ignore resize errors when toggling visibility
@@ -697,7 +714,7 @@ function ConnectedTerminalComponent({
     const terminal = terminalRef.current
     const ptyId = ptyIdRef.current
     if (terminal && ptyId) {
-      window.api.terminal.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
+      terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
         // Ignore resize errors - terminal may have been killed
       })
     }
@@ -735,7 +752,7 @@ function ConnectedTerminalComponent({
     // Track timeout to prevent firing after unmount
     let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
 
-    const cleanup = window.api.system.onPowerResume(() => {
+    const cleanup = systemApi.onPowerResume(() => {
       // Clear any pending timeout before scheduling new one
       if (recoveryTimeoutId) {
         clearTimeout(recoveryTimeoutId)

@@ -1,6 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 
+// Mock Tauri APIs BEFORE importing the component
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(vi.fn())),
+  emit: vi.fn()
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(() => Promise.resolve({
+    id: 'terminal-123',
+    shell: 'bash',
+    cwd: '/home/user'
+  }))
+}))
+
+// Import the mocked modules
+import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
+
 // Create mocks before vi.mock calls
 const mockTerminalConstructor = vi.fn()
 const mockTerminalInstance = {
@@ -107,6 +125,10 @@ vi.mock('@xterm/addon-web-links', () => ({
 }))
 
 // Mock window.api with proper typing for mocks
+let capturedDataCallback: ((id: string, data: string) => void) | null = null
+let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
+let capturedPowerResumeCallback: (() => void) | null = null
+
 const mockTerminalApi = {
   spawn: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   write: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
@@ -127,46 +149,62 @@ const mockClipboardApi = {
   writeText: vi.fn<() => Promise<{ success: boolean; error?: string }>>()
 }
 
-let capturedDataCallback: ((id: string, data: string) => void) | null = null
-let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
-let capturedPowerResumeCallback: (() => void) | null = null
-
-// Cast to any to allow mock methods in tests
-const mockTerminalApiWithMocks = mockTerminalApi as unknown as typeof mockTerminalApi & {
-  spawn: { mockResolvedValue: (v: unknown) => void }
-  write: { mockResolvedValue: (v: unknown) => void }
-  resize: { mockResolvedValue: (v: unknown) => void }
-  onData: { mockReturnValue: (v: unknown) => void }
-  onExit: { mockReturnValue: (v: unknown) => void }
+// Define mock window.api
+const mockWindowApi = {
+  terminal: mockTerminalApi,
+  clipboard: mockClipboardApi,
+  persistence: {
+    read: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    write: vi.fn(() => Promise.resolve({ success: true }))
+  },
+  system: {
+    getHomeDirectory: vi.fn(() => Promise.resolve({ success: true, data: '/home/user' })),
+    onPowerResume: vi.fn((cb: () => void) => {
+      capturedPowerResumeCallback = cb
+      // Return cleanup function directly (not a Promise)
+      return vi.fn()
+    })
+  }
 }
 
 Object.defineProperty(window, 'api', {
-  value: {
-    terminal: mockTerminalApiWithMocks,
-    clipboard: mockClipboardApi,
-    persistence: {
-      read: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
-      write: vi.fn(() => Promise.resolve({ success: true }))
-    },
-    system: {
-      getHomeDirectory: vi.fn(() => Promise.resolve({ success: true, data: '/home/user' })),
-      onPowerResume: vi.fn((cb: () => void) => {
-        capturedPowerResumeCallback = cb
-        return vi.fn()
-      })
-    }
-  } as unknown as Window['api'],
-  writable: true
+  value: mockWindowApi as unknown as Window['api'],
+  writable: true,
+  configurable: true
 })
 
 import { ConnectedTerminal } from './ConnectedTerminal'
+import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
+
+// Mock the API modules
+vi.mock('@/lib/api', () => ({
+  terminalApi: {
+    spawn: vi.fn(),
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    onData: vi.fn(),
+    onExit: vi.fn(),
+    onCwdChanged: vi.fn(),
+    getCwd: vi.fn()
+  },
+  systemApi: {
+    getHomeDirectory: vi.fn(),
+    onPowerResume: vi.fn(() => vi.fn())
+  },
+  clipboardApi: {
+    readText: vi.fn(),
+    writeText: vi.fn()
+  }
+}))
 
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: {
     getState: () => ({
       findTerminalByPtyId: vi.fn(),
       updateTerminalActivity: vi.fn(),
-      updateTerminalLastActivityTimestamp: vi.fn()
+      updateTerminalLastActivityTimestamp: vi.fn(),
+      updateTerminalActivityBatch: vi.fn()
     })
   }
 }))
@@ -177,6 +215,8 @@ describe('ConnectedTerminal', () => {
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
+    capturedDataCallback = null
+    capturedExitCallback = null
     lastCreatedWebglInstance = null
 
     global.ResizeObserver = class MockResizeObserver {
@@ -185,16 +225,30 @@ describe('ConnectedTerminal', () => {
       disconnect = vi.fn()
     } as unknown as typeof ResizeObserver
 
-    mockTerminalApiWithMocks.spawn.mockResolvedValue({
+    // Re-setup onData and onExit mocks with fresh callback captures
+    vi.mocked(terminalApi).onData.mockImplementation((cb: (id: string, data: string) => void) => {
+      capturedDataCallback = cb
+      return vi.fn()
+    })
+    vi.mocked(terminalApi).onExit.mockImplementation((cb: (id: string, exitCode: number, signal?: number) => void) => {
+      capturedExitCallback = cb
+      return vi.fn()
+    })
+    vi.mocked(systemApi).onPowerResume.mockImplementation((cb: () => void) => {
+      capturedPowerResumeCallback = cb
+      return vi.fn()
+    })
+
+    vi.mocked(terminalApi).spawn.mockResolvedValue({
       success: true,
       data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
     })
-    mockTerminalApiWithMocks.write.mockResolvedValue({ success: true, data: undefined })
-    mockTerminalApiWithMocks.resize.mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(terminalApi).write.mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(terminalApi).resize.mockResolvedValue({ success: true, data: undefined })
 
     // Reset clipboard mocks
-    mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
-    mockClipboardApi.writeText.mockResolvedValue({ success: true })
+    vi.mocked(clipboardApi).readText.mockResolvedValue({ success: true, data: '' })
+    vi.mocked(clipboardApi).writeText.mockResolvedValue({ success: true, data: undefined })
 
     // Reset terminal selection mocks
     mockTerminalInstance.hasSelection.mockReturnValue(false)
@@ -215,7 +269,7 @@ describe('ConnectedTerminal', () => {
 
     // Wait for async spawn
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
   })
 
@@ -257,17 +311,17 @@ describe('ConnectedTerminal', () => {
     // Give time for potential spawn
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(mockTerminalApi.spawn).not.toHaveBeenCalled()
+    expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
   })
 
   it('should set up data listener BEFORE spawn to avoid race condition', async () => {
     // Track the order of calls
     const callOrder: string[] = []
-    ;(mockTerminalApi.onData as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+    ;(vi.mocked(terminalApi).onData as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
       callOrder.push('onData')
       return vi.fn()
     })
-    ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+    ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -278,7 +332,7 @@ describe('ConnectedTerminal', () => {
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     // Verify onData was called BEFORE spawn
@@ -289,11 +343,11 @@ describe('ConnectedTerminal', () => {
 
   it('should set up exit listener BEFORE spawn to avoid race condition', async () => {
     const callOrder: string[] = []
-    ;(mockTerminalApi.onExit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+    ;(vi.mocked(terminalApi).onExit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
       callOrder.push('onExit')
       return vi.fn()
     })
-    ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+    ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -304,7 +358,7 @@ describe('ConnectedTerminal', () => {
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     const onExitIndex = callOrder.indexOf('onExit')
@@ -313,7 +367,7 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should call onError when spawn fails', async () => {
-    mockTerminalApi.spawn.mockResolvedValue({
+    vi.mocked(terminalApi).spawn.mockResolvedValue({
       success: false,
       error: 'Shell not found',
       code: 'SPAWN_FAILED'
@@ -386,7 +440,7 @@ describe('ConnectedTerminal', () => {
     render(<ConnectedTerminal spawnOptions={spawnOptions} />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalledWith(
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledWith(
         expect.objectContaining({
           cwd: '/custom/path',
           shell: 'zsh',
@@ -403,7 +457,7 @@ describe('ConnectedTerminal', () => {
     const { unmount } = render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     // Small delay to ensure component is fully set up
@@ -425,7 +479,7 @@ describe('ConnectedTerminal', () => {
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     // Simulate PTY data event with NON-matching ID
@@ -441,12 +495,12 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup data listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    ;(mockTerminalApiWithMocks.onData as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
+    ;(vi.mocked(terminalApi).onData as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.onData).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).onData).toHaveBeenCalled()
     })
 
     unmount()
@@ -456,12 +510,12 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup exit listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    ;(mockTerminalApiWithMocks.onExit as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
+    ;(vi.mocked(terminalApi).onExit as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.onExit).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).onExit).toHaveBeenCalled()
     })
 
     unmount()
@@ -473,7 +527,7 @@ describe('ConnectedTerminal', () => {
     render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     // Simulate terminal resize event
@@ -482,7 +536,7 @@ describe('ConnectedTerminal', () => {
     }
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.resize).toHaveBeenCalledWith('terminal-123', 120, 40)
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith('terminal-123', 120, 40)
     })
   })
 
@@ -490,12 +544,12 @@ describe('ConnectedTerminal', () => {
     const { unmount } = render(<ConnectedTerminal />)
 
     await vi.waitFor(() => {
-      expect(mockTerminalApi.spawn).toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
     })
 
     unmount()
 
-    expect(mockTerminalApi.kill).not.toHaveBeenCalled()
+    expect(vi.mocked(terminalApi).kill).not.toHaveBeenCalled()
   })
 
   describe('Windows ConPTY support', () => {
@@ -589,7 +643,7 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Simulate multiple rapid resize events
@@ -600,14 +654,14 @@ describe('ConnectedTerminal', () => {
       }
 
       // Should not call resize immediately
-      expect(mockTerminalApi.resize).not.toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).resize).not.toHaveBeenCalled()
 
       // Fast forward past debounce time
       await vi.advanceTimersByTimeAsync(50)
 
       // Should only call resize once with the last dimensions
-      expect(mockTerminalApi.resize).toHaveBeenCalledTimes(1)
-      expect(mockTerminalApi.resize).toHaveBeenCalledWith('terminal-123', 120, 40)
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith('terminal-123', 120, 40)
 
       vi.useRealTimers()
     })
@@ -623,7 +677,7 @@ describe('ConnectedTerminal', () => {
       const { unmount } = render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Trigger a resize event
@@ -638,7 +692,7 @@ describe('ConnectedTerminal', () => {
       await vi.advanceTimersByTimeAsync(100)
 
       // Resize should not have been called because component unmounted
-      expect(mockTerminalApi.resize).not.toHaveBeenCalled()
+      expect(vi.mocked(terminalApi).resize).not.toHaveBeenCalled()
 
       vi.useRealTimers()
     })
@@ -649,11 +703,11 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Verify spawn was called with cols and rows from terminal
-      expect(mockTerminalApi.spawn).toHaveBeenCalledWith(
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledWith(
         expect.objectContaining({
           cols: 80,
           rows: 24
@@ -668,7 +722,7 @@ describe('ConnectedTerminal', () => {
         callOrder.push('fit')
       })
 
-      ;(mockTerminalApiWithMocks.spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+      ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
         callOrder.push('spawn')
         return {
           success: true,
@@ -679,7 +733,7 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Verify fit was called before spawn (after initial fit during terminal setup)
@@ -707,7 +761,7 @@ describe('ConnectedTerminal', () => {
       const selectedText = 'Hello, World!'
       mockTerminalInstance.hasSelection.mockReturnValue(true)
       mockTerminalInstance.getSelection.mockReturnValue(selectedText)
-      mockClipboardApi.writeText.mockResolvedValue({ success: true })
+      vi.mocked(clipboardApi).writeText.mockResolvedValue({ success: true, data: undefined })
 
       render(<ConnectedTerminal />)
 
@@ -732,7 +786,7 @@ describe('ConnectedTerminal', () => {
 
       // Should write to clipboard via the hook
       await vi.waitFor(() => {
-        expect(mockClipboardApi.writeText).toHaveBeenCalledWith(selectedText)
+        expect(vi.mocked(clipboardApi).writeText).toHaveBeenCalledWith(selectedText)
       })
     })
 
@@ -757,12 +811,12 @@ describe('ConnectedTerminal', () => {
 
       // Should allow xterm to handle (for interrupt signal)
       expect(result).toBe(true)
-      expect(mockClipboardApi.writeText).not.toHaveBeenCalled()
+      expect(vi.mocked(clipboardApi).writeText).not.toHaveBeenCalled()
     })
 
     it('should paste from clipboard on Ctrl+V', async () => {
       const clipboardText = 'Pasted content'
-      mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
+      vi.mocked(clipboardApi).readText.mockResolvedValue({ success: true, data: clipboardText })
 
       render(<ConnectedTerminal />)
 
@@ -785,7 +839,7 @@ describe('ConnectedTerminal', () => {
 
       // Should read from clipboard and paste via the hook
       await vi.waitFor(() => {
-        expect(mockClipboardApi.readText).toHaveBeenCalled()
+        expect(vi.mocked(clipboardApi).readText).toHaveBeenCalled()
       })
 
       await vi.waitFor(() => {
@@ -819,7 +873,7 @@ describe('ConnectedTerminal', () => {
       const selectedText = 'Selected text'
       mockTerminalInstance.hasSelection.mockReturnValue(true)
       mockTerminalInstance.getSelection.mockReturnValue(selectedText)
-      mockClipboardApi.writeText.mockResolvedValue({ success: true })
+      vi.mocked(clipboardApi).writeText.mockResolvedValue({ success: true, data: undefined })
 
       render(<ConnectedTerminal />)
 
@@ -840,7 +894,7 @@ describe('ConnectedTerminal', () => {
 
       expect(result).toBe(false)
       await vi.waitFor(() => {
-        expect(mockClipboardApi.writeText).toHaveBeenCalledWith(selectedText)
+        expect(vi.mocked(clipboardApi).writeText).toHaveBeenCalledWith(selectedText)
       })
     })
 
@@ -892,7 +946,7 @@ describe('ConnectedTerminal', () => {
       const { container } = render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Terminal container should be in the DOM
@@ -910,7 +964,7 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // WebGL addon should have been created once during init
@@ -932,7 +986,7 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // loadAddon is called for FitAddon, WebLinksAddon, SearchAddon, WebglAddon
@@ -946,7 +1000,7 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Initial load
@@ -1003,12 +1057,12 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       // Clear previous fit/resize calls from init
       mockFitAddonInstance.fit.mockClear()
-      mockTerminalApi.resize.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
 
       // Simulate visibility change to visible
       Object.defineProperty(document, 'visibilityState', {
@@ -1022,7 +1076,7 @@ describe('ConnectedTerminal', () => {
       await vi.advanceTimersByTimeAsync(200)
 
       expect(mockFitAddonInstance.fit).toHaveBeenCalled()
-      expect(mockTerminalApi.resize).toHaveBeenCalledWith(
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
         expect.any(Number)
@@ -1035,11 +1089,11 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       mockFitAddonInstance.fit.mockClear()
-      mockTerminalApi.resize.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
 
       // Simulate visibility change to hidden
       Object.defineProperty(document, 'visibilityState', {
@@ -1061,7 +1115,7 @@ describe('ConnectedTerminal', () => {
       const { unmount } = render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       unmount()
@@ -1080,10 +1134,10 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
-      expect(window.api.system.onPowerResume).toHaveBeenCalled()
+      expect(systemApi.onPowerResume).toHaveBeenCalled()
       expect(capturedPowerResumeCallback).toBeTruthy()
     })
 
@@ -1093,11 +1147,11 @@ describe('ConnectedTerminal', () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(mockTerminalApi.spawn).toHaveBeenCalled()
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
       mockFitAddonInstance.fit.mockClear()
-      mockTerminalApi.resize.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
 
       // Simulate power resume
       capturedPowerResumeCallback!()
@@ -1106,7 +1160,7 @@ describe('ConnectedTerminal', () => {
       await vi.advanceTimersByTimeAsync(350)
 
       expect(mockFitAddonInstance.fit).toHaveBeenCalled()
-      expect(mockTerminalApi.resize).toHaveBeenCalledWith(
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
         expect.any(Number)
@@ -1117,12 +1171,12 @@ describe('ConnectedTerminal', () => {
 
     it('should cleanup power resume subscription on unmount', async () => {
       const cleanupFn = vi.fn()
-      ;(window.api.system.onPowerResume as ReturnType<typeof vi.fn>).mockReturnValue(cleanupFn)
+      ;(systemApi.onPowerResume as ReturnType<typeof vi.fn>).mockReturnValue(cleanupFn)
 
       const { unmount } = render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
-        expect(window.api.system.onPowerResume).toHaveBeenCalled()
+        expect(systemApi.onPowerResume).toHaveBeenCalled()
       })
 
       unmount()
