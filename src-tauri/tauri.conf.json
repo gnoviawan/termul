@@ -25,7 +25,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; worker-src 'self' blob:; img-src 'self' asset: http://asset.localhost data:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws://localhost:* ws://127.0.0.1:*; worker-src 'self' blob:; img-src 'self' asset: http://asset.localhost data: https://picsum.photos; font-src 'self' data:; media-src 'self' blob:;"
+    }
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
     }
   },
   "bundle": {
