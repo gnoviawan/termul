@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { toast } from 'sonner'
+import { filesystemApi } from '@/lib/api'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
@@ -86,9 +87,9 @@ export function useFileWatcher(): void {
       }
     }
 
-    const unsubChanged = window.api.filesystem.onFileChanged(handleFileChanged)
-    const unsubCreated = window.api.filesystem.onFileCreated(handleFileCreated)
-    const unsubDeleted = window.api.filesystem.onFileDeleted(handleFileDeleted)
+    const unsubChanged = filesystemApi.onFileChanged(handleFileChanged)
+    const unsubCreated = filesystemApi.onFileCreated(handleFileCreated)
+    const unsubDeleted = filesystemApi.onFileDeleted(handleFileDeleted)
 
     return () => {
       if (flushTimer) clearTimeout(flushTimer)

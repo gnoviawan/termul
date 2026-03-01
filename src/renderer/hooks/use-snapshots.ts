@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useSnapshotActions, useSnapshots } from '@/stores/snapshot-store'
+import { persistenceApi } from '@/lib/api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useProjectStore } from '@/stores/project-store'
 import { getTerminal } from '@/utils/terminal-registry'

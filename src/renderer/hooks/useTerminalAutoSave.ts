@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTerminalStore } from '../stores/terminal-store'
+import { persistenceApi } from '@/lib/api'
 import { useProjectStore } from '../stores/project-store'
 import type { Terminal } from '@/types/project'
 import type {
@@ -110,8 +111,8 @@ export function useTerminalAutoSave(): void {
         state.activeTerminalId
       )
 
-      // Use debounced write via IPC
-      window.api.persistence
+      // Use debounced write via API
+      persistenceApi
         .writeDebounced(PersistenceKeys.terminals(projectId), layout)
         .catch((err: unknown) => {
           console.error('Failed to auto-save terminal layout:', err)
@@ -131,7 +132,7 @@ export function useTerminalAutoSave(): void {
 export async function loadPersistedTerminals(
   projectId: string
 ): Promise<PersistedTerminalLayout | null> {
-  const result = await window.api.persistence.read<PersistedTerminalLayout>(
+  const result = await persistenceApi.read<PersistedTerminalLayout>(
     PersistenceKeys.terminals(projectId)
   )
 
@@ -156,7 +157,7 @@ export async function saveTerminalLayout(projectId: string): Promise<void> {
   const state = useTerminalStore.getState()
   const layout = serializeTerminalsForProject(state.terminals, projectId, state.activeTerminalId)
 
-  const result = await window.api.persistence.write(PersistenceKeys.terminals(projectId), layout)
+  const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
 
   if (!result.success) {
     console.error('Failed to save terminal layout:', result.error)

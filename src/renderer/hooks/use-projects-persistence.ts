@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react'
 import { useProjectStore } from '@/stores/project-store'
+import { persistenceApi } from '@/lib/api'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import type { PersistedProjectData, PersistedProject } from '../../shared/types/persistence.types'
 import type { Project, ProjectColor } from '@/types/project'
@@ -33,7 +34,7 @@ export function useProjectsLoader(): void {
 
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await window.api.persistence.read<PersistedProjectData>(
+      const result = await persistenceApi.read<PersistedProjectData>(
         PersistenceKeys.projects
       )
       if (result.success && result.data) {
@@ -84,8 +85,8 @@ export function useProjectsAutoSave(): void {
         updatedAt: new Date().toISOString()
       }
 
-      // Use debounced write via IPC
-      window.api.persistence
+      // Use debounced write via API
+      persistenceApi
         .writeDebounced(PersistenceKeys.projects, data)
         .catch((err: unknown) => {
           console.error('Failed to auto-save projects:', err)
@@ -106,7 +107,7 @@ export function usePersistProjects(): () => Promise<void> {
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
-    await window.api.persistence.writeDebounced(PersistenceKeys.projects, data)
+    await persistenceApi.writeDebounced(PersistenceKeys.projects, data)
   }, [])
 }
 
@@ -118,7 +119,7 @@ export function usePersistProjectsImmediate(): () => Promise<void> {
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
-    await window.api.persistence.write(PersistenceKeys.projects, data)
+    await persistenceApi.write(PersistenceKeys.projects, data)
   }, [])
 }
 
@@ -129,8 +130,8 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
 
     // Cascade delete: remove terminal layout and snapshots for this project
     await Promise.all([
-      window.api.persistence.delete(PersistenceKeys.terminals(id)),
-      window.api.persistence.delete(PersistenceKeys.snapshots(id))
+      persistenceApi.delete(PersistenceKeys.terminals(id)),
+      persistenceApi.delete(PersistenceKeys.snapshots(id))
     ])
 
     // Persist the updated projects list
@@ -140,6 +141,6 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
-    await window.api.persistence.write(PersistenceKeys.projects, data)
+    await persistenceApi.write(PersistenceKeys.projects, data)
   }, [])
 }

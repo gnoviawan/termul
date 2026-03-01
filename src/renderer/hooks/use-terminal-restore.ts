@@ -30,11 +30,12 @@ export function useTerminalRestore(): void {
       return
     }
 
-    const restoreTerminals = async (): Promise<void> => {
-      isRestoringRef.current = true
-      setTerminalRestoreInProgress(true)
-      const projectIdToRestore = activeProjectId
+    // Set flag immediately to prevent race condition
+    isRestoringRef.current = true
+    setTerminalRestoreInProgress(true)
+    const projectIdToRestore = activeProjectId
 
+    const restoreTerminals = async (): Promise<void> => {
       try {
         // Save previous project's terminal state before switching
         const previousProjectId = previousProjectIdRef.current

@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useCommandHistoryStore, CommandHistoryEntry } from '@/stores/command-history-store'
+import { persistenceApi } from '@/lib/api'
 
 export const COMMAND_HISTORY_KEY = (projectId: string) => `projects/${projectId}/command-history`
 
@@ -11,7 +12,7 @@ export function useCommandHistoryLoader(projectId: string | null): void {
     if (!projectId) return
 
     async function load(): Promise<void> {
-      const result = await window.api.persistence.read<CommandHistoryEntry[]>(
+      const result = await persistenceApi.read<CommandHistoryEntry[]>(
         COMMAND_HISTORY_KEY(projectId!) // projectId is guaranteed non-null here due to early return
       )
       if (result.success && result.data) {
@@ -32,7 +33,7 @@ export function useSaveCommandHistory(projectId: string | null): () => Promise<v
   return useCallback(async () => {
     if (!projectId) return
     const projectEntries = entries.filter((e) => e.projectId === projectId)
-    await window.api.persistence.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+    await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
   }, [projectId, entries])
 }
 
@@ -61,7 +62,7 @@ export function useAddCommand(): (
       // Persist after adding
       const { entries } = useCommandHistoryStore.getState()
       const projectEntries = entries.filter((e) => e.projectId === projectId)
-      await window.api.persistence.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+      await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
     },
     [addCommand]
   )
