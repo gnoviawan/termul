@@ -59,18 +59,8 @@
     "shortDescription": "Termul Manager - Project-aware terminal manager",
     "longDescription": "Termul Manager is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
     "windows": {
-      "allowDowngrades": true,
-      "webviewInstallMode": {
-        "type": "downloadBootstrapper",
-        "silent": true
-      },
       "nsis": {
-        "installMode": "currentUser",
-        "displayLanguageSelector": false,
-        "languages": ["English", "Indonesian"],
-        "installerIcon": "icons/icon.ico",
-        "createDesktopIcon": true,
-        "createStartMenuShortcut": true
+        "displayLanguageSelector": false
       }
     }
   }

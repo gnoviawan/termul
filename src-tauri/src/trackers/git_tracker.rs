@@ -1,11 +1,53 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Cache for the resolved git binary path (avoiding Laragon PATH pollution)
+static GIT_BINARY: OnceLock<String> = OnceLock::new();
+
+/// Resolve the git binary path, filtering out Laragon's git installation.
+///
+/// On Windows, runs `where git` to get all git paths in PATH order.
+/// On Unix, runs `which -a git`.
+/// Skips any path that contains "laragon" (case-insensitive).
+/// Falls back to plain `"git"` if no suitable path is found.
+fn resolve_git_binary() -> &'static str {
+    GIT_BINARY.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        let where_cmd = Command::new("where").arg("git").output();
+        #[cfg(not(target_os = "windows"))]
+        let where_cmd = Command::new("which").args(["-a", "git"]).output();
+
+        if let Ok(output) = where_cmd {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let path = line.trim();
+                    if path.is_empty() {
+                        continue;
+                    }
+                    // Skip Laragon's git (case-insensitive match)
+                    if path.to_lowercase().contains("laragon") {
+                        log::debug!("[GitTracker] Skipping Laragon git: {}", path);
+                        continue;
+                    }
+                    log::debug!("[GitTracker] Using git binary: {}", path);
+                    return path.to_string();
+                }
+            }
+        }
+
+        // Fallback to plain "git" if nothing better found
+        log::warn!("[GitTracker] Could not resolve non-Laragon git binary, using plain 'git'");
+        "git".to_string()
+    })
+}
 
 const POLL_INTERVAL_MS: u64 = 6000;
 
@@ -214,7 +256,7 @@ impl GitTracker {
     /// Runs `git rev-parse --abbrev-ref HEAD` and returns the branch name.
     /// Returns None if not in a git repository or in detached HEAD state.
     fn check_branch_internal(cwd: &str) -> Option<String> {
-        let output = Command::new("git")
+        let output = Command::new(resolve_git_binary())
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
             .output()
@@ -239,7 +281,7 @@ impl GitTracker {
     /// Runs `git status --porcelain` and returns parsed status.
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
-        let output = Command::new("git")
+        let output = Command::new(resolve_git_binary())
             .args(["status", "--porcelain"])
             .current_dir(cwd)
             .output()
