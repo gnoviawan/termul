@@ -1,26 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useMenuUpdaterListener } from './use-menu-updater-listener'
 import { useUpdaterStore } from '@/stores/updater-store'
 
+// Spy on console.debug to verify the no-op behavior
+const consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
 beforeEach(() => {
-  vi.stubGlobal('electron', {
-    ipcRenderer: {
-      on: vi.fn(),
-      removeListener: vi.fn()
-    }
-  })
-  vi.stubGlobal('api', {
-    updater: {
-      checkForUpdates: vi.fn(() => Promise.resolve({ success: true, data: null })),
-      getState: vi.fn(() => Promise.resolve({ success: true, data: {} })),
-      getAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: true })),
-      onUpdateAvailable: vi.fn(() => () => {}),
-      onUpdateDownloaded: vi.fn(() => () => {}),
-      onDownloadProgress: vi.fn(() => () => {}),
-      onError: vi.fn(() => () => {})
-    }
-  })
+  vi.clearAllMocks()
+  consoleDebugSpy.mockClear()
+
   useUpdaterStore.setState({
     updateAvailable: false,
     version: null,
@@ -33,47 +22,44 @@ beforeEach(() => {
     lastChecked: null,
     autoUpdateEnabled: true
   })
-  vi.clearAllMocks()
 })
 
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
-describe('useMenuUpdaterListener', () => {
-  it('should register menu event listener on mount', () => {
+describe('useMenuUpdaterListener (Tauri POC)', () => {
+  it('should log debug message on mount (no-op implementation)', () => {
     renderHook(() => useMenuUpdaterListener())
 
-    expect(window.electron.ipcRenderer.on).toHaveBeenCalledWith(
-      'updater:check-for-updates-triggered',
-      expect.any(Function)
+    expect(consoleDebugSpy).toHaveBeenCalledWith(
+      '[MenuUpdater] Menu updater listener not implemented in Tauri POC'
     )
   })
 
-  it('should clean up listener on unmount', () => {
+  it('should not throw error on mount', () => {
+    expect(() => {
+      renderHook(() => useMenuUpdaterListener())
+    }).not.toThrow()
+  })
+
+  it('should cleanup without errors on unmount', () => {
     const { unmount } = renderHook(() => useMenuUpdaterListener())
-    unmount()
 
-    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'updater:check-for-updates-triggered',
-      expect.any(Function)
-    )
+    expect(() => {
+      unmount()
+    }).not.toThrow()
   })
 
-  it('should trigger checkForUpdates when menu event fires', () => {
+  it('should not interact with window.electron (Electron API not used)', () => {
     renderHook(() => useMenuUpdaterListener())
 
-    // Get the registered listener
-    const onCall = (window.electron.ipcRenderer.on as ReturnType<typeof vi.fn>).mock.calls
-      .find((call: unknown[]) => call[0] === 'updater:check-for-updates-triggered')
+    // In Tauri implementation, window.electron should not be accessed
+    expect((window as any).electron).toBeUndefined()
+  })
 
-    expect(onCall).toBeDefined()
+  it('should work even without window.api defined', () => {
+    // Ensure window.api is not defined
+    delete (window as any).api
 
-    // Simulate menu event
-    const listener = onCall![1]
-    listener()
-
-    // Verify checkForUpdates was called via store action
-    expect(window.api.updater.checkForUpdates).toHaveBeenCalled()
+    expect(() => {
+      renderHook(() => useMenuUpdaterListener())
+    }).not.toThrow()
   })
 })

@@ -49,6 +49,8 @@ import {
   useAddCommand,
   useCommandHistory
 } from '@/hooks/use-command-history'
+import type { KeyboardShortcutCallback } from '@shared/types/ipc.types'
+import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
   useTerminalFontSize,
@@ -124,10 +126,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
     async function applyProjectSwitch(): Promise<void> {
       try {
-        const watchResult = await window.api.filesystem.watchDirectory(nextRootPath)
+        const watchResult = await filesystemApi.watchDirectory(nextRootPath)
 
         if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
-          window.api.filesystem.unwatchDirectory(nextRootPath)
+          filesystemApi.unwatchDirectory(nextRootPath)
           return
         }
 
@@ -143,7 +145,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         useFileExplorerStore.getState().setRootPath(nextRootPath)
 
         if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-          window.api.filesystem.unwatchDirectory(previousWatchedRoot)
+          filesystemApi.unwatchDirectory(previousWatchedRoot)
         }
 
         watchedRootPathRef.current = nextRootPath
@@ -175,7 +177,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     return () => {
       if (watchedRootPathRef.current) {
-        window.api.filesystem.unwatchDirectory(watchedRootPathRef.current)
+        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
       }
     }
   }, [])
@@ -209,13 +211,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Intercept app close to check for unsaved files
   useEffect(() => {
-    return window.api.window.onCloseRequested(() => {
+    return windowApi.onCloseRequested(() => {
       const dirtyCount = useEditorStore.getState().getDirtyFileCount()
       if (dirtyCount > 0) {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        window.api.window.respondToClose('close')
+        windowApi.respondToClose('close')
       }
     })
   }, [])
@@ -465,7 +467,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
   useEffect(() => {
-    return window.api.keyboard.onShortcut((shortcut) => {
+    return keyboardApi.onShortcut((shortcut) => {
       switch (shortcut) {
         case 'nextTerminal':
           cycleTab('next')
@@ -533,7 +535,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
     if (terminalToClose?.ptyId) {
       try {
-        await window.api.terminal.kill(terminalToClose.ptyId)
+        await terminalApi.kill(terminalToClose.ptyId)
       } catch {
         // Continue close flow even if PTY termination fails
       }
@@ -592,17 +594,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
-    window.api.window.respondToClose('close')
+    windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])
 
   const handleDiscardAllAndClose = useCallback(() => {
-    window.api.window.respondToClose('close')
+    windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])
 
   const handleCancelAppClose = useCallback(() => {
-    window.api.window.respondToClose('cancel')
+    windowApi.respondToClose('cancel')
     setIsAppCloseDialogOpen(false)
   }, [])
 
@@ -610,7 +612,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleInsertCommand = useCallback((command: string) => {
     // TODO: Route to active terminal pane via context
     if (activeTerminal?.ptyId) {
-      window.api.terminal.write(activeTerminal.ptyId, command)
+      terminalApi.write(activeTerminal.ptyId, command)
     }
   }, [activeTerminal])
 

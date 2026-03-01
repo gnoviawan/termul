@@ -2,11 +2,10 @@ import { useEffect } from 'react'
 import { useUpdaterActions } from '@/stores/updater-store'
 
 /**
- * useMenuUpdaterListener Hook
+ * useMenuUpdaterListener Hook (Tauri - No-op implementation)
  *
- * Listens for menu-triggered update check events.
- * When the user clicks "Check for Updates..." in the application menu,
- * this hook triggers the update check via the updater store.
+ * Placeholder for Tauri compatibility.
+ * Menu-triggered update events are Electron-specific.
  *
  * This hook should be used once at the app level to handle menu events.
  */
@@ -14,15 +13,11 @@ export function useMenuUpdaterListener(): void {
   const { checkForUpdates } = useUpdaterActions()
 
   useEffect(() => {
-    // Listen for the menu-triggered update check event
-    const listener = (): void => {
-      checkForUpdates()
-    }
-
-    window.electron?.ipcRenderer?.on('updater:check-for-updates-triggered', listener)
+    // No-op for Tauri - menu events not implemented in POC phase
+    console.debug('[MenuUpdater] Menu updater listener not implemented in Tauri POC')
 
     return () => {
-      window.electron?.ipcRenderer?.removeListener('updater:check-for-updates-triggered', listener)
+      // No cleanup needed
     }
   }, [checkForUpdates])
 }
