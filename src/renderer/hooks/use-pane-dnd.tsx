@@ -23,6 +23,7 @@ interface PaneDndContextValue {
 
 const PaneDndContext = createContext<PaneDndContextValue | null>(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePaneDnd(): PaneDndContextValue {
   const ctx = useContext(PaneDndContext)
   if (!ctx) {

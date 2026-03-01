@@ -581,20 +581,23 @@ impl PtyManager {
         {
             // Try shell.exe variant
             let exe_shell = format!("{}.exe", shell);
-            if self.is_shell_available(&exe_shell) {
-                return Ok(exe_shell);
+            if let Some(abs_path) = self.get_absolute_shell_path(&exe_shell) {
+                return Ok(abs_path);
             }
 
             // Try the shell name directly
-            if self.is_shell_available(shell) {
-                return Ok(shell.to_string());
+            if let Some(abs_path) = self.get_absolute_shell_path(shell) {
+                return Ok(abs_path);
             }
 
             // Try common paths for Git Bash
             if shell == "bash" || shell == "git-bash" {
                 let paths = vec![
                     r"C:\Program Files\Git\bin\bash.exe",
+                    r"C:\Program Files\Git\usr\bin\bash.exe",
                     r"C:\Program Files (x86)\Git\bin\bash.exe",
+                    r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+                    r"C:\tools\msys64\usr\bin\bash.exe",
                 ];
                 for path in paths {
                     if Path::new(path).exists() {
@@ -607,8 +610,8 @@ impl PtyManager {
             if shell == "powershell" || shell == "pwsh" {
                 let paths = vec!["pwsh.exe", "powershell.exe"];
                 for path in paths {
-                    if self.is_shell_available(path) {
-                        return Ok(path.to_string());
+                    if let Some(abs_path) = self.get_absolute_shell_path(path) {
+                        return Ok(abs_path);
                     }
                 }
             }
@@ -632,26 +635,54 @@ impl PtyManager {
         Err(format!("Shell not found: {}", shell))
     }
 
-    /// Check if a shell is available
-    fn is_shell_available(&self, shell_path: &str) -> bool {
+    /// Get the absolute path for a shell if available
+    fn get_absolute_shell_path(&self, shell_path: &str) -> Option<String> {
+        // If it's already an absolute path that exists, return it
+        if Path::new(shell_path).exists() {
+            return Some(shell_path.to_string());
+        }
+
         #[cfg(target_os = "windows")]
         {
             if !shell_path.contains('\\') && !shell_path.contains('/') {
-                return std::process::Command::new("where")
+                if let Ok(output) = std::process::Command::new("where")
                     .arg(shell_path)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
                     .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+                    .output()
+                {
+                    if output.status.success() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let first_line = stdout.lines().next().unwrap_or("").trim();
+                        if !first_line.is_empty() {
+                            return Some(first_line.to_string());
+                        }
+                    }
+                }
             }
-            Path::new(shell_path).exists()
+            if Path::new(shell_path).exists() {
+                return Some(shell_path.to_string());
+            }
+            None
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            Path::new(shell_path).exists()
+            if let Ok(output) = std::process::Command::new("which")
+                .arg(shell_path)
+                .output()
+            {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let first_line = stdout.lines().next().unwrap_or("").trim();
+                    if !first_line.is_empty() {
+                        return Some(first_line.to_string());
+                    }
+                }
+            }
+            if Path::new(shell_path).exists() {
+                return Some(shell_path.to_string());
+            }
+            None
         }
     }
 

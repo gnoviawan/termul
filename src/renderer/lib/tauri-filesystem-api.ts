@@ -44,9 +44,17 @@ function shouldIgnore(name: string, path: string): boolean {
   return false;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(errorMessage)), ms);
+    promise.then((val) => { clearTimeout(timer); resolve(val); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 async function loadGitignore(rootPath: string): Promise<void> {
   try {
-    const content = await readTextFile(`${rootPath}/.gitignore`);
+    const content = await withTimeout(readTextFile(`${rootPath}/.gitignore`), 2000, 'Gitignore read timeout');
     gitignorePatterns = content
       .split('\n')
       .map(line => line.trim())
@@ -80,7 +88,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/');
         await loadGitignore(normalizedDirPath);
-        const entries = await readDir(dirPath);
+        const entries = await withTimeout(readDir(dirPath), 5000, 'Directory read timeout');
 
         const filtered: DirectoryEntry[] = [];
         for (const entry of entries) {

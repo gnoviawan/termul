@@ -45,17 +45,18 @@ const IPC_COMMANDS = {
 } as const
 
 /**
- * Wrap invoke() calls in IpcResult<T> pattern with try/catch
+ * Invoke Tauri IPC commands that already return IpcResult<T> from Rust.
+ * The Rust commands in commands.rs wrap their results in IpcResult::success/error,
+ * so we must NOT wrap them again here.
  */
 async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
   try {
-    const data = await invoke<T>(command, args)
-    return { success: true, data }
+    return await invoke<IpcResult<T>>(command, args)
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
-      code: 'UNKNOWN_ERROR'
+      code: 'INVOKE_ERROR'
     }
   }
 }
@@ -72,7 +73,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Spawn a new terminal PTY
      */
     async spawn(options?: TerminalSpawnOptions): Promise<IpcResult<TerminalInfo>> {
-      return invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, options)
+      return invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options })
     },
 
     /**
@@ -101,10 +102,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onData(callback: TerminalDataCallback): () => void {
-      const unlisten = listen<[string, string]>(
+      const unlisten = listen<{ id: string; data: string }>(
         IPC_EVENTS.TERMINAL_DATA,
-        ({ payload: [terminalId, data] }) => {
-          callback(terminalId, data)
+        ({ payload }) => {
+          callback(payload.id, payload.data)
         }
       )
       return () => {
@@ -117,10 +118,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExit(callback: TerminalExitCallback): () => void {
-      const unlisten = listen<[string, number, number | undefined]>(
+      const unlisten = listen<{ id: string; exitCode: number | null; signal: number | null }>(
         IPC_EVENTS.TERMINAL_EXIT,
-        ({ payload: [terminalId, exitCode, signal] }) => {
-          callback(terminalId, exitCode, signal)
+        ({ payload }) => {
+          callback(payload.id, payload.exitCode ?? 0, payload.signal ?? undefined)
         }
       )
       return () => {
@@ -133,10 +134,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onCwdChanged(callback: TerminalCwdChangedCallback): () => void {
-      const unlisten = listen<[string, string]>(
+      const unlisten = listen<{ terminalId: string; cwd: string }>(
         IPC_EVENTS.TERMINAL_CWD_CHANGED,
-        ({ payload: [terminalId, cwd] }) => {
-          callback(terminalId, cwd)
+        ({ payload }) => {
+          callback(payload.terminalId, payload.cwd)
         }
       )
       return () => {
@@ -156,10 +157,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitBranchChanged(callback: TerminalGitBranchChangedCallback): () => void {
-      const unlisten = listen<[string, string | null]>(
+      const unlisten = listen<{ terminalId: string; branch: string | null }>(
         IPC_EVENTS.TERMINAL_GIT_BRANCH_CHANGED,
-        ({ payload: [terminalId, branch] }) => {
-          callback(terminalId, branch)
+        ({ payload }) => {
+          callback(payload.terminalId, payload.branch)
         }
       )
       return () => {
@@ -179,10 +180,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitStatusChanged(callback: TerminalGitStatusChangedCallback): () => void {
-      const unlisten = listen<[string, GitStatus | null]>(
+      const unlisten = listen<{ terminalId: string; status: GitStatus | null }>(
         IPC_EVENTS.TERMINAL_GIT_STATUS_CHANGED,
-        ({ payload: [terminalId, status] }) => {
-          callback(terminalId, status)
+        ({ payload }) => {
+          callback(payload.terminalId, payload.status)
         }
       )
       return () => {
@@ -202,10 +203,10 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExitCodeChanged(callback: TerminalExitCodeChangedCallback): () => void {
-      const unlisten = listen<[string, number]>(
+      const unlisten = listen<{ terminalId: string; exitCode: number }>(
         IPC_EVENTS.TERMINAL_EXIT_CODE_CHANGED,
-        ({ payload: [terminalId, exitCode] }) => {
-          callback(terminalId, exitCode)
+        ({ payload }) => {
+          callback(payload.terminalId, payload.exitCode)
         }
       )
       return () => {
@@ -227,7 +228,12 @@ export function createTauriTerminalApi(): TerminalApi {
       enabled: boolean,
       timeout: number | null
     ): Promise<IpcResult<void>> {
-      return invokeIpc<void>(IPC_COMMANDS.UPDATE_ORPHAN_DETECTION, { enabled, timeout })
+      // Rust expects argument `settings: OrphanDetectionSettings`
+      const settings = {
+        enabled,
+        timeoutMinutes: timeout ? Math.floor(timeout / 60000) : null
+      }
+      return invokeIpc<void>(IPC_COMMANDS.UPDATE_ORPHAN_DETECTION, { settings })
     }
   }
 }
@@ -237,7 +243,9 @@ export function createTauriTerminalApi(): TerminalApi {
  * Called when a terminal component mounts to register with the Rust backend
  */
 export async function addRendererRef(ptyId: string): Promise<IpcResult<void>> {
-  return invokeIpc<void>(IPC_COMMANDS.ADD_RENDERER_REF, { ptyId })
+  // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
+  const request = { terminalId: ptyId, rendererId: 'default' }
+  return invokeIpc<void>(IPC_COMMANDS.ADD_RENDERER_REF, { request })
 }
 
 /**
@@ -245,5 +253,7 @@ export async function addRendererRef(ptyId: string): Promise<IpcResult<void>> {
  * Called when a terminal component unmounts to unregister from the Rust backend
  */
 export async function removeRendererRef(ptyId: string): Promise<IpcResult<void>> {
-  return invokeIpc<void>(IPC_COMMANDS.REMOVE_RENDERER_REF, { ptyId })
+  // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
+  const request = { terminalId: ptyId, rendererId: 'default' }
+  return invokeIpc<void>(IPC_COMMANDS.REMOVE_RENDERER_REF, { request })
 }

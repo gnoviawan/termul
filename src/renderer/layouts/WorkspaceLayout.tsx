@@ -380,9 +380,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
           toast.error(`Maximum ${maxTerminals} terminals per project`)
           return
         }
-        const shell = activeProject?.defaultShell || appDefaultShell || ''
-        const cwd = activeProject?.path
-        addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+        const paneId = useWorkspaceStore.getState().activePaneId
+        handleCreateTerminalInPane(paneId)
         return
       }
 
@@ -535,7 +534,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
     if (terminalToClose?.ptyId) {
       try {
-        await terminalApi.kill(terminalToClose.ptyId)
+        await Promise.race([
+          terminalApi.kill(terminalToClose.ptyId),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 2000))
+        ])
       } catch {
         // Continue close flow even if PTY termination fails
       }
@@ -635,97 +637,97 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <TitleBar />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-      {/* Sidebar */}
-      {isSidebarVisible && (
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={selectProject}
-        onNewProject={() => setIsNewProjectModalOpen(true)}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-      )}
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {projects.length === 0 ? (
-          /* No Projects Empty State */
-          <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.4, ease: 'easeOut' }}
-              className="flex flex-col items-center text-center max-w-md"
-            >
-              <div className="mb-6">
-                <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-              </div>
-              <h2 className="text-xl font-semibold text-foreground mb-2">
-                No Projects Yet
-              </h2>
-              <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                Create your first project to organize your terminals, snapshots, and commands
-              </p>
-              <button
-                onClick={() => setIsNewProjectModalOpen(true)}
-                className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-              >
-                Create Your First Project
-              </button>
-            </motion.div>
-          </div>
-        ) : (
-          <>
-            {isWorkspaceRoute ? (
-              <div className="flex-1 flex min-h-0">
-                <PaneDndProvider>
-                  <ResizablePanelGroup direction="horizontal">
-                    {/* Center Panel: Pane Tree */}
-                    <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
-                      <PaneRenderer
-                        node={paneRoot}
-                        onNewTerminal={(paneId) => {
-                          handleCreateTerminalInPane(paneId)
-                        }}
-                        onNewTerminalWithShell={(paneId, shell) => {
-                          handleCreateTerminalInPane(paneId, shell.name)
-                        }}
-                        onCloseTerminal={handleCloseTerminal}
-                        onRenameTerminal={renameTerminal}
-                        onCloseEditorTab={handleCloseEditorTab}
-                        defaultShell={activeProject?.defaultShell || appDefaultShell}
-                      />
-                    </ResizablePanel>
-
-                    {/* File Explorer Panel (Right, full height) */}
-                    {isExplorerVisible && (
-                      <>
-                        <ResizableHandle />
-                        <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
-                          <FileExplorer />
-                        </ResizablePanel>
-                      </>
-                    )}
-                  </ResizablePanelGroup>
-                </PaneDndProvider>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-hidden bg-terminal-bg relative">
-                <div className="w-full h-full">
-                  <Outlet />
-                </div>
-              </div>
-            )}
-
-            {/* Status Bar */}
-            <StatusBar project={activeProject} />
-          </>
+        {/* Sidebar */}
+        {isSidebarVisible && (
+          <ProjectSidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectProject={selectProject}
+            onNewProject={() => setIsNewProjectModalOpen(true)}
+            onUpdateProject={updateProject}
+            onDeleteProject={deleteProject}
+            onArchiveProject={archiveProject}
+            onRestoreProject={restoreProject}
+            onReorderProjects={reorderProjects}
+          />
         )}
-      </main>
+
+        {/* Main Content */}
+        <main className="flex-1 flex flex-col min-w-0">
+          {projects.length === 0 ? (
+            /* No Projects Empty State */
+            <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+                className="flex flex-col items-center text-center max-w-md"
+              >
+                <div className="mb-6">
+                  <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground mb-2">
+                  No Projects Yet
+                </h2>
+                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                  Create your first project to organize your terminals, snapshots, and commands
+                </p>
+                <button
+                  onClick={() => setIsNewProjectModalOpen(true)}
+                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                >
+                  Create Your First Project
+                </button>
+              </motion.div>
+            </div>
+          ) : (
+            <>
+              {isWorkspaceRoute ? (
+                <div className="flex-1 flex min-h-0">
+                  <PaneDndProvider>
+                    <ResizablePanelGroup direction="horizontal">
+                      {/* Center Panel: Pane Tree */}
+                      <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
+                        <PaneRenderer
+                          node={paneRoot}
+                          onNewTerminal={(paneId) => {
+                            handleCreateTerminalInPane(paneId)
+                          }}
+                          onNewTerminalWithShell={(paneId, shell) => {
+                            handleCreateTerminalInPane(paneId, shell.name)
+                          }}
+                          onCloseTerminal={handleCloseTerminal}
+                          onRenameTerminal={renameTerminal}
+                          onCloseEditorTab={handleCloseEditorTab}
+                          defaultShell={activeProject?.defaultShell || appDefaultShell}
+                        />
+                      </ResizablePanel>
+
+                      {/* File Explorer Panel (Right, full height) */}
+                      {isExplorerVisible && (
+                        <>
+                          <ResizableHandle />
+                          <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
+                            <FileExplorer />
+                          </ResizablePanel>
+                        </>
+                      )}
+                    </ResizablePanelGroup>
+                  </PaneDndProvider>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden bg-terminal-bg relative">
+                  <div className="w-full h-full">
+                    <Outlet />
+                  </div>
+                </div>
+              )}
+
+              {/* Status Bar */}
+              <StatusBar project={activeProject} />
+            </>
+          )}
+        </main>
       </div>
 
       {/* Modals */}
@@ -761,9 +763,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <ConfirmDialog
         isOpen={closeConfirmTerminalId !== null}
         title="Close Terminal"
-        message={`Are you sure you want to close "${
-          terminalToClose?.name || 'this terminal'
-        }"? Any running processes will be terminated.`}
+        message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'
+          }"? Any running processes will be terminated.`}
         confirmLabel="Close"
         cancelLabel="Cancel"
         variant="danger"

@@ -24,8 +24,12 @@ export function TitleBar(): React.JSX.Element {
     <header
       className="h-8 flex items-center justify-between bg-card border-b border-border select-none shrink-0"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      data-tauri-drag-region
     >
-      <span className="text-xs font-semibold text-muted-foreground tracking-wider uppercase px-3">
+      <span
+        className="text-xs font-semibold text-muted-foreground tracking-wider uppercase px-3"
+        data-tauri-drag-region
+      >
         termul
       </span>
 

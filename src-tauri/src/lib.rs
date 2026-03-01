@@ -18,29 +18,29 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 
 
 #[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
+    pub display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DetectedShells {
-    pub shells: Vec<ShellInfo>,
-    #[serde(rename = "defaultShell")]
-    pub default_shell: ShellInfo,
+    pub available: Vec<ShellInfo>,
+    pub default: Option<ShellInfo>,
 }
 
 #[tauri::command]
 fn detect_shells() -> Result<DetectedShells, String> {
     let shells = get_available_shells();
-    let default = get_default_shell_info()
-        .unwrap_or_else(|| fallback_shell());
+    let default = get_default_shell_info();
 
     Ok(DetectedShells {
-        shells,
-        default_shell: default,
+        available: shells,
+        default,
     })
 }
 
@@ -65,37 +65,20 @@ fn get_home_directory() -> Result<String, String> {
     }
 }
 
-fn fallback_shell() -> ShellInfo {
-    #[cfg(target_os = "windows")]
-    {
-        ShellInfo {
-            name: "cmd".to_string(),
-            path: "cmd.exe".to_string(),
-            args: None,
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        ShellInfo {
-            name: "sh".to_string(),
-            path: "/bin/sh".to_string(),
-            args: None,
-        }
-    }
-}
 
 fn get_default_shell_info() -> Option<ShellInfo> {
     #[cfg(target_os = "windows")]
     {
         let comspec = env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-        let name = if comspec.to_lowercase().contains("powershell") {
-            "powershell"
+        let (name, display_name) = if comspec.to_lowercase().contains("powershell") {
+            ("powershell", "PowerShell")
         } else {
-            "cmd"
+            ("cmd", "Command Prompt")
         };
         Some(ShellInfo {
             name: name.to_string(),
             path: comspec,
+            display_name: display_name.to_string(),
             args: None,
         })
     }
@@ -103,11 +86,28 @@ fn get_default_shell_info() -> Option<ShellInfo> {
     {
         let shell = env::var("SHELL").ok()?;
         let name = shell.split('/').last().unwrap_or("sh").to_string();
+        let display_name = shell_display_name(&name);
         Some(ShellInfo {
             name,
             path: shell,
+            display_name,
             args: None,
         })
+    }
+}
+
+fn shell_display_name(name: &str) -> String {
+    match name {
+        "powershell" => "PowerShell".to_string(),
+        "pwsh" => "PowerShell 7".to_string(),
+        "cmd" => "Command Prompt".to_string(),
+        "git-bash" => "Git Bash".to_string(),
+        "wsl" => "WSL".to_string(),
+        "bash" => "Bash".to_string(),
+        "zsh" => "Zsh".to_string(),
+        "fish" => "Fish".to_string(),
+        "sh" => "Shell".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -118,10 +118,13 @@ fn get_available_shells() -> Vec<ShellInfo> {
     {
         let candidates = vec![
             ("powershell", "powershell.exe", None),
-            ("pwsh", "pwsh.exe", None),
+            ("pwsh", "pwsh.exe", None), // PowerShell 7 via PATH
+            ("pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", None), // PowerShell 7 explicit path
             ("cmd", "cmd.exe", None),
+            ("git-bash", "bash.exe", None), // Git Bash via PATH (when Git is in PATH)
             ("git-bash", "C:\\Program Files\\Git\\bin\\bash.exe", None),
             ("git-bash", "C:\\Program Files (x86)\\Git\\bin\\bash.exe", None),
+            ("git-bash", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", None),
             ("wsl", "wsl.exe", None),
         ];
 
@@ -132,6 +135,7 @@ fn get_available_shells() -> Vec<ShellInfo> {
                     shells.push(ShellInfo {
                         name: name.to_string(),
                         path: path.to_string(),
+                        display_name: shell_display_name(name),
                         args: args.map(|a: &str| vec![a.to_string()]),
                     });
                 }
@@ -155,6 +159,7 @@ fn get_available_shells() -> Vec<ShellInfo> {
                 shells.push(ShellInfo {
                     name: name.to_string(),
                     path: path.to_string(),
+                    display_name: shell_display_name(name),
                     args: None,
                 });
             }

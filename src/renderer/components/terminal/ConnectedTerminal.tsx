@@ -394,7 +394,11 @@ function ConnectedTerminalComponent({
     // Store reference for recovery handlers to use
     loadWebglAddonRef.current = loadWebglAddon
 
-    fitAddon.fit()
+    try {
+      fitAddon.fit()
+    } catch {
+      // Ignore fit errors on initial mount if container is 0x0
+    }
 
     if (autoFocus) {
       terminal.focus()
@@ -487,8 +491,8 @@ function ConnectedTerminalComponent({
       } catch {
         // Ignore fit errors if container not properly laid out yet
       }
-      const spawnCols = terminal.cols
-      const spawnRows = terminal.rows
+      const spawnCols = terminal.cols || 80
+      const spawnRows = terminal.rows || 24
 
       if (!externalTerminalId) {
         if (spawnInFlightRef.current || ptyIdRef.current) {
@@ -519,13 +523,17 @@ function ConnectedTerminalComponent({
             if (onBoundToStoreTerminalRef.current) {
               onBoundToStoreTerminalRef.current(result.data.id)
             }
-          } else if (onError) {
-            onError(result.error)
+          } else {
+            const errorMsg = result.error || 'Unknown spawn error'
+            console.error('[Terminal Spawn Failed]', errorMsg)
+            terminal.write(`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`)
+            if (onError) onError(errorMsg)
           }
         } catch (err) {
-          if (onError) {
-            onError(err instanceof Error ? err.message : 'Spawn failed')
-          }
+          const errorMsg = err instanceof Error ? err.message : 'Spawn failed'
+          console.error('[Terminal Spawn Exception]', errorMsg)
+          terminal.write(`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`)
+          if (onError) onError(errorMsg)
         } finally {
           spawnInFlightRef.current = false
         }
