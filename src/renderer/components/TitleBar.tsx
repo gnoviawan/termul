@@ -22,23 +22,27 @@ export function TitleBar(): React.JSX.Element {
 
   return (
     <header
-      className="h-8 flex items-center justify-between bg-card border-b border-border select-none shrink-0"
-      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      data-tauri-drag-region
+      className="h-8 flex items-center bg-card border-b border-border select-none shrink-0"
     >
-      <span
-        className="text-xs font-semibold text-muted-foreground tracking-wider uppercase px-3"
+      <div
+        className="flex items-center h-full px-3"
         data-tauri-drag-region
       >
-        termul
-      </span>
+        <span
+          className="text-xs font-semibold text-muted-foreground tracking-wider uppercase pointer-events-none"
+        >
+          termul
+        </span>
+      </div>
+
+      <div className="flex-1 h-full" data-tauri-drag-region />
 
       <div
-        className="flex items-center h-full"
+        className="flex items-center h-full relative z-[100]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          onClick={() => useSidebarStore.getState().toggleVisibility()}
+          onClick={(e) => { e.stopPropagation(); useSidebarStore.getState().toggleVisibility(); }}
           className={focusableButtonClass}
           title="Toggle sidebar"
           aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
@@ -51,7 +55,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => useFileExplorerStore.getState().toggleVisibility()}
+          onClick={(e) => { e.stopPropagation(); useFileExplorerStore.getState().toggleVisibility(); }}
           className={focusableButtonClass}
           title="Toggle file explorer"
           aria-label={isExplorerVisible ? 'Hide file explorer' : 'Show file explorer'}
@@ -64,7 +68,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => navigate('/settings')}
+          onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
           className={focusableButtonClass}
           title="Settings"
           aria-label="Open settings"
@@ -77,7 +81,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => navigate('/preferences')}
+          onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}
           className={focusableButtonClass}
           title="Preferences"
           aria-label="Open preferences"
@@ -92,8 +96,8 @@ export function TitleBar(): React.JSX.Element {
         <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 
         <button
-          onClick={() => windowApi.minimize()}
-          className={focusableButtonClass}
+          onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}
+          className={`${focusableButtonClass} cursor-pointer`}
           title="Minimize"
           aria-label="Minimize window"
         >
@@ -101,8 +105,8 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => void windowApi.toggleMaximize()}
-          className={focusableButtonClass}
+          onClick={(e) => { e.stopPropagation(); void windowApi.toggleMaximize(); }}
+          className={`${focusableButtonClass} cursor-pointer`}
           title={isMaximized ? 'Restore' : 'Maximize'}
           aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
         >
@@ -110,8 +114,8 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => windowApi.close()}
-          className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+          onClick={(e) => { e.stopPropagation(); void windowApi.close(); }}
+          className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
           title="Close"
           aria-label="Close window"
         >

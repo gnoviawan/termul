@@ -34,6 +34,14 @@ async function wrapVoidOperation(fn: () => Promise<void>, errorCode: string): Pr
 }
 
 /**
+ * Returns true when running inside a real Tauri WebView (not a plain browser).
+ * Tauri injects window.__TAURI_INTERNALS__ before any page script runs.
+ */
+function isTauriContext(): boolean {
+  return typeof window !== 'undefined' && typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
+}
+
+/**
  * Create a WindowApi implementation using Tauri's window API
  *
  * This uses @tauri-apps/api/window directly instead of IPC commands,
@@ -42,10 +50,12 @@ async function wrapVoidOperation(fn: () => Promise<void>, errorCode: string): Pr
 export function createTauriWindowApi(): WindowApi {
   return {
     minimize(): void {
+      if (!isTauriContext()) return
       void getCurrentWindow().minimize()
     },
 
     async toggleMaximize(): Promise<IpcResult<boolean>> {
+      if (!isTauriContext()) return { success: false, error: 'Not in Tauri context', code: 'NO_TAURI' }
       return wrapWindowOperation(async () => {
         const window = getCurrentWindow()
         if (await window.isMaximized()) {
@@ -59,10 +69,12 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     close(): void {
+      if (!isTauriContext()) return
       void getCurrentWindow().close()
     },
 
     onMaximizeChange(callback: (isMaximized: boolean) => void): () => void {
+      if (!isTauriContext()) return () => { /* noop in browser */ }
       const window = getCurrentWindow()
       const unlisten = window.onResized(async () => {
         const maximized = await window.isMaximized()
@@ -75,6 +87,7 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     onCloseRequested(callback: () => void): () => void {
+      if (!isTauriContext()) return () => { /* noop in browser */ }
       const window = getCurrentWindow()
       const unlisten = window.onCloseRequested((event) => {
         event.preventDefault()
@@ -87,6 +100,7 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     respondToClose(response: 'close' | 'cancel'): void {
+      if (!isTauriContext()) return
       if (response === 'close') {
         void getCurrentWindow().destroy()
       }

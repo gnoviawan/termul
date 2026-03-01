@@ -74,8 +74,9 @@ export default function TauriApp(): React.JSX.Element {
   useWindowState()
 
   useEffect(() => {
-    // Show window immediately after mount
+    // Show window immediately after mount (only in Tauri context)
     const showWindow = async () => {
+      if (typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ === 'undefined') return
       try {
         await getCurrentWindow().show()
       } catch (err) {
