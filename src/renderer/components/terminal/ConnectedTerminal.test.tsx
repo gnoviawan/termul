@@ -646,6 +646,10 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
+      // Clear any initial resize call triggered by the needsResizeOnReady path
+      // (fired once after spawn when isVisible becomes true before PTY is ready)
+      vi.mocked(terminalApi).resize.mockClear()
+
       // Simulate multiple rapid resize events
       if (capturedResizeCallback) {
         capturedResizeCallback({ cols: 100, rows: 30 })
@@ -653,7 +657,7 @@ describe('ConnectedTerminal', () => {
         capturedResizeCallback({ cols: 120, rows: 40 })
       }
 
-      // Should not call resize immediately
+      // Should not call resize immediately (xterm onResize events are debounced)
       expect(vi.mocked(terminalApi).resize).not.toHaveBeenCalled()
 
       // Fast forward past debounce time
@@ -680,6 +684,10 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
+      // Clear any initial resize call triggered by the needsResizeOnReady path
+      // (fired once after spawn when isVisible becomes true before PTY is ready)
+      vi.mocked(terminalApi).resize.mockClear()
+
       // Trigger a resize event
       if (capturedResizeCallback) {
         capturedResizeCallback({ cols: 100, rows: 30 })
@@ -691,7 +699,7 @@ describe('ConnectedTerminal', () => {
       // Fast forward past debounce time
       await vi.advanceTimersByTimeAsync(100)
 
-      // Resize should not have been called because component unmounted
+      // Resize should not have been called because component unmounted before debounce fired
       expect(vi.mocked(terminalApi).resize).not.toHaveBeenCalled()
 
       vi.useRealTimers()

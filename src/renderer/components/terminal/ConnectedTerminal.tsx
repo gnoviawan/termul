@@ -101,6 +101,7 @@ function ConnectedTerminalComponent({
   const ptyIdRef = useRef<string | null>(null)
   const spawnInFlightRef = useRef(false)
   const didInitRef = useRef(false)
+  const initializedTerminalIdRef = useRef<string | undefined>(undefined)
   // Use refs for callbacks to avoid dependency changes
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
@@ -110,8 +111,9 @@ function ConnectedTerminalComponent({
   onBoundToStoreTerminalRef.current = onBoundToStoreTerminal
   // Track current input line for command history
   const currentLineRef = useRef<string>('')
-  // Buffer for keystrokes received before PTY is ready (prevents silent input drop)
-  const pendingInputRef = useRef<string[]>([])
+  // Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
+  const terminalInitializedForRef = useRef<string | undefined>(undefined)
+  const needsResizeOnReadyRef = useRef<boolean>(false)
   // Resize debounce timer ref
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Activity timeout timer ref
@@ -131,27 +133,12 @@ function ConnectedTerminalComponent({
     terminal: terminalInstance
   })
 
-  // Flush buffered keystrokes to PTY once ptyId is available
-  const flushPendingInput = useCallback(async (ptyId: string): Promise<void> => {
-    if (pendingInputRef.current.length === 0) return
-    const buffered = pendingInputRef.current.splice(0)
-    for (const chunk of buffered) {
-      try {
-        await terminalApi.write(ptyId, chunk)
-      } catch {
-        // Ignore flush errors - PTY may have died
-      }
-    }
-  }, [])
-
   // Sync ptyIdRef with external terminal ID when provided
   useEffect(() => {
     if (externalTerminalId) {
       ptyIdRef.current = externalTerminalId
-      // Flush any buffered input now that PTY ID is known
-      void flushPendingInput(externalTerminalId)
     }
-  }, [externalTerminalId, flushPendingInput])
+  }, [externalTerminalId])
 
   // Memoize spawn options to prevent unnecessary re-spawns
   const memoizedSpawnOptions = useMemo(
@@ -170,23 +157,8 @@ function ConnectedTerminalComponent({
   const handleTerminalData = useCallback(
     async (data: string): Promise<void> => {
       const ptyId = ptyIdRef.current
-      if (!ptyId) {
-        // PTY not ready yet — buffer input instead of dropping silently
-        pendingInputRef.current.push(data)
-        // Track command line even while buffering
-        if (data === '\r' || data === '\n') {
-          currentLineRef.current = ''
-        } else if (data === '\x7f' || data === '\b') {
-          currentLineRef.current = currentLineRef.current.slice(0, -1)
-        } else if (data === '\x03') {
-          currentLineRef.current = ''
-        } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-          currentLineRef.current += data
-        } else if (data.length > 1) {
-          currentLineRef.current += data
-        }
-        return
-      }
+      if (!ptyId) return
+
       // Track command input for history
       if (data === '\r' || data === '\n') {
         // Enter pressed - capture command
@@ -293,8 +265,17 @@ function ConnectedTerminalComponent({
   // Initialize terminal, set up IPC listeners, and spawn PTY
   useEffect(() => {
     if (!containerRef.current) return
-    if (didInitRef.current) return
+
+    // Check if we're initializing a new terminal (different from previous)
+    const terminalKey = externalTerminalId ?? 'new'
+    if (didInitRef.current && initializedTerminalIdRef.current === terminalKey) {
+      // Already initialized for this terminal, skip
+      return
+    }
+
+    // Reset init state for new terminal
     didInitRef.current = true
+    initializedTerminalIdRef.current = terminalKey
 
     // Merge platform-aware options with dynamic app settings
     const terminalOptions = {
@@ -426,11 +407,18 @@ function ConnectedTerminalComponent({
     // Store reference for recovery handlers to use
     loadWebglAddonRef.current = loadWebglAddon
 
-    try {
-      fitAddon.fit()
-    } catch {
-      // Ignore fit errors on initial mount if container is 0x0
-    }
+    // Defer initial fit to next animation frame so the WebGL renderer has time
+    // to fully initialize its internal _renderer.value before we call dimensions.
+    // Calling fit() synchronously after loadWebglAddon() causes an uncaught
+    // "Cannot read properties of undefined (reading 'dimensions')" from xterm.
+    requestAnimationFrame(() => {
+      if (!fitAddonRef.current) return
+      try {
+        fitAddonRef.current.fit()
+      } catch {
+        // Ignore fit errors on initial mount if container is 0x0
+      }
+    })
 
     if (autoFocus) {
       terminal.focus()
@@ -544,8 +532,12 @@ function ConnectedTerminalComponent({
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
-            // Flush any keystrokes buffered before spawn completed
-            void flushPendingInput(result.data.id)
+            // If tab was visible before PTY was ready, flush deferred fit+resize now
+            if (needsResizeOnReadyRef.current) {
+              needsResizeOnReadyRef.current = false
+              try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+              terminalApi.resize(result.data.id, terminal.cols, terminal.rows).catch(() => { })
+            }
             // Register terminal for scrollback persistence
             registerTerminal(result.data.id, terminal)
             // Restore scrollback if provided
@@ -657,25 +649,16 @@ function ConnectedTerminalComponent({
       searchAddonRef.current = null
       ptyIdRef.current = null
       spawnInFlightRef.current = false
+      // Reset init flag so a new terminal can be created if component remounts
       didInitRef.current = false
+      initializedTerminalIdRef.current = undefined
       // Reset WebGL recovery state for next terminal creation
       webglRecoveryAttemptsRef.current = 0
       webglContextLostRef.current = false
       loadWebglAddonRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
-  }, [
-    externalTerminalId,
-    initialScrollback,
-    onSpawned,
-    onError,
-    autoFocus,
-    memoizedSpawnOptions,
-    handleTerminalData,
-    handleResize,
-    bufferSize,
-    flushPendingInput
-  ])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Update terminal font settings when app settings change (without recreating terminal)
   useEffect(() => {
@@ -698,8 +681,6 @@ function ConnectedTerminalComponent({
   useEffect(() => {
     if (isVisible && fitAddonRef.current && terminalRef.current) {
       // Double RAF ensures DOM is fully rendered after pane transition
-      // First RAF waits for current frame to complete
-      // Second RAF waits for next frame when layout is settled
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           try {
@@ -710,15 +691,35 @@ function ConnectedTerminalComponent({
 
           const terminal = terminalRef.current
           const ptyId = ptyIdRef.current
-          if (terminal && ptyId) {
-            // Restore scroll position after fit (in case of pane transition)
-            restoreScrollPosition(ptyId, terminal)
+          if (terminal) {
+            // Only focus if no interactive element (button, input, etc.) currently has focus.
+            // This prevents stealing focus from TitleBar window controls when tab switch happens.
+            const active = document.activeElement
+            const isInteractiveElementFocused =
+              active &&
+              active !== document.body &&
+              (active.tagName === 'BUTTON' ||
+                active.tagName === 'INPUT' ||
+                active.tagName === 'TEXTAREA' ||
+                active.tagName === 'SELECT' ||
+                active.tagName === 'A')
+            if (!isInteractiveElementFocused) {
+              terminal.focus()
+            }
 
-            const resizePromise = terminalApi.resize(ptyId, terminal.cols, terminal.rows)
-            if (resizePromise && typeof resizePromise.catch === 'function') {
-              resizePromise.catch(() => {
-                // Ignore resize errors when toggling visibility
-              })
+            if (ptyId) {
+              // Restore scroll position after fit (in case of pane transition)
+              restoreScrollPosition(ptyId, terminal)
+
+              const resizePromise = terminalApi.resize(ptyId, terminal.cols, terminal.rows)
+              if (resizePromise && typeof resizePromise.catch === 'function') {
+                resizePromise.catch(() => {
+                  // Ignore resize errors when toggling visibility
+                })
+              }
+            } else {
+              // PTY not ready yet — defer resize until spawn completes
+              needsResizeOnReadyRef.current = true
             }
           }
         })
@@ -843,6 +844,14 @@ function ConnectedTerminalComponent({
           className={`w-full h-full ${className}`}
           style={{ padding: '8px' }}
           onClick={handleContainerClick}
+          onMouseDown={(e) => {
+            // Prevent event from bubbling to window/parent handlers
+            // that might steal focus back or interfere with UI
+            e.stopPropagation()
+            if (terminalRef.current) {
+              terminalRef.current.focus()
+            }
+          }}
         />
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">
