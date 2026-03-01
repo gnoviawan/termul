@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { terminalApi, systemApi } from '@/lib/api'
 
 // Cache for home directory to avoid repeated IPC calls
 let cachedHomeDir: string | null = null
@@ -19,7 +20,7 @@ export function useCwd(): void {
 
   useEffect(() => {
     // Subscribe to CWD changed events from main process
-    const cleanup = window.api.terminal.onCwdChanged((ptyId: string, cwd: string) => {
+    const cleanup = terminalApi.onCwdChanged((ptyId: string, cwd: string) => {
       // Look up terminal by ptyId and update using store id
       const terminal = findTerminalByPtyId(ptyId)
       if (terminal) {
@@ -48,7 +49,7 @@ export function useHomeDirectory(): string {
   useEffect(() => {
     if (cachedHomeDir !== null) return
 
-    window.api.system.getHomeDirectory().then((result) => {
+    systemApi.getHomeDirectory().then((result) => {
       if (result.success) {
         cachedHomeDir = result.data
         setHomeDir(result.data)

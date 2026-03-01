@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { terminalApi } from '@/lib/api'
 
 /**
  * Hook to subscribe to git branch changes for terminals
@@ -12,7 +13,7 @@ export function useGitBranch(): void {
 
   useEffect(() => {
     // Subscribe to git branch changed events from main process
-    const cleanup = window.api.terminal.onGitBranchChanged(
+    const cleanup = terminalApi.onGitBranchChanged(
       (ptyId: string, branch: string | null) => {
         // Look up terminal by ptyId and update using store id
         const terminal = findTerminalByPtyId(ptyId)

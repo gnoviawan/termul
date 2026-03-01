@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { terminalApi } from '@/lib/api'
 import type { GitStatus } from '@/types/project'
 
 /**
@@ -13,7 +14,7 @@ export function useGitStatus(): void {
 
   useEffect(() => {
     // Subscribe to git status changed events from main process
-    const cleanup = window.api.terminal.onGitStatusChanged(
+    const cleanup = terminalApi.onGitStatusChanged(
       (ptyId: string, status: GitStatus | null) => {
         // Look up terminal by ptyId and update using store id
         const terminal = findTerminalByPtyId(ptyId)
