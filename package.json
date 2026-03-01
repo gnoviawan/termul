@@ -26,6 +26,11 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "dev:tauri": "tauri dev --config src-tauri/tauri.conf.json",
     "build:tauri": "tauri build",
+    "build:tauri:debug": "tauri build --debug",
+    "build:tauri:win": "tauri build --target x86_64-pc-windows-msvc",
+    "build:tauri:mac-arm": "tauri build --target aarch64-apple-darwin",
+    "build:tauri:mac-x64": "tauri build --target x86_64-apple-darwin",
+    "build:tauri:linux": "tauri build --target x86_64-unknown-linux-gnu",
     "tauri": "tauri",
     "prepare": "husky"
   },
@@ -112,7 +117,9 @@
     "@tauri-apps/plugin-store": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-clipboard-manager": "^2"
+    "@tauri-apps/plugin-clipboard-manager": "^2",
+    "@tauri-apps/plugin-updater": "^2",
+    "@tauri-apps/plugin-process": "^2"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.2",

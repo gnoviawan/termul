@@ -31,6 +31,16 @@
   "plugins": {
     "fs": {
       "requireLiteralLeadingDot": false
+    },
+    "updater": {
+      "active": true,
+      "pubkey": "${TAURI_SIGNING_PUBLIC_KEY}",
+      "endpoints": [
+        "https://github.com/gnoviawan/termul/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "bundle": {
