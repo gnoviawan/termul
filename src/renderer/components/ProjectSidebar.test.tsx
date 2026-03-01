@@ -6,12 +6,18 @@ import type { Project } from '@/types/project'
 
 // Mock the shell API
 const mockGetAvailableShells = vi.fn()
+vi.mock('@/lib/shell-api', () => ({
+  shellApi: {
+    getAvailableShells: mockGetAvailableShells
+  }
+}))
+
 vi.mock('@/lib/utils', async () => {
   const actual = await vi.importActual('@/lib/utils')
   return { ...actual }
 })
 
-// Setup window.api mock
+// Setup mock data
 beforeEach(() => {
   mockGetAvailableShells.mockReset()
   mockGetAvailableShells.mockResolvedValue({
@@ -25,12 +31,6 @@ beforeEach(() => {
       ]
     }
   })
-  // @ts-expect-error - mock window.api
-  window.api = {
-    shell: {
-      getAvailableShells: mockGetAvailableShells
-    }
-  }
 })
 
 const mockProjects: Project[] = [

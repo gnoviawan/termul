@@ -20,6 +20,7 @@ import { ContextMenu } from './ContextMenu'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPickerPopover } from './ColorPickerPopover'
+import { shellApi } from '@/lib/api'
 
 function getFirstLetter(name: string): string {
   if (!name) return '?'
@@ -110,7 +111,7 @@ export function ProjectSidebar({
   useEffect(() => {
     const fetchShells = async () => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success) {
           setAvailableShells(result.data)
         }
@@ -118,7 +119,7 @@ export function ProjectSidebar({
         // Ignore errors
       }
     }
-    fetchShells()
+    void fetchShells()
   }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {

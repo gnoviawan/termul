@@ -3,6 +3,7 @@ import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizon
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarStore, useSidebarVisible } from '@/stores/sidebar-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { windowApi } from '@/lib/api'
 
 const focusableButtonClass = 'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
@@ -14,7 +15,7 @@ export function TitleBar(): React.JSX.Element {
   const location = useLocation()
 
   useEffect(() => {
-    return window.api.window.onMaximizeChange((maximized) => {
+    return windowApi.onMaximizeChange((maximized) => {
       setIsMaximized(maximized)
     })
   }, [])
@@ -87,7 +88,7 @@ export function TitleBar(): React.JSX.Element {
         <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 
         <button
-          onClick={() => window.api.window.minimize()}
+          onClick={() => windowApi.minimize()}
           className={focusableButtonClass}
           title="Minimize"
           aria-label="Minimize window"
@@ -96,7 +97,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => window.api.window.toggleMaximize()}
+          onClick={() => void windowApi.toggleMaximize()}
           className={focusableButtonClass}
           title={isMaximized ? 'Restore' : 'Maximize'}
           aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
@@ -105,7 +106,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={() => window.api.window.close()}
+          onClick={() => windowApi.close()}
           className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
           title="Close"
           aria-label="Close window"
