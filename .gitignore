@@ -65,3 +65,8 @@ E2E_VERIFICATION_REPORT.md
 VERIFICATION_CHECKLIST.md
 *_VERIFICATION*.md
 /_bmad-bkp
+
+# Agent workflow & prompt files
+.agent/workflows/
+.github/prompts/
+.github/copilot-instructions.md
