@@ -183,6 +183,51 @@ vi.mock('../main/menu', () => ({
   setMainWindow: vi.fn()
 }))
 
+// Mock Tauri APIs
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn()
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  readDir: vi.fn(),
+  readTextFile: vi.fn(),
+  writeTextFile: vi.fn(),
+  mkdir: vi.fn(),
+  remove: vi.fn(),
+  rename: vi.fn(),
+  stat: vi.fn(),
+  watchImmediate: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn(),
+  save: vi.fn(),
+  message: vi.fn(),
+  confirm: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: vi.fn(),
+  writeText: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-store', () => ({
+  createStore: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-os', () => ({
+  platform: vi.fn(),
+  version: vi.fn(),
+  type: vi.fn(),
+  arch: vi.fn(),
+  tempdir: vi.fn(),
+  homedir: vi.fn()
+}))
+
 // Mock react-virtuoso to render items directly in tests
 vi.mock('react-virtuoso', () => {
   const VirtuosoComponent = React.forwardRef(
