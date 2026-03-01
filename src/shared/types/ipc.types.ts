@@ -10,6 +10,8 @@ export interface TerminalSpawnOptions {
   env?: Record<string, string>
   cols?: number
   rows?: number
+  // Index signature to satisfy Tauri's InvokeArgs constraint
+  [key: string]: unknown
 }
 
 // Terminal info returned after spawn
