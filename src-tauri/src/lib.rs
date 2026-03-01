@@ -1,6 +1,21 @@
+// Module declarations
+mod commands;
+mod pty;
+mod trackers;
+
 use serde::Serialize;
 use std::env;
 use std::path::Path;
+use std::sync::Arc;
+use tauri::Manager;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+// Re-exports for commands
+pub use pty::PtyManager;
+pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ShellInfo {
@@ -158,6 +173,7 @@ fn is_shell_available(shell_path: &str) -> bool {
                 .arg(shell_path)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
@@ -173,12 +189,55 @@ fn is_shell_available(shell_path: &str) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_pty::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            // Create CWD Tracker (takes app_handle directly)
+            let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
+            app.manage(cwd_tracker.clone());
+
+            // Create Git Tracker (takes app_handle directly)
+            let git_tracker = Arc::new(GitTracker::new(handle.clone()));
+            app.manage(git_tracker.clone());
+
+            // Create Exit Code Tracker (takes app_handle directly)
+            let exit_code_tracker = Arc::new(ExitCodeTracker::new(handle.clone()));
+            app.manage(exit_code_tracker.clone());
+
+            // Create PTY Manager (depends on trackers)
+            let pty_manager = Arc::new(PtyManager::new(
+                handle.clone(),
+                cwd_tracker,
+                git_tracker,
+                exit_code_tracker,
+            ));
+            app.manage(pty_manager);
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            // Shell detection commands
             detect_shells,
             get_default_shell,
-            get_home_directory
+            get_home_directory,
+            // Terminal commands
+            commands::terminal_spawn,
+            commands::terminal_write,
+            commands::terminal_resize,
+            commands::terminal_kill,
+            commands::terminal_get_cwd,
+            commands::terminal_get_git_branch,
+            commands::terminal_get_git_status,
+            commands::terminal_get_exit_code,
+            commands::terminal_update_orphan_detection,
+            commands::terminal_add_renderer_ref,
+            commands::terminal_remove_renderer_ref,
+            commands::terminal_set_visibility,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
