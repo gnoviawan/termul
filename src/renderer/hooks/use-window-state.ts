@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
 import { persistenceApi } from '@/lib/api'
 
 interface WindowState {
@@ -14,8 +14,6 @@ const WINDOW_STATE_KEY = 'window-state'
 
 export function useWindowState() {
   useEffect(() => {
-    let restoreTimeout: ReturnType<typeof setTimeout>
-
     const restoreWindowState = async () => {
       try {
         const result = await persistenceApi.read<WindowState>(WINDOW_STATE_KEY)
@@ -23,9 +21,8 @@ export function useWindowState() {
           const state = result.data
           const window = getCurrentWindow()
 
-          // Use plain objects instead of LogicalPosition/LogicalSize
-          await window.setPosition({ x: state.x, y: state.y })
-          await window.setSize({ width: state.width, height: state.height })
+          await window.setPosition(new LogicalPosition(state.x, state.y))
+          await window.setSize(new LogicalSize(state.width, state.height))
 
           if (state.isMaximized) {
             await window.maximize()
@@ -37,7 +34,7 @@ export function useWindowState() {
     }
 
     // Delay restoration to ensure window is ready
-    restoreTimeout = setTimeout(restoreWindowState, 100)
+    const restoreTimeout = setTimeout(restoreWindowState, 100)
 
     return () => clearTimeout(restoreTimeout)
   }, [])

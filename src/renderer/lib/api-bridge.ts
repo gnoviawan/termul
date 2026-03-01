@@ -14,7 +14,6 @@ import { tauriDialogApi } from './tauri-dialog-api'
 import { tauriClipboardApi } from './tauri-clipboard-api'
 import { tauriSystemApi } from './tauri-system-api'
 import { tauriWindowApi } from './tauri-window-api'
-import type { UpdaterApi } from '@shared/types/updater.types'
 
 /**
  * Detect if running in Tauri environment

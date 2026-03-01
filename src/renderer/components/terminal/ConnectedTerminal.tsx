@@ -501,11 +501,14 @@ function ConnectedTerminalComponent({
 
         spawnInFlightRef.current = true
         try {
-          const result = await terminalApi.spawn({
+          const spawnOpts = {
             ...memoizedSpawnOptions,
+            // Ensure empty shell string is treated as undefined so Rust uses default
+            shell: memoizedSpawnOptions?.shell || undefined,
             cols: spawnCols,
             rows: spawnRows
-          })
+          }
+          const result = await terminalApi.spawn(spawnOpts)
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id

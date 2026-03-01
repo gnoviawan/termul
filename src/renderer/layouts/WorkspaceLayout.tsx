@@ -504,7 +504,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      const shell = shellName ?? activeProject?.defaultShell ?? appDefaultShell ?? ''
+      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
       const cwd = activeProject?.path
       const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
 
