@@ -536,7 +536,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       try {
         await Promise.race([
           terminalApi.kill(terminalToClose.ptyId),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 2000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
         ])
       } catch {
         // Continue close flow even if PTY termination fails
