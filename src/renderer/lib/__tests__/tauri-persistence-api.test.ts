@@ -32,10 +32,17 @@ vi.mock('@tauri-apps/plugin-store', () => {
 import { Store } from '@tauri-apps/plugin-store'
 import { tauriPersistenceApi, createTauriPersistenceApi, _resetStoreInstanceForTesting } from '../tauri-persistence-api'
 
+type MockStore = {
+  get: ReturnType<typeof vi.fn>
+  set: ReturnType<typeof vi.fn>
+  delete: ReturnType<typeof vi.fn>
+  save: ReturnType<typeof vi.fn>
+}
+
 const mockStoreLoad = Store.load as ReturnType<typeof vi.fn>
 
 describe('tauriPersistenceApi', () => {
-  let currentMockStore: any
+  let currentMockStore: MockStore
   let mockData: Map<string, unknown>
 
   beforeEach(async () => {

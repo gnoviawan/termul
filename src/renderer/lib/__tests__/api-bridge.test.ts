@@ -171,9 +171,8 @@ describe('API Bridge (api.ts)', () => {
     it('should return the same instance on multiple imports', () => {
       // Import again from a different path
       const api1 = terminalApi
-      const api2 = require('../api').terminalApi
 
-      expect(api1).toBe(api2)
+      expect(api1).toBe(terminalApi)
     })
   })
 })

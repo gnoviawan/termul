@@ -1,14 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 import { useMenuUpdaterListener } from './use-menu-updater-listener'
 import { useUpdaterStore } from '@/stores/updater-store'
 
-// Spy on console.debug to verify the no-op behavior
-const consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+const mockInitializeUpdater = vi.fn(async () => {})
 
 beforeEach(() => {
   vi.clearAllMocks()
-  consoleDebugSpy.mockClear()
 
   useUpdaterStore.setState({
     updateAvailable: false,
@@ -20,46 +18,25 @@ beforeEach(() => {
     isDownloading: false,
     error: null,
     lastChecked: null,
-    autoUpdateEnabled: true
+    autoUpdateEnabled: true,
+    releaseNotes: null,
+    hasActiveTerminals: false,
+    initializeUpdater: mockInitializeUpdater
   })
 })
 
-describe('useMenuUpdaterListener (Tauri POC)', () => {
-  it('should log debug message on mount (no-op implementation)', () => {
+describe('useMenuUpdaterListener', () => {
+  it('should initialize updater with autoCheck false on mount', async () => {
     renderHook(() => useMenuUpdaterListener())
 
-    expect(consoleDebugSpy).toHaveBeenCalledWith(
-      '[MenuUpdater] Menu updater listener not implemented in Tauri POC'
-    )
+    await waitFor(() => {
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: false })
+    })
   })
 
-  it('should not throw error on mount', () => {
-    expect(() => {
-      renderHook(() => useMenuUpdaterListener())
-    }).not.toThrow()
-  })
-
-  it('should cleanup without errors on unmount', () => {
+  it('should not throw on mount and unmount', () => {
     const { unmount } = renderHook(() => useMenuUpdaterListener())
 
-    expect(() => {
-      unmount()
-    }).not.toThrow()
-  })
-
-  it('should not interact with window.electron (Electron API not used)', () => {
-    renderHook(() => useMenuUpdaterListener())
-
-    // In Tauri implementation, window.electron should not be accessed
-    expect((window as any).electron).toBeUndefined()
-  })
-
-  it('should work even without window.api defined', () => {
-    // Ensure window.api is not defined
-    delete (window as any).api
-
-    expect(() => {
-      renderHook(() => useMenuUpdaterListener())
-    }).not.toThrow()
+    expect(() => unmount()).not.toThrow()
   })
 })

@@ -4,6 +4,30 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { FileInfo } from '@tauri-apps/plugin-fs'
+
+type WatchCallback = (event: unknown) => void
+
+const defaultStat: FileInfo = {
+  isFile: true,
+  isDirectory: false,
+  isSymlink: false,
+  size: 1024,
+  mtime: new Date(),
+  atime: null,
+  birthtime: null,
+  readonly: false,
+  fileAttributes: null,
+  dev: null,
+  ino: null,
+  mode: null,
+  nlink: null,
+  uid: null,
+  gid: null,
+  rdev: null,
+  blksize: null,
+  blocks: null
+}
 
 // Mock @tauri-apps/plugin-fs BEFORE importing
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -13,10 +37,8 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   mkdir: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
   rename: vi.fn(async () => {}),
-  stat: vi.fn(async () => ({ isFile: true, isDirectory: false, size: 1024, mtime: new Date() } as any)),
-  watchImmediate: vi.fn(async (_paths: string[], _callback: any) => vi.fn()),
-  // Re-export types are not available at runtime, but we can define what we need
-  // DirEntry is only used as a type
+  stat: vi.fn(async () => defaultStat),
+  watchImmediate: vi.fn(async (_paths: string[], _callback: WatchCallback) => vi.fn())
 }))
 
 import {
@@ -24,8 +46,14 @@ import {
   mkdir, remove, rename, stat, watchImmediate
 } from '@tauri-apps/plugin-fs'
 import type { DirEntry } from '@tauri-apps/plugin-fs'
-import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { tauriFilesystemApi, _resetFilesystemStateForTesting } from '../tauri-filesystem-api'
+
+function makeFileInfo(overrides: Partial<FileInfo>): FileInfo {
+  return {
+    ...defaultStat,
+    ...overrides
+  }
+}
 
 describe('tauriFilesystemApi', () => {
   beforeEach(() => {
@@ -39,7 +67,7 @@ describe('tauriFilesystemApi', () => {
     vi.mocked(mkdir).mockResolvedValue(undefined)
     vi.mocked(remove).mockResolvedValue(undefined)
     vi.mocked(rename).mockResolvedValue(undefined)
-    vi.mocked(stat).mockResolvedValue({ isFile: true, isDirectory: false, size: 1024, mtime: new Date() } as any)
+    vi.mocked(stat).mockResolvedValue(defaultStat)
     vi.mocked(watchImmediate).mockResolvedValue(vi.fn())
   })
 
@@ -52,7 +80,7 @@ describe('tauriFilesystemApi', () => {
       const mockEntries: DirEntry[] = [
         { name: 'file1.txt', isDirectory: false, isFile: true, isSymlink: false },
         { name: 'dir1', isDirectory: true, isFile: false, isSymlink: false }
-      ] as DirEntry[]
+      ]
       vi.mocked(readDir).mockResolvedValue(mockEntries)
 
       const result = await tauriFilesystemApi.readDirectory('/test')
@@ -73,7 +101,7 @@ describe('tauriFilesystemApi', () => {
         { name: 'node_modules', isDirectory: true, isFile: false, isSymlink: false },
         { name: '.git', isDirectory: true, isFile: false, isSymlink: false },
         { name: 'dist', isDirectory: true, isFile: false, isSymlink: false }
-      ] as DirEntry[]
+      ]
       vi.mocked(readDir).mockResolvedValue(mockEntries)
 
       const result = await tauriFilesystemApi.readDirectory('/test')
@@ -101,7 +129,7 @@ describe('tauriFilesystemApi', () => {
     it('should successfully read file content', async () => {
       const testDate = new Date('2024-01-01')
       vi.mocked(readTextFile).mockResolvedValue('Hello, World!')
-      vi.mocked(stat).mockResolvedValue({ isFile: true, isDirectory: false, size: 13, mtime: testDate } as any)
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 13, mtime: testDate }))
 
       const result = await tauriFilesystemApi.readFile('/test/file.txt')
 
@@ -114,7 +142,7 @@ describe('tauriFilesystemApi', () => {
     })
 
     it('should reject files larger than MAX_FILE_SIZE', async () => {
-      vi.mocked(stat).mockResolvedValue({ isFile: true, isDirectory: false, size: 2 * 1024 * 1024, mtime: new Date() } as any)
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 2 * 1024 * 1024 }))
 
       const result = await tauriFilesystemApi.readFile('/test/large.bin')
 
@@ -139,7 +167,7 @@ describe('tauriFilesystemApi', () => {
   describe('getFileInfo', () => {
     it('should return file metadata', async () => {
       const testDate = new Date('2024-01-01T00:00:00Z')
-      vi.mocked(stat).mockResolvedValue({ isFile: true, isDirectory: false, size: 2048, mtime: testDate } as any)
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 2048, mtime: testDate }))
       vi.mocked(readTextFile).mockResolvedValue('some content')
 
       const result = await tauriFilesystemApi.getFileInfo('/test/file.txt')
@@ -155,7 +183,7 @@ describe('tauriFilesystemApi', () => {
 
     it('should detect binary files', async () => {
       const testDate = new Date('2024-01-01T00:00:00Z')
-      vi.mocked(stat).mockResolvedValue({ isFile: true, isDirectory: false, size: 10, mtime: testDate } as any)
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 10, mtime: testDate }))
       vi.mocked(readTextFile).mockResolvedValue('Hello\x00World')
 
       const result = await tauriFilesystemApi.getFileInfo('/test/binary.bin')
@@ -337,8 +365,10 @@ describe('tauriFilesystemApi', () => {
 
     it('should handle errors', async () => {
       // Force an error by making unlisten throw
-      const badUnlisten = () => { throw new Error('Unlisten failed') }
-      vi.mocked(watchImmediate).mockResolvedValue(badUnlisten as any)
+      const badUnlisten = () => {
+        throw new Error('Unlisten failed')
+      }
+      vi.mocked(watchImmediate).mockResolvedValue(badUnlisten)
 
       await tauriFilesystemApi.watchDirectory('/test')
       const result = await tauriFilesystemApi.unwatchDirectory('/test')
