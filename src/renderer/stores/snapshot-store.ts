@@ -8,6 +8,7 @@ import type {
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { useProjectStore } from './project-store'
+import { persistenceApi } from '@/lib/api'
 
 export interface SnapshotState {
   // State
@@ -91,7 +92,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
     // Persist to storage
     try {
       const key = PersistenceKeys.snapshots(projectId)
-      const existingResult = await window.api.persistence.read<PersistedSnapshotList>(key)
+      const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
       const existingSnapshots: PersistedSnapshot[] =
         existingResult.success && existingResult.data ? existingResult.data.snapshots : []
@@ -102,7 +103,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         updatedAt: new Date().toISOString()
       }
 
-      const writeResult = await window.api.persistence.write(key, updatedList)
+      const writeResult = await persistenceApi.write(key, updatedList)
       if (!writeResult.success) {
         // Rollback optimistic update on failure
         set((state) => ({
@@ -125,7 +126,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
     set({ isLoading: true })
 
     const key = PersistenceKeys.snapshots(projectId)
-    const result = await window.api.persistence.read<PersistedSnapshotList>(key)
+    const result = await persistenceApi.read<PersistedSnapshotList>(key)
 
     if (result.success && result.data) {
       const snapshots = result.data.snapshots.map(persistedToSnapshot)
@@ -147,14 +148,14 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
 
     // Update persistence
     const key = PersistenceKeys.snapshots(snapshotToDelete.projectId)
-    const existingResult = await window.api.persistence.read<PersistedSnapshotList>(key)
+    const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
     if (existingResult.success && existingResult.data) {
       const updatedList: PersistedSnapshotList = {
         snapshots: existingResult.data.snapshots.filter((s) => s.id !== id),
         updatedAt: new Date().toISOString()
       }
-      await window.api.persistence.write(key, updatedList)
+      await persistenceApi.write(key, updatedList)
     }
   },
 
@@ -165,7 +166,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
 
     // Read from persistence to get full terminal data
     const key = PersistenceKeys.snapshots(snapshot.projectId)
-    const result = await window.api.persistence.read<PersistedSnapshotList>(key)
+    const result = await persistenceApi.read<PersistedSnapshotList>(key)
 
     if (result.success && result.data) {
       return result.data.snapshots.find((s) => s.id === id) || null

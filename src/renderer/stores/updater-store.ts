@@ -66,7 +66,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ isChecking: true, error: null })
 
     try {
-      const result = await window.api.updater?.checkForUpdates()
+      // Check if updater API is available (Electron mode only, not Tauri)
+      if (!window.api?.updater) {
+        set({ error: 'Updater API not available in this environment' })
+        return
+      }
+
+      const result = await window.api.updater.checkForUpdates()
 
       if (result?.success === false) {
         set({ error: result.error ?? 'Failed to check for updates' })
@@ -91,7 +97,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ isDownloading: true, error: null, downloadProgress: 0 })
 
     try {
-      const result = await window.api.updater?.downloadUpdate()
+      // Check if updater API is available (Electron mode only, not Tauri)
+      if (!window.api?.updater) {
+        set({ error: 'Updater API not available in this environment' })
+        return
+      }
+
+      const result = await window.api.updater.downloadUpdate()
 
       if (result?.success === false) {
         set({ error: result.error ?? 'Failed to download update' })
@@ -114,7 +126,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ error: null })
 
     try {
-      const result = await window.api.updater?.installAndRestart()
+      // Check if updater API is available (Electron mode only, not Tauri)
+      if (!window.api?.updater) {
+        set({ error: 'Updater API not available in this environment' })
+        return
+      }
+
+      const result = await window.api.updater.installAndRestart()
 
       if (result?.success === false) {
         set({ error: result.error ?? 'Failed to install update' })
@@ -133,7 +151,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ error: null })
 
     try {
-      const result = await window.api.updater?.skipVersion(version)
+      // Check if updater API is available (Electron mode only, not Tauri)
+      if (!window.api?.updater) {
+        set({ error: 'Updater API not available in this environment' })
+        return
+      }
+
+      const result = await window.api.updater.skipVersion(version)
 
       if (result?.success === false) {
         set({ error: result.error ?? 'Failed to skip version' })
@@ -160,7 +184,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ error: null })
 
     try {
-      const result = await window.api.updater?.setAutoUpdateEnabled(enabled)
+      // Check if updater API is available (Electron mode only, not Tauri)
+      if (!window.api?.updater) {
+        set({ error: 'Updater API not available in this environment' })
+        return
+      }
+
+      const result = await window.api.updater.setAutoUpdateEnabled(enabled)
 
       if (result?.success === false) {
         set({ error: result.error ?? 'Failed to update auto-update setting' })
