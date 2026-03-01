@@ -2,22 +2,15 @@ import { useEffect } from 'react'
 import { useUpdaterActions } from '@/stores/updater-store'
 
 /**
- * useMenuUpdaterListener Hook (Tauri - No-op implementation)
+ * useMenuUpdaterListener Hook
  *
- * Placeholder for Tauri compatibility.
- * Menu-triggered update events are Electron-specific.
- *
- * This hook should be used once at the app level to handle menu events.
+ * Placeholder hook for compatibility. In current architecture,
+ * updater checks are triggered by updater initialization and UI actions.
  */
 export function useMenuUpdaterListener(): void {
-  const { checkForUpdates } = useUpdaterActions()
+  const { initializeUpdater } = useUpdaterActions()
 
   useEffect(() => {
-    // No-op for Tauri - menu events not implemented in POC phase
-    console.debug('[MenuUpdater] Menu updater listener not implemented in Tauri POC')
-
-    return () => {
-      // No cleanup needed
-    }
-  }, [checkForUpdates])
+    void initializeUpdater({ autoCheck: false })
+  }, [initializeUpdater])
 }
