@@ -3,9 +3,10 @@ import type { IpcResult, VisibilityApi } from '@shared/types/ipc.types'
 
 /**
  * IPC Command names
+ * Must match Rust command names in src-tauri/src/commands.rs
  */
 const IPC_COMMANDS = {
-  SET_VISIBILITY_STATE: 'visibility_set_state'
+  SET_VISIBILITY_STATE: 'terminal_set_visibility'
 } as const
 
 /**
@@ -30,7 +31,9 @@ async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResu
 export function createTauriVisibilityApi(): VisibilityApi {
   return {
     async setVisibilityState(isVisible: boolean): Promise<IpcResult<void>> {
-      return invokeIpc<void>(IPC_COMMANDS.SET_VISIBILITY_STATE, { isVisible })
+      // Rust expects: request: SetVisibilityRequest { is_visible }
+      const request = { isVisible }
+      return invokeIpc<void>(IPC_COMMANDS.SET_VISIBILITY_STATE, { request })
     }
   }
 }
