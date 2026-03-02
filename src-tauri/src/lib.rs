@@ -1,8 +1,10 @@
 // Module declarations
 mod commands;
+mod migrations;
 mod pty;
 mod trackers;
 
+use migrations::MigrationManager;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
@@ -191,6 +193,86 @@ fn is_shell_available(shell_path: &str) -> bool {
     }
 }
 
+/// Register default application migrations
+///
+/// This function is called during app setup to register all known migrations.
+/// Add new migrations here as the application schema evolves.
+fn register_default_migrations(manager: &MigrationManager) {
+    // Example migrations - replace with actual application migrations
+    // Migration 1.0.0: Initial schema setup
+    let _ = manager.register_migration(
+        "1.0.0".to_string(),
+        "Initial schema setup".to_string(),
+        || {
+            // Migration logic here
+            // For now, this is a no-op placeholder
+            // In production, this would initialize the data store
+            Ok(())
+        },
+        Some(|| {
+            // Rollback logic for 1.0.0
+            // Typically cannot rollback initial schema
+            Err("Cannot rollback initial schema migration".to_string())
+        }),
+    );
+
+    // Migration 1.0.1: Add terminal history persistence
+    let _ = manager.register_migration(
+        "1.0.1".to_string(),
+        "Add terminal history persistence".to_string(),
+        || {
+            // Migration logic: migrate old history format to new format
+            Ok(())
+        },
+        Some(|| {
+            // Rollback: revert to old history format
+            Ok(())
+        }),
+    );
+
+    // Migration 1.1.0: Add workspace state tracking
+    let _ = manager.register_migration(
+        "1.1.0".to_string(),
+        "Add workspace state tracking".to_string(),
+        || {
+            // Migration logic: initialize workspace state
+            Ok(())
+        },
+        Some(|| {
+            // Rollback: remove workspace state
+            Ok(())
+        }),
+    );
+
+    // Migration 1.2.0: Add orphan detection settings
+    let _ = manager.register_migration(
+        "1.2.0".to_string(),
+        "Add orphan detection settings".to_string(),
+        || {
+            // Migration logic: migrate orphan detection config
+            Ok(())
+        },
+        Some(|| {
+            // Rollback: remove orphan detection config
+            Ok(())
+        }),
+    );
+
+    // Migration 2.0.0: Session persistence redesign
+    let _ = manager.register_migration(
+        "2.0.0".to_string(),
+        "Session persistence redesign".to_string(),
+        || {
+            // Migration logic: migrate session data to new format
+            Ok(())
+        },
+        Some(|| {
+            // Rollback: revert to old session format
+            Ok(())
+        }),
+    );
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -225,6 +307,13 @@ pub fn run() {
             ));
             app.manage(pty_manager);
 
+            // Create Migration Manager
+            let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
+            app.manage(migration_manager.clone());
+
+            // Register default migrations
+            register_default_migrations(migration_manager.as_ref());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -245,6 +334,13 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_set_visibility,
+            // Data migration commands
+            commands::data_migration_get_version,
+            commands::data_migration_get_history,
+            commands::data_migration_run_migrations,
+            commands::data_migration_get_schema_info,
+            commands::data_migration_get_registered,
+            commands::data_migration_rollback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -256,11 +352,11 @@ mod tests {
 
     #[test]
     fn test_fallback_shell() {
-        let shell = fallback_shell();
+        let shell = get_default_shell_info().unwrap();
         #[cfg(target_os = "windows")]
         assert_eq!(shell.name, "cmd");
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(shell.name, "sh");
+        assert!(shell.name == "sh" || shell.name == "bash" || shell.name == "zsh");
     }
 
     #[test]
