@@ -22,12 +22,9 @@ export interface Project {
   envVars?: EnvVariable[]
 }
 
-export interface GitStatus {
-  modified: number
-  staged: number
-  untracked: number
-  hasChanges: boolean
-}
+// Re-export GitStatus from shared types to ensure consistency
+// between IPC contract and renderer domain models
+export type { GitStatus } from '@shared/types/ipc.types'
 
 export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'
 

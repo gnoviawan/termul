@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { terminalApi } from '@/lib/api'
-import type { GitStatus } from '@/types/project'
+import type { GitStatus } from '@shared/types/ipc.types'
 
 /**
  * Hook to subscribe to git status changes for terminals
