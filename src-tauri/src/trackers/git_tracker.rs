@@ -111,7 +111,8 @@ struct GitStatusChangedEvent {
 pub struct GitTracker {
     terminal_states: Arc<RwLock<HashMap<String, GitState>>>,
     app_handle: AppHandle,
-    poll_handle: Option<tokio::task::JoinHandle<()>>,
+    poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    is_polling_started: Arc<AtomicBool>,
     is_visible: Arc<AtomicBool>,
     is_polling: Arc<AtomicBool>,
 }
@@ -122,7 +123,8 @@ impl GitTracker {
         Self {
             terminal_states: Arc::new(RwLock::new(HashMap::new())),
             app_handle,
-            poll_handle: None,
+            poll_handle: Arc::new(RwLock::new(None)),
+            is_polling_started: Arc::new(AtomicBool::new(false)),
             is_visible: Arc::new(AtomicBool::new(true)),
             is_polling: Arc::new(AtomicBool::new(false)),
         }
@@ -148,7 +150,12 @@ impl GitTracker {
         self.emit_status_changed(terminal_id, &status);
 
         // Start polling if not already running
-        if self.poll_handle.is_none() {
+        if self.is_polling_started.compare_exchange(
+            false,
+            true,
+            Ordering::SeqCst,
+            Ordering::Relaxed
+        ).is_ok() {
             self.start_polling();
         }
     }
@@ -186,9 +193,13 @@ impl GitTracker {
 
     /// Shutdown the tracker and stop polling
     pub fn shutdown(&self) {
-        if let Some(handle) = &self.poll_handle {
+        // Abort the polling task if running
+        let mut poll_handle_guard = self.poll_handle.write();
+        if let Some(handle) = poll_handle_guard.take() {
             handle.abort();
         }
+        // Reset the flag so polling can be restarted
+        self.is_polling_started.store(false, Ordering::SeqCst);
         self.terminal_states.write().clear();
     }
 
@@ -198,6 +209,7 @@ impl GitTracker {
         let is_visible = self.is_visible.clone();
         let is_polling = self.is_polling.clone();
         let app_handle = self.app_handle.clone();
+        let poll_handle = self.poll_handle.clone();
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(POLL_INTERVAL_MS));
@@ -246,9 +258,9 @@ impl GitTracker {
             }
         });
 
-        // Note: In a real implementation, we'd store this handle
-        // For now, we rely on the abort during shutdown
-        let _ = handle;
+        // Store the handle using RwLock write lock
+        let mut poll_handle_guard = poll_handle.write();
+        *poll_handle_guard = Some(handle);
     }
 
     /// Check the git branch for a directory
