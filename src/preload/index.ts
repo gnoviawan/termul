@@ -31,7 +31,9 @@ import type {
   WindowMaximizeChangedCallback,
   AppCloseRequestedCallback,
   AppCloseResponse,
-  VisibilityApi
+  VisibilityApi,
+  SessionApi,
+  SessionData
 } from '../shared/types/ipc.types'
 import type {
   UpdateInfo,
@@ -431,6 +433,52 @@ const windowApi: WindowApi = {
   }
 }
 
+// Session API for renderer
+const sessionApi: SessionApi = {
+  save: (sessionData: SessionData): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('session:save', sessionData)
+  },
+
+  restore: (): Promise<IpcResult<SessionData>> => {
+    return ipcRenderer.invoke('session:restore')
+  },
+
+  clear: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('session:clear')
+  },
+
+  flush: (): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('session:flush')
+  },
+
+  hasSession: (): Promise<IpcResult<boolean>> => {
+    return ipcRenderer.invoke('session:hasSession')
+  }
+}
+
+// Data Migration API for renderer
+const dataMigrationApi = {
+  runMigrations: (): Promise<IpcResult<{ results: Array<{ version: string; success: boolean; error?: string; duration: number }> }>> => {
+    return ipcRenderer.invoke('dataMigration:runMigrations')
+  },
+
+  rollback: (version: string): Promise<IpcResult<void>> => {
+    return ipcRenderer.invoke('dataMigration:rollback', version)
+  },
+
+  getHistory: (): Promise<IpcResult<Array<{ version: string; timestamp: string; success: boolean; error?: string; duration?: number }>>> => {
+    return ipcRenderer.invoke('dataMigration:getHistory')
+  },
+
+  getRegistered: (): Promise<IpcResult<Array<{ version: string; description: string; hasRollback: boolean }>>> => {
+    return ipcRenderer.invoke('dataMigration:getRegistered')
+  },
+
+  getVersionInfo: (): Promise<IpcResult<{ current: string; target: string }>> => {
+    return ipcRenderer.invoke('dataMigration:getVersionInfo')
+  }
+}
+
 // Custom APIs for renderer
 const api = {
   terminal: terminalApi,
@@ -443,7 +491,9 @@ const api = {
   clipboard: clipboardApi,
   filesystem: filesystemApi,
   window: windowApi,
-  visibility: visibilityApi
+  visibility: visibilityApi,
+  session: sessionApi,
+  dataMigration: dataMigrationApi
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

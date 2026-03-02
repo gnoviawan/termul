@@ -1,3 +1,10 @@
+// Import GitStatus from shared types to ensure consistency
+// between IPC contract and renderer domain models
+import type { GitStatus } from '@shared/types/ipc.types'
+
+// Re-export for convenience
+export type { GitStatus }
+
 export type ProjectColor =
   | 'blue'
   | 'purple'
@@ -21,10 +28,6 @@ export interface Project {
   defaultShell?: string
   envVars?: EnvVariable[]
 }
-
-// Re-export GitStatus from shared types to ensure consistency
-// between IPC contract and renderer domain models
-export type { GitStatus } from '@shared/types/ipc.types'
 
 export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'
 
