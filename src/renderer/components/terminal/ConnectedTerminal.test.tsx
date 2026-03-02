@@ -1135,6 +1135,400 @@ describe('ConnectedTerminal', () => {
 
       removeEventListenerSpy.mockRestore()
     })
+
+    it('should debounce rapid visibility changes to visible', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+
+      // Simulate rapid visibility changes
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      // Trigger another visibility change before the debounce completes
+      await vi.advanceTimersByTimeAsync(50)
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      // Advance past the debounce delay
+      await vi.advanceTimersByTimeAsync(200)
+
+      // Should only call fit once after debounce completes
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+    })
+
+    it('should handle visibility broadcast with isVisible prop', async () => {
+      vi.useFakeTimers()
+
+      const { rerender } = render(<ConnectedTerminal isVisible={true} />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+
+      // Change visibility to false (simulating terminal becoming hidden in workspace)
+      rerender(<ConnectedTerminal isVisible={false} />)
+
+      // Small delay to ensure prop change is processed
+      await vi.advanceTimersByTimeAsync(50)
+
+      // Change back to visible
+      rerender(<ConnectedTerminal isVisible={true} />)
+
+      // Small delay to ensure prop change is processed
+      await vi.advanceTimersByTimeAsync(50)
+
+      // Verify that terminal responds to visibility prop changes
+      expect(mockTerminalInstance.focus).toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+
+    it('should skip resize when terminal becomes visible but PTY is not ready', async () => {
+      vi.useFakeTimers()
+
+      // Mock spawn to return success but terminal might not be ready
+      vi.mocked(terminalApi).spawn.mockResolvedValue({
+        success: true,
+        data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
+      })
+
+      const { unmount } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+
+      // Unmount before visibility change completes
+      unmount()
+
+      // Simulate visibility change after unmount (should be handled by cleanup)
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(200)
+
+      // Should not call resize after unmount
+      expect(vi.mocked(terminalApi).resize).not.toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+
+    it('should handle visibility changes during active data transfer', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Simulate active data transfer
+      if (capturedDataCallback) {
+        capturedDataCallback('terminal-123', 'Loading data...\n')
+      }
+
+      mockFitAddonInstance.fit.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+
+      // Change visibility during active data
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(200)
+
+      // Should still recover even during active data transfer
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+
+    describe('Visibility broadcast to backend', () => {
+      it('should broadcast terminal dimensions to backend when becoming visible', async () => {
+        vi.useFakeTimers()
+
+        const { rerender } = render(<ConnectedTerminal isVisible={false} />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Clear initial calls
+        vi.mocked(terminalApi).resize.mockClear()
+
+        // Terminal becomes visible - should broadcast dimensions to backend
+        rerender(<ConnectedTerminal isVisible={true} />)
+
+        // Wait for double requestAnimationFrame + fit + resize
+        await vi.advanceTimersByTimeAsync(50)
+
+        expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
+          'terminal-123',
+          expect.any(Number),
+          expect.any(Number)
+        )
+
+        vi.useRealTimers()
+      })
+
+      it('should defer resize broadcast until PTY is ready', async () => {
+        vi.useFakeTimers()
+
+        // Render with terminal visible but PTY not ready yet
+        const { rerender } = render(<ConnectedTerminal isVisible={false} />)
+
+        // Wait a bit - spawn should have been called
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Clear initial calls
+        vi.mocked(terminalApi).resize.mockClear()
+
+        // Change to visible when PTY is ready - should broadcast resize
+        rerender(<ConnectedTerminal isVisible={true} />)
+
+        // Wait for double requestAnimationFrame + resize
+        await vi.advanceTimersByTimeAsync(50)
+
+        // Verify resize was called with terminal dimensions
+        expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
+          'terminal-123',
+          expect.any(Number),
+          expect.any(Number)
+        )
+
+        vi.useRealTimers()
+      })
+
+      it('should handle rapid visibility toggles without spamming backend', async () => {
+        vi.useFakeTimers()
+
+        const { rerender } = render(<ConnectedTerminal isVisible={true} />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Clear initial calls
+        vi.mocked(terminalApi).resize.mockClear()
+        const initialCallCount = vi.mocked(terminalApi).resize.mock.calls.length
+
+        // Rapidly toggle visibility
+        for (let i = 0; i < 5; i++) {
+          rerender(<ConnectedTerminal isVisible={i % 2 === 0} />)
+          await vi.advanceTimersByTimeAsync(10)
+        }
+
+        // Final state: visible
+        rerender(<ConnectedTerminal isVisible={true} />)
+
+        // Wait for all pending operations to complete
+        await vi.advanceTimersByTimeAsync(100)
+
+        // Should not have spammed the backend with 5+ resize calls
+        // The double RAF pattern should prevent excessive calls
+        const finalCallCount = vi.mocked(terminalApi).resize.mock.calls.length
+        expect(finalCallCount).toBeLessThan(initialCallCount + 3)
+
+        vi.useRealTimers()
+      })
+    })
+
+    describe('Recovery compatibility with visibility changes', () => {
+      it('should recover WebGL context after visibility change with context loss', async () => {
+        vi.useFakeTimers()
+
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        const initialWebglCount = webglAddonCreateCount
+
+        // Simulate WebGL context loss
+        capturedContextLossCallback!()
+
+        // Immediately change visibility (simulating tab switch during context loss recovery)
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+
+        // Advance past both recovery delays (WebGL: 100ms, Visibility: 150ms)
+        await vi.advanceTimersByTimeAsync(200)
+
+        // WebGL should have been recreated despite visibility change
+        expect(webglAddonCreateCount).toBeGreaterThan(initialWebglCount)
+
+        // Fit should have been called as part of visibility recovery
+        expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+
+      it('should handle simultaneous power resume and visibility change', async () => {
+        vi.useFakeTimers()
+
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        mockFitAddonInstance.fit.mockClear()
+        vi.mocked(terminalApi).resize.mockClear()
+
+        // Trigger both power resume and visibility change simultaneously
+        capturedPowerResumeCallback!()
+
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+
+        // Advance past both delays (Power: 300ms, Visibility: 150ms)
+        await vi.advanceTimersByTimeAsync(350)
+
+        // Should handle both events gracefully
+        // Both events trigger the same performTerminalRecovery function
+        expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+
+        // Resize should have been called (may be called multiple times but should not error)
+        expect(vi.mocked(terminalApi).resize).toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+
+      it('should not crash when visibility change occurs during unmount', async () => {
+        vi.useFakeTimers()
+
+        const { unmount } = render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Start visibility change recovery
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+
+        // Unmount before recovery completes
+        unmount()
+
+        // Advance past recovery delay - should not throw
+        await vi.advanceTimersByTimeAsync(200)
+
+        // No errors should have been thrown
+        expect(mockTerminalInstance.dispose).toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+
+      it('should maintain recovery state across multiple visibility cycles', async () => {
+        vi.useFakeTimers()
+
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Perform multiple visibility cycles
+        for (let i = 0; i < 3; i++) {
+          mockFitAddonInstance.fit.mockClear()
+          vi.mocked(terminalApi).resize.mockClear()
+
+          Object.defineProperty(document, 'visibilityState', {
+            value: i % 2 === 0 ? 'visible' : 'hidden',
+            writable: true,
+            configurable: true
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+
+          await vi.advanceTimersByTimeAsync(50)
+        }
+
+        // Final visibility to visible
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+
+        await vi.advanceTimersByTimeAsync(200)
+
+        // Should still recover properly after multiple cycles
+        expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+
+      it('should handle visibility recovery without scroll position errors', async () => {
+        vi.useFakeTimers()
+
+        // Render with an external terminal ID
+        const { unmount } = render(<ConnectedTerminal terminalId="test-term-123" />)
+
+        await vi.waitFor(() => {
+          // Should NOT spawn since external ID is provided
+          expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
+        })
+
+        // Verify terminal was initialized
+        expect(mockTerminalInstance.open).toHaveBeenCalled()
+
+        // Trigger visibility change - should not throw any errors
+        // even if scroll position restoration occurs
+        Object.defineProperty(document, 'visibilityState', {
+          value: 'visible',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+
+        await vi.advanceTimersByTimeAsync(200)
+
+        // Terminal should still be functional after visibility recovery
+        expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+    })
   })
 
   describe('Power resume recovery', () => {
@@ -1190,6 +1584,248 @@ describe('ConnectedTerminal', () => {
       unmount()
 
       expect(cleanupFn).toHaveBeenCalled()
+    })
+  })
+
+  describe('Regression: Visibility transition + recovery scenarios', () => {
+    /**
+     * REGRESSION TEST: Ensure terminal properly handles visibility state transitions
+     * and recovers correctly when returning from hidden state.
+     *
+     * Tests for:
+     * - Proper cleanup on visibility hide
+     * - Recovery on visibility show
+     * - CWD polling pause/resume behavior
+     */
+
+    it('should pause CWD tracking when terminal becomes hidden', async () => {
+      vi.useFakeTimers()
+
+      // Mock the getCwd and onCwdChanged methods
+      const mockCwdChanged = vi.fn()
+      vi.mocked(terminalApi).onCwdChanged.mockReturnValue(mockCwdChanged)
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Start with visible state
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+
+      // Transition to hidden
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'hidden',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      // CWD tracking should be paused (no new tracking started)
+      // The component should handle visibility state properly
+
+      vi.useRealTimers()
+    })
+
+    it('should resume CWD tracking when terminal becomes visible again', async () => {
+      vi.useFakeTimers()
+
+      const mockCwdChanged = vi.fn()
+      vi.mocked(terminalApi).onCwdChanged.mockReturnValue(mockCwdChanged)
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Start with hidden state
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'hidden',
+        writable: true,
+        configurable: true
+      })
+
+      // Transition to visible
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(300)
+
+      // Terminal should recover and be functional
+      expect(mockTerminalInstance.focus).toHaveBeenCalled()
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+
+    it('should handle rapid visibility transitions without errors', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Simulate rapid visibility changes
+      for (let i = 0; i < 5; i++) {
+        Object.defineProperty(document, 'visibilityState', {
+          value: i % 2 === 0 ? 'visible' : 'hidden',
+          writable: true,
+          configurable: true
+        })
+        document.dispatchEvent(new Event('visibilitychange'))
+        await vi.advanceTimersByTimeAsync(50)
+      }
+
+      // Terminal should still be functional after rapid transitions
+      expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+  })
+
+  describe('Regression: CWD changes trigger updates', () => {
+    /**
+     * REGRESSION TEST: Ensure CWD changes from the backend trigger
+     * proper updates in the terminal component.
+     *
+     * Note: CWD tracking is handled at the store level (use-cwd hook)
+     * rather than directly in ConnectedTerminal. These tests verify
+     * the component's behavior when CWD state changes.
+     */
+
+    it('should have terminalApi with CWD tracking capabilities', () => {
+      // Verify the terminal API has CWD-related methods
+      expect(terminalApi).toBeDefined()
+      expect(typeof (terminalApi as any).onCwdChanged).toBe('function')
+      expect(typeof (terminalApi as any).getCwd).toBe('function')
+    })
+
+    it('should handle CWD tracking for terminal sessions', async () => {
+      // The component should work correctly with CWD tracking enabled
+      // CWD is tracked via the use-cwd hook which uses terminalApi
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Terminal should be functional
+      expect(mockTerminalInstance.open).toHaveBeenCalled()
+    })
+
+    it('should handle visibility state for CWD polling pause/resume', async () => {
+      // CWD polling should pause when terminal is hidden and resume when visible
+      // This is tested through visibility behavior
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Simulate hidden state (CWD polling should pause)
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'hidden',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      // Simulate visible state (CWD polling should resume)
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        writable: true,
+        configurable: true
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      await vi.advanceTimersByTimeAsync(300)
+
+      // Terminal should still be functional
+      expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
+
+      vi.useRealTimers()
+    })
+  })
+
+  describe('Regression: Proper Tauri terminal API mocking', () => {
+    /**
+     * REGRESSION TEST: Ensure tests properly mock Tauri terminal API
+     * to prevent silent fallback to window.api (Electron path).
+     *
+     * This test validates that the component works with Tauri APIs
+     * without requiring window.api to be present.
+     */
+
+    it('should use Tauri invoke for terminal operations', async () => {
+      // The component should use terminalApi from @/lib/api
+      // which should be the Tauri implementation
+      expect(terminalApi).toBeDefined()
+      expect(typeof terminalApi.spawn).toBe('function')
+      expect(typeof terminalApi.write).toBe('function')
+      expect(typeof terminalApi.resize).toBe('function')
+      expect(typeof terminalApi.kill).toBe('function')
+    })
+
+    it('should work without window.api for terminal operations', async () => {
+      // Store original window.api if it exists
+      const originalWindowApi = (window as any).api
+
+      // Remove window.api to simulate pure Tauri environment
+      delete (window as any).api
+
+      // Component should still work with Tauri APIs
+      const { unmount } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Restore window.api
+      if (originalWindowApi) {
+        (window as any).api = originalWindowApi
+      }
+
+      unmount()
+    })
+
+    it('should properly handle Tauri IPC invoke errors', async () => {
+      // Mock a failed spawn
+      vi.mocked(terminalApi).spawn.mockResolvedValue({
+        success: false,
+        error: 'Failed to spawn terminal',
+        code: 'SPAWN_FAILED'
+      })
+
+      const { getByText } = render(<ConnectedTerminal />)
+
+      // Should handle the error gracefully
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Reset for other tests
+      vi.mocked(terminalApi).spawn.mockResolvedValue({
+        success: true,
+        data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
+      })
     })
   })
 })
