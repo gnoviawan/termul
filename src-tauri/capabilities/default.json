@@ -44,6 +44,7 @@
     "clipboard-manager:allow-write-text",
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "process:default"
+    "process:default",
+    "mcp-bridge:default"
   ]
 }

@@ -10,6 +10,7 @@
     "frontendDist": "../dist-tauri"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
