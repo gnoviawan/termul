@@ -5,7 +5,7 @@
 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 use parking_lot::RwLock;
-use portable_pty::{native_pty_system, CommandBuilder, Child, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -15,7 +15,52 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+fn resolve_executable_from_path(command: &str) -> Option<String> {
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    if command.contains('\\') || command.contains('/') {
+        let candidate = Path::new(command);
+        return candidate.exists().then(|| command.to_string());
+    }
+
+    let path_var = env::var_os("PATH")?;
+    let pathext_var =
+        env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+
+    let command_path = Path::new(command);
+    let has_extension = command_path.extension().is_some();
+
+    let mut extensions: Vec<OsString> = Vec::new();
+    if has_extension {
+        extensions.push(OsString::new());
+    } else {
+        extensions.push(OsString::new());
+        for ext in pathext_var
+            .to_string_lossy()
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            extensions.push(OsString::from(ext.trim()));
+        }
+    }
+
+    for dir in env::split_paths(&path_var) {
+        for ext in &extensions {
+            let candidate: PathBuf = if ext.is_empty() {
+                dir.join(command)
+            } else {
+                dir.join(format!("{}{}", command, ext.to_string_lossy()))
+            };
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
+
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as AsyncMutex;
@@ -184,7 +229,11 @@ impl PtyManager {
     /// This is called lazily when the first terminal is spawned
     fn start_orphan_detection(&self) {
         // Check if already started using compare_exchange
-        if self.orphan_detection_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
+        if self
+            .orphan_detection_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
             return; // Already started
         }
 
@@ -197,7 +246,8 @@ impl PtyManager {
         let timeout_ms = self.orphan_timeout_ms.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(ORPHAN_CHECK_INTERVAL_MS));
+            let mut interval =
+                tokio::time::interval(Duration::from_millis(ORPHAN_CHECK_INTERVAL_MS));
 
             loop {
                 interval.tick().await;
@@ -213,7 +263,9 @@ impl PtyManager {
                 let orphans: Vec<String> = terminals
                     .read()
                     .iter()
-                    .filter(|(_, instance)| instance.is_orphan() && instance.inactive_duration() > timeout)
+                    .filter(|(_, instance)| {
+                        instance.is_orphan() && instance.inactive_duration() > timeout
+                    })
                     .map(|(id, _)| id.clone())
                     .collect();
 
@@ -334,12 +386,15 @@ impl PtyManager {
 
         // Get a dedicated writer from the master PTY.
         // portable-pty only allows take_writer() once for each PTY.
-        let writer = pty_pair.master
+        let writer = pty_pair
+            .master
             .take_writer()
             .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
 
         // Get the reader from the master PTY
-        let reader = pty_pair.master.try_clone_reader()
+        let reader = pty_pair
+            .master
+            .try_clone_reader()
             .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
 
         // Create terminal instance
@@ -365,7 +420,13 @@ impl PtyManager {
         let terminal_id = id.clone();
 
         let reader_task = std::thread::spawn(move || {
-            Self::reader_loop_sync(reader_instance, reader, app_handle, exit_code_tracker, terminal_id);
+            Self::reader_loop_sync(
+                reader_instance,
+                reader,
+                app_handle,
+                exit_code_tracker,
+                terminal_id,
+            );
         });
 
         *instance.reader_handle.lock().await = Some(reader_task);
@@ -497,7 +558,8 @@ impl PtyManager {
 
     /// Write data to a terminal
     pub fn write(&self, id: &str, data: &str) -> Result<(), String> {
-        let instance = self.terminals
+        let instance = self
+            .terminals
             .read()
             .get(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?
@@ -505,7 +567,9 @@ impl PtyManager {
 
         instance.update_activity();
 
-        let mut writer_guard = instance.writer.try_lock()
+        let mut writer_guard = instance
+            .writer
+            .try_lock()
             .map_err(|_| "Failed to acquire PTY writer lock".to_string())?;
 
         let writer = writer_guard
@@ -524,16 +588,20 @@ impl PtyManager {
 
     /// Resize a terminal
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let instance = self.terminals
+        let instance = self
+            .terminals
             .read()
             .get(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?
             .clone();
 
-        let master_guard = instance.master.try_lock()
+        let master_guard = instance
+            .master
+            .try_lock()
             .map_err(|_| "Failed to acquire PTY lock".to_string())?;
 
-        let master = master_guard.as_ref()
+        let master = master_guard
+            .as_ref()
             .ok_or_else(|| "PTY master already consumed".to_string())?;
 
         let size = PtySize {
@@ -543,7 +611,8 @@ impl PtyManager {
             pixel_height: 0,
         };
 
-        master.resize(size)
+        master
+            .resize(size)
             .map_err(|e| format!("Failed to resize terminal: {}", e))?;
 
         *instance.cols.write() = cols;
@@ -555,7 +624,10 @@ impl PtyManager {
 
     /// Kill a terminal
     pub fn kill(&self, id: &str) -> Result<(), String> {
-        let instance = self.terminals.write().remove(id)
+        let instance = self
+            .terminals
+            .write()
+            .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
         // Clone references needed for the task
@@ -625,17 +697,24 @@ impl PtyManager {
 
     /// Update orphan detection settings (timeout in milliseconds)
     pub fn update_orphan_detection(&self, enabled: bool, timeout_ms: Option<u64>) {
-        self.orphan_detection_enabled.store(enabled, Ordering::Relaxed);
+        self.orphan_detection_enabled
+            .store(enabled, Ordering::Relaxed);
         if let Some(timeout) = timeout_ms {
             self.orphan_timeout_ms.store(timeout, Ordering::Relaxed);
         }
     }
 
     /// Update orphan detection settings (timeout in minutes, for async API compatibility)
-    pub async fn update_orphan_detection_settings(&self, enabled: bool, timeout_minutes: Option<u64>) {
-        self.orphan_detection_enabled.store(enabled, Ordering::Relaxed);
+    pub async fn update_orphan_detection_settings(
+        &self,
+        enabled: bool,
+        timeout_minutes: Option<u64>,
+    ) {
+        self.orphan_detection_enabled
+            .store(enabled, Ordering::Relaxed);
         if let Some(timeout) = timeout_minutes {
-            self.orphan_timeout_ms.store(timeout * 60 * 1000, Ordering::Relaxed);
+            self.orphan_timeout_ms
+                .store(timeout * 60 * 1000, Ordering::Relaxed);
         }
     }
 
@@ -695,7 +774,10 @@ impl PtyManager {
                 }
 
                 // All strategies failed
-                return Err(format!("Shell not found: {} - bash.exe not found in PATH or common Git Bash locations", shell));
+                return Err(format!(
+                    "Shell not found: {} - bash.exe not found in PATH or common Git Bash locations",
+                    shell
+                ));
             }
 
             // Standard shell resolution for other shells
@@ -756,7 +838,55 @@ impl PtyManager {
     }
 
     /// Get the absolute path for a shell if available
+    /// Uses cache to avoid repeated `where`/`which` command spawns
     fn get_absolute_shell_path(&self, shell_path: &str) -> Option<String> {
+        use std::sync::OnceLock;
+
+        // Per-shell cache to avoid repeated `where` commands
+        static CACHE: OnceLock<
+            std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
+        > = OnceLock::new();
+        let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        // Check cache first
+        {
+            let cache_read = cache.lock().unwrap();
+            if let Some(cached) = cache_read.get(shell_path) {
+                return cached.clone();
+            }
+        }
+
+        // Not in cache - resolve and store
+        let result = self.resolve_shell_path_uncached(shell_path);
+
+        // Store in cache
+        {
+            let mut cache_write = cache.lock().unwrap();
+            cache_write.insert(shell_path.to_string(), result.clone());
+        }
+
+        result
+    }
+
+    #[cfg(target_os = "windows")]
+    fn is_builtin_windows_shell(shell_path: &str) -> bool {
+        let normalized = shell_path.to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "cmd"
+                | "cmd.exe"
+                | "powershell"
+                | "powershell.exe"
+                | "pwsh"
+                | "pwsh.exe"
+                | "wsl"
+                | "wsl.exe"
+        )
+    }
+
+    /// Internal uncached resolution - resolve via PATH scan or absolute path
+    fn resolve_shell_path_uncached(&self, shell_path: &str) -> Option<String> {
+        log::debug!("[ShellResolve] Uncached resolution for: {}", shell_path);
         // If it's already an absolute path that exists, return it
         if Path::new(shell_path).exists() {
             return Some(shell_path.to_string());
@@ -765,18 +895,22 @@ impl PtyManager {
         #[cfg(target_os = "windows")]
         {
             if !shell_path.contains('\\') && !shell_path.contains('/') {
-                if let Ok(output) = std::process::Command::new("where")
-                    .arg(shell_path)
-                    .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                    .output()
-                {
-                    if output.status.success() {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let first_line = stdout.lines().next().unwrap_or("").trim();
-                        if !first_line.is_empty() {
-                            return Some(first_line.to_string());
-                        }
-                    }
+                if Self::is_builtin_windows_shell(shell_path) {
+                    log::debug!(
+                        "[ShellResolve] Built-in Windows shell, skipping PATH resolution: {}",
+                        shell_path
+                    );
+                    return Some(shell_path.to_string());
+                }
+
+                let resolved = resolve_executable_from_path(shell_path);
+                if let Some(path) = resolved {
+                    log::debug!(
+                        "[ShellResolve] Resolved from PATH without spawning cmd: {} -> {}",
+                        shell_path,
+                        path
+                    );
+                    return Some(path);
                 }
             }
             if Path::new(shell_path).exists() {
@@ -787,10 +921,7 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            if let Ok(output) = std::process::Command::new("which")
-                .arg(shell_path)
-                .output()
-            {
+            if let Ok(output) = std::process::Command::new("which").arg(shell_path).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let first_line = stdout.lines().next().unwrap_or("").trim();
@@ -935,13 +1066,21 @@ mod tests {
         // Verify primary paths are non-empty and well-formed
         assert!(!git_bash_paths::PRIMARY_PATHS.is_empty());
         for path in git_bash_paths::PRIMARY_PATHS {
-            assert!(path.contains("bash.exe"), "Primary path should contain bash.exe: {}", path);
+            assert!(
+                path.contains("bash.exe"),
+                "Primary path should contain bash.exe: {}",
+                path
+            );
         }
 
         // Verify fallback paths are non-empty and well-formed
         assert!(!git_bash_paths::FALLBACK_PATHS.is_empty());
         for path in git_bash_paths::FALLBACK_PATHS {
-            assert!(path.contains("bash.exe"), "Fallback path should contain bash.exe: {}", path);
+            assert!(
+                path.contains("bash.exe"),
+                "Fallback path should contain bash.exe: {}",
+                path
+            );
         }
 
         // Specific verification that key paths exist
@@ -986,5 +1125,17 @@ mod tests {
         let expected_error_substring = "bash.exe not found in PATH or common Git Bash locations";
         assert!(expected_error_substring.contains("bash.exe"));
         assert!(expected_error_substring.contains("PATH"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_is_builtin_windows_shell() {
+        assert!(PtyManager::is_builtin_windows_shell("cmd"));
+        assert!(PtyManager::is_builtin_windows_shell("CMD.EXE"));
+        assert!(PtyManager::is_builtin_windows_shell("powershell"));
+        assert!(PtyManager::is_builtin_windows_shell("pwsh"));
+        assert!(PtyManager::is_builtin_windows_shell("wsl"));
+        assert!(!PtyManager::is_builtin_windows_shell("bash.exe"));
+        assert!(!PtyManager::is_builtin_windows_shell("git-bash"));
     }
 }
