@@ -4,9 +4,9 @@
 //! Provides migration history tracking and safe migration execution.
 
 use crate::commands::IpcResult;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use parking_lot::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -95,12 +95,16 @@ impl MigrationManager {
 
     /// Load migration history from store
     fn load_history(&self) -> Result<(), String> {
-        let store = self.app_handle.store("settings.json")
+        let store = self
+            .app_handle
+            .store("settings.json")
             .map_err(|e| format!("Failed to get store: {}", e))?;
 
         // Try to get history from store
         if let Some(history_value) = store.get(&self.migration_history_key) {
-            if let Ok(history) = serde_json::from_value::<Vec<MigrationRecord>>(history_value.clone()) {
+            if let Ok(history) =
+                serde_json::from_value::<Vec<MigrationRecord>>(history_value.clone())
+            {
                 *self.history.lock() = history;
             }
         }
@@ -115,7 +119,9 @@ impl MigrationManager {
             .map_err(|e| format!("Failed to serialize history: {}", e))?;
         drop(history); // Release lock before store operations
 
-        let store = self.app_handle.store("settings.json")
+        let store = self
+            .app_handle
+            .store("settings.json")
             .map_err(|e| format!("Failed to get store: {}", e))?;
 
         store.set(self.migration_history_key.clone(), history_json);
@@ -143,7 +149,12 @@ impl MigrationManager {
     fn set_schema_version(&self, version: String) -> IpcResult<()> {
         let store = match self.app_handle.store("settings.json") {
             Ok(s) => s,
-            Err(e) => return IpcResult::error(format!("Store error: {}", e), ERROR_MIGRATION_VERSION_INVALID),
+            Err(e) => {
+                return IpcResult::error(
+                    format!("Store error: {}", e),
+                    ERROR_MIGRATION_VERSION_INVALID,
+                )
+            }
         };
 
         store.set(self.schema_version_key.clone(), version);
@@ -165,7 +176,8 @@ impl MigrationManager {
         let entry = MigrationEntry {
             version: version.clone(),
             description,
-            rollback_fn: rollback_fn.map(|f| Box::new(f) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
+            rollback_fn: rollback_fn
+                .map(|f| Box::new(f) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
         };
 
         self.migrations.lock().insert(version, entry);
@@ -216,7 +228,8 @@ impl MigrationManager {
 
         // Find target version (highest registered)
         let migrations_map = self.migrations.lock();
-        let target = migrations_map.keys()
+        let target = migrations_map
+            .keys()
             .max_by_key(|v| version_to_parts(v))
             .cloned()
             .unwrap_or_else(|| "0.0.0".to_string());
@@ -268,7 +281,9 @@ impl MigrationManager {
         // Filter pending migrations
         let pending: Vec<MigrationEntry> = migrations
             .into_iter()
-            .filter(|m| compare_versions(&m.version, &current_version) == std::cmp::Ordering::Greater)
+            .filter(|m| {
+                compare_versions(&m.version, &current_version) == std::cmp::Ordering::Greater
+            })
             .collect();
 
         if pending.is_empty() {
@@ -382,10 +397,7 @@ impl MigrationManager {
 
         migrations.sort_by(|a, b| compare_versions(a, b));
 
-        let version_index = migrations
-            .iter()
-            .position(|m| m == &version)
-            .unwrap_or(0);
+        let version_index = migrations.iter().position(|m| m == &version).unwrap_or(0);
 
         let previous_version = if version_index > 0 {
             migrations[version_index - 1].clone()
@@ -456,7 +468,8 @@ fn format_datetime(secs: u64) -> String {
     let day_of_year = (days % 365) as u32;
 
     // Simple approximation - sufficient for migration timestamps
-    format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+    format!(
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         year,
         ((day_of_year / 30) + 1).min(12),
         (day_of_year % 30) + 1,
@@ -474,11 +487,23 @@ mod tests {
 
     #[test]
     fn test_compare_versions() {
-        assert_eq!(compare_versions("1.0.0", "1.0.0"), std::cmp::Ordering::Equal);
+        assert_eq!(
+            compare_versions("1.0.0", "1.0.0"),
+            std::cmp::Ordering::Equal
+        );
         assert_eq!(compare_versions("1.0.0", "1.0.1"), std::cmp::Ordering::Less);
-        assert_eq!(compare_versions("1.0.1", "1.0.0"), std::cmp::Ordering::Greater);
-        assert_eq!(compare_versions("1.2.0", "1.10.0"), std::cmp::Ordering::Less);
-        assert_eq!(compare_versions("2.0.0", "1.9.9"), std::cmp::Ordering::Greater);
+        assert_eq!(
+            compare_versions("1.0.1", "1.0.0"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.2.0", "1.10.0"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("2.0.0", "1.9.9"),
+            std::cmp::Ordering::Greater
+        );
     }
 
     #[test]
