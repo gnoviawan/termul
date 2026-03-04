@@ -1,15 +1,14 @@
+use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use lazy_static::lazy_static;
 
 // OSC 133;D;{exit_code} escape sequence pattern (shell integration protocol)
 lazy_static! {
-    static ref OSC_EXIT_CODE_RE: Regex =
-        Regex::new(r"\x1b\]133;D;?(\d*)\x07").unwrap();
+    static ref OSC_EXIT_CODE_RE: Regex = Regex::new(r"\x1b\]133;D;?(\d*)\x07").unwrap();
 }
 
 // Simple marker pattern as fallback (injected via PROMPT_COMMAND)
@@ -139,9 +138,7 @@ impl ExitCodeTracker {
             terminal_id: terminal_id.to_string(),
             exit_code,
         };
-        let _ = self
-            .app_handle
-            .emit("terminal-exit-code-changed", event);
+        let _ = self.app_handle.emit("terminal-exit-code-changed", event);
     }
 
     /// Shutdown the tracker

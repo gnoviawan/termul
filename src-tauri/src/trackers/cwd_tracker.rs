@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use parking_lot::RwLock;
-use std::sync::Arc;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 
 const POLL_INTERVAL_MS: u64 = 500;
 
@@ -183,12 +183,11 @@ impl CwdTracker {
     /// Uses atomic flag to prevent starting multiple polling loops.
     fn ensure_polling_started(&self) {
         // Use compare_exchange to atomically start polling only once
-        if self.is_polling_started.compare_exchange(
-            false,
-            true,
-            Ordering::SeqCst,
-            Ordering::Relaxed
-        ).is_err() {
+        if self
+            .is_polling_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
             // Already started, return early
             return;
         }
@@ -209,7 +208,8 @@ impl CwdTracker {
         let poll_count = self.poll_count.clone();
 
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(POLL_INTERVAL_MS));
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_millis(POLL_INTERVAL_MS));
 
             loop {
                 interval.tick().await;
@@ -362,21 +362,13 @@ mod tests {
         let is_polling_started = std::sync::atomic::AtomicBool::new(false);
 
         // First call should succeed (compare_exchange returns Ok)
-        let result = is_polling_started.compare_exchange(
-            false,
-            true,
-            Ordering::SeqCst,
-            Ordering::Relaxed
-        );
+        let result =
+            is_polling_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
         assert!(result.is_ok());
 
         // Second call should fail (already started)
-        let result = is_polling_started.compare_exchange(
-            false,
-            true,
-            Ordering::SeqCst,
-            Ordering::Relaxed
-        );
+        let result =
+            is_polling_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
         assert!(result.is_err());
     }
 

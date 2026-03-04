@@ -1,44 +1,118 @@
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "windows")]
+fn resolve_command_candidates_from_path(command: &str) -> Vec<String> {
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    let mut results = Vec::new();
+
+    if command.contains('\\') || command.contains('/') {
+        let candidate = Path::new(command);
+        if candidate.exists() {
+            results.push(command.to_string());
+        }
+        return results;
+    }
+
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return results;
+    };
+
+    let pathext_var =
+        std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+
+    let command_path = Path::new(command);
+    let has_extension = command_path.extension().is_some();
+
+    let mut extensions: Vec<OsString> = Vec::new();
+    if has_extension {
+        extensions.push(OsString::new());
+    } else {
+        extensions.push(OsString::new());
+        for ext in pathext_var
+            .to_string_lossy()
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            extensions.push(OsString::from(ext.trim()));
+        }
+    }
+
+    for dir in std::env::split_paths(&path_var) {
+        for ext in &extensions {
+            let candidate: PathBuf = if ext.is_empty() {
+                dir.join(command)
+            } else {
+                dir.join(format!("{}{}", command, ext.to_string_lossy()))
+            };
+
+            if candidate.exists() {
+                let candidate_str = candidate.to_string_lossy().to_string();
+                if !results
+                    .iter()
+                    .any(|r| r.eq_ignore_ascii_case(&candidate_str))
+                {
+                    results.push(candidate_str);
+                }
+            }
+        }
+    }
+
+    results
+}
 
 /// Cache for the resolved git binary path (avoiding Laragon PATH pollution)
 static GIT_BINARY: OnceLock<String> = OnceLock::new();
 
 /// Resolve the git binary path, filtering out Laragon's git installation.
 ///
-/// On Windows, runs `where git` to get all git paths in PATH order.
+/// On Windows, resolves candidates directly from PATH/PATHEXT without spawning `where`.
 /// On Unix, runs `which -a git`.
 /// Skips any path that contains "laragon" (case-insensitive).
 /// Falls back to plain `"git"` if no suitable path is found.
 fn resolve_git_binary() -> &'static str {
     GIT_BINARY.get_or_init(|| {
         #[cfg(target_os = "windows")]
-        let where_cmd = Command::new("where").arg("git").output();
-        #[cfg(not(target_os = "windows"))]
-        let where_cmd = Command::new("which").args(["-a", "git"]).output();
+        {
+            let candidates = resolve_command_candidates_from_path("git");
+            for path in candidates {
+                if path.to_lowercase().contains("laragon") {
+                    log::debug!("[GitTracker] Skipping Laragon git: {}", path);
+                    continue;
+                }
+                log::debug!("[GitTracker] Using git binary: {}", path);
+                return path;
+            }
+        }
 
-        if let Ok(output) = where_cmd {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let path = line.trim();
-                    if path.is_empty() {
-                        continue;
+        #[cfg(not(target_os = "windows"))]
+        {
+            let which_cmd = Command::new("which").args(["-a", "git"]).output();
+
+            if let Ok(output) = which_cmd {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    for line in stdout.lines() {
+                        let path = line.trim();
+                        if path.is_empty() {
+                            continue;
+                        }
+                        if path.to_lowercase().contains("laragon") {
+                            log::debug!("[GitTracker] Skipping Laragon git: {}", path);
+                            continue;
+                        }
+                        log::debug!("[GitTracker] Using git binary: {}", path);
+                        return path.to_string();
                     }
-                    // Skip Laragon's git (case-insensitive match)
-                    if path.to_lowercase().contains("laragon") {
-                        log::debug!("[GitTracker] Skipping Laragon git: {}", path);
-                        continue;
-                    }
-                    log::debug!("[GitTracker] Using git binary: {}", path);
-                    return path.to_string();
                 }
             }
         }
@@ -198,19 +272,20 @@ impl GitTracker {
             last_known_status: status.clone(),
         };
 
-        self.terminal_states.write().insert(terminal_id.to_string(), state);
+        self.terminal_states
+            .write()
+            .insert(terminal_id.to_string(), state);
 
         // Emit initial events
         self.emit_branch_changed(terminal_id, &branch);
         self.emit_status_changed(terminal_id, &status);
 
         // Start polling if not already running
-        if self.is_polling_started.compare_exchange(
-            false,
-            true,
-            Ordering::SeqCst,
-            Ordering::Relaxed
-        ).is_ok() {
+        if self
+            .is_polling_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
             self.start_polling();
         }
     }
@@ -220,7 +295,8 @@ impl GitTracker {
         // On Windows, clean up CWD poll state if no other terminals use this CWD
         #[cfg(target_os = "windows")]
         {
-            let cwd_to_remove = self.terminal_states
+            let cwd_to_remove = self
+                .terminal_states
                 .read()
                 .get(terminal_id)
                 .map(|s| s.last_known_cwd.clone());
@@ -229,7 +305,8 @@ impl GitTracker {
                 self.terminal_states.write().remove(terminal_id);
 
                 // Check if any other terminal uses this CWD
-                let cwd_still_in_use = self.terminal_states
+                let cwd_still_in_use = self
+                    .terminal_states
                     .read()
                     .values()
                     .any(|s| s.last_known_cwd == cwd);
@@ -317,10 +394,16 @@ impl GitTracker {
                 #[cfg(target_os = "windows")]
                 {
                     tick_count += 1;
+                    log::trace!(
+                        "[GitTracker] Tick: {}, visible: {}",
+                        tick_count,
+                        is_visible.load(Ordering::SeqCst)
+                    );
                 }
 
                 // Skip when not visible
                 if !is_visible.load(Ordering::SeqCst) {
+                    log::debug!("[GitTracker] Skipping poll - window not visible");
                     continue;
                 }
 
@@ -328,8 +411,13 @@ impl GitTracker {
                 {
                     // On Windows, only poll every Nth tick (throttling)
                     if tick_count % WINDOWS_POLL_MULTIPLIER != 0 {
+                        log::trace!(
+                            "[GitTracker] Skipping poll - throttling (tick {})",
+                            tick_count
+                        );
                         continue;
                     }
+                    log::debug!("[GitTracker] Polling tick: {}", tick_count);
                 }
 
                 // Use RAII guard - automatically resets is_polling when dropped
@@ -369,17 +457,29 @@ impl GitTracker {
                             POLL_INTERVAL_MS
                         };
 
-                        if now.duration_since(poll_state.last_checked) < Duration::from_millis(cooldown_ms) {
+                        let elapsed = now.duration_since(poll_state.last_checked);
+                        if elapsed < Duration::from_millis(cooldown_ms) {
+                            log::trace!(
+                                "[GitTracker] CWD '{}' on cooldown: {:?} remaining",
+                                cwd,
+                                Duration::from_millis(cooldown_ms) - elapsed
+                            );
                             continue; // Skip this CWD due to cooldown
                         }
 
+                        log::debug!(
+                            "[GitTracker] Polling CWD: {} ({} terminals)",
+                            cwd,
+                            terminal_ids.len()
+                        );
                         // Update last checked time
                         poll_state.last_checked = now;
 
                         // Check status once for this CWD
                         if let Some(new_status) = Self::check_status_internal(&cwd) {
                             // Update the poll state's last status
-                            let _status_changed = Some(&new_status) != poll_state.last_status.as_ref();
+                            let _status_changed =
+                                Some(&new_status) != poll_state.last_status.as_ref();
                             poll_state.last_status = Some(new_status.clone());
 
                             // Fan out to all terminals using this CWD
@@ -387,7 +487,8 @@ impl GitTracker {
                                 let needs_emit = {
                                     let mut states_guard = states.write();
                                     if let Some(state) = states_guard.get_mut(&terminal_id) {
-                                        let should_emit = Some(&new_status) != state.last_known_status.as_ref();
+                                        let should_emit =
+                                            Some(&new_status) != state.last_known_status.as_ref();
                                         state.last_known_status = Some(new_status.clone());
                                         should_emit
                                     } else {
@@ -396,7 +497,11 @@ impl GitTracker {
                                 };
 
                                 if needs_emit {
-                                    Self::emit_status_changed_static(&app_handle, &terminal_id, &Some(new_status.clone()));
+                                    Self::emit_status_changed_static(
+                                        &app_handle,
+                                        &terminal_id,
+                                        &Some(new_status.clone()),
+                                    );
                                 }
                             }
                         }
@@ -417,7 +522,8 @@ impl GitTracker {
                             let needs_emit = {
                                 let mut states_guard = states.write();
                                 if let Some(state) = states_guard.get_mut(&terminal_id) {
-                                    let should_emit = Some(&new_status) != state.last_known_status.as_ref();
+                                    let should_emit =
+                                        Some(&new_status) != state.last_known_status.as_ref();
                                     state.last_known_status = Some(new_status.clone());
                                     should_emit
                                 } else {
@@ -426,7 +532,11 @@ impl GitTracker {
                             };
 
                             if needs_emit {
-                                Self::emit_status_changed_static(&app_handle, &terminal_id, &Some(new_status));
+                                Self::emit_status_changed_static(
+                                    &app_handle,
+                                    &terminal_id,
+                                    &Some(new_status),
+                                );
                             }
                         }
                     }
@@ -469,6 +579,7 @@ impl GitTracker {
     /// Runs `git status --porcelain` and returns parsed status.
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
+        log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
         let output = Command::new(resolve_git_binary())
             .args(["status", "--porcelain"])
             .current_dir(cwd)
@@ -479,7 +590,9 @@ impl GitTracker {
             return None;
         }
 
-        Some(Self::parse_git_status(&String::from_utf8_lossy(&output.stdout)))
+        Some(Self::parse_git_status(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     /// Parse git status --porcelain output
@@ -543,7 +656,11 @@ impl GitTracker {
     }
 
     /// Static version of emit_status_changed for use in async context
-    fn emit_status_changed_static(app_handle: &AppHandle, terminal_id: &str, status: &Option<GitStatus>) {
+    fn emit_status_changed_static(
+        app_handle: &AppHandle,
+        terminal_id: &str,
+        status: &Option<GitStatus>,
+    ) {
         let event = GitStatusChangedEvent {
             terminal_id: terminal_id.to_string(),
             status: status.clone(),
@@ -585,7 +702,8 @@ mod tests {
 
     #[test]
     fn test_parse_git_status_staged() {
-        let status = GitTracker::parse_git_status("M  staged.txt\nA  added.txt\nD  deleted-staged.txt\n");
+        let status =
+            GitTracker::parse_git_status("M  staged.txt\nA  added.txt\nD  deleted-staged.txt\n");
         assert_eq!(status.untracked, 0);
         assert_eq!(status.modified, 0);
         assert_eq!(status.staged, 3);
@@ -597,7 +715,7 @@ mod tests {
         let status = GitTracker::parse_git_status("MM both-changed.txt\n");
         assert_eq!(status.untracked, 0);
         assert_eq!(status.modified, 1); // Work tree has M
-        assert_eq!(status.staged, 1);   // Index has M
+        assert_eq!(status.staged, 1); // Index has M
         assert!(status.has_changes);
     }
 
@@ -607,7 +725,7 @@ mod tests {
         let status = GitTracker::parse_git_status(output);
         assert_eq!(status.untracked, 1);
         assert_eq!(status.modified, 2); // modified.txt + both.txt (work tree)
-        assert_eq!(status.staged, 2);   // staged.txt + both.txt (index)
+        assert_eq!(status.staged, 2); // staged.txt + both.txt (index)
         assert!(status.has_changes);
     }
 
@@ -735,7 +853,8 @@ mod tests {
 
         // Should be in cooldown immediately after poll with status
         assert!(
-            Instant::now().duration_since(state.last_checked) < Duration::from_millis(STATUS_UNCHANGED_COOLDOWN_MS)
+            Instant::now().duration_since(state.last_checked)
+                < Duration::from_millis(STATUS_UNCHANGED_COOLDOWN_MS)
         );
     }
 
@@ -748,7 +867,8 @@ mod tests {
 
         // Shorter cooldown when no status
         assert!(
-            Instant::now().duration_since(state.last_checked) < Duration::from_millis(POLL_INTERVAL_MS)
+            Instant::now().duration_since(state.last_checked)
+                < Duration::from_millis(POLL_INTERVAL_MS)
         );
     }
 }
