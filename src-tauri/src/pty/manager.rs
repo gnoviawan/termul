@@ -9,7 +9,7 @@ use portable_pty::{native_pty_system, CommandBuilder, Child, MasterPty, PtySize}
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -65,6 +65,7 @@ pub struct TerminalInstance {
     pub id: String,
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
+    pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
     pub reader_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub shell: String,
     pub cwd: String,
@@ -200,6 +201,11 @@ impl PtyManager {
                     log::info!("Cleaning up orphaned terminal: {}", id);
 
                     if let Some(instance) = terminals.write().remove(&id) {
+                        // Drop writer first to close PTY input stream cleanly.
+                        if let Ok(mut guard) = instance.writer.try_lock() {
+                            let _ = guard.take();
+                        }
+
                         // Kill child process first to unblock reader thread on PTY EOF
                         if let Ok(mut guard) = instance.child.try_lock() {
                             if let Some(child) = guard.as_mut() {
@@ -305,6 +311,12 @@ impl PtyManager {
 
         let pid = child.process_id().unwrap_or(0);
 
+        // Get a dedicated writer from the master PTY.
+        // portable-pty only allows take_writer() once for each PTY.
+        let writer = pty_pair.master
+            .take_writer()
+            .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
+
         // Get the reader from the master PTY
         let reader = pty_pair.master.try_clone_reader()
             .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
@@ -314,6 +326,7 @@ impl PtyManager {
             id: id.clone(),
             child: Arc::new(AsyncMutex::new(Some(child))),
             master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
+            writer: Arc::new(AsyncMutex::new(Some(writer))),
             reader_handle: Arc::new(AsyncMutex::new(None)),
             shell: shell_path.clone(),
             cwd: cwd.clone(),
@@ -471,18 +484,13 @@ impl PtyManager {
 
         instance.update_activity();
 
-        // Try to get the master - using try_lock for sync context
-        let master_guard = instance.master.try_lock()
-            .map_err(|_| "Failed to acquire PTY lock".to_string())?;
+        let mut writer_guard = instance.writer.try_lock()
+            .map_err(|_| "Failed to acquire PTY writer lock".to_string())?;
 
-        let master = master_guard.as_ref()
-            .ok_or_else(|| "PTY master already consumed".to_string())?;
+        let writer = writer_guard
+            .as_mut()
+            .ok_or_else(|| "PTY writer unavailable".to_string())?;
 
-        let mut writer = master
-            .take_writer()
-            .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
-
-        use std::io::Write;
         writer
             .write_all(data.as_bytes())
             .map_err(|e| format!("Failed to write to PTY: {}", e))?;
@@ -531,10 +539,14 @@ impl PtyManager {
 
         // Clone references needed for the task
         let child_clone = instance.child.clone();
+        let writer_clone = instance.writer.clone();
         let reader_handle_clone = instance.reader_handle.clone();
 
         // Spawn task to do async cleanup
         tokio::spawn(async move {
+            // Drop writer first to close PTY input stream cleanly.
+            let _ = writer_clone.lock().await.take();
+
             // Kill the child process first so reader thread can naturally exit on EOF
             if let Some(mut child) = child_clone.lock().await.take() {
                 let _ = child.kill();

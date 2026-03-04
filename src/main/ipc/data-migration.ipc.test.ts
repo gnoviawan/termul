@@ -148,8 +148,10 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<{ results: unknown[] }>
 
       expect(result.success).toBe(false)
-      expect(result.error).toContain('Migration failed')
-      expect(result.code).toBe('MIGRATION_EXECUTION_FAILED')
+      if (!result.success) {
+        expect(result.error).toContain('Migration failed')
+        expect(result.code).toBe('MIGRATION_EXECUTION_FAILED')
+      }
     })
 
     it('should return empty results when no migrations needed', async () => {
@@ -199,8 +201,10 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent, '1.2.0') as IpcResult<void>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('MIGRATION_NOT_FOUND')
-      expect(result.error).toContain('not found')
+      if (!result.success) {
+        expect(result.code).toBe('MIGRATION_NOT_FOUND')
+        expect(result.error).toContain('not found')
+      }
     })
 
     it('should handle rollback failure', async () => {
@@ -216,7 +220,9 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent, '1.5.0') as IpcResult<void>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('ROLLBACK_FAILED')
+      if (!result.success) {
+        expect(result.code).toBe('ROLLBACK_FAILED')
+      }
     })
   })
 
@@ -272,7 +278,9 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<unknown[]>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('MIGRATION_HISTORY_CORRUPT')
+      if (!result.success) {
+        expect(result.code).toBe('MIGRATION_HISTORY_CORRUPT')
+      }
     })
   })
 
@@ -340,8 +348,10 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<unknown[]>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('MIGRATION_GET_REGISTERED_FAILED')
-      expect(result.error).toContain('Failed to get registered migrations')
+      if (!result.success) {
+        expect(result.code).toBe('MIGRATION_GET_REGISTERED_FAILED')
+        expect(result.error).toContain('Failed to get registered migrations')
+      }
     })
   })
 
@@ -380,7 +390,9 @@ describe('data-migration.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<{ current: string; target: string }>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('MIGRATION_VERSION_INVALID')
+      if (!result.success) {
+        expect(result.code).toBe('MIGRATION_VERSION_INVALID')
+      }
     })
   })
 
@@ -536,8 +548,12 @@ describe('data-migration.ipc (Electron compatibility)', () => {
         const handler = handlers.get('dataMigration:rollback')
         const result = await handler!({} as Electron.IpcMainInvokeEvent, '1.0.0') as IpcResult<void>
 
-        expect(result.code).toBe(test.expectedCode)
-        expect(result.error).toBe(test.mock.error)
+        if (!result.success) {
+          expect(result.code).toBe(test.expectedCode)
+          expect(result.error).toBe(test.mock.error)
+        } else {
+          throw new Error('Expected rollback to fail for error code consistency test')
+        }
       }
     })
   })

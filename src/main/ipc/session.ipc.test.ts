@@ -128,8 +128,10 @@ describe('session.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent, sessionData) as IpcResult<void>
 
       expect(result.success).toBe(false)
-      expect(result.error).toBe('Failed to save session')
-      expect(result.code).toBe('SESSION_SAVE_FAILED')
+      if (!result.success) {
+        expect(result.error).toBe('Failed to save session')
+        expect(result.code).toBe('SESSION_SAVE_FAILED')
+      }
     })
   })
 
@@ -178,7 +180,9 @@ describe('session.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<SessionData>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('SESSION_NOT_FOUND')
+      if (!result.success) {
+        expect(result.code).toBe('SESSION_NOT_FOUND')
+      }
     })
   })
 
@@ -208,7 +212,9 @@ describe('session.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<void>
 
       expect(result.success).toBe(false)
-      expect(result.code).toBe('SESSION_CLEAR_FAILED')
+      if (!result.success) {
+        expect(result.code).toBe('SESSION_CLEAR_FAILED')
+      }
     })
   })
 
@@ -235,8 +241,10 @@ describe('session.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<void>
 
       expect(result.success).toBe(false)
-      expect(result.error).toContain('Disk full')
-      expect(result.code).toBe('SESSION_FLUSH_FAILED')
+      if (!result.success) {
+        expect(result.error).toContain('Disk full')
+        expect(result.code).toBe('SESSION_FLUSH_FAILED')
+      }
     })
   })
 
@@ -273,8 +281,10 @@ describe('session.ipc (Electron compatibility)', () => {
       const result = await handler!({} as Electron.IpcMainInvokeEvent) as IpcResult<boolean>
 
       expect(result.success).toBe(false)
-      expect(result.error).toContain('Permission denied')
-      expect(result.code).toBe('SESSION_CHECK_FAILED')
+      if (!result.success) {
+        expect(result.error).toContain('Permission denied')
+        expect(result.code).toBe('SESSION_CHECK_FAILED')
+      }
     })
   })
 

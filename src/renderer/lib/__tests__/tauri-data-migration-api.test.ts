@@ -735,7 +735,9 @@ describe('tauriDataMigrationApi', () => {
 
       expect(result.success).toBe(false)
       // Should still have success: false and error message
-      expect(result.error).toBe('Unknown error')
+      if (!result.success) {
+        expect(result.error).toBe('Unknown error')
+      }
     })
 
     it('should use MIGRATION_EXECUTION_FAILED for runMigration invoke errors', async () => {

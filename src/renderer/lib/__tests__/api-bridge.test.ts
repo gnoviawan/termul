@@ -158,11 +158,29 @@ describe('API Bridge (api.ts)', () => {
 
     it('should export dataMigrationApi', () => {
       expect(dataMigrationApi).toBeDefined()
-      expect(typeof dataMigrationApi.runMigrations).toBe('function')
       expect(typeof dataMigrationApi.rollback).toBe('function')
       expect(typeof dataMigrationApi.getHistory).toBe('function')
       expect(typeof dataMigrationApi.getRegistered).toBe('function')
-      expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
+
+      if ('runMigration' in dataMigrationApi) {
+        expect(typeof dataMigrationApi.runMigration).toBe('function')
+      }
+
+      if ('getVersion' in dataMigrationApi) {
+        expect(typeof dataMigrationApi.getVersion).toBe('function')
+      }
+
+      if ('getSchemaInfo' in dataMigrationApi) {
+        expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
+      }
+
+      if ('runMigrations' in dataMigrationApi) {
+        expect(typeof dataMigrationApi.runMigrations).toBe('function')
+      }
+
+      if ('getVersionInfo' in dataMigrationApi) {
+        expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
+      }
     })
 
     it('should export renderer ref functions', () => {
@@ -228,16 +246,33 @@ describe('API Bridge (api.ts)', () => {
 
       // In Tauri context, verify canonical method names
       if (isTauri) {
-        expect(typeof dataMigrationApi.getVersion).toBe('function')
-        expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
-        expect(typeof dataMigrationApi.runMigration).toBe('function')
+        expect('getVersion' in dataMigrationApi).toBe(true)
+        expect('getSchemaInfo' in dataMigrationApi).toBe(true)
+        expect('runMigration' in dataMigrationApi).toBe(true)
+
+        if ('getVersion' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getVersion).toBe('function')
+        }
+        if ('getSchemaInfo' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
+        }
+        if ('runMigration' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.runMigration).toBe('function')
+        }
       } else {
         // In Electron context (or tests), verify legacy method names
-        expect(typeof dataMigrationApi.runMigrations).toBe('function')
-        expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
+        expect('runMigrations' in dataMigrationApi).toBe(true)
+        expect('getVersionInfo' in dataMigrationApi).toBe(true)
         expect(typeof dataMigrationApi.getHistory).toBe('function')
         expect(typeof dataMigrationApi.getRegistered).toBe('function')
         expect(typeof dataMigrationApi.rollback).toBe('function')
+
+        if ('runMigrations' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.runMigrations).toBe('function')
+        }
+        if ('getVersionInfo' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
+        }
       }
     })
 
@@ -297,31 +332,38 @@ describe('API Bridge (api.ts)', () => {
 
       if (isTauri) {
         // These are the canonical method names from MigrationApi interface
-        const canonicalMethods = [
-          'getVersion',
-          'getSchemaInfo',
-          'getHistory',
-          'getRegistered',
-          'runMigration',
-          'rollback'
-        ]
+        expect(typeof dataMigrationApi.getHistory).toBe('function')
+        expect(typeof dataMigrationApi.getRegistered).toBe('function')
+        expect(typeof dataMigrationApi.rollback).toBe('function')
 
-        canonicalMethods.forEach(method => {
-          expect(typeof dataMigrationApi[method as keyof typeof dataMigrationApi]).toBe('function')
-        })
+        expect('getVersion' in dataMigrationApi).toBe(true)
+        expect('getSchemaInfo' in dataMigrationApi).toBe(true)
+        expect('runMigration' in dataMigrationApi).toBe(true)
+
+        if ('getVersion' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getVersion).toBe('function')
+        }
+        if ('getSchemaInfo' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
+        }
+        if ('runMigration' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.runMigration).toBe('function')
+        }
       } else {
         // In Electron context, legacy method names are used
-        const legacyMethods = [
-          'runMigrations', // Legacy: plural
-          'getVersionInfo', // Legacy: getVersionInfo
-          'getHistory',
-          'getRegistered',
-          'rollback'
-        ]
+        expect(typeof dataMigrationApi.getHistory).toBe('function')
+        expect(typeof dataMigrationApi.getRegistered).toBe('function')
+        expect(typeof dataMigrationApi.rollback).toBe('function')
 
-        legacyMethods.forEach(method => {
-          expect(typeof dataMigrationApi[method as keyof typeof dataMigrationApi]).toBe('function')
-        })
+        expect('runMigrations' in dataMigrationApi).toBe(true)
+        expect('getVersionInfo' in dataMigrationApi).toBe(true)
+
+        if ('runMigrations' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.runMigrations).toBe('function')
+        }
+        if ('getVersionInfo' in dataMigrationApi) {
+          expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
+        }
       }
     })
 
