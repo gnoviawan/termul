@@ -15,7 +15,7 @@ interface PaneContentProps {
   pane: LeafNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -142,6 +142,7 @@ export function PaneContent({
                   >
                     <ConnectedTerminal
                       terminalId={terminal.ptyId}
+                      autoSpawn={false}
                       spawnOptions={{
                         shell: terminal.shell,
                         cwd: terminal.cwd

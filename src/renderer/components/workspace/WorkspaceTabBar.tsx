@@ -135,7 +135,7 @@ interface WorkspaceTabBarProps {
   activeTabId: string | null
   onNewTerminal?: () => void
   onNewTerminalWithShell?: (shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -340,7 +340,7 @@ export function WorkspaceTabBar({
                           setActivePane(paneId)
                         }}
                         onClose={() => {
-                          if (onCloseTerminal) onCloseTerminal(tab.terminalId)
+                          if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
                         }}
                         onRename={(name) => {
                           if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)

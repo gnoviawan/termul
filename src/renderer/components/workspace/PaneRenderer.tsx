@@ -13,7 +13,7 @@ interface PaneRendererProps {
   node: PaneNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -58,7 +58,7 @@ interface PaneLeafRendererProps {
   pane: LeafNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -90,7 +90,7 @@ interface PaneSplitRendererProps {
   node: SplitNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -176,7 +176,7 @@ interface PaneRendererPanelProps {
   onDragging: (isDragging: boolean) => void
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string

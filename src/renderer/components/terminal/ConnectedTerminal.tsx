@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { terminalApi, systemApi } from '@/lib/api'
+import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
@@ -49,6 +50,7 @@ export interface ConnectedTerminalProps {
   terminalId?: string
   spawnOptions?: TerminalSpawnOptions
   onSpawned?: (terminalId: string) => void
+  autoSpawn?: boolean
   onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
   onError?: (error: string) => void
@@ -64,6 +66,7 @@ function ConnectedTerminalComponent({
   terminalId: externalTerminalId,
   spawnOptions,
   onSpawned,
+  autoSpawn = true,
   onExit,
   onError,
   onCommand,
@@ -503,7 +506,7 @@ function ConnectedTerminalComponent({
       }
     )
 
-    // Spawn terminal if no external ID provided
+    // Spawn terminal if no external ID provided and auto-spawn enabled
     const initTerminal = async (): Promise<void> => {
       // Fit to get real dimensions BEFORE spawning
       try {
@@ -515,6 +518,9 @@ function ConnectedTerminalComponent({
       const spawnRows = terminal.rows || 24
 
       if (!externalTerminalId) {
+        if (!autoSpawn) {
+          return
+        }
         if (spawnInFlightRef.current || ptyIdRef.current) {
           return
         }
@@ -532,6 +538,7 @@ function ConnectedTerminalComponent({
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
+            void addRendererRef(result.data.id)
             // If tab was visible before PTY was ready, flush deferred fit+resize now
             if (needsResizeOnReadyRef.current) {
               needsResizeOnReadyRef.current = false
@@ -568,6 +575,7 @@ function ConnectedTerminalComponent({
         }
       } else {
         // External terminal ID provided - register and restore scrollback
+        void addRendererRef(externalTerminalId)
         registerTerminal(externalTerminalId, terminal)
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
@@ -587,6 +595,7 @@ function ConnectedTerminalComponent({
       const terminalId = ptyIdRef.current || externalTerminalId
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
+        void removeRendererRef(terminalId)
       }
 
       // Unregister terminal from registry

@@ -40,7 +40,8 @@ import {
   usePaneRoot,
   editorTabId,
   getActiveTerminalIdFromTree,
-  getActiveFilePathFromTree
+  getActiveFilePathFromTree,
+  findPaneContainingTab
 } from '@/stores/workspace-store'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
@@ -69,7 +70,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
-  const [closeConfirmTerminalId, setCloseConfirmTerminalId] = useState<string | null>(null)
+  const [closeConfirmTerminal, setCloseConfirmTerminal] = useState<{
+    terminalId: string
+    tabId: string
+  } | null>(null)
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
@@ -308,7 +312,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             useWorkspaceStore.getState().removeTab(activeTab.id)
           }
         } else if (activeTab?.type === 'terminal') {
-          setCloseConfirmTerminalId(activeTab.terminalId)
+          setCloseConfirmTerminal({ terminalId: activeTab.terminalId, tabId: activeTab.id })
         }
         return
       }
@@ -498,7 +502,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [cycleTab, fontSize, updateAppSetting])
 
   const handleCreateTerminalInPane = useCallback(
-    (paneId: string, shellName?: string) => {
+    async (paneId: string, shellName?: string) => {
       if (terminals.length >= maxTerminals) {
         toast.error(`Maximum ${maxTerminals} terminals per project`)
         return
@@ -506,7 +510,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
       const cwd = activeProject?.path
+
+      const spawnResult = await terminalApi.spawn({ shell, cwd })
+      if (!spawnResult.success) {
+        toast.error(spawnResult.error || 'Failed to create terminal')
+        return
+      }
+
       const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
 
       useWorkspaceStore.getState().addTabToPane(paneId, {
         type: 'terminal',
@@ -522,33 +534,66 @@ export default function WorkspaceLayout(): React.JSX.Element {
     handleCreateTerminalInPane(paneId)
   }, [handleCreateTerminalInPane])
 
-  const handleCloseTerminal = useCallback((id: string) => {
-    setCloseConfirmTerminalId(id)
+  const handleCloseTerminal = useCallback((id: string, tabId: string) => {
+    setCloseConfirmTerminal({ terminalId: id, tabId })
   }, [])
 
+  const closeTerminalByRecordId = useCallback(
+    async (terminalRecordId: string) => {
+      const terminalToClose = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminalRecordId)
+
+      if (!terminalToClose) {
+        return
+      }
+
+      if (terminalToClose.ptyId) {
+        try {
+          await Promise.race([
+            terminalApi.kill(terminalToClose.ptyId),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
+          ])
+        } catch {
+          // Continue close flow even if PTY termination fails
+        }
+      }
+
+      closeTerminal(terminalRecordId, activeProjectId)
+    },
+    [activeProjectId, closeTerminal]
+  )
+
+  const closeTerminalTabByTabId = useCallback(
+    async (tabId: string) => {
+      const root = useWorkspaceStore.getState().root
+      const containingPane = findPaneContainingTab(root, tabId)
+      if (!containingPane) {
+        return
+      }
+
+      const tab = containingPane.tabs.find((t) => t.id === tabId)
+      if (!tab || tab.type !== 'terminal') {
+        return
+      }
+
+      await closeTerminalByRecordId(tab.terminalId)
+      useWorkspaceStore.getState().closeTab(containingPane.id, tabId)
+    },
+    [closeTerminalByRecordId]
+  )
+
   const handleConfirmCloseTerminal = useCallback(async () => {
-    if (!closeConfirmTerminalId) {
+    if (!closeConfirmTerminal) {
       return
     }
 
-    const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
-    if (terminalToClose?.ptyId) {
-      try {
-        await Promise.race([
-          terminalApi.kill(terminalToClose.ptyId),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
-        ])
-      } catch {
-        // Continue close flow even if PTY termination fails
-      }
-    }
-
-    closeTerminal(closeConfirmTerminalId, activeProjectId)
-    setCloseConfirmTerminalId(null)
-  }, [closeTerminal, activeProjectId, closeConfirmTerminalId, terminals])
+    await closeTerminalTabByTabId(closeConfirmTerminal.tabId)
+    setCloseConfirmTerminal(null)
+  }, [closeConfirmTerminal, closeTerminalTabByTabId])
 
   const handleCancelCloseTerminal = useCallback(() => {
-    setCloseConfirmTerminalId(null)
+    setCloseConfirmTerminal(null)
   }, [])
 
   // Dirty file close handlers
@@ -618,7 +663,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [activeTerminal])
 
-  const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
+  const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminal?.terminalId)
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
@@ -761,7 +806,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       {/* Close Terminal Confirmation */}
       <ConfirmDialog
-        isOpen={closeConfirmTerminalId !== null}
+        isOpen={closeConfirmTerminal !== null}
         title="Close Terminal"
         message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'
           }"? Any running processes will be terminated.`}
