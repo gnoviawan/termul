@@ -175,6 +175,7 @@ Object.defineProperty(window, 'api', {
 
 import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
+import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 
 // Mock the API modules
 vi.mock('@/lib/api', () => ({
@@ -207,6 +208,11 @@ vi.mock('@/stores/terminal-store', () => ({
       updateTerminalActivityBatch: vi.fn()
     })
   }
+}))
+
+vi.mock('@/lib/tauri-terminal-api', () => ({
+  addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+  removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined })
 }))
 
 describe('ConnectedTerminal', () => {
@@ -305,10 +311,32 @@ describe('ConnectedTerminal', () => {
     })
   })
 
+  it('should register and unregister renderer refs for external terminalId', async () => {
+    const { unmount } = render(<ConnectedTerminal terminalId="external-123" />)
+
+    await vi.waitFor(() => {
+      expect(addRendererRef).toHaveBeenCalledWith('external-123')
+    })
+
+    unmount()
+
+    await vi.waitFor(() => {
+      expect(removeRendererRef).toHaveBeenCalledWith('external-123')
+    })
+  })
+
   it('should not spawn terminal when external ID provided', async () => {
     render(<ConnectedTerminal terminalId="external-123" />)
 
     // Give time for potential spawn
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
+  })
+
+  it('should not spawn terminal when autoSpawn is false', async () => {
+    render(<ConnectedTerminal autoSpawn={false} />)
+
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(vi.mocked(terminalApi).spawn).not.toHaveBeenCalled()
