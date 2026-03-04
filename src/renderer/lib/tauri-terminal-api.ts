@@ -102,13 +102,21 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onData(callback: TerminalDataCallback): () => void {
+      if (import.meta.env.DEV) {
+        console.log('[TauriTerminalAPI] Registering terminal-data listener')
+      }
+
       const unlisten = listen<{ id: string; data: string }>(
         IPC_EVENTS.TERMINAL_DATA,
         ({ payload }) => {
           callback(payload.id, payload.data)
         }
       )
+
       return () => {
+        if (import.meta.env.DEV) {
+          console.log('[TauriTerminalAPI] Unregistering terminal-data listener')
+        }
         void unlisten.then((fn) => fn())
       }
     },
@@ -118,13 +126,25 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExit(callback: TerminalExitCallback): () => void {
+      if (import.meta.env.DEV) {
+        console.log('[TauriTerminalAPI] Registering terminal-exit listener')
+      }
+
       const unlisten = listen<{ id: string; exitCode: number | null; signal: number | null }>(
         IPC_EVENTS.TERMINAL_EXIT,
         ({ payload }) => {
-          callback(payload.id, payload.exitCode ?? 0, payload.signal ?? undefined)
+          if (import.meta.env.DEV) {
+            console.log(
+              `[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`
+            )
+          }
+          callback(payload.id, payload.exitCode ?? -1, payload.signal ?? undefined)
         }
       )
       return () => {
+        if (import.meta.env.DEV) {
+          console.log('[TauriTerminalAPI] Unregistering terminal-exit listener')
+        }
         void unlisten.then((fn) => fn())
       }
     },

@@ -65,7 +65,7 @@ pub struct TerminalInstance {
     pub id: String,
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
-    pub reader_handle: Arc<AsyncMutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub reader_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub shell: String,
     pub cwd: String,
     pub pid: u32,
@@ -200,18 +200,17 @@ impl PtyManager {
                     log::info!("Cleaning up orphaned terminal: {}", id);
 
                     if let Some(instance) = terminals.write().remove(&id) {
-                        // Abort reader task
-                        if let Ok(mut guard) = instance.reader_handle.try_lock() {
-                            if let Some(handle) = guard.take() {
-                                handle.abort();
-                            }
-                        }
-
-                        // Kill child process
+                        // Kill child process first to unblock reader thread on PTY EOF
                         if let Ok(mut guard) = instance.child.try_lock() {
                             if let Some(child) = guard.as_mut() {
                                 child.kill().ok();
                             }
+                        }
+
+                        // Join reader thread with short timeout by detaching.
+                        // We cannot safely block this async task on thread join.
+                        if let Ok(mut guard) = instance.reader_handle.try_lock() {
+                            let _ = guard.take();
                         }
 
                         // Stop tracking
@@ -331,8 +330,8 @@ impl PtyManager {
         let exit_code_tracker = self.exit_code_tracker.clone();
         let terminal_id = id.clone();
 
-        let reader_task = tokio::spawn(async move {
-            Self::reader_loop(reader_instance, reader, app_handle, exit_code_tracker, terminal_id).await;
+        let reader_task = std::thread::spawn(move || {
+            Self::reader_loop_sync(reader_instance, reader, app_handle, exit_code_tracker, terminal_id);
         });
 
         *instance.reader_handle.lock().await = Some(reader_task);
@@ -356,7 +355,7 @@ impl PtyManager {
     }
 
     /// Reader loop that continuously reads from PTY and emits events
-    async fn reader_loop(
+    fn reader_loop_sync(
         instance: Arc<TerminalInstance>,
         mut reader: Box<dyn Read + Send>,
         app_handle: AppHandle,
@@ -366,10 +365,15 @@ impl PtyManager {
         let mut buffer = [0u8; 8192];
         let id = terminal_id.clone();
 
+        log::info!("[PTY {}] Reader loop started", id);
+
+        let mut had_read_error = false;
+
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     // EOF - process has exited
+                    log::info!("[PTY {}] EOF reached, exiting reader loop", id);
                     break;
                 }
                 Ok(n) => {
@@ -377,6 +381,8 @@ impl PtyManager {
 
                     // Convert bytes to UTF-8 string, replacing invalid sequences
                     let data = String::from_utf8_lossy(&buffer[..n]).to_string();
+
+                    log::trace!("[PTY {}] Read {} bytes", id, n);
 
                     // Parse exit codes from output
                     exit_code_tracker.process_data(&id, &data);
@@ -386,22 +392,73 @@ impl PtyManager {
                         id: id.clone(),
                         data,
                     };
-                    let _ = app_handle.emit("terminal-data", event);
+
+                    if let Err(e) = app_handle.emit("terminal-data", event) {
+                        log::error!("[PTY {}] Failed to emit terminal-data event: {}", id, e);
+                    }
                 }
                 Err(e) => {
-                    log::error!("Error reading from PTY {}: {}", id, e);
+                    had_read_error = true;
+                    log::error!("[PTY {}] Error reading from PTY: {}", id, e);
                     break;
                 }
             }
         }
 
+        // Get real child exit status where possible.
+        // If we observed a PTY read error and cannot retrieve a child status, do not report success.
+        let exit_code = match instance.child.try_lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let code_u32 = status.exit_code();
+                        i32::try_from(code_u32).ok()
+                    }
+                    Ok(None) => {
+                        if had_read_error {
+                            None
+                        } else {
+                            Some(0)
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[PTY {}] Failed to query child exit status: {}", id, e);
+                        if had_read_error {
+                            None
+                        } else {
+                            Some(0)
+                        }
+                    }
+                },
+                None => {
+                    if had_read_error {
+                        None
+                    } else {
+                        Some(0)
+                    }
+                }
+            },
+            Err(_) => {
+                if had_read_error {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
+        };
+
         // Process has exited - emit terminal-exit event
         let exit_event = TerminalExitEvent {
             id: id.clone(),
-            exit_code: Some(0),
+            exit_code,
             signal: None,
         };
-        let _ = app_handle.emit("terminal-exit", exit_event);
+
+        if let Err(e) = app_handle.emit("terminal-exit", exit_event) {
+            log::error!("[PTY {}] Failed to emit terminal-exit event: {}", id, e);
+        }
+
+        log::info!("[PTY {}] Reader loop ended", id);
     }
 
     /// Write data to a terminal
@@ -478,15 +535,13 @@ impl PtyManager {
 
         // Spawn task to do async cleanup
         tokio::spawn(async move {
-            // Abort the reader task
-            if let Some(handle) = reader_handle_clone.lock().await.take() {
-                handle.abort();
-            }
-
-            // Kill the child process
+            // Kill the child process first so reader thread can naturally exit on EOF
             if let Some(mut child) = child_clone.lock().await.take() {
                 let _ = child.kill();
             }
+
+            // Drop join handle to detach reader thread; it will end after PTY closes
+            let _ = reader_handle_clone.lock().await.take();
         });
 
         // Stop tracking (sync operations)

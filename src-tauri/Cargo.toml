@@ -39,3 +39,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Logging
 log = "0.4"
+env_logger = { version = "0.11", default-features = false }
