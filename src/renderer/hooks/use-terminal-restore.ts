@@ -3,12 +3,32 @@ import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
+import { terminalApi } from '@/lib/api'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
   setTerminalRestoreInProgress
 } from './useTerminalAutoSave'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+
+const PROJECT_RESTORE_LOCKS = new Set<string>()
+
+export function normalizeShellForStartup(shell?: string): string {
+  const fallback = 'powershell'
+  if (!shell) return fallback
+
+  if (typeof window !== 'undefined' && typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined') {
+    const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform)
+    if (isWindows) {
+      const normalized = shell.trim().toLowerCase()
+      if (normalized === 'cmd' || normalized === 'cmd.exe') {
+        return fallback
+      }
+    }
+  }
+
+  return shell
+}
 
 /**
  * Hook to restore terminals when switching projects
@@ -26,12 +46,13 @@ export function useTerminalRestore(): void {
     }
 
     // Skip if already restoring
-    if (isRestoringRef.current) {
+    if (isRestoringRef.current || PROJECT_RESTORE_LOCKS.has(activeProjectId)) {
       return
     }
 
     // Set flag immediately to prevent race condition
     isRestoringRef.current = true
+    PROJECT_RESTORE_LOCKS.add(activeProjectId)
     setTerminalRestoreInProgress(true)
     const projectIdToRestore = activeProjectId
 
@@ -60,16 +81,17 @@ export function useTerminalRestore(): void {
         const layout = await loadPersistedTerminals(projectIdToRestore)
 
         if (layout && layout.terminals.length > 0) {
-          restoreFromLayout(projectIdToRestore, layout)
+          await restoreFromLayout(projectIdToRestore, layout)
         } else {
-          createDefaultTerminal(projectIdToRestore)
+          await createDefaultTerminal(projectIdToRestore)
         }
       } catch (err: unknown) {
         console.error('Failed to restore terminals:', err)
         // Fall back to default terminal
-        createDefaultTerminal(projectIdToRestore)
+        await createDefaultTerminal(projectIdToRestore)
       } finally {
         isRestoringRef.current = false
+        PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
         setTerminalRestoreInProgress(false)
         previousProjectIdRef.current = projectIdToRestore
       }
@@ -130,7 +152,7 @@ function selectTerminalForProject(
 /**
  * Restore terminals from persisted layout (only when no terminals exist in memory)
  */
-function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): void {
+async function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): Promise<void> {
   const terminalStore = useTerminalStore.getState()
 
   // Create all terminals at once to avoid multiple re-renders
@@ -142,22 +164,34 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
     cwd?: string
     output: never[]
     pendingScrollback?: string[]
+    ptyId?: string
   }> = []
 
   // Map old IDs to new IDs for active terminal selection and pane remapping
   const idMap = new Map<string, string>()
 
   for (const persistedTerminal of layout.terminals) {
+    const normalizedShell = normalizeShellForStartup(persistedTerminal.shell)
+    const spawnResult = await terminalApi.spawn({
+      shell: normalizedShell,
+      cwd: persistedTerminal.cwd
+    })
+
+    if (!spawnResult.success) {
+      continue
+    }
+
     const newId = Date.now().toString() + Math.random().toString(36).slice(2, 5)
     idMap.set(persistedTerminal.id, newId)
     newTerminals.push({
       id: newId,
       name: persistedTerminal.name,
       projectId,
-      shell: persistedTerminal.shell || 'powershell',
+      shell: normalizedShell,
       cwd: persistedTerminal.cwd,
       output: [],
-      pendingScrollback: persistedTerminal.scrollback
+      pendingScrollback: persistedTerminal.scrollback,
+      ptyId: spawnResult.data.id
     })
   }
 
@@ -184,7 +218,7 @@ function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): 
 /**
  * Create a default terminal when no persisted data exists
  */
-function createDefaultTerminal(projectId: string): void {
+async function createDefaultTerminal(projectId: string): Promise<void> {
   const terminalStore = useTerminalStore.getState()
   const projectStore = useProjectStore.getState()
   const appSettings = useAppSettingsStore.getState()
@@ -198,10 +232,22 @@ function createDefaultTerminal(projectId: string): void {
 
   // Get shell from fallback chain: project -> app settings -> system default
   const project = projectStore.projects.find((p) => p.id === projectId)
-  const shell = project?.defaultShell || appSettings.settings.defaultShell || ''
+  const shell = normalizeShellForStartup(
+    project?.defaultShell || appSettings.settings.defaultShell || ''
+  )
+
+  const spawnResult = await terminalApi.spawn({
+    shell,
+    cwd: project?.path
+  })
+
+  if (!spawnResult.success) {
+    return
+  }
 
   // Create default terminal - addTerminal also sets it as active
   const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
+  terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
 
   // Explicitly select to ensure activeTerminalId is set correctly
   terminalStore.selectTerminal(newTerminal.id)

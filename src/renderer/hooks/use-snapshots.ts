@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useSnapshotActions, useSnapshots } from '@/stores/snapshot-store'
-import { persistenceApi } from '@/lib/api'
+import { persistenceApi, terminalApi } from '@/lib/api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useProjectStore } from '@/stores/project-store'
 import { getTerminal } from '@/utils/terminal-registry'
@@ -97,7 +97,7 @@ export function useRestoreSnapshot(): (snapshotId: string) => Promise<void> {
       }
 
       // Restore terminals from snapshot
-      restoreFromSnapshot(activeProjectId, snapshot)
+      await restoreFromSnapshot(activeProjectId, snapshot)
     },
     [activeProjectId, getSnapshot]
   )
@@ -107,7 +107,7 @@ export function useRestoreSnapshot(): (snapshotId: string) => Promise<void> {
  * Restore terminals from a persisted snapshot
  * Follows the pattern from use-terminal-restore.ts
  */
-function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapshot): void {
+async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapshot): Promise<void> {
   const terminalStore = useTerminalStore.getState()
 
   // Close all existing terminals for this project
@@ -121,6 +121,15 @@ function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapshot): vo
   let firstCreatedId: string | null = null
 
   for (const persistedTerminal of snapshot.terminals) {
+    const spawnResult = await terminalApi.spawn({
+      shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
+      cwd: persistedTerminal.cwd
+    })
+
+    if (!spawnResult.success) {
+      continue
+    }
+
     const created = terminalStore.addTerminal(
       persistedTerminal.name,
       projectId,
@@ -128,6 +137,7 @@ function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapshot): vo
       persistedTerminal.cwd,
       persistedTerminal.scrollback
     )
+    terminalStore.setTerminalPtyId(created.id, spawnResult.data.id)
 
     if (!firstCreatedId) {
       firstCreatedId = created.id

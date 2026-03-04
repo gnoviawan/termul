@@ -141,7 +141,7 @@ export interface WorkspaceState {
     targetPaneId: string,
     position: DropPosition
   ) => void
-  closeTab: (paneId: string, tabId: string) => void
+  closeTab: (paneId: string, tabId: string) => WorkspaceTab | null
   setActiveTab: (paneId: string, tabId: string) => void
   setActivePane: (paneId: string) => void
   updatePaneSizes: (splitId: string, sizes: number[]) => void
@@ -362,11 +362,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({ root: newRoot, activePaneId: newLeaf.id })
     },
 
-    closeTab: (paneId: string, tabId: string): void => {
+    closeTab: (paneId: string, tabId: string): WorkspaceTab | null => {
       const { root, activePaneId } = get()
+      let removedTab: WorkspaceTab | null = null
+
       let newRoot = updateLeaf(root, paneId, (leaf) => {
         const idx = leaf.tabs.findIndex((t) => t.id === tabId)
         if (idx === -1) return leaf
+        removedTab = leaf.tabs[idx]
         const newTabs = leaf.tabs.filter((t) => t.id !== tabId)
         let newActive = leaf.activeTabId
         if (leaf.activeTabId === tabId) {
@@ -379,6 +382,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
+
+      if (!removedTab) {
+        return null
+      }
 
       // If pane is now empty and not the only pane, collapse it
       const pane = findPaneById(newRoot, paneId)
@@ -398,11 +405,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           }
           newRoot = removeNode(newRoot, paneId) ?? createLeaf()
           set({ root: newRoot, activePaneId: newActivePaneId })
-          return
+          return removedTab
         }
       }
 
       set({ root: newRoot })
+      return removedTab
     },
 
     setActiveTab: (paneId: string, tabId: string): void => {
@@ -534,7 +542,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const { root } = get()
       const pane = findPaneContainingTab(root, tabId)
       if (pane) {
-        get().closeTab(pane.id, tabId)
+        void get().closeTab(pane.id, tabId)
       }
     },
 
