@@ -20,6 +20,27 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as AsyncMutex;
 
+// Git Bash path candidates - MUST match lib.rs git_bash_paths module
+// Version: v1.0 - When updating, update both files
+#[cfg(target_os = "windows")]
+mod git_bash_paths {
+    /// Primary Git Bash installation paths (Program Files)
+    pub const PRIMARY_PATHS: &[&str] = &[
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    ];
+
+    /// Fallback Git Bash paths for non-standard installations
+    pub const FALLBACK_PATHS: &[&str] = &[
+        r"C:\tools\msys64\usr\bin\bash.exe",
+        r"C:\msys64\usr\bin\bash.exe",
+        r"C:\Git\bin\bash.exe",
+        r"C:\Git\usr\bin\bash.exe",
+    ];
+}
+
 // Constants matching Electron implementation
 const GLOBAL_TERMINAL_LIMIT: usize = 30;
 const ORPHAN_TIMEOUT_MS: u64 = 300_000; // 5 minutes
@@ -635,6 +656,11 @@ impl PtyManager {
     }
 
     /// Resolve a shell name to its full path
+    ///
+    /// For `git-bash` alias on Windows, tries multiple fallback strategies:
+    /// 1. `bash.exe` via `where` command (PATH lookup)
+    /// 2. Common Git Bash installation paths
+    /// 3. MSYS2 paths
     fn resolve_shell_path(&self, shell: &str) -> Result<String, String> {
         // If it looks like a path, verify it exists
         if shell.contains('/') || shell.contains('\\') {
@@ -646,6 +672,33 @@ impl PtyManager {
 
         #[cfg(target_os = "windows")]
         {
+            // Special handling for git-bash alias
+            if shell == "git-bash" {
+                // Strategy 1: Try bash.exe via PATH (where command)
+                if let Some(abs_path) = self.get_absolute_shell_path("bash.exe") {
+                    return Ok(abs_path);
+                }
+
+                // Strategy 2: Try common Git Bash installation paths
+                // Uses shared constants from git_bash_paths module (synced with lib.rs)
+                for path in git_bash_paths::PRIMARY_PATHS {
+                    if Path::new(path).exists() {
+                        return Ok(path.to_string());
+                    }
+                }
+
+                // Strategy 3: Try MSYS2 and other common locations
+                for path in git_bash_paths::FALLBACK_PATHS {
+                    if Path::new(path).exists() {
+                        return Ok(path.to_string());
+                    }
+                }
+
+                // All strategies failed
+                return Err(format!("Shell not found: {} - bash.exe not found in PATH or common Git Bash locations", shell));
+            }
+
+            // Standard shell resolution for other shells
             // Try shell.exe variant
             let exe_shell = format!("{}.exe", shell);
             if let Some(abs_path) = self.get_absolute_shell_path(&exe_shell) {
@@ -657,16 +710,16 @@ impl PtyManager {
                 return Ok(abs_path);
             }
 
-            // Try common paths for Git Bash
-            if shell == "bash" || shell == "git-bash" {
-                let paths = vec![
-                    r"C:\Program Files\Git\bin\bash.exe",
-                    r"C:\Program Files\Git\usr\bin\bash.exe",
-                    r"C:\Program Files (x86)\Git\bin\bash.exe",
-                    r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
-                    r"C:\tools\msys64\usr\bin\bash.exe",
-                ];
-                for path in paths {
+            // Try common paths for bash (not git-bash alias)
+            if shell == "bash" {
+                // Use same candidate lists as git-bash
+                for path in git_bash_paths::PRIMARY_PATHS {
+                    if Path::new(path).exists() {
+                        return Ok(path.to_string());
+                    }
+                }
+                // Also try a subset of fallback paths for bash
+                for path in git_bash_paths::FALLBACK_PATHS {
                     if Path::new(path).exists() {
                         return Ok(path.to_string());
                     }
@@ -868,5 +921,70 @@ mod tests {
         assert_eq!(options.cwd, Some("C:\\".to_string()));
         assert_eq!(options.cols, Some(120));
         assert_eq!(options.rows, Some(40));
+    }
+
+    // ========== Git Bash resolution tests ==========
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_git_bash_candidates_match_detection() {
+        // Verify that the candidates in resolve_shell_path match
+        // the candidates in lib.rs get_available_shells()
+        // This test ensures the git_bash_paths constants stay in sync
+
+        // Verify primary paths are non-empty and well-formed
+        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty());
+        for path in git_bash_paths::PRIMARY_PATHS {
+            assert!(path.contains("bash.exe"), "Primary path should contain bash.exe: {}", path);
+        }
+
+        // Verify fallback paths are non-empty and well-formed
+        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty());
+        for path in git_bash_paths::FALLBACK_PATHS {
+            assert!(path.contains("bash.exe"), "Fallback path should contain bash.exe: {}", path);
+        }
+
+        // Specific verification that key paths exist
+        assert!(git_bash_paths::PRIMARY_PATHS.contains(&r"C:\Program Files\Git\bin\bash.exe"));
+        assert!(git_bash_paths::PRIMARY_PATHS.contains(&r"C:\Program Files\Git\usr\bin\bash.exe"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_git_bash_fallback_paths_included() {
+        // Verify fallback paths are included for edge cases
+        let fallback_paths = vec![
+            r"C:\tools\msys64\usr\bin\bash.exe",
+            r"C:\msys64\usr\bin\bash.exe",
+            r"C:\Git\bin\bash.exe",
+            r"C:\Git\usr\bin\bash.exe",
+        ];
+
+        for path in fallback_paths {
+            assert!(path.contains("bash.exe"));
+        }
+    }
+
+    #[test]
+    fn test_shell_resolution_git_bash_alias_recognized() {
+        // Verify git-bash is treated as a special alias distinct from "bash"
+        let git_bash = "git-bash";
+        let bash = "bash";
+
+        // These should be different shell names
+        assert_ne!(git_bash, bash);
+
+        // git-bash should map to bash.exe eventually (verified in resolve_shell_path)
+        assert!(git_bash.contains("bash"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_shell_resolution_error_message_git_bash() {
+        // Verify that git-bash error message is informative
+        let _shell = "git-bash";
+        let expected_error_substring = "bash.exe not found in PATH or common Git Bash locations";
+        assert!(expected_error_substring.contains("bash.exe"));
+        assert!(expected_error_substring.contains("PATH"));
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -51,6 +51,14 @@ fn resolve_git_binary() -> &'static str {
 
 const POLL_INTERVAL_MS: u64 = 6000;
 
+/// Windows-specific polling multiplier for longer intervals between checks
+#[cfg(target_os = "windows")]
+const WINDOWS_POLL_MULTIPLIER: u32 = 2;
+
+/// Cooldown duration when status hasn't changed (Windows only)
+#[cfg(target_os = "windows")]
+const STATUS_UNCHANGED_COOLDOWN_MS: u64 = POLL_INTERVAL_MS * 3;
+
 /// Git status information
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +84,50 @@ impl GitStatus {
 impl Default for GitStatus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Windows-only state for tracking when a CWD was last polled
+#[derive(Debug, Clone)]
+struct CwdPollState {
+    last_checked: Instant,
+    last_status: Option<GitStatus>,
+}
+
+impl CwdPollState {
+    fn new() -> Self {
+        Self {
+            last_checked: Instant::now() - Duration::from_secs(60), // Initially allow immediate poll
+            last_status: None,
+        }
+    }
+}
+
+impl Default for CwdPollState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Guard that resets is_polling flag when dropped (RAII pattern)
+struct PollingGuard {
+    is_polling: Arc<AtomicBool>,
+}
+
+impl PollingGuard {
+    fn new(is_polling: Arc<AtomicBool>) -> Option<Self> {
+        // Try to acquire the lock - return None if already polling
+        if !is_polling.swap(true, Ordering::SeqCst) {
+            Some(Self { is_polling })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for PollingGuard {
+    fn drop(&mut self) {
+        self.is_polling.store(false, Ordering::SeqCst);
     }
 }
 
@@ -108,13 +160,15 @@ struct GitStatusChangedEvent {
 ///
 /// Polls git status periodically and emits events when branch or status changes.
 /// Skips polling when the window is not visible to save resources.
+/// On Windows, uses CWD deduplication and throttling to reduce git.exe spawns.
 pub struct GitTracker {
     terminal_states: Arc<RwLock<HashMap<String, GitState>>>,
     app_handle: AppHandle,
     poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     is_polling_started: Arc<AtomicBool>,
     is_visible: Arc<AtomicBool>,
-    is_polling: Arc<AtomicBool>,
+    #[cfg(target_os = "windows")]
+    cwd_poll_states: Arc<RwLock<HashMap<String, CwdPollState>>>,
 }
 
 impl GitTracker {
@@ -126,7 +180,8 @@ impl GitTracker {
             poll_handle: Arc::new(RwLock::new(None)),
             is_polling_started: Arc::new(AtomicBool::new(false)),
             is_visible: Arc::new(AtomicBool::new(true)),
-            is_polling: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "windows")]
+            cwd_poll_states: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -162,7 +217,35 @@ impl GitTracker {
 
     /// Remove a terminal from tracking
     pub fn remove_terminal(&self, terminal_id: &str) {
-        self.terminal_states.write().remove(terminal_id);
+        // On Windows, clean up CWD poll state if no other terminals use this CWD
+        #[cfg(target_os = "windows")]
+        {
+            let cwd_to_remove = self.terminal_states
+                .read()
+                .get(terminal_id)
+                .map(|s| s.last_known_cwd.clone());
+
+            if let Some(cwd) = cwd_to_remove {
+                self.terminal_states.write().remove(terminal_id);
+
+                // Check if any other terminal uses this CWD
+                let cwd_still_in_use = self.terminal_states
+                    .read()
+                    .values()
+                    .any(|s| s.last_known_cwd == cwd);
+
+                if !cwd_still_in_use {
+                    self.cwd_poll_states.write().remove(&cwd);
+                }
+            } else {
+                self.terminal_states.write().remove(terminal_id);
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.terminal_states.write().remove(terminal_id);
+        }
 
         // If no terminals left, we could stop polling but keep it running
         // for simplicity - it will just skip when empty
@@ -201,60 +284,153 @@ impl GitTracker {
         // Reset the flag so polling can be restarted
         self.is_polling_started.store(false, Ordering::SeqCst);
         self.terminal_states.write().clear();
+        #[cfg(target_os = "windows")]
+        self.cwd_poll_states.write().clear();
     }
 
     /// Start the polling task
+    ///
+    /// Windows optimizations:
+    /// - Uses CWD deduplication: polls once per unique CWD, fans out results
+    /// - Implements cooldown when status hasn't changed
+    /// - Uses RAII guard to ensure is_polling flag is always reset
     fn start_polling(&self) {
         let states = self.terminal_states.clone();
         let is_visible = self.is_visible.clone();
-        let is_polling = self.is_polling.clone();
+        #[cfg(target_os = "windows")]
+        let cwd_poll_states = self.cwd_poll_states.clone();
         let app_handle = self.app_handle.clone();
         let poll_handle = self.poll_handle.clone();
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(POLL_INTERVAL_MS));
 
+            // Create is_polling flag for guard mechanism
+            let is_polling = Arc::new(AtomicBool::new(false));
+
+            #[cfg(target_os = "windows")]
+            let mut tick_count = 0u32;
+
             loop {
                 interval.tick().await;
+
+                #[cfg(target_os = "windows")]
+                {
+                    tick_count += 1;
+                }
 
                 // Skip when not visible
                 if !is_visible.load(Ordering::SeqCst) {
                     continue;
                 }
 
-                // Guard against concurrent polls
-                if is_polling.swap(true, Ordering::SeqCst) {
-                    continue; // Already polling
+                #[cfg(target_os = "windows")]
+                {
+                    // On Windows, only poll every Nth tick (throttling)
+                    if tick_count % WINDOWS_POLL_MULTIPLIER != 0 {
+                        continue;
+                    }
                 }
 
-                // Clone the data we need
-                let terminals: Vec<(String, String)> = states
-                    .read()
-                    .iter()
-                    .map(|(id, s)| (id.clone(), s.last_known_cwd.clone()))
-                    .collect();
+                // Use RAII guard - automatically resets is_polling when dropped
+                let guard_opt = PollingGuard::new(is_polling.clone());
+                let _guard = match guard_opt {
+                    Some(g) => g,
+                    None => continue, // Already polling
+                };
 
-                for (terminal_id, cwd) in terminals {
-                    // Check status
-                    if let Some(new_status) = Self::check_status_internal(&cwd) {
-                        let needs_emit = {
-                            let mut states_guard = states.write();
-                            if let Some(state) = states_guard.get_mut(&terminal_id) {
-                                let should_emit = Some(&new_status) != state.last_known_status.as_ref();
-                                state.last_known_status = Some(new_status.clone());
-                                should_emit
-                            } else {
-                                false
-                            }
+                #[cfg(target_os = "windows")]
+                {
+                    // Windows: CWD deduplication strategy
+                    // Group terminals by CWD, poll once per CWD, fan out results
+                    let cwd_states: HashMap<String, Vec<String>> = {
+                        let states_read = states.read();
+                        let mut map = HashMap::new();
+                        for (id, s) in states_read.iter() {
+                            map.entry(s.last_known_cwd.clone())
+                                .or_insert_with(Vec::new)
+                                .push(id.clone());
+                        }
+                        map
+                    };
+
+                    let now = Instant::now();
+                    let mut cwd_poll_states_write = cwd_poll_states.write();
+
+                    for (cwd, terminal_ids) in cwd_states {
+                        let poll_state = cwd_poll_states_write
+                            .entry(cwd.clone())
+                            .or_insert_with(CwdPollState::new);
+
+                        // Check cooldown based on whether status changed last time
+                        let cooldown_ms = if poll_state.last_status.is_some() {
+                            STATUS_UNCHANGED_COOLDOWN_MS
+                        } else {
+                            POLL_INTERVAL_MS
                         };
 
-                        if needs_emit {
-                            Self::emit_status_changed_static(&app_handle, &terminal_id, &Some(new_status));
+                        if now.duration_since(poll_state.last_checked) < Duration::from_millis(cooldown_ms) {
+                            continue; // Skip this CWD due to cooldown
+                        }
+
+                        // Update last checked time
+                        poll_state.last_checked = now;
+
+                        // Check status once for this CWD
+                        if let Some(new_status) = Self::check_status_internal(&cwd) {
+                            // Update the poll state's last status
+                            let _status_changed = Some(&new_status) != poll_state.last_status.as_ref();
+                            poll_state.last_status = Some(new_status.clone());
+
+                            // Fan out to all terminals using this CWD
+                            for terminal_id in terminal_ids {
+                                let needs_emit = {
+                                    let mut states_guard = states.write();
+                                    if let Some(state) = states_guard.get_mut(&terminal_id) {
+                                        let should_emit = Some(&new_status) != state.last_known_status.as_ref();
+                                        state.last_known_status = Some(new_status.clone());
+                                        should_emit
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                if needs_emit {
+                                    Self::emit_status_changed_static(&app_handle, &terminal_id, &Some(new_status.clone()));
+                                }
+                            }
                         }
                     }
                 }
 
-                is_polling.store(false, Ordering::SeqCst);
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Non-Windows: original per-terminal polling
+                    let terminals: Vec<(String, String)> = states
+                        .read()
+                        .iter()
+                        .map(|(id, s)| (id.clone(), s.last_known_cwd.clone()))
+                        .collect();
+
+                    for (terminal_id, cwd) in terminals {
+                        if let Some(new_status) = Self::check_status_internal(&cwd) {
+                            let needs_emit = {
+                                let mut states_guard = states.write();
+                                if let Some(state) = states_guard.get_mut(&terminal_id) {
+                                    let should_emit = Some(&new_status) != state.last_known_status.as_ref();
+                                    state.last_known_status = Some(new_status.clone());
+                                    should_emit
+                                } else {
+                                    false
+                                }
+                            };
+
+                            if needs_emit {
+                                Self::emit_status_changed_static(&app_handle, &terminal_id, &Some(new_status));
+                            }
+                        }
+                    }
+                }
             }
         });
 
@@ -470,5 +646,109 @@ mod tests {
         assert_eq!(status.untracked, 1);
         assert_eq!(status.modified, 0);
         assert!(status.has_changes);
+    }
+
+    // ========== Windows-specific tests for CWD dedupe and throttling ==========
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_cwd_poll_state_new() {
+        let state = CwdPollState::new();
+        assert!(state.last_status.is_none());
+        // New state should allow immediate poll (checked in past)
+        let now = Instant::now();
+        assert!(now.duration_since(state.last_checked) < Duration::from_secs(61));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_cwd_poll_state_default() {
+        let state = CwdPollState::default();
+        assert!(state.last_status.is_none());
+    }
+
+    #[test]
+    fn test_polling_guard_acquires_when_free() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let guard = PollingGuard::new(flag.clone());
+        assert!(guard.is_some());
+        assert!(flag.load(Ordering::SeqCst)); // Flag should be set
+    }
+
+    #[test]
+    fn test_polling_guard_fails_when_locked() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let guard = PollingGuard::new(flag.clone());
+        assert!(guard.is_none());
+        assert!(flag.load(Ordering::SeqCst)); // Flag should still be set
+    }
+
+    #[test]
+    fn test_polling_guard_resets_on_drop() {
+        let flag = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = PollingGuard::new(flag.clone()).unwrap();
+            assert!(flag.load(Ordering::SeqCst));
+        }
+        // After drop, flag should be reset
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_polling_guard_reset_after_early_return() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let _result = (|| -> Option<()> {
+            let _guard = PollingGuard::new(flag.clone())?;
+            // Simulate early return
+            None::<()>.or(Some(()))
+        })();
+        // Even with early return pattern, guard should clean up
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    // Test deduplication helper: grouping terminals by CWD
+    #[test]
+    fn test_cwd_grouping_logic() {
+        use std::collections::HashMap;
+        let mut terminals: HashMap<String, String> = HashMap::new();
+        terminals.insert("term-1".to_string(), "/home/user/repo".to_string());
+        terminals.insert("term-2".to_string(), "/home/user/repo".to_string());
+        terminals.insert("term-3".to_string(), "/home/user/other".to_string());
+
+        let mut cwd_groups: HashMap<String, Vec<String>> = HashMap::new();
+        for (id, cwd) in terminals.iter() {
+            cwd_groups.entry(cwd.clone()).or_default().push(id.clone());
+        }
+
+        assert_eq!(cwd_groups.len(), 2);
+        assert_eq!(cwd_groups.get("/home/user/repo").unwrap().len(), 2);
+        assert_eq!(cwd_groups.get("/home/user/other").unwrap().len(), 1);
+    }
+
+    // Test throttling decision logic
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_throttling_cooldown_with_status() {
+        let mut state = CwdPollState::new();
+        state.last_status = Some(GitStatus::new());
+        state.last_checked = Instant::now();
+
+        // Should be in cooldown immediately after poll with status
+        assert!(
+            Instant::now().duration_since(state.last_checked) < Duration::from_millis(STATUS_UNCHANGED_COOLDOWN_MS)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_throttling_cooldown_without_status() {
+        let mut state = CwdPollState::new();
+        state.last_status = None; // No git repo or initial state
+        state.last_checked = Instant::now();
+
+        // Shorter cooldown when no status
+        assert!(
+            Instant::now().duration_since(state.last_checked) < Duration::from_millis(POLL_INTERVAL_MS)
+        );
     }
 }

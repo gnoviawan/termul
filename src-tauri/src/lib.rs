@@ -4,6 +4,29 @@ mod migrations;
 mod pty;
 mod trackers;
 
+/// Git Bash path candidates shared between shell detection and PTY resolver.
+/// When updating this list, ensure BOTH lib.rs and pty/manager.rs are updated.
+/// Version: v1.0
+mod git_bash_paths {
+    use super::*;
+
+    /// Primary Git Bash installation paths (Program Files)
+    pub const PRIMARY_PATHS: &[&str] = &[
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    ];
+
+    /// Fallback Git Bash paths for non-standard installations
+    pub const FALLBACK_PATHS: &[&str] = &[
+        r"C:\tools\msys64\usr\bin\bash.exe",
+        r"C:\msys64\usr\bin\bash.exe",
+        r"C:\Git\bin\bash.exe",
+        r"C:\Git\usr\bin\bash.exe",
+    ];
+}
+
 use migrations::MigrationManager;
 use serde::Serialize;
 use std::env;
@@ -118,17 +141,26 @@ fn get_available_shells() -> Vec<ShellInfo> {
 
     #[cfg(target_os = "windows")]
     {
-        let candidates = vec![
+        let mut candidates = vec![
             ("powershell", "powershell.exe", None),
             ("pwsh", "pwsh.exe", None), // PowerShell 7 via PATH
             ("pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", None), // PowerShell 7 explicit path
             ("cmd", "cmd.exe", None),
-            ("git-bash", "bash.exe", None), // Git Bash via PATH (when Git is in PATH)
-            ("git-bash", "C:\\Program Files\\Git\\bin\\bash.exe", None),
-            ("git-bash", "C:\\Program Files (x86)\\Git\\bin\\bash.exe", None),
-            ("git-bash", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", None),
             ("wsl", "wsl.exe", None),
         ];
+
+        // Git Bash via PATH
+        candidates.push(("git-bash", "bash.exe", None));
+
+        // Add primary paths from shared constants
+        for path in git_bash_paths::PRIMARY_PATHS {
+            candidates.push(("git-bash", path, None));
+        }
+
+        // Add fallback paths from shared constants
+        for path in git_bash_paths::FALLBACK_PATHS {
+            candidates.push(("git-bash", path, None));
+        }
 
         for (name, path, args) in candidates {
             if is_shell_available(path) {
@@ -383,5 +415,39 @@ mod tests {
         let result = get_home_directory();
         assert!(result.is_ok());
         assert!(!result.unwrap().is_empty());
+    }
+
+    // ========== Git Bash candidate sync tests ==========
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_git_bash_primary_candidates_defined() {
+        // Verify primary Git Bash candidates are defined
+        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty(),
+                "PRIMARY_PATHS should not be empty");
+
+        // Verify specific well-known paths exist
+        assert!(git_bash_paths::PRIMARY_PATHS.iter().any(|p| p.contains("Program Files") && p.contains("Git\\bin")));
+        assert!(git_bash_paths::PRIMARY_PATHS.iter().any(|p| p.contains("Git\\usr\\bin")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_git_bash_fallback_candidates_defined() {
+        // Verify fallback Git Bash candidates are defined
+        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty(),
+                "FALLBACK_PATHS should not be empty");
+
+        // All fallback paths should contain bash.exe
+        for path in git_bash_paths::FALLBACK_PATHS {
+            assert!(path.contains("bash.exe"),
+                    "Fallback path should contain bash.exe: {}", path);
+        }
+    }
+
+    #[test]
+    fn test_git_bash_shell_display_name() {
+        let display_name = shell_display_name("git-bash");
+        assert_eq!(display_name, "Git Bash");
     }
 }
