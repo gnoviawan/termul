@@ -32,15 +32,59 @@ use serde::Serialize;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+fn resolve_executable_from_path(command: &str) -> Option<String> {
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    if command.contains('\\') || command.contains('/') {
+        let candidate = Path::new(command);
+        return candidate.exists().then(|| command.to_string());
+    }
+
+    let path_var = env::var_os("PATH")?;
+    let pathext_var =
+        env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+
+    let command_path = Path::new(command);
+    let has_extension = command_path.extension().is_some();
+
+    let mut extensions: Vec<OsString> = Vec::new();
+    if has_extension {
+        extensions.push(OsString::new());
+    } else {
+        extensions.push(OsString::new());
+        for ext in pathext_var
+            .to_string_lossy()
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            extensions.push(OsString::from(ext.trim()));
+        }
+    }
+
+    for dir in env::split_paths(&path_var) {
+        for ext in &extensions {
+            let candidate: PathBuf = if ext.is_empty() {
+                dir.join(command)
+            } else {
+                dir.join(format!("{}{}", command, ext.to_string_lossy()))
+            };
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
 
 // Re-exports for commands
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
-
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -58,21 +102,30 @@ pub struct DetectedShells {
     pub default: Option<ShellInfo>,
 }
 
+/// Cache for shell detection results to avoid repeated `where` command spawns
+static AVAILABLE_SHELLS_CACHE: OnceLock<Vec<ShellInfo>> = OnceLock::new();
+static CACHE_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[tauri::command]
 fn detect_shells() -> Result<DetectedShells, String> {
-    let shells = get_available_shells();
+    let count = CACHE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    log::debug!("[ShellDetect] detect_shells called (call #{})", count);
+
+    let shells = AVAILABLE_SHELLS_CACHE.get_or_init(|| {
+        log::debug!("[ShellDetect] Computing available shells (cached)");
+        get_available_shells()
+    });
     let default = get_default_shell_info();
 
     Ok(DetectedShells {
-        available: shells,
+        available: shells.clone(),
         default,
     })
 }
 
 #[tauri::command]
 fn get_default_shell() -> Result<ShellInfo, String> {
-    get_default_shell_info()
-        .ok_or_else(|| "No default shell found".to_string())
+    get_default_shell_info().ok_or_else(|| "No default shell found".to_string())
 }
 
 #[tauri::command]
@@ -89,7 +142,6 @@ fn get_home_directory() -> Result<String, String> {
         Ok(env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     }
 }
-
 
 fn get_default_shell_info() -> Option<ShellInfo> {
     #[cfg(target_os = "windows")]
@@ -203,20 +255,45 @@ fn get_available_shells() -> Vec<ShellInfo> {
     shells
 }
 
+#[cfg(target_os = "windows")]
+fn is_builtin_windows_shell(shell_path: &str) -> bool {
+    let normalized = shell_path.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
+            | "wsl"
+            | "wsl.exe"
+    )
+}
+
 fn is_shell_available(shell_path: &str) -> bool {
+    log::debug!("[ShellDetect] Checking availability: {}", shell_path);
     #[cfg(target_os = "windows")]
     {
         if !shell_path.contains('\\') && !shell_path.contains('/') {
-            // Verify PATH-based shells actually exist using `where`
-            return std::process::Command::new("where")
-                .arg(shell_path)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            if is_builtin_windows_shell(shell_path) {
+                log::debug!(
+                    "[ShellDetect] Built-in Windows shell, skipping PATH resolution: {}",
+                    shell_path
+                );
+                return true;
+            }
+
+            let resolved = resolve_executable_from_path(shell_path);
+            if resolved.is_some() {
+                log::debug!(
+                    "[ShellDetect] Resolved from PATH without spawning cmd: {}",
+                    shell_path
+                );
+            }
+            return resolved.is_some();
         }
+
         Path::new(shell_path).exists()
     }
     #[cfg(not(target_os = "windows"))]
@@ -417,31 +494,61 @@ mod tests {
         assert!(!result.unwrap().is_empty());
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_is_builtin_windows_shell() {
+        assert!(is_builtin_windows_shell("cmd"));
+        assert!(is_builtin_windows_shell("CMD.EXE"));
+        assert!(is_builtin_windows_shell("powershell"));
+        assert!(is_builtin_windows_shell("pwsh"));
+        assert!(is_builtin_windows_shell("wsl"));
+        assert!(!is_builtin_windows_shell("bash.exe"));
+        assert!(!is_builtin_windows_shell("git-bash"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_resolve_executable_from_path_nonexistent() {
+        let result = resolve_executable_from_path("definitely-not-a-real-shell-xyz");
+        assert!(result.is_none());
+    }
+
     // ========== Git Bash candidate sync tests ==========
 
     #[cfg(target_os = "windows")]
     #[test]
     fn test_git_bash_primary_candidates_defined() {
         // Verify primary Git Bash candidates are defined
-        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty(),
-                "PRIMARY_PATHS should not be empty");
+        assert!(
+            !git_bash_paths::PRIMARY_PATHS.is_empty(),
+            "PRIMARY_PATHS should not be empty"
+        );
 
         // Verify specific well-known paths exist
-        assert!(git_bash_paths::PRIMARY_PATHS.iter().any(|p| p.contains("Program Files") && p.contains("Git\\bin")));
-        assert!(git_bash_paths::PRIMARY_PATHS.iter().any(|p| p.contains("Git\\usr\\bin")));
+        assert!(git_bash_paths::PRIMARY_PATHS
+            .iter()
+            .any(|p| p.contains("Program Files") && p.contains("Git\\bin")));
+        assert!(git_bash_paths::PRIMARY_PATHS
+            .iter()
+            .any(|p| p.contains("Git\\usr\\bin")));
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn test_git_bash_fallback_candidates_defined() {
         // Verify fallback Git Bash candidates are defined
-        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty(),
-                "FALLBACK_PATHS should not be empty");
+        assert!(
+            !git_bash_paths::FALLBACK_PATHS.is_empty(),
+            "FALLBACK_PATHS should not be empty"
+        );
 
         // All fallback paths should contain bash.exe
         for path in git_bash_paths::FALLBACK_PATHS {
-            assert!(path.contains("bash.exe"),
-                    "Fallback path should contain bash.exe: {}", path);
+            assert!(
+                path.contains("bash.exe"),
+                "Fallback path should contain bash.exe: {}",
+                path
+            );
         }
     }
 

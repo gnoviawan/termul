@@ -1,6 +1,8 @@
-use crate::migrations::{MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion};
+use crate::migrations::{
+    MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
+};
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, GitStatus};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -259,7 +261,6 @@ pub async fn data_migration_rollback(
 ) -> Result<IpcResult<()>, String> {
     Ok(migration_manager.rollback_migration(request.version))
 }
-
 
 /// Get available shells
 #[cfg(test)]
