@@ -411,7 +411,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Next terminal (Ctrl+Tab) - only on workspace routes
+      // Next terminal/tab (default: Ctrl+PageDown)
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
@@ -419,7 +419,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Previous terminal (Ctrl+Shift+Tab) - only on workspace routes
+      // Previous terminal/tab (default: Ctrl+PageUp)
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
@@ -490,7 +490,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     activeTab
   ])
 
-  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
+  // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
     return keyboardApi.onShortcut((shortcut) => {
       switch (shortcut) {

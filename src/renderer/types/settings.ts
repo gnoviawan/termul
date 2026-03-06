@@ -135,14 +135,14 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   nextTerminal: {
     id: 'nextTerminal',
     label: 'Next Tab',
-    description: 'Switch to next tab (terminal or editor)',
-    defaultKey: 'ctrl+tab'
+    description: 'Switch to next tab (terminal or editor) using the Tauri-safe fallback',
+    defaultKey: 'ctrl+pagedown'
   },
   prevTerminal: {
     id: 'prevTerminal',
     label: 'Previous Tab',
-    description: 'Switch to previous tab (terminal or editor)',
-    defaultKey: 'ctrl+shift+tab'
+    description: 'Switch to previous tab (terminal or editor) using the Tauri-safe fallback',
+    defaultKey: 'ctrl+pageup'
   },
   zoomIn: {
     id: 'zoomIn',

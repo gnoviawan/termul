@@ -12,7 +12,7 @@ import {
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
 import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
-import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -43,7 +43,6 @@ export default function AppPreferences(): React.JSX.Element {
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [isResetShortcutsDialogOpen, setIsResetShortcutsDialogOpen] = useState(false)
-
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const updateShortcut = useUpdateShortcut()
@@ -66,7 +65,7 @@ export default function AppPreferences(): React.JSX.Element {
         // Silently fail - user will see empty dropdown with System Default option
       }
     }
-    loadShells()
+    void loadShells()
   }, [])
 
   const handleFontFamilyChange = (value: string) => {

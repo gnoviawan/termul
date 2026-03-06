@@ -130,6 +130,10 @@ export function formatKeyForDisplay(key: string): string {
           return 'Esc'
         case 'space':
           return 'Space'
+        case 'pageup':
+          return 'PageUp'
+        case 'pagedown':
+          return 'PageDown'
         default:
           return part.toUpperCase()
       }
