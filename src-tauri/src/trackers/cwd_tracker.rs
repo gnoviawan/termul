@@ -383,15 +383,15 @@ mod tests {
         let is_visible = std::sync::atomic::AtomicBool::new(true);
 
         // Initially visible
-        assert_eq!(is_visible.load(Ordering::Relaxed), true);
+        assert!(is_visible.load(Ordering::Relaxed));
 
         // Hide (pause polling)
         is_visible.store(false, Ordering::Relaxed);
-        assert_eq!(is_visible.load(Ordering::Relaxed), false);
+        assert!(!is_visible.load(Ordering::Relaxed));
 
         // Show (resume polling)
         is_visible.store(true, Ordering::Relaxed);
-        assert_eq!(is_visible.load(Ordering::Relaxed), true);
+        assert!(is_visible.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -400,21 +400,21 @@ mod tests {
         let poll_count = std::sync::atomic::AtomicBool::new(false);
 
         // Initially false
-        assert_eq!(poll_count.load(Ordering::Relaxed), false);
+        assert!(!poll_count.load(Ordering::Relaxed));
 
         // XOR with true toggles the value
         poll_count.fetch_xor(true, Ordering::Relaxed);
-        assert_eq!(poll_count.load(Ordering::Relaxed), true);
+        assert!(poll_count.load(Ordering::Relaxed));
 
         // XOR with true toggles again
         poll_count.fetch_xor(true, Ordering::Relaxed);
-        assert_eq!(poll_count.load(Ordering::Relaxed), false);
+        assert!(!poll_count.load(Ordering::Relaxed));
 
         // AND with false resets to false
         poll_count.store(true, Ordering::Relaxed);
         let previous = poll_count.fetch_and(false, Ordering::Relaxed);
-        assert_eq!(previous, true);
-        assert_eq!(poll_count.load(Ordering::Relaxed), false);
+        assert!(previous);
+        assert!(!poll_count.load(Ordering::Relaxed));
     }
 
     #[test]

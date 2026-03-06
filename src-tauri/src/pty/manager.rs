@@ -540,14 +540,14 @@ impl PtyManager {
 
             slot_reservation.commit();
 
-            return Ok(TerminalInfo {
+            Ok(TerminalInfo {
                 id,
                 shell: shell_path,
                 cwd,
                 pid,
                 cols,
                 rows,
-            });
+            })
         }
 
         // On non-Windows, use portable-pty as before
@@ -1029,6 +1029,7 @@ impl PtyManager {
 
     /// Get the absolute path for a shell if available
     /// Uses cache to avoid repeated `where`/`which` command spawns
+    #[cfg(target_os = "windows")]
     fn get_absolute_shell_path(&self, shell_path: &str) -> Option<String> {
         use std::sync::OnceLock;
 
@@ -1067,12 +1068,15 @@ impl PtyManager {
                 | "cmd.exe"
                 | "powershell"
                 | "powershell.exe"
+                | "pwsh"
+                | "pwsh.exe"
                 | "wsl"
                 | "wsl.exe"
         )
     }
 
     /// Internal uncached resolution - resolve via PATH scan or absolute path
+    #[cfg(target_os = "windows")]
     fn resolve_shell_path_uncached(&self, shell_path: &str) -> Option<String> {
         log::debug!("[ShellResolve] Uncached resolution for: {}", shell_path);
         // If it's already an absolute path that exists, return it
@@ -1148,7 +1152,7 @@ impl PtyManager {
     ) -> HashMap<String, String> {
         #[cfg(target_os = "windows")]
         {
-            return merge_windows_environment_map(env::vars(), custom_env);
+            merge_windows_environment_map(env::vars(), custom_env)
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -1225,9 +1229,8 @@ impl portable_pty::ChildKiller for WindowsPidKiller {
             if handle.is_null() {
                 return Err(std::io::Error::last_os_error());
             }
-            let terminate_ok =
-                winapi::um::processthreadsapi::TerminateProcess(handle as *mut std::ffi::c_void, 1);
-            let close_ok = winapi::um::handleapi::CloseHandle(handle as *mut std::ffi::c_void);
+            let terminate_ok = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
+            let close_ok = winapi::um::handleapi::CloseHandle(handle);
             if terminate_ok == 0 {
                 return Err(std::io::Error::last_os_error());
             }

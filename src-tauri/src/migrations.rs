@@ -495,9 +495,8 @@ impl MigrationManager {
                     .and_then(|index| applied_versions.get(index).cloned())
                     .unwrap_or_else(|| "0.0.0".to_string());
 
-                self.write_history_records(&next_history).and_then(|_| {
-                    self.set_schema_version_result(previous_version)
-                })
+                self.write_history_records(&next_history)
+                    .and_then(|_| self.set_schema_version_result(previous_version))
             }
             Err(_) => self.write_history_records(&next_history),
         };
@@ -554,7 +553,7 @@ fn compare_versions(v1: &str, v2: &str) -> std::cmp::Ordering {
 /// Convert version string to comparable parts tuple
 fn version_to_parts(version: &str) -> (u32, u32, u32) {
     let parts: Vec<&str> = version.split('.').collect();
-    let major = parts.get(0).and_then(|p| p.parse().ok()).unwrap_or(0);
+    let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
     let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
     let patch = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(0);
     (major, minor, patch)
@@ -570,8 +569,7 @@ fn chrono_timestamp() -> String {
         .unwrap_or_default();
 
     let secs = duration.as_secs();
-    let datetime = format_datetime(secs);
-    datetime
+    format_datetime(secs)
 }
 
 /// Format Unix timestamp to ISO 8601

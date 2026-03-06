@@ -5,15 +5,15 @@ mod pty;
 mod shell_paths;
 mod trackers;
 
+#[cfg(target_os = "windows")]
+use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
-#[cfg(target_os = "windows")]
-use crate::shell_paths::git_bash_paths;
+use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager, RunEvent,
@@ -173,7 +173,7 @@ fn get_default_shell_info() -> Option<ShellInfo> {
     #[cfg(not(target_os = "windows"))]
     {
         let shell = env::var("SHELL").ok()?;
-        let name = shell.split('/').last().unwrap_or("sh").to_string();
+        let name = shell.split('/').next_back().unwrap_or("sh").to_string();
         let display_name = shell_display_name(&name);
         Some(ShellInfo {
             name,
@@ -328,7 +328,10 @@ fn get_main_webview_window<R: tauri::Runtime>(
         .ok_or_else(|| "Main webview window not found".to_string())
 }
 
-fn set_zoom_factor<R: tauri::Runtime>(app: &tauri::AppHandle<R>, zoom_factor: f64) -> Result<(), String> {
+fn set_zoom_factor<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    zoom_factor: f64,
+) -> Result<(), String> {
     let state = app
         .try_state::<ViewMenuState>()
         .ok_or_else(|| "View menu state is not initialized".to_string())?;
@@ -345,7 +348,10 @@ fn set_zoom_factor<R: tauri::Runtime>(app: &tauri::AppHandle<R>, zoom_factor: f6
     Ok(())
 }
 
-fn adjust_zoom_factor<R: tauri::Runtime>(app: &tauri::AppHandle<R>, delta: f64) -> Result<(), String> {
+fn adjust_zoom_factor<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    delta: f64,
+) -> Result<(), String> {
     let state = app
         .try_state::<ViewMenuState>()
         .ok_or_else(|| "View menu state is not initialized".to_string())?;
@@ -420,7 +426,9 @@ fn open_external_url(url: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+fn build_app_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<tauri::menu::Menu<R>> {
     let file_menu = {
         #[cfg(target_os = "macos")]
         let builder = SubmenuBuilder::new(app, "File").close_window();
@@ -453,17 +461,18 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out")
         .accelerator("CmdOrCtrl+-")
         .build(app)?;
-    let toggle_fullscreen = MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen")
-        .build(app)?;
+    let toggle_fullscreen =
+        MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen").build(app)?;
 
     let view_menu = {
         let builder = SubmenuBuilder::new(app, "View").item(&reload);
 
         #[cfg(debug_assertions)]
         let builder = {
-            let toggle_devtools = MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
-                .accelerator("CmdOrCtrl+Shift+I")
-                .build(app)?;
+            let toggle_devtools =
+                MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
+                    .accelerator("CmdOrCtrl+Shift+I")
+                    .build(app)?;
             builder.item(&toggle_devtools)
         };
 
@@ -484,12 +493,10 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .close_window()
         .build()?;
 
-    let check_for_updates = MenuItemBuilder::with_id(
-        MENU_ID_CHECK_FOR_UPDATES,
-        "Check for Updates...",
-    )
-    .accelerator("CmdOrCtrl+Shift+U")
-    .build(app)?;
+    let check_for_updates =
+        MenuItemBuilder::with_id(MENU_ID_CHECK_FOR_UPDATES, "Check for Updates...")
+            .accelerator("CmdOrCtrl+Shift+U")
+            .build(app)?;
     let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
 
     let help_menu = SubmenuBuilder::new(app, "Help")
@@ -518,8 +525,7 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     #[cfg(not(target_os = "macos"))]
     let menu = MenuBuilder::new(app);
 
-    menu
-        .item(&file_menu)
+    menu.item(&file_menu)
         .item(&edit_menu)
         .item(&view_menu)
         .item(&window_menu)
@@ -634,7 +640,10 @@ pub fn run() {
                 }
 
                 if migration_failures.is_empty() && !results.is_empty() {
-                    log::info!("Completed {} data migration(s) during startup", results.len());
+                    log::info!(
+                        "Completed {} data migration(s) during startup",
+                        results.len()
+                    );
                 }
             }
 

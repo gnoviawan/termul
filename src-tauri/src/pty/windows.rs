@@ -39,6 +39,14 @@ impl Drop for ConPtyHandles {
     }
 }
 
+type ConPtySpawnResult = (
+    Box<dyn std::io::Read + Send>,
+    Box<dyn std::io::Write + Send>,
+    u32,
+    *mut c_void,
+    ConPtyHandles,
+);
+
 fn validate_conpty_size(cols: u16, rows: u16) -> std::io::Result<winapi::um::wincon::COORD> {
     fn validate_dimension(value: u16, name: &str) -> std::io::Result<i16> {
         if value == 0 || value > i16::MAX as u16 {
@@ -69,10 +77,10 @@ pub fn resize_conpty(handles: &ConPtyHandles, cols: u16, rows: u16) -> std::io::
 
     let result = unsafe { winapi::um::consoleapi::ResizePseudoConsole(handles.raw_hpcon(), size) };
     if result != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("ResizePseudoConsole failed: HRESULT 0x{:08X}", result),
-        ));
+        return Err(std::io::Error::other(format!(
+            "ResizePseudoConsole failed: HRESULT 0x{:08X}",
+            result
+        )));
     }
 
     Ok(())
@@ -122,13 +130,7 @@ pub fn spawn_conpty(
     cols: u16,
     rows: u16,
     env: &std::collections::HashMap<String, String>,
-) -> std::io::Result<(
-    Box<dyn std::io::Read + Send>,
-    Box<dyn std::io::Write + Send>,
-    u32,
-    *mut c_void,
-    ConPtyHandles,
-)> {
+) -> std::io::Result<ConPtySpawnResult> {
     #[cfg(not(target_os = "windows"))]
     {
         return Err(std::io::Error::new(
@@ -211,10 +213,10 @@ pub fn spawn_conpty(
             CloseHandle(input_write);
             CloseHandle(output_read);
             CloseHandle(output_write);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("CreatePseudoConsole failed: HRESULT 0x{:08X}", result),
-            ));
+            return Err(std::io::Error::other(format!(
+                "CreatePseudoConsole failed: HRESULT 0x{:08X}",
+                result
+            )));
         }
 
         // 3. Initialize the attribute list
@@ -223,11 +225,10 @@ pub fn spawn_conpty(
             std::ptr::null_mut(),
             1,
             0,
-            &mut attr_list_size as *mut _ as *mut usize,
+            &mut attr_list_size as *mut _,
         );
 
-        let attr_list_words =
-            ((attr_list_size + size_of::<usize>() - 1) / size_of::<usize>()).max(1);
+        let attr_list_words = attr_list_size.div_ceil(size_of::<usize>()).max(1);
         let mut attr_list_storage: Vec<MaybeUninit<usize>> =
             vec![MaybeUninit::uninit(); attr_list_words];
         let attr_list = attr_list_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
@@ -246,7 +247,7 @@ pub fn spawn_conpty(
             attr_list,
             0,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-            hpcon as *mut c_void,
+            hpcon,
             std::mem::size_of::<HPCON>(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -308,18 +309,10 @@ pub fn spawn_conpty(
         let reader = Box::new(File::from_raw_handle(output_read)) as Box<dyn std::io::Read + Send>;
         let writer = Box::new(File::from_raw_handle(input_write)) as Box<dyn std::io::Write + Send>;
 
-        let conpty_handles = ConPtyHandles {
-            hpcon: hpcon as *mut c_void,
-        };
+        let conpty_handles = ConPtyHandles { hpcon };
 
         CloseHandle(pi.hThread);
 
-        Ok((
-            reader,
-            writer,
-            pi.dwProcessId,
-            pi.hProcess as *mut c_void,
-            conpty_handles,
-        ))
+        Ok((reader, writer, pi.dwProcessId, pi.hProcess, conpty_handles))
     }
 }

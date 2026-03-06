@@ -185,6 +185,7 @@ impl Default for GitStatus {
 }
 
 /// Windows-only state for tracking when a CWD was last polled
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
 struct CwdPollState {
     last_checked: Instant,
@@ -193,6 +194,7 @@ struct CwdPollState {
     last_snapshot_unchanged: bool,
 }
 
+#[cfg(target_os = "windows")]
 impl CwdPollState {
     fn new() -> Self {
         Self {
@@ -204,11 +206,16 @@ impl CwdPollState {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Default for CwdPollState {
     fn default() -> Self {
         Self::new()
     }
 }
+
+type BranchEmit = (String, Option<String>);
+type StatusEmit = (String, Option<GitStatus>);
+type GitResultEmits = (Vec<BranchEmit>, Vec<StatusEmit>);
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
@@ -421,10 +428,10 @@ impl GitTracker {
         {
             let cwd_states: HashMap<String, Vec<String>> = {
                 let states_read = self.terminal_states.read();
-                let mut map = HashMap::new();
+                let mut map: HashMap<String, Vec<String>> = HashMap::new();
                 for (id, state) in states_read.iter() {
                     map.entry(state.last_known_cwd.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(id.clone());
                 }
                 map
@@ -437,7 +444,7 @@ impl GitTracker {
 
                 {
                     let mut cwd_poll_states = self.cwd_poll_states.write();
-                    let poll_state = cwd_poll_states.entry(cwd).or_insert_with(CwdPollState::new);
+                    let poll_state = cwd_poll_states.entry(cwd).or_default();
                     poll_state.last_checked = now;
                     poll_state.last_branch = new_branch.clone();
                     poll_state.last_status = new_status.clone();
@@ -474,8 +481,12 @@ impl GitTracker {
                 let new_status = Self::check_status_internal(&cwd);
                 let new_branch = Self::check_branch_internal(&cwd);
                 let terminal_ids = vec![terminal_id.clone()];
-                let (branch_emits, status_emits) =
-                    Self::apply_git_results(&self.terminal_states, &terminal_ids, new_branch, new_status);
+                let (branch_emits, status_emits) = Self::apply_git_results(
+                    &self.terminal_states,
+                    &terminal_ids,
+                    new_branch,
+                    new_status,
+                );
 
                 for (_, branch) in branch_emits {
                     Self::emit_branch_changed_static(&self.app_handle, &terminal_id, &branch);
@@ -499,7 +510,11 @@ impl GitTracker {
         let terminal_ids: Vec<String> = states.read().keys().cloned().collect();
         let updates: Vec<(String, String)> = terminal_ids
             .into_iter()
-            .filter_map(|terminal_id| cwd_tracker.get_cwd(&terminal_id).map(|cwd| (terminal_id, cwd)))
+            .filter_map(|terminal_id| {
+                cwd_tracker
+                    .get_cwd(&terminal_id)
+                    .map(|cwd| (terminal_id, cwd))
+            })
             .collect();
 
         if updates.is_empty() {
@@ -535,10 +550,7 @@ impl GitTracker {
         terminal_ids: &[String],
         branch: Option<String>,
         status: Option<GitStatus>,
-    ) -> (
-        Vec<(String, Option<String>)>,
-        Vec<(String, Option<GitStatus>)>,
-    ) {
+    ) -> GitResultEmits {
         let mut branch_emits = Vec::new();
         let mut status_emits = Vec::new();
         let mut states_guard = states.write();
@@ -561,12 +573,15 @@ impl GitTracker {
     }
 
     async fn poll_git_snapshot(cwd: String) -> (Option<GitStatus>, Option<String>) {
-        tokio::time::timeout(Duration::from_millis(GIT_COMMAND_TIMEOUT_MS), tokio::task::spawn_blocking(move || {
-            (
-                Self::check_status_internal(&cwd),
-                Self::check_branch_internal(&cwd),
-            )
-        }))
+        tokio::time::timeout(
+            Duration::from_millis(GIT_COMMAND_TIMEOUT_MS),
+            tokio::task::spawn_blocking(move || {
+                (
+                    Self::check_status_internal(&cwd),
+                    Self::check_branch_internal(&cwd),
+                )
+            }),
+        )
         .await
         .ok()
         .and_then(|result| result.ok())
@@ -692,10 +707,10 @@ impl GitTracker {
                     // Group terminals by CWD, poll once per unique CWD, then fan out results
                     let cwd_states: HashMap<String, Vec<String>> = {
                         let states_read = states.read();
-                        let mut map = HashMap::new();
+                        let mut map: HashMap<String, Vec<String>> = HashMap::new();
                         for (id, state) in states_read.iter() {
                             map.entry(state.last_known_cwd.clone())
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(id.clone());
                         }
                         map
@@ -707,9 +722,7 @@ impl GitTracker {
                         let mut targets = Vec::new();
 
                         for (cwd, terminal_ids) in cwd_states {
-                            let poll_state = cwd_poll_states_write
-                                .entry(cwd.clone())
-                                .or_insert_with(CwdPollState::new);
+                            let poll_state = cwd_poll_states_write.entry(cwd.clone()).or_default();
 
                             let cooldown_ms = if poll_state.last_snapshot_unchanged {
                                 STATUS_UNCHANGED_COOLDOWN_MS
