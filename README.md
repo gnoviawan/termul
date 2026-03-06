@@ -1,12 +1,13 @@
 # Termul Manager
 
-A modern, project-aware terminal manager built with Electron and Tauri. Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+A modern, project-aware terminal manager built with Tauri. Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+
+Original project by `gnoviawan`. This repository also includes Tauri port and migration contributions by `mannnrachman`.
 
 > **Note:** This is an experimental project developed using long-running autonomous AI agents. It took a total of 15 hours for the first iteration and 8 hours for the 2nd UI iteration, with minimal human intervention, plus 6 iterations for bug fixes with HITL (Human-in-the-Loop).
 
 ![Termul Manager](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Electron](https://img.shields.io/badge/Electron-39-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri)
 ![React](https://img.shields.io/badge/React-18-blue)
 
@@ -21,7 +22,6 @@ A modern, project-aware terminal manager built with Electron and Tauri. Termul t
 - **Command History** - Track and search through command history
 - **Keyboard Shortcuts** - Customizable keyboard shortcuts for power users
 - **Cross-Platform** - Works on Windows, macOS, and Linux
-- **Dual Backend Support** - Available as both Electron and Tauri builds
 
 ## Screenshots
 
@@ -82,7 +82,7 @@ cargo --version
 
 ```bash
 # Clone the repository
-git clone https://github.com/gnoviawan/termul/termul.git
+git clone https://github.com/gnoviawan/termul.git
 cd termul
 
 # Install dependencies
@@ -91,35 +91,15 @@ npm install
 
 ### Running in Development Mode
 
-**Electron:**
 ```bash
 npm run dev
 ```
 
-**Tauri:**
-```bash
-npm run dev:tauri
-```
-
 ### Building for Production
-
-#### Electron Builds
 
 ```bash
 # Build for your current platform
 npm run build
-
-# Build installers
-npm run build:win    # Windows (NSIS + Portable)
-npm run build:mac    # macOS (DMG + ZIP)
-npm run build:linux  # Linux (AppImage + DEB)
-```
-
-#### Tauri Builds
-
-```bash
-# Build for your current platform
-npm run build:tauri
 
 # Debug build (faster compilation, larger binary)
 npm run build:tauri:debug
@@ -131,11 +111,7 @@ npm run build:tauri:mac-x64    # macOS (Intel)
 npm run build:tauri:linux      # Linux (x64)
 ```
 
-**Build Output Locations:**
-- **Electron:** `dist/` directory
-- **Tauri:** `src-tauri/target/release/bundle/` directory
-
-> **Tip:** Tauri builds produce significantly smaller binaries (~5-10 MB) compared to Electron (~150+ MB).
+**Build Output Location:** `src-tauri/target/release/bundle/`
 
 ## Usage
 
@@ -158,39 +134,25 @@ npm run build:tauri:linux      # Linux (x64)
 
 | Action | Default Shortcut |
 |--------|------------------|
-| New Terminal | `Ctrl+Shift+T` |
-| Close Terminal | `Ctrl+Shift+W` |
-| Next Tab | `Ctrl+Tab` |
-| Previous Tab | `Ctrl+Shift+Tab` |
-| Command Palette | `Ctrl+Shift+P` |
+| New Terminal | `Ctrl+T` |
+| Next Tab | `Ctrl+PageDown` |
+| Previous Tab | `Ctrl+PageUp` |
+| Command Palette | `Ctrl+K` or `Ctrl+Shift+P` |
 
-Shortcuts are customizable in Settings.
+Shortcuts are customizable in Settings. On Tauri/WebView2, browser-reserved shortcuts such as `Ctrl+Tab` are not used as defaults because they are not reliably interceptable.
 
 ## Migration Status
 
-Termul is currently migrating from Electron to Tauri 2.0 for better performance, smaller bundle sizes, and improved security.
+Termul has migrated its desktop runtime to Tauri 2.0 for better performance, smaller bundle sizes, and improved security. The remaining migration artifacts are now mostly archived documentation and cleanup notes.
 
-- **Current Phase:** Phase 4 - Updater + CI/CD + Signing (partial)
-- **Branch:** `feat/tauri-poc`
-- **Status:** Core features implemented, backup/rollback pending
+- **Current Phase:** Cleanup + parity hardening
+- **Status:** Core runtime on Tauri, repository cleanup still in progress
 
-For detailed migration progress, see [Electron to Tauri Migration Status](docs/electron-to-tauri-migration-status.md).
+For archived migration history, see [Electron to Tauri Migration Status](docs/electron-old/electron-to-tauri-migration-status.md). For the current cleanup snapshot, use [Tauri Cleanup Status (2026-03-06)](docs/handoffs/tauri-cleanup-status-2026-03-06.md).
 
 ## Tech Stack
 
-### Electron Build
-- **Electron** - Cross-platform desktop app framework
-- **React 18** - UI framework
-- **TypeScript** - Type safety
-- **Vite** - Build tool (via electron-vite)
-- **Tailwind CSS** - Styling
-- **shadcn/ui** - UI components
-- **Zustand** - State management
-- **node-pty** - Terminal emulation
-- **xterm.js** - Terminal rendering
-- **Framer Motion** - Animations
-
-### Tauri Build
+### Application
 - **Tauri 2.0** - Cross-platform desktop app framework
 - **Rust** - Backend logic
 - **React 18** - UI framework
@@ -214,8 +176,6 @@ For detailed migration progress, see [Electron to Tauri Migration Status](docs/e
 
 ## Development
 
-### Electron Development
-
 ```bash
 # Run in development mode with hot reload
 npm run dev
@@ -231,19 +191,12 @@ npm run typecheck
 
 # Linting
 npm run lint
-```
-
-### Tauri Development
-
-```bash
-# Run in development mode with hot reload
-npm run dev:tauri
 
 # Tauri CLI (direct access)
 npm run tauri <command>
 
 # Build Tauri app
-npm run build:tauri
+npm run build
 
 # Build with debug info
 npm run build:tauri:debug
@@ -253,30 +206,26 @@ npm run build:tauri:debug
 
 ```
 src/
-├── main/           # Electron main process
-│   ├── ipc/        # IPC handlers
-│   └── services/   # Backend services (pty, persistence, etc.)
-├── preload/        # Preload scripts (context bridge)
-├── renderer/       # React frontend (shared by Electron & Tauri)
+├── renderer/       # React frontend used by the Tauri app
 │   ├── components/ # UI components
 │   ├── hooks/      # Custom React hooks
-│   ├── lib/        # Platform adapters (electron-*, tauri-*)
+│   ├── lib/        # Runtime adapters and desktop integration helpers
 │   ├── pages/      # Page components
 │   └── stores/     # Zustand stores
 ├── shared/         # Shared types between main/renderer
-└── tauri/          # Tauri-specific Rust code
-└── tauri/          # Tauri configuration and Cargo.toml
+src-tauri/          # Tauri Rust code, configuration, and bundling
+docs/electron-old/  # Archived Electron docs and migration history
 ```
 
 ### Platform Adapters
 
-The codebase uses adapter pattern to support both Electron and Tauri:
+The renderer keeps an adapter/service layer so desktop integrations stay isolated from UI code:
 
 ```
 src/renderer/lib/
-├── electron-*.ts       # Electron-specific implementations
-├── tauri-*.ts          # Tauri-specific implementations
-└── platform-adapter.ts # Unified interface
+├── tauri-*.ts    # Tauri-native integrations
+├── *.ts          # Runtime-safe facades and helpers
+└── __tests__/    # Regression and parity coverage
 ```
 
 ## Contributing

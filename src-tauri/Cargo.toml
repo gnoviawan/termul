@@ -2,7 +2,7 @@
 name = "termul-manager"
 version = "0.2.3"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
-authors = ["Termul Manager"]
+authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
 rust-version = "1.77.2"
 
