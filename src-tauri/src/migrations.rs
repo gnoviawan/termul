@@ -56,7 +56,7 @@ pub struct MigrationInfo {
 struct MigrationEntry {
     version: String,
     description: String,
-    #[allow(dead_code)]
+    migration_fn: Option<Box<dyn Fn() -> Result<(), String> + Send + Sync>>,
     rollback_fn: Option<Box<dyn Fn() -> Result<(), String> + Send + Sync>>,
 }
 
@@ -67,6 +67,25 @@ pub const ERROR_MIGRATION_HISTORY_CORRUPT: &str = "MIGRATION_HISTORY_CORRUPT";
 pub const ERROR_MIGRATION_ALREADY_RUNNING: &str = "MIGRATION_ALREADY_RUNNING";
 pub const ERROR_MIGRATION_NOT_FOUND: &str = "MIGRATION_NOT_FOUND";
 pub const ERROR_ROLLBACK_FAILED: &str = "ROLLBACK_FAILED";
+
+// ==================== Scope Guard ====================
+
+/// Scope guard that sets a Mutex<bool> to false when dropped
+struct ScopeGuard<'a> {
+    flag: &'a Mutex<bool>,
+}
+
+impl<'a> ScopeGuard<'a> {
+    fn new(flag: &'a Mutex<bool>) -> Self {
+        Self { flag }
+    }
+}
+
+impl<'a> Drop for ScopeGuard<'a> {
+    fn drop(&mut self) {
+        *self.flag.lock() = false;
+    }
+}
 
 // ==================== Migration Manager ====================
 
@@ -166,16 +185,17 @@ impl MigrationManager {
         &self,
         version: String,
         description: String,
-        _migration_fn: F,
+        migration_fn: F,
         rollback_fn: Option<R>,
     ) -> IpcResult<()>
     where
-        F: Fn() -> Result<(), String> + 'static,
+        F: Fn() -> Result<(), String> + Send + Sync + 'static,
         R: Fn() -> Result<(), String> + Send + Sync + 'static,
     {
         let entry = MigrationEntry {
             version: version.clone(),
             description,
+            migration_fn: Some(Box::new(migration_fn) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
             rollback_fn: rollback_fn
                 .map(|f| Box::new(f) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
         };
@@ -239,23 +259,26 @@ impl MigrationManager {
 
     /// Run all pending migrations
     pub fn run_migrations(&self) -> IpcResult<Vec<MigrationResult>> {
-        // Check if already running
-        if *self.is_running.lock() {
+        // Acquire lock once, check and set atomically
+        let mut guard = self.is_running.lock();
+        if *guard {
             return IpcResult::error(
                 "Migration already in progress".to_string(),
                 ERROR_MIGRATION_ALREADY_RUNNING,
             );
         }
+        *guard = true;
+        drop(guard);
 
-        // Load history first
+        // Scope guard ensures is_running is reset when function exits
+        let _scope_guard = ScopeGuard::new(&self.is_running);
+
+        // Load history after setting is_running
         let _ = self.load_history();
-
-        *self.is_running.lock() = true;
 
         // Get current version
         let current_result = self.get_current_schema_version();
         if !current_result.success {
-            *self.is_running.lock() = false;
             return IpcResult::error(
                 current_result.error.unwrap_or_default(),
                 ERROR_MIGRATION_VERSION_INVALID,
@@ -271,6 +294,7 @@ impl MigrationManager {
             .map(|m| MigrationEntry {
                 version: m.version.clone(),
                 description: m.description.clone(),
+                migration_fn: None, // We'll take() this from the original later if needed
                 rollback_fn: None, // We don't need the rollback fn for running migrations
             })
             .collect();
@@ -279,74 +303,104 @@ impl MigrationManager {
         migrations.sort_by(|a, b| compare_versions(&a.version, &b.version));
 
         // Filter pending migrations
-        let pending: Vec<MigrationEntry> = migrations
+        let pending_versions: Vec<String> = migrations
             .into_iter()
             .filter(|m| {
                 compare_versions(&m.version, &current_version) == std::cmp::Ordering::Greater
             })
+            .map(|m| m.version)
             .collect();
 
-        if pending.is_empty() {
-            *self.is_running.lock() = false;
+        if pending_versions.is_empty() {
             return IpcResult::success(vec![]);
         }
 
         // Execute migrations
         let mut results = Vec::new();
 
-        for entry in pending {
+        for version in pending_versions {
             let start = std::time::Instant::now();
 
             // Check if already migrated
             let history = self.history.lock();
             let already_migrated = history
                 .iter()
-                .any(|r| r.version == entry.version && r.success);
+                .any(|r| r.version == version && r.success);
             drop(history);
 
             if already_migrated {
                 continue;
             }
 
-            // Execute migration - for now, this is a placeholder
-            // In a real implementation, we would call the migration function here
-            // Since we stored closures without a way to call them (due to type erasure),
-            // we simulate successful execution
+            // Get the migration entry and take the migration_fn
+            let migration_result = {
+                let migrations_map = self.migrations.lock();
+                let entry = migrations_map.get(&version);
+                match entry {
+                    Some(e) => {
+                        let result = if let Some(ref migration_fn) = e.migration_fn {
+                            // Execute the migration function
+                            migration_fn()
+                        } else {
+                            // No migration function, simulate success
+                            Ok(())
+                        };
+                        result
+                    }
+                    None => {
+                        continue;
+                    }
+                }
+            };
+
             let duration = start.elapsed().as_millis() as u64;
 
-            let result = MigrationResult {
-                version: entry.version.clone(),
-                success: true,
-                error: None,
-                duration,
+            // Build result based on execution outcome
+            let result = match &migration_result {
+                Ok(()) => MigrationResult {
+                    version: version.clone(),
+                    success: true,
+                    error: None,
+                    duration,
+                },
+                Err(err) => MigrationResult {
+                    version: version.clone(),
+                    success: false,
+                    error: Some(err.clone()),
+                    duration,
+                },
             };
 
-            // Record in history
-            let record = MigrationRecord {
-                version: entry.version.clone(),
-                timestamp: chrono_timestamp(),
-                success: true,
-                error: None,
-                duration: Some(duration),
-            };
+            // Record in history only if migration succeeded
+            if migration_result.is_ok() {
+                let record = MigrationRecord {
+                    version: version.clone(),
+                    timestamp: chrono_timestamp(),
+                    success: true,
+                    error: None,
+                    duration: Some(duration),
+                };
 
-            self.history.lock().push(record);
+                self.history.lock().push(record);
 
-            let _ = self.save_history();
+                let _ = self.save_history();
 
-            // Update schema version
-            let _ = self.set_schema_version(entry.version.clone());
+                // Update schema version
+                let _ = self.set_schema_version(version.clone());
+            }
 
             results.push(result);
         }
 
-        *self.is_running.lock() = false;
         IpcResult::success(results)
     }
 
     /// Rollback a specific migration
     pub fn rollback_migration(&self, version: String) -> IpcResult<()> {
-        let _rollback_fn = {
+        let start = std::time::Instant::now();
+
+        // Execute rollback and get result
+        let rollback_result = {
             let migrations_map = self.migrations.lock();
             let entry = match migrations_map.get(&version) {
                 Some(e) => e,
@@ -365,49 +419,64 @@ impl MigrationManager {
                 );
             }
 
-            // Clone the rollback fn if it exists
-            entry.rollback_fn.as_ref().map(|_| {
-                // We can't clone the function, so we'll handle this differently
-                // For now, we'll just return an error indicating this needs implementation
-                None::<Box<dyn Fn() -> Result<(), String> + Send + Sync>>
-            })
+            // Execute rollback function while holding the lock
+            // We can't clone the function, so we execute it here
+            if let Some(ref rollback_fn) = entry.rollback_fn {
+                rollback_fn()
+            } else {
+                Err("Rollback function not available".to_string())
+            }
         };
 
-        // Execute rollback - placeholder for now
-        // In a real implementation, we would call the rollback function here
-        // Due to type erasure in our current design, we simulate rollback
+        let duration = start.elapsed().as_millis() as u64;
 
-        // Record rollback in history
-        let record = MigrationRecord {
-            version: version.clone(),
-            timestamp: chrono_timestamp(),
-            success: true,
-            error: Some("Rollback successful".to_string()),
-            duration: None,
+        // Record rollback in history based on actual result
+        let record = match rollback_result {
+            Ok(()) => MigrationRecord {
+                version: version.clone(),
+                timestamp: chrono_timestamp(),
+                success: true,
+                error: None,
+                duration: Some(duration),
+            },
+            Err(ref err) => MigrationRecord {
+                version: version.clone(),
+                timestamp: chrono_timestamp(),
+                success: false,
+                error: Some(err.clone()),
+                duration: Some(duration),
+            },
         };
 
         self.history.lock().push(record);
 
         let _ = self.save_history();
 
-        // Revert schema version
-        let migrations_map = self.migrations.lock();
-        let mut migrations: Vec<String> = migrations_map.keys().cloned().collect();
-        drop(migrations_map);
+        // Only revert schema version if rollback succeeded
+        if rollback_result.is_ok() {
+            // Revert schema version
+            let migrations_map = self.migrations.lock();
+            let mut migrations: Vec<String> = migrations_map.keys().cloned().collect();
+            drop(migrations_map);
 
-        migrations.sort_by(|a, b| compare_versions(a, b));
+            migrations.sort_by(|a, b| compare_versions(a, b));
 
-        let version_index = migrations.iter().position(|m| m == &version).unwrap_or(0);
+            let version_index = migrations.iter().position(|m| m == &version).unwrap_or(0);
 
-        let previous_version = if version_index > 0 {
-            migrations[version_index - 1].clone()
-        } else {
-            "0.0.0".to_string()
-        };
+            let previous_version = if version_index > 0 {
+                migrations[version_index - 1].clone()
+            } else {
+                "0.0.0".to_string()
+            };
 
-        let _ = self.set_schema_version(previous_version);
+            let _ = self.set_schema_version(previous_version);
+        }
 
-        IpcResult::success(())
+        // Return result based on rollback outcome
+        match rollback_result {
+            Ok(()) => IpcResult::success(()),
+            Err(err) => IpcResult::error(err, ERROR_ROLLBACK_FAILED),
+        }
     }
 }
 
