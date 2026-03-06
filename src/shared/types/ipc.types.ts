@@ -391,7 +391,7 @@ export interface RollbackRequest {
  * @deprecated Use RollbackRequest from the canonical contract instead.
  * This is an alias for backward compatibility.
  */
-export interface RollbackRequestPayload extends RollbackRequest {}
+export type RollbackRequestPayload = RollbackRequest
 
 /**
  * Canonical Migration API Contract
@@ -485,3 +485,4 @@ export interface MigrationApi {
    */
   rollback: (version: string) => Promise<IpcResult<void>>
 }
+
