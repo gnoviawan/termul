@@ -141,12 +141,9 @@ impl MigrationManager {
         Ok(())
     }
 
-    /// Save migration history to store
-    fn save_history(&self) -> Result<(), String> {
-        let history = self.history.lock();
-        let history_json = serde_json::to_value(&*history)
+    fn write_history_records(&self, history: &[MigrationRecord]) -> Result<(), String> {
+        let history_json = serde_json::to_value(history)
             .map_err(|e| format!("Failed to serialize history: {}", e))?;
-        drop(history); // Release lock before store operations
 
         let store = self
             .app_handle
@@ -174,23 +171,20 @@ impl MigrationManager {
         IpcResult::success("0.0.0".to_string()) // Fresh install
     }
 
-    /// Set schema version
-    fn set_schema_version(&self, version: String) -> IpcResult<()> {
+    fn set_schema_version_result(&self, version: String) -> Result<(), String> {
         let store = match self.app_handle.store("settings.json") {
             Ok(s) => s,
             Err(e) => {
-                return IpcResult::error(
-                    format!("Store error: {}", e),
-                    ERROR_MIGRATION_VERSION_INVALID,
-                );
+                return Err(format!("Store error: {}", e));
             }
         };
 
         store.set(self.schema_version_key.clone(), version);
-        IpcResult::success(())
+        Ok(())
     }
 
     /// Register a migration
+    #[allow(dead_code)]
     pub fn register_migration<F, R>(
         &self,
         version: String,
@@ -286,7 +280,9 @@ impl MigrationManager {
         let _scope_guard = ScopeGuard::new(&self.is_running);
 
         // Load history after setting is_running
-        let _ = self.load_history();
+        if let Err(error) = self.load_history() {
+            return IpcResult::error(error, ERROR_MIGRATION_HISTORY_CORRUPT);
+        }
 
         // Get current version
         let current_result = self.get_current_schema_version();
@@ -332,8 +328,8 @@ impl MigrationManager {
                 continue;
             }
 
-            // Get the migration entry and take the migration_fn
-            let migration_result = {
+            // Get the migration entry and execute the migration function
+            let execution_result = {
                 let migrations_map = self.migrations.lock();
                 let entry = migrations_map.get(&version);
                 match entry {
@@ -359,6 +355,39 @@ impl MigrationManager {
 
             let duration = start.elapsed().as_millis() as u64;
 
+            let migration_result = match execution_result {
+                Ok(()) => {
+                    let record = MigrationRecord {
+                        version: version.clone(),
+                        timestamp: chrono_timestamp(),
+                        success: true,
+                        error: None,
+                        duration: Some(duration),
+                    };
+
+                    let mut next_history = self.history.lock().clone();
+                    next_history.push(record);
+
+                    match self.write_history_records(&next_history) {
+                        Ok(()) => match self.set_schema_version_result(version.clone()) {
+                            Ok(()) => {
+                                *self.history.lock() = next_history;
+                                Ok(())
+                            }
+                            Err(error) => Err(format!(
+                                "Migration {} applied but failed to persist schema version: {}",
+                                version, error
+                            )),
+                        },
+                        Err(error) => Err(format!(
+                            "Migration {} applied but failed to persist migration history: {}",
+                            version, error
+                        )),
+                    }
+                }
+                Err(error) => Err(error),
+            };
+
             // Build result based on execution outcome
             let result = match &migration_result {
                 Ok(()) => MigrationResult {
@@ -375,24 +404,6 @@ impl MigrationManager {
                 },
             };
 
-            // Record in history only if migration succeeded
-            if migration_result.is_ok() {
-                let record = MigrationRecord {
-                    version: version.clone(),
-                    timestamp: chrono_timestamp(),
-                    success: true,
-                    error: None,
-                    duration: Some(duration),
-                };
-
-                self.history.lock().push(record);
-
-                let _ = self.save_history();
-
-                // Update schema version
-                let _ = self.set_schema_version(version.clone());
-            }
-
             results.push(result);
         }
 
@@ -402,6 +413,18 @@ impl MigrationManager {
     /// Rollback a specific migration
     pub fn rollback_migration(&self, version: String) -> IpcResult<()> {
         let start = std::time::Instant::now();
+
+        if !self
+            .history
+            .lock()
+            .iter()
+            .any(|record| record.version == version && record.success)
+        {
+            return IpcResult::error(
+                format!("Migration {} has not been applied", version),
+                ERROR_ROLLBACK_FAILED,
+            );
+        }
 
         // Execute rollback and get result
         let rollback_result = {
@@ -434,8 +457,7 @@ impl MigrationManager {
 
         let duration = start.elapsed().as_millis() as u64;
 
-        // Record rollback in history based on actual result
-        let record = match rollback_result {
+        let base_record = match &rollback_result {
             Ok(()) => MigrationRecord {
                 version: version.clone(),
                 timestamp: chrono_timestamp(),
@@ -443,7 +465,7 @@ impl MigrationManager {
                 error: None,
                 duration: Some(duration),
             },
-            Err(ref err) => MigrationRecord {
+            Err(err) => MigrationRecord {
                 version: version.clone(),
                 timestamp: chrono_timestamp(),
                 success: false,
@@ -452,31 +474,50 @@ impl MigrationManager {
             },
         };
 
-        self.history.lock().push(record);
+        let current_history = self.history.lock().clone();
+        let mut next_history = current_history.clone();
+        next_history.push(base_record);
 
-        let _ = self.save_history();
+        let persistence_result = match &rollback_result {
+            Ok(()) => {
+                let mut applied_versions: Vec<String> = current_history
+                    .iter()
+                    .filter(|record| record.success)
+                    .map(|record| record.version.clone())
+                    .collect();
+                applied_versions.sort_by(|a, b| compare_versions(a, b));
+                applied_versions.dedup();
 
-        // Only revert schema version if rollback succeeded
-        if rollback_result.is_ok() {
-            // Revert schema version
-            let migrations_map = self.migrations.lock();
-            let mut migrations: Vec<String> = migrations_map.keys().cloned().collect();
-            drop(migrations_map);
+                let previous_version = applied_versions
+                    .iter()
+                    .position(|entry| entry == &version)
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| applied_versions.get(index).cloned())
+                    .unwrap_or_else(|| "0.0.0".to_string());
 
-            migrations.sort_by(|a, b| compare_versions(a, b));
+                self.write_history_records(&next_history).and_then(|_| {
+                    self.set_schema_version_result(previous_version)
+                })
+            }
+            Err(_) => self.write_history_records(&next_history),
+        };
 
-            let version_index = migrations.iter().position(|m| m == &version).unwrap_or(0);
-
-            let previous_version = if version_index > 0 {
-                migrations[version_index - 1].clone()
-            } else {
-                "0.0.0".to_string()
-            };
-
-            let _ = self.set_schema_version(previous_version);
+        if let Err(error) = persistence_result {
+            let mut failure_history = current_history;
+            failure_history.push(MigrationRecord {
+                version: version.clone(),
+                timestamp: chrono_timestamp(),
+                success: false,
+                error: Some(format!("Rollback persistence failed: {}", error)),
+                duration: Some(duration),
+            });
+            let _ = self.write_history_records(&failure_history);
+            *self.history.lock() = failure_history;
+            return IpcResult::error(error, ERROR_ROLLBACK_FAILED);
         }
 
-        // Return result based on rollback outcome
+        *self.history.lock() = next_history;
+
         match rollback_result {
             Ok(()) => IpcResult::success(()),
             Err(err) => IpcResult::error(err, ERROR_ROLLBACK_FAILED),

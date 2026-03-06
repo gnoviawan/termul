@@ -317,80 +317,8 @@ fn is_shell_available(shell_path: &str) -> bool {
 ///
 /// This function is called during app setup to register all known migrations.
 /// Add new migrations here as the application schema evolves.
-fn register_default_migrations(manager: &MigrationManager) {
-    // Example migrations - replace with actual application migrations
-    // Migration 1.0.0: Initial schema setup
-    let _ = manager.register_migration(
-        "1.0.0".to_string(),
-        "Initial schema setup".to_string(),
-        || {
-            // Migration logic here
-            // For now, this is a no-op placeholder
-            // In production, this would initialize the data store
-            Ok(())
-        },
-        Some(|| {
-            // Rollback logic for 1.0.0
-            // Typically cannot rollback initial schema
-            Err("Cannot rollback initial schema migration".to_string())
-        }),
-    );
-
-    // Migration 1.0.1: Add terminal history persistence
-    let _ = manager.register_migration(
-        "1.0.1".to_string(),
-        "Add terminal history persistence".to_string(),
-        || {
-            // Migration logic: migrate old history format to new format
-            Ok(())
-        },
-        Some(|| {
-            // Rollback: revert to old history format
-            Ok(())
-        }),
-    );
-
-    // Migration 1.1.0: Add workspace state tracking
-    let _ = manager.register_migration(
-        "1.1.0".to_string(),
-        "Add workspace state tracking".to_string(),
-        || {
-            // Migration logic: initialize workspace state
-            Ok(())
-        },
-        Some(|| {
-            // Rollback: remove workspace state
-            Ok(())
-        }),
-    );
-
-    // Migration 1.2.0: Add orphan detection settings
-    let _ = manager.register_migration(
-        "1.2.0".to_string(),
-        "Add orphan detection settings".to_string(),
-        || {
-            // Migration logic: migrate orphan detection config
-            Ok(())
-        },
-        Some(|| {
-            // Rollback: remove orphan detection config
-            Ok(())
-        }),
-    );
-
-    // Migration 2.0.0: Session persistence redesign
-    let _ = manager.register_migration(
-        "2.0.0".to_string(),
-        "Session persistence redesign".to_string(),
-        || {
-            // Migration logic: migrate session data to new format
-            Ok(())
-        },
-        Some(|| {
-            // Rollback: revert to old session format
-            Ok(())
-        }),
-    );
+fn register_default_migrations(_manager: &MigrationManager) {
+    // Intentionally left empty until real migrations are implemented.
 }
 
 fn get_main_webview_window<R: tauri::Runtime>(
@@ -516,9 +444,6 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
-    let toggle_devtools = MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
-        .accelerator("CmdOrCtrl+Shift+I")
-        .build(app)?;
     let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size")
         .accelerator("CmdOrCtrl+0")
         .build(app)?;
@@ -531,16 +456,26 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let toggle_fullscreen = MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen")
         .build(app)?;
 
-    let view_menu = SubmenuBuilder::new(app, "View")
-        .item(&reload)
-        .item(&toggle_devtools)
-        .separator()
-        .item(&zoom_reset)
-        .item(&zoom_in)
-        .item(&zoom_out)
-        .separator()
-        .item(&toggle_fullscreen)
-        .build()?;
+    let view_menu = {
+        let builder = SubmenuBuilder::new(app, "View").item(&reload);
+
+        #[cfg(debug_assertions)]
+        let builder = {
+            let toggle_devtools = MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
+                .accelerator("CmdOrCtrl+Shift+I")
+                .build(app)?;
+            builder.item(&toggle_devtools)
+        };
+
+        builder
+            .separator()
+            .item(&zoom_reset)
+            .item(&zoom_in)
+            .item(&zoom_out)
+            .separator()
+            .item(&toggle_fullscreen)
+            .build()?
+    };
 
     let window_menu = SubmenuBuilder::new(app, "Window")
         .minimize()
