@@ -107,7 +107,7 @@ jobs:
         run: npm ci
 
       - name: Build and publish release artifacts
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
@@ -119,4 +119,5 @@ jobs:
           releaseBody: ${{ needs.changelog.outputs.changelog }}
           releaseDraft: false
           prerelease: ${{ needs.changelog.outputs.is_prerelease }}
-          args: ${{ matrix.args }}
+          tauriScript: npm run tauri
+          args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
