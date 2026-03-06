@@ -907,9 +907,7 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            env::var("SHELL")
-                .or_else(|_| Ok("/bin/sh".to_string()))
-                .map_err(|_| "Failed to determine default shell".to_string())
+            Ok(env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()))
         }
     }
 
