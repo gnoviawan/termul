@@ -766,9 +766,34 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    fn with_test_comspec<T>(f: impl FnOnce() -> T) -> T {
+        use std::ffi::OsString;
+
+        struct ComspecGuard(Option<OsString>);
+
+        impl Drop for ComspecGuard {
+            fn drop(&mut self) {
+                if let Some(value) = &self.0 {
+                    std::env::set_var("COMSPEC", value);
+                } else {
+                    std::env::remove_var("COMSPEC");
+                }
+            }
+        }
+
+        let _guard = ComspecGuard(std::env::var_os("COMSPEC"));
+        std::env::set_var("COMSPEC", r"C:\Windows\System32\cmd.exe");
+        f()
+    }
+
     #[test]
     fn test_fallback_shell() {
+        #[cfg(target_os = "windows")]
+        let shell = with_test_comspec(|| get_default_shell_info().unwrap());
+        #[cfg(not(target_os = "windows"))]
         let shell = get_default_shell_info().unwrap();
+
         #[cfg(target_os = "windows")]
         assert_eq!(shell.name, "cmd");
         #[cfg(not(target_os = "windows"))]

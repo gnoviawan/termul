@@ -4,11 +4,12 @@
 
 use std::ffi::c_void;
 use std::fs::File;
+use std::mem::{size_of, MaybeUninit};
 use std::os::windows::io::FromRawHandle;
 
 /// ConPTY handles owned for a terminal lifecycle.
 pub struct ConPtyHandles {
-    pub hpcon: *mut c_void,
+    hpcon: *mut c_void,
 }
 
 // SAFETY: ConPtyHandles is only accessed through the Arc<Mutex<...>> wrapper in
@@ -32,6 +33,24 @@ impl Drop for ConPtyHandles {
     }
 }
 
+fn validate_conpty_size(cols: u16, rows: u16) -> std::io::Result<winapi::um::wincon::COORD> {
+    fn validate_dimension(value: u16, name: &str) -> std::io::Result<i16> {
+        if value == 0 || value > i16::MAX as u16 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("ConPTY {} must be between 1 and {} cells", name, i16::MAX),
+            ));
+        }
+
+        Ok(value as i16)
+    }
+
+    Ok(winapi::um::wincon::COORD {
+        X: validate_dimension(cols, "columns")?,
+        Y: validate_dimension(rows, "rows")?,
+    })
+}
+
 pub fn resize_conpty(handles: &ConPtyHandles, cols: u16, rows: u16) -> std::io::Result<()> {
     if handles.hpcon.is_null() {
         return Err(std::io::Error::new(
@@ -40,10 +59,7 @@ pub fn resize_conpty(handles: &ConPtyHandles, cols: u16, rows: u16) -> std::io::
         ));
     }
 
-    let size = winapi::um::wincon::COORD {
-        X: cols as i16,
-        Y: rows as i16,
-    };
+    let size = validate_conpty_size(cols, rows)?;
 
     let result = unsafe { winapi::um::consoleapi::ResizePseudoConsole(handles.hpcon, size) };
     if result != 0 {
@@ -76,7 +92,14 @@ fn env_to_wide_block(env: &std::collections::HashMap<String, String>) -> Vec<u16
         block.extend(std::ffi::OsStr::new(&entry).encode_wide());
         block.push(0);
     }
-    block.push(0);
+
+    if !block.ends_with(&[0, 0]) {
+        block.push(0);
+        if !block.ends_with(&[0, 0]) {
+            block.push(0);
+        }
+    }
+
     block
 }
 
@@ -115,10 +138,9 @@ pub fn spawn_conpty(
         use winapi::um::handleapi::{CloseHandle, SetHandleInformation};
         use winapi::um::processthreadsapi::{
             CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-            LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, UpdateProcThreadAttribute,
+            UpdateProcThreadAttribute, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
         };
         use winapi::um::winbase::{EXTENDED_STARTUPINFO_PRESENT, HANDLE_FLAG_INHERIT};
-        use winapi::um::wincon::COORD;
         use winapi::um::wincontypes::HPCON;
 
         // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE value from Windows SDK
@@ -175,10 +197,7 @@ pub fn spawn_conpty(
 
         // 2. Create the pseudo console
         let mut hpcon: HPCON = std::ptr::null_mut();
-        let size = COORD {
-            X: cols as i16,
-            Y: rows as i16,
-        };
+        let size = validate_conpty_size(cols, rows)?;
         let result = CreatePseudoConsole(size, input_read, output_write, 0, &mut hpcon);
 
         if result != 0 {
@@ -201,7 +220,10 @@ pub fn spawn_conpty(
             &mut attr_list_size as *mut _ as *mut usize,
         );
 
-        let mut attr_list_storage: Vec<u8> = vec![0; attr_list_size];
+        let attr_list_words =
+            ((attr_list_size + size_of::<usize>() - 1) / size_of::<usize>()).max(1);
+        let mut attr_list_storage: Vec<MaybeUninit<usize>> =
+            vec![MaybeUninit::uninit(); attr_list_words];
         let attr_list = attr_list_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
 
         if InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_list_size) == 0 {
