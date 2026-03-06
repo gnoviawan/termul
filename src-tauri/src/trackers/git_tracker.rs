@@ -4,6 +4,7 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -145,6 +146,7 @@ fn resolve_git_binary() -> &'static str {
 }
 
 const POLL_INTERVAL_MS: u64 = 6000;
+const GIT_COMMAND_TIMEOUT_MS: u64 = 2000;
 
 /// Windows-specific polling multiplier for longer intervals between checks
 #[cfg(target_os = "windows")]
@@ -186,14 +188,18 @@ impl Default for GitStatus {
 #[derive(Debug, Clone)]
 struct CwdPollState {
     last_checked: Instant,
+    last_branch: Option<String>,
     last_status: Option<GitStatus>,
+    last_snapshot_unchanged: bool,
 }
 
 impl CwdPollState {
     fn new() -> Self {
         Self {
             last_checked: Instant::now() - Duration::from_secs(60), // Initially allow immediate poll
+            last_branch: None,
             last_status: None,
+            last_snapshot_unchanged: false,
         }
     }
 }
@@ -300,24 +306,36 @@ impl GitTracker {
 
     /// Initialize tracking for a terminal with the given working directory
     pub fn initialize_terminal(&self, terminal_id: &str, cwd: &str) {
-        // Get initial branch and status
-        let branch = Self::check_branch_internal(cwd);
-        let status = Self::check_status_internal(cwd);
-
         let state = GitState {
             _terminal_id: terminal_id.to_string(),
-            last_known_branch: branch.clone(),
+            last_known_branch: None,
             last_known_cwd: cwd.to_string(),
-            last_known_status: status.clone(),
+            last_known_status: None,
         };
 
         self.terminal_states
             .write()
             .insert(terminal_id.to_string(), state);
 
-        // Emit initial events
-        self.emit_branch_changed(terminal_id, &branch);
-        self.emit_status_changed(terminal_id, &status);
+        let app_handle = self.app_handle.clone();
+        let states = self.terminal_states.clone();
+        let terminal_id_owned = terminal_id.to_string();
+        let cwd_owned = cwd.to_string();
+
+        tokio::spawn(async move {
+            let (status, branch) = Self::poll_git_snapshot(cwd_owned.clone()).await;
+            let terminal_ids = vec![terminal_id_owned.clone()];
+            let (branch_emits, status_emits) =
+                Self::apply_git_results(&states, &terminal_ids, branch, status);
+
+            for (_, branch) in branch_emits {
+                Self::emit_branch_changed_static(&app_handle, &terminal_id_owned, &branch);
+            }
+
+            for (_, status) in status_emits {
+                Self::emit_status_changed_static(&app_handle, &terminal_id_owned, &status);
+            }
+        });
 
         // Start polling if not already running
         if self
@@ -421,7 +439,9 @@ impl GitTracker {
                     let mut cwd_poll_states = self.cwd_poll_states.write();
                     let poll_state = cwd_poll_states.entry(cwd).or_insert_with(CwdPollState::new);
                     poll_state.last_checked = now;
+                    poll_state.last_branch = new_branch.clone();
                     poll_state.last_status = new_status.clone();
+                    poll_state.last_snapshot_unchanged = false;
                 }
 
                 let (branch_emits, status_emits) = Self::apply_git_results(
@@ -541,14 +561,49 @@ impl GitTracker {
     }
 
     async fn poll_git_snapshot(cwd: String) -> (Option<GitStatus>, Option<String>) {
-        tokio::task::spawn_blocking(move || {
+        tokio::time::timeout(Duration::from_millis(GIT_COMMAND_TIMEOUT_MS), tokio::task::spawn_blocking(move || {
             (
                 Self::check_status_internal(&cwd),
                 Self::check_branch_internal(&cwd),
             )
-        })
+        }))
         .await
+        .ok()
+        .and_then(|result| result.ok())
         .unwrap_or((None, None))
+    }
+
+    fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
+        let mut child = backend_command(resolve_git_binary())
+            .args(args)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+
+        let deadline = Instant::now() + Duration::from_millis(GIT_COMMAND_TIMEOUT_MS);
+
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return child.wait_with_output().ok(),
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        log::warn!(
+                            "[GitTracker] Timed out running git {} in {}",
+                            args.join(" "),
+                            cwd
+                        );
+                        return None;
+                    }
+
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => return None,
+            }
+        }
     }
 
     /// Shutdown the tracker and stop polling
@@ -656,7 +711,7 @@ impl GitTracker {
                                 .entry(cwd.clone())
                                 .or_insert_with(CwdPollState::new);
 
-                            let cooldown_ms = if poll_state.last_status.is_some() {
+                            let cooldown_ms = if poll_state.last_snapshot_unchanged {
                                 STATUS_UNCHANGED_COOLDOWN_MS
                             } else {
                                 POLL_INTERVAL_MS
@@ -691,6 +746,10 @@ impl GitTracker {
                         {
                             let mut cwd_poll_states_write = cwd_poll_states.write();
                             if let Some(poll_state) = cwd_poll_states_write.get_mut(&target.cwd) {
+                                poll_state.last_snapshot_unchanged =
+                                    poll_state.last_status.as_ref() == new_status.as_ref()
+                                        && poll_state.last_branch.as_ref() == new_branch.as_ref();
+                                poll_state.last_branch = new_branch.clone();
                                 poll_state.last_status = new_status.clone();
                             }
                         }
@@ -748,11 +807,7 @@ impl GitTracker {
     /// Runs `git rev-parse --abbrev-ref HEAD` and returns the branch name.
     /// Returns None if not in a git repository or in detached HEAD state.
     fn check_branch_internal(cwd: &str) -> Option<String> {
-        let output = backend_command(resolve_git_binary())
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(cwd)
-            .output()
-            .ok()?;
+        let output = Self::run_git_command(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
 
         if !output.status.success() {
             return None;
@@ -774,11 +829,7 @@ impl GitTracker {
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
         log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
-        let output = backend_command(resolve_git_binary())
-            .args(["status", "--porcelain"])
-            .current_dir(cwd)
-            .output()
-            .ok()?;
+        let output = Self::run_git_command(cwd, &["status", "--porcelain"])?;
 
         if !output.status.success() {
             return None;
@@ -829,24 +880,6 @@ impl GitTracker {
         status.has_changes = status.modified + status.staged + status.untracked > 0;
 
         status
-    }
-
-    /// Emit a branch changed event
-    fn emit_branch_changed(&self, terminal_id: &str, branch: &Option<String>) {
-        let event = GitBranchChangedEvent {
-            terminal_id: terminal_id.to_string(),
-            branch: branch.clone(),
-        };
-        let _ = self.app_handle.emit("terminal-git-branch-changed", event);
-    }
-
-    /// Emit a status changed event
-    fn emit_status_changed(&self, terminal_id: &str, status: &Option<GitStatus>) {
-        let event = GitStatusChangedEvent {
-            terminal_id: terminal_id.to_string(),
-            status: status.clone(),
-        };
-        let _ = self.app_handle.emit("terminal-git-status-changed", event);
     }
 
     /// Static version of emit_branch_changed for use in async context

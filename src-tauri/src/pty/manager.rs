@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
@@ -234,9 +234,48 @@ struct TerminalExitEvent {
     signal: Option<i32>,
 }
 
+struct TerminalSlotReservation {
+    active_slots: Arc<AtomicUsize>,
+    committed: bool,
+}
+
+impl TerminalSlotReservation {
+    fn try_acquire(active_slots: Arc<AtomicUsize>) -> Option<Self> {
+        loop {
+            let current = active_slots.load(Ordering::SeqCst);
+            if current >= GLOBAL_TERMINAL_LIMIT {
+                return None;
+            }
+
+            if active_slots
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return Some(Self {
+                    active_slots,
+                    committed: false,
+                });
+            }
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for TerminalSlotReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.active_slots.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
+    active_terminal_slots: Arc<AtomicUsize>,
     id_counter: Arc<AtomicU64>,
     app_handle: AppHandle,
     orphan_detection_enabled: Arc<AtomicBool>,
@@ -257,6 +296,7 @@ impl PtyManager {
     ) -> Self {
         Self {
             terminals: Arc::new(RwLock::new(HashMap::new())),
+            active_terminal_slots: Arc::new(AtomicUsize::new(0)),
             id_counter: Arc::new(AtomicU64::new(0)),
             app_handle,
             orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
@@ -301,6 +341,14 @@ impl PtyManager {
         }
     }
 
+    fn try_reserve_terminal_slot(&self) -> Option<TerminalSlotReservation> {
+        TerminalSlotReservation::try_acquire(self.active_terminal_slots.clone())
+    }
+
+    fn release_terminal_slot(&self) {
+        self.active_terminal_slots.fetch_sub(1, Ordering::SeqCst);
+    }
+
     /// Start the orphan detection background task
     /// This is called lazily when the first terminal is spawned
     fn start_orphan_detection(&self) {
@@ -318,6 +366,7 @@ impl PtyManager {
         let cwd_tracker = self.cwd_tracker.clone();
         let git_tracker = self.git_tracker.clone();
         let exit_code_tracker = self.exit_code_tracker.clone();
+        let active_slots = self.active_terminal_slots.clone();
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
 
@@ -350,7 +399,9 @@ impl PtyManager {
                     log::info!("Cleaning up orphaned terminal: {}", id);
 
                     if let Some(instance) = terminals.write().remove(&id) {
+                        let active_slots = active_slots.clone();
                         tokio::task::spawn_blocking(move || {
+                            active_slots.fetch_sub(1, Ordering::SeqCst);
                             Self::cleanup_terminal_resources_sync(instance, true);
                         });
 
@@ -379,10 +430,9 @@ impl PtyManager {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
-        // Check terminal limit
-        if self.is_limit_reached() {
-            return Err("Global terminal limit reached".to_string());
-        }
+        let mut slot_reservation = self
+            .try_reserve_terminal_slot()
+            .ok_or_else(|| "Global terminal limit reached".to_string())?;
 
         let id = self.generate_id();
 
@@ -488,6 +538,8 @@ impl PtyManager {
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
 
+            slot_reservation.commit();
+
             return Ok(TerminalInfo {
                 id,
                 shell: shell_path,
@@ -579,6 +631,8 @@ impl PtyManager {
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
 
+            slot_reservation.commit();
+
             Ok(TerminalInfo {
                 id,
                 shell: shell_path,
@@ -602,8 +656,6 @@ impl PtyManager {
         let id = terminal_id.clone();
 
         log::info!("[PTY {}] Reader loop started", id);
-
-        let mut had_read_error = false;
 
         loop {
             match reader.read(&mut buffer) {
@@ -634,7 +686,6 @@ impl PtyManager {
                     }
                 }
                 Err(e) => {
-                    had_read_error = true;
                     log::error!("[PTY {}] Error reading from PTY: {}", id, e);
                     break;
                 }
@@ -650,37 +701,15 @@ impl PtyManager {
                         let code_u32 = status.exit_code();
                         i32::try_from(code_u32).ok()
                     }
-                    Ok(None) => {
-                        if had_read_error {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    }
+                    Ok(None) => None,
                     Err(e) => {
                         log::warn!("[PTY {}] Failed to query child exit status: {}", id, e);
-                        if had_read_error {
-                            None
-                        } else {
-                            Some(0)
-                        }
+                        None
                     }
                 },
-                None => {
-                    if had_read_error {
-                        None
-                    } else {
-                        Some(0)
-                    }
-                }
+                None => None,
             },
-            Err(_) => {
-                if had_read_error {
-                    None
-                } else {
-                    Some(0)
-                }
-            }
+            Err(_) => None,
         };
 
         // Process has exited - emit terminal-exit event
@@ -783,6 +812,8 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
+        self.release_terminal_slot();
+
         Self::cleanup_terminal_resources_sync(instance, true);
 
         // Stop tracking (sync operations)
@@ -828,7 +859,7 @@ impl PtyManager {
 
     /// Check if terminal limit is reached
     pub fn is_limit_reached(&self) -> bool {
-        self.get_count() >= GLOBAL_TERMINAL_LIMIT
+        self.active_terminal_slots.load(Ordering::SeqCst) >= GLOBAL_TERMINAL_LIMIT
     }
 
     /// Kill all terminals (best-effort), used as app-exit safety net.
@@ -840,6 +871,8 @@ impl PtyManager {
                 Some(i) => i,
                 None => continue,
             };
+
+            self.release_terminal_slot();
 
             Self::cleanup_terminal_resources_sync(instance, true);
 
@@ -962,7 +995,12 @@ impl PtyManager {
 
             // Try PowerShell variants
             if shell == "powershell" || shell == "pwsh" {
-                let paths = vec!["pwsh.exe", "powershell.exe"];
+                let paths = vec![
+                    "pwsh.exe",
+                    "powershell.exe",
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    r"C:\Program Files\PowerShell\6\pwsh.exe",
+                ];
                 for path in paths {
                     if let Some(abs_path) = self.get_absolute_shell_path(path) {
                         return Ok(abs_path);
@@ -1029,8 +1067,6 @@ impl PtyManager {
                 | "cmd.exe"
                 | "powershell"
                 | "powershell.exe"
-                | "pwsh"
-                | "pwsh.exe"
                 | "wsl"
                 | "wsl.exe"
         )
