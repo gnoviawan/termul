@@ -63,7 +63,8 @@ sudo apt install libwebkit2gtk-4.1-dev \
     libxdo-dev \
     libssl-dev \
     libayatana-appindicator3-dev \
-    librsvg2-dev
+    librsvg2-dev \
+    patchelf
 
 # Fedora
 sudo dnf install webkit2gtk4.1-devel \
@@ -71,7 +72,8 @@ sudo dnf install webkit2gtk4.1-devel \
     gcc-c++ \
     libopenssl-devel \
     appindicator-devel \
-    librsvg2-devel
+    librsvg2-devel \
+    patchelf
 ```
 
 **Rust Toolchain (all platforms):**
