@@ -93,7 +93,9 @@ mod git_bash_paths {
 
 #[cfg(target_os = "windows")]
 fn has_windows_env_var(env_map: &HashMap<String, String>, key: &str) -> bool {
-    env_map.keys().any(|existing| existing.eq_ignore_ascii_case(key))
+    env_map
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(key))
 }
 
 #[cfg(target_os = "windows")]
@@ -130,11 +132,7 @@ where
     }
 
     if !has_windows_env_var(&env_map, "Path") {
-        upsert_windows_env_var(
-            &mut env_map,
-            "Path",
-            env::var("PATH").unwrap_or_default(),
-        );
+        upsert_windows_env_var(&mut env_map, "Path", env::var("PATH").unwrap_or_default());
     }
 
     if !has_windows_env_var(&env_map, "PATHEXT") {
@@ -436,8 +434,12 @@ impl PtyManager {
         {
             // Quote the shell path if it contains spaces
             let shell_escaped = if shell_path.contains(' ') {
-                format!("\"{}\" {}", shell_path,
-                    if cfg!(windows) && (shell_path.contains("powershell") || shell_path.contains("pwsh")) {
+                format!(
+                    "\"{}\" {}",
+                    shell_path,
+                    if cfg!(windows)
+                        && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
+                    {
                         "-NoLogo -NoProfile"
                     } else {
                         ""
@@ -482,7 +484,10 @@ impl PtyManager {
             let terminal_id = id.clone();
 
             let reader_task = std::thread::spawn(move || {
-                log::info!("[PTY {}] Windows ConPTY reader thread starting", terminal_id);
+                log::info!(
+                    "[PTY {}] Windows ConPTY reader thread starting",
+                    terminal_id
+                );
                 Self::reader_loop_sync(
                     reader_instance,
                     reader,
@@ -1286,10 +1291,7 @@ impl portable_pty::Child for WindowsConPtyChild {
                 return Ok(Some(portable_pty::ExitStatus::with_exit_code(1)));
             }
 
-            let wait = winapi::um::synchapi::WaitForSingleObject(
-                self.process_handle,
-                0,
-            );
+            let wait = winapi::um::synchapi::WaitForSingleObject(self.process_handle, 0);
 
             if wait == winapi::shared::winerror::WAIT_TIMEOUT {
                 return Ok(None);
@@ -1300,7 +1302,9 @@ impl portable_pty::Child for WindowsConPtyChild {
             }
 
             let mut code: u32 = 0;
-            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code) == 0 {
+            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code)
+                == 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
 
@@ -1323,7 +1327,9 @@ impl portable_pty::Child for WindowsConPtyChild {
             }
 
             let mut code: u32 = 0;
-            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code) == 0 {
+            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code)
+                == 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
 

@@ -121,16 +121,18 @@ impl MigrationManager {
 
         // Try to get history from store
         if let Some(history_value) = store.get(&self.migration_history_key) {
-            let parsed_history = serde_json::from_value::<Vec<MigrationRecord>>(history_value.clone())
-                .or_else(|_| {
-                    history_value
-                        .as_str()
-                        .ok_or_else(|| "Migration history is not an array or JSON string".to_string())
-                        .and_then(|raw| {
-                            serde_json::from_str::<Vec<MigrationRecord>>(raw)
-                                .map_err(|e| format!("Failed to parse migration history: {}", e))
-                        })
-                })?;
+            let parsed_history = serde_json::from_value::<Vec<MigrationRecord>>(
+                history_value.clone(),
+            )
+            .or_else(|_| {
+                history_value
+                    .as_str()
+                    .ok_or_else(|| "Migration history is not an array or JSON string".to_string())
+                    .and_then(|raw| {
+                        serde_json::from_str::<Vec<MigrationRecord>>(raw)
+                            .map_err(|e| format!("Failed to parse migration history: {}", e))
+                    })
+            })?;
 
             *self.history.lock() = parsed_history;
         }
@@ -179,7 +181,7 @@ impl MigrationManager {
                 return IpcResult::error(
                     format!("Store error: {}", e),
                     ERROR_MIGRATION_VERSION_INVALID,
-                )
+                );
             }
         };
 
@@ -202,7 +204,9 @@ impl MigrationManager {
         let entry = MigrationEntry {
             version: version.clone(),
             description,
-            migration_fn: Some(Box::new(migration_fn) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
+            migration_fn: Some(
+                Box::new(migration_fn) as Box<dyn Fn() -> Result<(), String> + Send + Sync>
+            ),
             rollback_fn: rollback_fn
                 .map(|f| Box::new(f) as Box<dyn Fn() -> Result<(), String> + Send + Sync>),
         };
@@ -302,7 +306,7 @@ impl MigrationManager {
                 version: m.version.clone(),
                 description: m.description.clone(),
                 migration_fn: None, // We'll take() this from the original later if needed
-                rollback_fn: None, // We don't need the rollback fn for running migrations
+                rollback_fn: None,  // We don't need the rollback fn for running migrations
             })
             .collect();
         drop(migrations_map);
@@ -330,9 +334,7 @@ impl MigrationManager {
 
             // Check if already migrated
             let history = self.history.lock();
-            let already_migrated = history
-                .iter()
-                .any(|r| r.version == version && r.success);
+            let already_migrated = history.iter().any(|r| r.version == version && r.success);
             drop(history);
 
             if already_migrated {
