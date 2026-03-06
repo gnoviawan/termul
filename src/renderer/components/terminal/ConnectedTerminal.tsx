@@ -30,6 +30,7 @@ import {
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { terminalApi, systemApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
@@ -77,6 +78,10 @@ function ConnectedTerminalComponent({
   searchRef,
   isVisible = true
 }: ConnectedTerminalProps): React.JSX.Element {
+  // DEBUG: Unique instance ID for tracking
+  const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`)
+  const instanceId = instanceIdRef.current
+
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -265,20 +270,49 @@ function ConnectedTerminalComponent({
     []
   )
 
+  const shouldDebugLog = import.meta.env.DEV
+  const devLog = (...args: unknown[]): void => {
+    if (shouldDebugLog) {
+      console.log(...args)
+    }
+  }
+
   // Initialize terminal, set up IPC listeners, and spawn PTY
   useEffect(() => {
-    if (!containerRef.current) return
+    const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`
+
+    devLog(`[ConnectedTerminal] MOUNT [${debugId}]`, {
+      instanceId,
+      externalTerminalId,
+      autoSpawn,
+      spawnOptions,
+      isVisible
+    })
+
+    if (!containerRef.current) {
+      devLog(`[ConnectedTerminal] SKIP [${debugId}]: no container`)
+      return
+    }
 
     // Check if we're initializing a new terminal (different from previous)
     const terminalKey = externalTerminalId ?? 'new'
+    devLog(`[ConnectedTerminal] terminalKey check [${debugId}]`, {
+      terminalKey,
+      didInit: didInitRef.current,
+      initializedKey: initializedTerminalIdRef.current,
+      willSkip: didInitRef.current && initializedTerminalIdRef.current === terminalKey
+    })
+
     if (didInitRef.current && initializedTerminalIdRef.current === terminalKey) {
-      // Already initialized for this terminal, skip
+      devLog(`[ConnectedTerminal] SKIP [${debugId}]: already initialized for ${terminalKey}`)
       return
     }
 
     // Reset init state for new terminal
     didInitRef.current = true
     initializedTerminalIdRef.current = terminalKey
+
+    devLog(`[ConnectedTerminal] INITIALIZING [${debugId}] for key: ${terminalKey}`)
 
     // Merge platform-aware options with dynamic app settings
     const terminalOptions = {
@@ -508,6 +542,15 @@ function ConnectedTerminalComponent({
 
     // Spawn terminal if no external ID provided and auto-spawn enabled
     const initTerminal = async (): Promise<void> => {
+      const spawnDebugId = `${instanceId}-spawn-${Date.now().toString().slice(-6)}`
+
+      devLog(`[ConnectedTerminal.initTerminal] START [${spawnDebugId}]`, {
+        externalTerminalId,
+        autoSpawn,
+        spawnInFlight: spawnInFlightRef.current,
+        hasPtyId: !!ptyIdRef.current
+      })
+
       // Fit to get real dimensions BEFORE spawning
       try {
         fitAddon.fit()
@@ -519,13 +562,27 @@ function ConnectedTerminalComponent({
 
       if (!externalTerminalId) {
         if (!autoSpawn) {
+          devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: autoSpawn is false`)
           return
         }
         if (spawnInFlightRef.current || ptyIdRef.current) {
+          devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: already spawning or has PTY`)
           return
         }
+      } else if (isTerminalPendingPtyAssignment(externalTerminalId)) {
+        devLog(`SKIP autoSpawn: terminal ${externalTerminalId} pending PTY assignment from restore`)
+        return
+      }
+
+      if (!externalTerminalId) {
 
         spawnInFlightRef.current = true
+        devLog(`[ConnectedTerminal.initTerminal] SPAWNING [${spawnDebugId}]`, {
+          cols: spawnCols,
+          rows: spawnRows,
+          spawnOpts: memoizedSpawnOptions
+        })
+
         try {
           const spawnOpts = {
             ...memoizedSpawnOptions,
@@ -535,10 +592,16 @@ function ConnectedTerminalComponent({
             rows: spawnRows
           }
           const result = await terminalApi.spawn(spawnOpts)
+          devLog(`[ConnectedTerminal.initTerminal] SPAWN RESULT [${spawnDebugId}]`, {
+            success: result.success,
+            error: result.success ? undefined : result.error,
+            ptyId: result.success ? result.data.id : 'FAILED'
+          })
+
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
-            void addRendererRef(result.data.id)
+            void addRendererRef(result.data.id, instanceIdRef.current)
             // If tab was visible before PTY was ready, flush deferred fit+resize now
             if (needsResizeOnReadyRef.current) {
               needsResizeOnReadyRef.current = false
@@ -575,7 +638,10 @@ function ConnectedTerminalComponent({
         }
       } else {
         // External terminal ID provided - register and restore scrollback
-        void addRendererRef(externalTerminalId)
+        devLog(`[ConnectedTerminal.initTerminal] EXTERNAL PTY [${spawnDebugId}]`, {
+          externalTerminalId
+        })
+        void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
@@ -588,14 +654,20 @@ function ConnectedTerminalComponent({
       }
     }
 
+    devLog(`[ConnectedTerminal] Calling initTerminal [${debugId}]`)
     initTerminal()
 
     return () => {
+      devLog(`[ConnectedTerminal] UNMOUNT [${debugId}]`, {
+        instanceId,
+        ptyId: ptyIdRef.current,
+        externalTerminalId
+      })
       // Capture scroll position BEFORE unregistering for pane transitions
       const terminalId = ptyIdRef.current || externalTerminalId
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
-        void removeRendererRef(terminalId)
+        void removeRendererRef(terminalId, instanceIdRef.current)
       }
 
       // Unregister terminal from registry

@@ -64,15 +64,7 @@ interface PaneLeafRendererProps {
   defaultShell?: string
 }
 
-function PaneLeafRenderer({
-  pane,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneLeafRendererProps): React.JSX.Element {
+const PaneLeafRenderer = memo(({ pane, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneLeafRendererProps): React.JSX.Element => {
   return (
     <PaneContent
       pane={pane}
@@ -84,7 +76,7 @@ function PaneLeafRenderer({
       defaultShell={defaultShell}
     />
   )
-}
+})
 
 interface PaneSplitRendererProps {
   node: SplitNode
@@ -96,15 +88,7 @@ interface PaneSplitRendererProps {
   defaultShell?: string
 }
 
-function PaneSplitRenderer({
-  node,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneSplitRendererProps): React.JSX.Element {
+const PaneSplitRenderer = memo(({ node, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneSplitRendererProps): React.JSX.Element => {
   const updatePaneSizes = useWorkspaceStore((state) => state.updatePaneSizes)
   const pendingSizesRef = useRef<number[] | null>(null)
   const isDraggingRef = useRef(false)
@@ -166,7 +150,7 @@ function PaneSplitRenderer({
       ))}
     </ResizablePanelGroup>
   )
-}
+})
 
 interface PaneRendererPanelProps {
   child: PaneNode
@@ -182,19 +166,7 @@ interface PaneRendererPanelProps {
   defaultShell?: string
 }
 
-const PaneRendererPanel = memo(function PaneRendererPanel({
-  child,
-  panelOrder,
-  defaultSize,
-  isLast,
-  onDragging,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneRendererPanelProps): React.JSX.Element {
+const PaneRendererPanel = memo(({ child, panelOrder, defaultSize, isLast, onDragging, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneRendererPanelProps): React.JSX.Element => {
   return (
     <>
       <ResizablePanel

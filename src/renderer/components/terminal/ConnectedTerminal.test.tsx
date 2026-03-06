@@ -177,6 +177,10 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 
+vi.mock('@/hooks/use-terminal-restore', () => ({
+  isTerminalPendingPtyAssignment: vi.fn(() => false)
+}))
+
 // Mock the API modules
 vi.mock('@/lib/api', () => ({
   terminalApi: {
@@ -315,13 +319,13 @@ describe('ConnectedTerminal', () => {
     const { unmount } = render(<ConnectedTerminal terminalId="external-123" />)
 
     await vi.waitFor(() => {
-      expect(addRendererRef).toHaveBeenCalledWith('external-123')
+      expect(addRendererRef).toHaveBeenCalledWith('external-123', expect.stringMatching(/^conn-/))
     })
 
     unmount()
 
     await vi.waitFor(() => {
-      expect(removeRendererRef).toHaveBeenCalledWith('external-123')
+      expect(removeRendererRef).toHaveBeenCalledWith('external-123', expect.stringMatching(/^conn-/))
     })
   })
 

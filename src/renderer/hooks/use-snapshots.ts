@@ -111,8 +111,16 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
   const terminalStore = useTerminalStore.getState()
 
   // Close all existing terminals for this project
+  // CRITICAL: Kill PTYs before removing from store to prevent orphaned processes
   const existingTerminals = terminalStore.terminals.filter((t) => t.projectId === projectId)
   for (const terminal of existingTerminals) {
+    if (terminal.ptyId) {
+      try {
+        await terminalApi.kill(terminal.ptyId)
+      } catch {
+        // Continue with close even if kill fails
+      }
+    }
     terminalStore.closeTerminal(terminal.id, projectId)
   }
 

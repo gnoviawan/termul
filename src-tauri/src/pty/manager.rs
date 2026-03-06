@@ -5,7 +5,12 @@
 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 use parking_lot::RwLock;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, MasterPty, PtySize};
+
+#[cfg(target_os = "windows")]
+use crate::pty::windows::{resize_conpty, spawn_conpty, ConPtyHandles};
+#[cfg(target_os = "windows")]
+use parking_lot::Mutex as ParkingMutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -140,6 +145,8 @@ pub struct TerminalInstance {
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
+    #[cfg(target_os = "windows")]
+    pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
 
 impl TerminalInstance {
@@ -225,6 +232,39 @@ impl PtyManager {
         }
     }
 
+    fn join_reader_with_timeout(reader_handle: std::thread::JoinHandle<()>, timeout: Duration) {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let _ = reader_handle.join();
+            let _ = tx.send(());
+        });
+        let _ = rx.recv_timeout(timeout);
+    }
+
+    fn cleanup_terminal_resources_sync(instance: Arc<TerminalInstance>, wait_reader_thread: bool) {
+        // a) Drop writer first to close PTY input stream cleanly.
+        let _ = instance.writer.blocking_lock().take();
+
+        // b) Wait reader thread to finish naturally (max 3s)
+        if let Some(reader_handle) = instance.reader_handle.blocking_lock().take() {
+            if wait_reader_thread {
+                Self::join_reader_with_timeout(reader_handle, Duration::from_secs(3));
+            }
+        }
+
+        // c) Kill child process
+        if let Some(mut child) = instance.child.blocking_lock().take() {
+            let _ = child.kill();
+        }
+
+        // d) Drop ConPTY handles last
+        #[cfg(target_os = "windows")]
+        if let Some(conpty_handles) = &instance.conpty_handles {
+            let mut guard = conpty_handles.lock();
+            let _ = guard.take();
+        }
+    }
+
     /// Start the orphan detection background task
     /// This is called lazily when the first terminal is spawned
     fn start_orphan_detection(&self) {
@@ -274,25 +314,11 @@ impl PtyManager {
                     log::info!("Cleaning up orphaned terminal: {}", id);
 
                     if let Some(instance) = terminals.write().remove(&id) {
-                        // Drop writer first to close PTY input stream cleanly.
-                        if let Ok(mut guard) = instance.writer.try_lock() {
-                            let _ = guard.take();
-                        }
+                        tokio::task::spawn_blocking(move || {
+                            Self::cleanup_terminal_resources_sync(instance, true);
+                        });
 
-                        // Kill child process first to unblock reader thread on PTY EOF
-                        if let Ok(mut guard) = instance.child.try_lock() {
-                            if let Some(child) = guard.as_mut() {
-                                child.kill().ok();
-                            }
-                        }
-
-                        // Join reader thread with short timeout by detaching.
-                        // We cannot safely block this async task on thread join.
-                        if let Ok(mut guard) = instance.reader_handle.try_lock() {
-                            let _ = guard.take();
-                        }
-
-                        // Stop tracking
+                        // Stop tracking (sync operations)
                         cwd_tracker.stop_tracking(&id);
                         git_tracker.remove_terminal(&id);
                         exit_code_tracker.remove_terminal(&id);
@@ -346,107 +372,179 @@ impl PtyManager {
         // Get terminal size
         let cols = options.cols.unwrap_or(80);
         let rows = options.rows.unwrap_or(24);
+        let env = self.merge_environment(options.env.clone());
 
-        // Create PTY
-        let pty_system = native_pty_system();
-        let pty_size = PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        // On Windows, use our custom ConPTY implementation to avoid console window
+        #[cfg(target_os = "windows")]
+        {
+            // Quote the shell path if it contains spaces
+            let shell_escaped = if shell_path.contains(' ') {
+                format!("\"{}\" {}", shell_path,
+                    if cfg!(windows) && (shell_path.contains("powershell") || shell_path.contains("pwsh")) {
+                        "-NoLogo -NoProfile"
+                    } else {
+                        ""
+                    }
+                )
+            } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
+                format!("{} -NoLogo -NoProfile", shell_path)
+            } else {
+                shell_path.clone()
+            };
 
-        let pty_pair = pty_system
-            .openpty(pty_size)
-            .map_err(|e| format!("Failed to open PTY: {}", e))?;
+            let (reader, writer, pid, process_handle, conpty_handles) =
+                spawn_conpty(&shell_escaped, Some(&cwd), cols, rows, &env)
+                    .map_err(|e| format!("Failed to spawn ConPTY: {}", e))?;
 
-        // Build command with environment
-        let mut cmd = CommandBuilder::new(&shell_path);
+            let child = WindowsConPtyChild {
+                pid,
+                process_handle,
+            };
 
-        // Merge environment variables (case-insensitive on Windows)
-        let env = self.merge_environment(options.env);
-        for (key, value) in &env {
-            cmd.env(key, value);
+            // Create terminal instance
+            let instance = Arc::new(TerminalInstance {
+                id: id.clone(),
+                child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
+                master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
+                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                reader_handle: Arc::new(AsyncMutex::new(None)),
+                shell: shell_path.clone(),
+                cwd: cwd.clone(),
+                pid,
+                last_activity: Arc::new(RwLock::new(Instant::now())),
+                renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                cols: Arc::new(RwLock::new(cols)),
+                rows: Arc::new(RwLock::new(rows)),
+                conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
+            });
+
+            // Start reader task
+            let reader_instance = instance.clone();
+            let app_handle = self.app_handle.clone();
+            let exit_code_tracker = self.exit_code_tracker.clone();
+            let terminal_id = id.clone();
+
+            let reader_task = std::thread::spawn(move || {
+                log::info!("[PTY {}] Windows ConPTY reader thread starting", terminal_id);
+                Self::reader_loop_sync(
+                    reader_instance,
+                    reader,
+                    app_handle,
+                    exit_code_tracker,
+                    terminal_id,
+                );
+            });
+
+            *instance.reader_handle.lock().await = Some(reader_task);
+
+            // Store the terminal
+            self.terminals.write().insert(id.clone(), instance.clone());
+
+            // Initialize tracking
+            self.cwd_tracker.start_tracking(&id, pid, &cwd);
+            self.git_tracker.initialize_terminal(&id, &cwd);
+            self.exit_code_tracker.initialize_terminal(&id);
+
+            return Ok(TerminalInfo {
+                id,
+                shell: shell_path,
+                cwd,
+                pid,
+                cols,
+                rows,
+            });
         }
 
-        // Set standard terminal environment variables
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
+        // On non-Windows, use portable-pty as before
+        #[cfg(not(target_os = "windows"))]
+        {
+            use portable_pty::{native_pty_system, CommandBuilder};
 
-        // Set working directory
-        cmd.cwd(&cwd);
+            let pty_system = native_pty_system();
+            let pty_size = PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            };
 
-        // Spawn the child process
-        let child = pty_pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("Failed to spawn shell: {}", e))?;
+            let pty_pair = pty_system
+                .openpty(pty_size)
+                .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-        let pid = child.process_id().unwrap_or(0);
+            let mut cmd = CommandBuilder::new(&shell_path);
+            for (key, value) in &env {
+                cmd.env(key, value);
+            }
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("COLORTERM", "truecolor");
+            cmd.cwd(&cwd);
 
-        // Get a dedicated writer from the master PTY.
-        // portable-pty only allows take_writer() once for each PTY.
-        let writer = pty_pair
-            .master
-            .take_writer()
-            .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
+            let child = pty_pair
+                .slave
+                .spawn_command(cmd)
+                .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
-        // Get the reader from the master PTY
-        let reader = pty_pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
+            let pid = child.process_id().unwrap_or(0);
 
-        // Create terminal instance
-        let instance = Arc::new(TerminalInstance {
-            id: id.clone(),
-            child: Arc::new(AsyncMutex::new(Some(child))),
-            master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
-            writer: Arc::new(AsyncMutex::new(Some(writer))),
-            reader_handle: Arc::new(AsyncMutex::new(None)),
-            shell: shell_path.clone(),
-            cwd: cwd.clone(),
-            pid,
-            last_activity: Arc::new(RwLock::new(Instant::now())),
-            renderer_refs: Arc::new(RwLock::new(HashSet::new())),
-            cols: Arc::new(RwLock::new(cols)),
-            rows: Arc::new(RwLock::new(rows)),
-        });
+            let reader = pty_pair
+                .master
+                .try_clone_reader()
+                .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
+            let writer = pty_pair
+                .master
+                .take_writer()
+                .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
 
-        // Start reader task
-        let reader_instance = instance.clone();
-        let app_handle = self.app_handle.clone();
-        let exit_code_tracker = self.exit_code_tracker.clone();
-        let terminal_id = id.clone();
+            let instance = Arc::new(TerminalInstance {
+                id: id.clone(),
+                child: Arc::new(AsyncMutex::new(Some(child))),
+                master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
+                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                reader_handle: Arc::new(AsyncMutex::new(None)),
+                shell: shell_path.clone(),
+                cwd: cwd.clone(),
+                pid,
+                last_activity: Arc::new(RwLock::new(Instant::now())),
+                renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                cols: Arc::new(RwLock::new(cols)),
+                rows: Arc::new(RwLock::new(rows)),
+                #[cfg(target_os = "windows")]
+                conpty_handles: None,
+            });
 
-        let reader_task = std::thread::spawn(move || {
-            Self::reader_loop_sync(
-                reader_instance,
-                reader,
-                app_handle,
-                exit_code_tracker,
-                terminal_id,
-            );
-        });
+            let reader_instance = instance.clone();
+            let app_handle = self.app_handle.clone();
+            let exit_code_tracker = self.exit_code_tracker.clone();
+            let terminal_id = id.clone();
 
-        *instance.reader_handle.lock().await = Some(reader_task);
+            let reader_task = std::thread::spawn(move || {
+                Self::reader_loop_sync(
+                    reader_instance,
+                    reader,
+                    app_handle,
+                    exit_code_tracker,
+                    terminal_id,
+                );
+            });
 
-        // Store the terminal
-        self.terminals.write().insert(id.clone(), instance.clone());
+            *instance.reader_handle.lock().await = Some(reader_task);
 
-        // Initialize tracking
-        self.cwd_tracker.start_tracking(&id, pid, &cwd);
-        self.git_tracker.initialize_terminal(&id, &cwd);
-        self.exit_code_tracker.initialize_terminal(&id);
+            self.terminals.write().insert(id.clone(), instance.clone());
 
-        Ok(TerminalInfo {
-            id,
-            shell: shell_path,
-            cwd,
-            pid,
-            cols,
-            rows,
-        })
+            self.cwd_tracker.start_tracking(&id, pid, &cwd);
+            self.git_tracker.initialize_terminal(&id, &cwd);
+            self.exit_code_tracker.initialize_terminal(&id);
+
+            Ok(TerminalInfo {
+                id,
+                shell: shell_path,
+                cwd,
+                pid,
+                cols,
+                rows,
+            })
+        }
     }
 
     /// Reader loop that continuously reads from PTY and emits events
@@ -595,6 +693,24 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?
             .clone();
 
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(conpty_handles) = &instance.conpty_handles {
+                let guard = conpty_handles.lock();
+                let handles = guard
+                    .as_ref()
+                    .ok_or_else(|| "ConPTY handles unavailable".to_string())?;
+                resize_conpty(handles, cols, rows)
+                    .map_err(|e| format!("Failed to resize ConPTY: {}", e))?;
+
+                *instance.cols.write() = cols;
+                *instance.rows.write() = rows;
+                instance.update_activity();
+
+                return Ok(());
+            }
+        }
+
         let master_guard = instance
             .master
             .try_lock()
@@ -630,24 +746,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        // Clone references needed for the task
-        let child_clone = instance.child.clone();
-        let writer_clone = instance.writer.clone();
-        let reader_handle_clone = instance.reader_handle.clone();
-
-        // Spawn task to do async cleanup
-        tokio::spawn(async move {
-            // Drop writer first to close PTY input stream cleanly.
-            let _ = writer_clone.lock().await.take();
-
-            // Kill the child process first so reader thread can naturally exit on EOF
-            if let Some(mut child) = child_clone.lock().await.take() {
-                let _ = child.kill();
-            }
-
-            // Drop join handle to detach reader thread; it will end after PTY closes
-            let _ = reader_handle_clone.lock().await.take();
-        });
+        Self::cleanup_terminal_resources_sync(instance, true);
 
         // Stop tracking (sync operations)
         self.cwd_tracker.stop_tracking(id);
@@ -693,6 +792,24 @@ impl PtyManager {
     /// Check if terminal limit is reached
     pub fn is_limit_reached(&self) -> bool {
         self.get_count() >= GLOBAL_TERMINAL_LIMIT
+    }
+
+    /// Kill all terminals (best-effort), used as app-exit safety net.
+    pub fn kill_all(&self) {
+        let ids: Vec<String> = self.terminals.read().keys().cloned().collect();
+
+        for id in ids {
+            let instance = match self.terminals.write().remove(&id) {
+                Some(i) => i,
+                None => continue,
+            };
+
+            Self::cleanup_terminal_resources_sync(instance, true);
+
+            self.cwd_tracker.stop_tracking(&id);
+            self.git_tracker.remove_terminal(&id);
+            self.exit_code_tracker.remove_terminal(&id);
+        }
     }
 
     /// Update orphan detection settings (timeout in milliseconds)
@@ -1007,6 +1124,183 @@ impl PtyManager {
         }
 
         env
+    }
+}
+
+/// Windows ConPTY child process wrapper.
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsConPtyChild {
+    pid: u32,
+    process_handle: *mut std::ffi::c_void,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsPidKiller {
+    pid: u32,
+}
+
+// SAFETY: process_handle is only accessed by one thread at a time via the
+// AsyncMutex<Option<Box<dyn Child>>> wrapper in TerminalInstance.
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsConPtyChild {}
+
+// SAFETY: process_handle is only accessed by one thread at a time via the
+// AsyncMutex<Option<Box<dyn Child>>> wrapper in TerminalInstance.
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsConPtyChild {}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsConPtyChild {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.process_handle.is_null() {
+                let _ = winapi::um::handleapi::CloseHandle(self.process_handle);
+                self.process_handle = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl portable_pty::ChildKiller for WindowsPidKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        unsafe {
+            let handle = winapi::um::processthreadsapi::OpenProcess(
+                winapi::um::winnt::PROCESS_TERMINATE,
+                0,
+                self.pid,
+            );
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let terminate_ok =
+                winapi::um::processthreadsapi::TerminateProcess(handle as *mut std::ffi::c_void, 1);
+            let close_ok = winapi::um::handleapi::CloseHandle(handle as *mut std::ffi::c_void);
+            if terminate_ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if close_ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync + 'static> {
+        Box::new(WindowsPidKiller { pid: self.pid })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl portable_pty::ChildKiller for WindowsConPtyChild {
+    fn kill(&mut self) -> std::io::Result<()> {
+        unsafe {
+            if self.process_handle.is_null() {
+                return Ok(());
+            }
+            if winapi::um::processthreadsapi::TerminateProcess(self.process_handle, 1) == 0 {
+                let err = std::io::Error::last_os_error();
+                log::warn!(
+                    "[WindowsConPtyChild:{}] TerminateProcess failed: {}",
+                    self.pid,
+                    err
+                );
+                return Err(err);
+            }
+            Ok(())
+        }
+    }
+
+    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync + 'static> {
+        let mut dup: *mut std::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let ok = winapi::um::handleapi::DuplicateHandle(
+                winapi::um::processthreadsapi::GetCurrentProcess(),
+                self.process_handle,
+                winapi::um::processthreadsapi::GetCurrentProcess(),
+                &mut dup,
+                0,
+                0,
+                winapi::um::winnt::DUPLICATE_SAME_ACCESS,
+            );
+            if ok == 0 {
+                log::warn!(
+                    "[WindowsConPtyChild:{}] DuplicateHandle failed, falling back to pid-based killer: {}",
+                    self.pid,
+                    std::io::Error::last_os_error()
+                );
+                return Box::new(WindowsPidKiller { pid: self.pid });
+            }
+        }
+
+        Box::new(WindowsConPtyChild {
+            pid: self.pid,
+            process_handle: dup,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl portable_pty::Child for WindowsConPtyChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+        unsafe {
+            if self.process_handle.is_null() {
+                return Ok(Some(portable_pty::ExitStatus::with_exit_code(1)));
+            }
+
+            let wait = winapi::um::synchapi::WaitForSingleObject(
+                self.process_handle,
+                0,
+            );
+
+            if wait == winapi::shared::winerror::WAIT_TIMEOUT {
+                return Ok(None);
+            }
+
+            if wait != winapi::um::winbase::WAIT_OBJECT_0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let mut code: u32 = 0;
+            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(Some(portable_pty::ExitStatus::with_exit_code(code)))
+        }
+    }
+
+    fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+        unsafe {
+            if self.process_handle.is_null() {
+                return Ok(portable_pty::ExitStatus::with_exit_code(1));
+            }
+
+            let wait = winapi::um::synchapi::WaitForSingleObject(
+                self.process_handle,
+                winapi::um::winbase::INFINITE,
+            );
+            if wait != winapi::um::winbase::WAIT_OBJECT_0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let mut code: u32 = 0;
+            if winapi::um::processthreadsapi::GetExitCodeProcess(self.process_handle, &mut code) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(portable_pty::ExitStatus::with_exit_code(code))
+        }
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        Some(self.pid)
+    }
+
+    fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
+        Some(self.process_handle)
     }
 }
 

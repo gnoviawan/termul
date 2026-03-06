@@ -32,7 +32,7 @@ use std::env;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 #[cfg(target_os = "windows")]
 fn resolve_executable_from_path(command: &str) -> Option<String> {
@@ -395,7 +395,7 @@ pub fn run() {
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
-    builder
+    let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -418,7 +418,7 @@ pub fn run() {
                 git_tracker,
                 exit_code_tracker,
             ));
-            app.manage(pty_manager);
+            app.manage(pty_manager.clone());
 
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
@@ -455,8 +455,16 @@ pub fn run() {
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::ExitRequested { .. } = event {
+            if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
+                pty_manager.kill_all();
+            }
+        }
+    });
 }
 
 #[cfg(test)]

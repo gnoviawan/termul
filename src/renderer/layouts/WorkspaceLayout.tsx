@@ -187,8 +187,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   // Sync terminal tabs with workspace store
+  // CRITICAL: Track sync calls to prevent loops
+  const syncCallCountRef = useRef(0)
+  const lastSyncTerminalsRef = useRef<string[]>([])
+
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id)
+
+    // Skip if terminals haven't actually changed (same IDs)
+    const prevIds = lastSyncTerminalsRef.current
+    if (terminalIds.length === prevIds.length &&
+        terminalIds.every((id, i) => id === prevIds[i])) {
+      return
+    }
+
+    const syncId = `sync-${syncCallCountRef.current++}-${Date.now().toString().slice(-6)}`
+
+    console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${syncId}]`, {
+      terminalCount: terminalIds.length,
+      terminalIds,
+      prevCount: prevIds.length,
+      callCount: syncCallCountRef.current
+    })
+
+    lastSyncTerminalsRef.current = terminalIds
     useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
   }, [terminals])
 

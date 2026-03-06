@@ -62,6 +62,34 @@ async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResu
 }
 
 /**
+ * Spawn tracking variables to detect and prevent spawn loops
+ */
+const IS_DEV = import.meta.env.DEV
+
+function devLog(...args: unknown[]): void {
+  if (IS_DEV) {
+    console.log(...args)
+  }
+}
+
+let SPAWN_CALL_COUNTER = 0
+const SPAWN_CALLS: Array<{
+  id: string
+  timestamp: number
+  shell?: string
+  cwd?: string
+  stack: string
+}> = []
+
+/**
+ * Capture stack trace for debugging spawn calls
+ */
+function captureStackTrace(): string {
+  const stack = new Error().stack?.split('\n').slice(3).join('\n') || ''
+  return stack
+}
+
+/**
  * Create a TerminalApi implementation using Tauri IPC
  *
  * This adapter maps all TerminalApi methods to Tauri invoke() calls and event listeners.
@@ -73,6 +101,56 @@ export function createTauriTerminalApi(): TerminalApi {
      * Spawn a new terminal PTY
      */
     async spawn(options?: TerminalSpawnOptions): Promise<IpcResult<TerminalInfo>> {
+      if (IS_DEV) {
+        const spawnId = `spawn-${SPAWN_CALL_COUNTER++}-${Date.now().toString(36)}`
+        const stack = captureStackTrace()
+
+        const callInfo = {
+          id: spawnId,
+          timestamp: Date.now(),
+          shell: options?.shell,
+          cwd: options?.cwd,
+          stack
+        }
+
+        SPAWN_CALLS.push(callInfo)
+
+        devLog('═══════════════════════════════════════════════════════════════')
+        devLog('[SPAWN CALL]', {
+          id: spawnId,
+          totalCalls: SPAWN_CALLS.length,
+          options,
+          stackTrace: stack,
+          recentCalls: SPAWN_CALLS.slice(-5).map(c => ({
+            id: c.id,
+            time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
+            shell: c.shell,
+            cwd: c.cwd
+          }))
+        })
+        devLog('═══════════════════════════════════════════════════════════════')
+
+        if (SPAWN_CALLS.length >= 5) {
+          const last5 = SPAWN_CALLS.slice(-5)
+          const timeSpan = last5[4].timestamp - last5[0].timestamp
+          if (timeSpan < 2000) {
+            console.warn('⚠️ Rapid spawns detected', {
+              callCount: last5.length,
+              timeSpan: `${timeSpan}ms`,
+              calls: last5.map(c => ({
+                id: c.id,
+                time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
+                stack: c.stack
+              }))
+            })
+          }
+        }
+
+        if (SPAWN_CALLS.length >= 10) {
+          console.debug(`Spawn tracking: ${SPAWN_CALLS.length} terminals spawned`)
+        }
+      }
+
       return invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options })
     },
 
@@ -103,7 +181,7 @@ export function createTauriTerminalApi(): TerminalApi {
      */
     onData(callback: TerminalDataCallback): () => void {
       if (import.meta.env.DEV) {
-        console.log('[TauriTerminalAPI] Registering terminal-data listener')
+        devLog('[TauriTerminalAPI] Registering terminal-data listener')
       }
 
       const unlisten = listen<{ id: string; data: string }>(
@@ -115,7 +193,7 @@ export function createTauriTerminalApi(): TerminalApi {
 
       return () => {
         if (import.meta.env.DEV) {
-          console.log('[TauriTerminalAPI] Unregistering terminal-data listener')
+          devLog('[TauriTerminalAPI] Unregistering terminal-data listener')
         }
         void unlisten.then((fn) => fn())
       }
@@ -127,14 +205,14 @@ export function createTauriTerminalApi(): TerminalApi {
      */
     onExit(callback: TerminalExitCallback): () => void {
       if (import.meta.env.DEV) {
-        console.log('[TauriTerminalAPI] Registering terminal-exit listener')
+        devLog('[TauriTerminalAPI] Registering terminal-exit listener')
       }
 
       const unlisten = listen<{ id: string; exitCode: number | null; signal: number | null }>(
         IPC_EVENTS.TERMINAL_EXIT,
         ({ payload }) => {
           if (import.meta.env.DEV) {
-            console.log(
+            devLog(
               `[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`
             )
           }
@@ -143,7 +221,7 @@ export function createTauriTerminalApi(): TerminalApi {
       )
       return () => {
         if (import.meta.env.DEV) {
-          console.log('[TauriTerminalAPI] Unregistering terminal-exit listener')
+          devLog('[TauriTerminalAPI] Unregistering terminal-exit listener')
         }
         void unlisten.then((fn) => fn())
       }
@@ -262,9 +340,9 @@ export function createTauriTerminalApi(): TerminalApi {
  * Internal method to add renderer ref (not part of TerminalApi interface)
  * Called when a terminal component mounts to register with the Rust backend
  */
-export async function addRendererRef(ptyId: string): Promise<IpcResult<void>> {
+export async function addRendererRef(ptyId: string, rendererId: string): Promise<IpcResult<void>> {
   // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
-  const request = { terminalId: ptyId, rendererId: 'default' }
+  const request = { terminalId: ptyId, rendererId }
   return invokeIpc<void>(IPC_COMMANDS.ADD_RENDERER_REF, { request })
 }
 
@@ -272,8 +350,43 @@ export async function addRendererRef(ptyId: string): Promise<IpcResult<void>> {
  * Internal method to remove renderer ref (not part of TerminalApi interface)
  * Called when a terminal component unmounts to unregister from the Rust backend
  */
-export async function removeRendererRef(ptyId: string): Promise<IpcResult<void>> {
+export async function removeRendererRef(ptyId: string, rendererId: string): Promise<IpcResult<void>> {
   // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
-  const request = { terminalId: ptyId, rendererId: 'default' }
+  const request = { terminalId: ptyId, rendererId }
   return invokeIpc<void>(IPC_COMMANDS.REMOVE_RENDERER_REF, { request })
+}
+
+/**
+ * Expose spawn tracking for debugging
+ * Access via: window.__TERMUL_SPAWN_TRACKER__
+ */
+if (typeof window !== 'undefined' && IS_DEV) {
+  const globalDebug = window as unknown as Record<string, unknown>
+  globalDebug.__TERMUL_SPAWN_TRACKER__ = {
+    getCalls: () => [...SPAWN_CALLS],
+    getCallCount: () => SPAWN_CALLS.length,
+    clearCalls: () => { SPAWN_CALLS.length = 0 },
+    getLastNCalls: (n: number) => SPAWN_CALLS.slice(-n),
+    printSummary: () => {
+      console.table(SPAWN_CALLS.map(c => ({
+        id: c.id,
+        time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
+        shell: c.shell || 'N/A',
+        cwd: c.cwd || 'N/A',
+        caller: c.stack.split(' <- ')[0] || 'unknown'
+      })))
+      devLog(`Total spawn calls: ${SPAWN_CALLS.length}`)
+
+      // Detect potential loops
+      if (SPAWN_CALLS.length >= 5) {
+        const last5 = SPAWN_CALLS.slice(-5)
+        const timeSpan = last5[4].timestamp - last5[0].timestamp
+        if (timeSpan < 2000) {
+          console.error('🚨 POTENTIAL SPAWN LOOP DETECTED 🚨')
+          console.error('5 spawns within', timeSpan, 'ms')
+          console.table(last5)
+        }
+      }
+    }
+  }
 }

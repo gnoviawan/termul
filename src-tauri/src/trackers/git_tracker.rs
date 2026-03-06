@@ -1,12 +1,31 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Build a backend helper command.
+/// On Windows this suppresses stray console windows from helper binaries like git.exe.
+#[cfg(target_os = "windows")]
+fn backend_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn backend_command(program: &str) -> Command {
+    Command::new(program)
+}
 
 #[cfg(target_os = "windows")]
 fn resolve_command_candidates_from_path(command: &str) -> Vec<String> {
@@ -96,7 +115,7 @@ fn resolve_git_binary() -> &'static str {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let which_cmd = Command::new("which").args(["-a", "git"]).output();
+            let which_cmd = backend_command("which").args(["-a", "git"]).output();
 
             if let Ok(output) = which_cmd {
                 if output.status.success() {
@@ -554,7 +573,7 @@ impl GitTracker {
     /// Runs `git rev-parse --abbrev-ref HEAD` and returns the branch name.
     /// Returns None if not in a git repository or in detached HEAD state.
     fn check_branch_internal(cwd: &str) -> Option<String> {
-        let output = Command::new(resolve_git_binary())
+        let output = backend_command(resolve_git_binary())
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
             .output()
@@ -580,7 +599,7 @@ impl GitTracker {
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
         log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
-        let output = Command::new(resolve_git_binary())
+        let output = backend_command(resolve_git_binary())
             .args(["status", "--porcelain"])
             .current_dir(cwd)
             .output()
