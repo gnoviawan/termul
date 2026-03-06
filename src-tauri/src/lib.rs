@@ -2,29 +2,8 @@
 mod commands;
 mod migrations;
 mod pty;
+mod shell_paths;
 mod trackers;
-
-/// Git Bash path candidates shared between shell detection and PTY resolver.
-/// When updating this list, ensure BOTH lib.rs and pty/manager.rs are updated.
-/// Version: v1.0
-mod git_bash_paths {
-
-    /// Primary Git Bash installation paths (Program Files)
-    pub const PRIMARY_PATHS: &[&str] = &[
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
-    ];
-
-    /// Fallback Git Bash paths for non-standard installations
-    pub const FALLBACK_PATHS: &[&str] = &[
-        r"C:\tools\msys64\usr\bin\bash.exe",
-        r"C:\msys64\usr\bin\bash.exe",
-        r"C:\Git\bin\bash.exe",
-        r"C:\Git\usr\bin\bash.exe",
-    ];
-}
 
 use migrations::MigrationManager;
 use serde::Serialize;
@@ -33,6 +12,8 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
+use crate::shell_paths::git_bash_paths;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager, RunEvent,
@@ -697,29 +678,41 @@ pub fn run() {
             register_default_migrations(migration_manager.as_ref());
 
             let migration_result = migration_manager.run_migrations();
+            let mut migration_failures = Vec::new();
+
             if !migration_result.success {
-                log::error!(
-                    "Data migration startup failed: {}",
+                migration_failures.push(
                     migration_result
                         .error
-                        .as_deref()
-                        .unwrap_or("unknown migration error")
+                        .clone()
+                        .unwrap_or_else(|| "unknown migration error".to_string()),
                 );
-            } else if let Some(results) = migration_result.data.as_ref() {
-                let mut failed_count = 0usize;
+            }
 
+            if let Some(results) = migration_result.data.as_ref() {
                 for result in results.iter().filter(|result| !result.success) {
-                    failed_count += 1;
-                    log::error!(
-                        "Data migration {} failed during startup: {}",
+                    migration_failures.push(format!(
+                        "Migration {} failed: {}",
                         result.version,
                         result.error.as_deref().unwrap_or("unknown migration error")
-                    );
+                    ));
                 }
 
-                if failed_count == 0 && !results.is_empty() {
+                if migration_failures.is_empty() && !results.is_empty() {
                     log::info!("Completed {} data migration(s) during startup", results.len());
                 }
+            }
+
+            if !migration_failures.is_empty() {
+                let failure_message = format!(
+                    "Data migration startup failed:\n{}",
+                    migration_failures.join("\n")
+                );
+
+                let _ = app.emit("startup-migration-failed", failure_message.clone());
+                log::error!("{}", failure_message);
+
+                return Err(anyhow::anyhow!(failure_message).into());
             }
 
             Ok(())

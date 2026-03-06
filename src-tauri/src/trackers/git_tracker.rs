@@ -387,7 +387,85 @@ impl GitTracker {
     ///
     /// When false, polling will skip git commands to save CPU.
     pub fn set_visibility(&self, visible: bool) {
-        self.is_visible.store(visible, Ordering::SeqCst);
+        let was_visible = self.is_visible.swap(visible, Ordering::SeqCst);
+        if !was_visible && visible {
+            self.refresh_tracked_terminals();
+        }
+    }
+
+    fn refresh_tracked_terminals(&self) {
+        Self::sync_terminal_cwds_from_tracker(&self.app_handle, &self.terminal_states);
+
+        #[cfg(target_os = "windows")]
+        Self::prune_unused_cwd_poll_states(&self.terminal_states, &self.cwd_poll_states);
+
+        #[cfg(target_os = "windows")]
+        {
+            let cwd_states: HashMap<String, Vec<String>> = {
+                let states_read = self.terminal_states.read();
+                let mut map = HashMap::new();
+                for (id, state) in states_read.iter() {
+                    map.entry(state.last_known_cwd.clone())
+                        .or_insert_with(Vec::new)
+                        .push(id.clone());
+                }
+                map
+            };
+
+            let now = Instant::now();
+            for (cwd, terminal_ids) in cwd_states {
+                let new_status = Self::check_status_internal(&cwd);
+                let new_branch = Self::check_branch_internal(&cwd);
+
+                {
+                    let mut cwd_poll_states = self.cwd_poll_states.write();
+                    let poll_state = cwd_poll_states.entry(cwd).or_insert_with(CwdPollState::new);
+                    poll_state.last_checked = now;
+                    poll_state.last_status = new_status.clone();
+                }
+
+                let (branch_emits, status_emits) = Self::apply_git_results(
+                    &self.terminal_states,
+                    &terminal_ids,
+                    new_branch,
+                    new_status,
+                );
+
+                for (terminal_id, branch) in branch_emits {
+                    Self::emit_branch_changed_static(&self.app_handle, &terminal_id, &branch);
+                }
+
+                for (terminal_id, status) in status_emits {
+                    Self::emit_status_changed_static(&self.app_handle, &terminal_id, &status);
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let terminals: Vec<(String, String)> = self
+                .terminal_states
+                .read()
+                .iter()
+                .map(|(id, state)| (id.clone(), state.last_known_cwd.clone()))
+                .collect();
+
+            for (terminal_id, cwd) in terminals {
+                let new_status = Self::check_status_internal(&cwd);
+                let new_branch = Self::check_branch_internal(&cwd);
+                let terminal_ids = vec![terminal_id.clone()];
+                let (branch_emits, status_emits) =
+                    Self::apply_git_results(&self.terminal_states, &terminal_ids, new_branch, new_status);
+
+                for (_, branch) in branch_emits {
+                    Self::emit_branch_changed_static(&self.app_handle, &terminal_id, &branch);
+                }
+
+                for (_, status) in status_emits {
+                    Self::emit_status_changed_static(&self.app_handle, &terminal_id, &status);
+                }
+            }
+        }
     }
 
     fn sync_terminal_cwds_from_tracker(
@@ -909,6 +987,15 @@ mod tests {
         assert_eq!(status.untracked, 0);
         assert_eq!(status.modified, 0);
         assert_eq!(status.staged, 1); // R in index counts as staged
+        assert!(status.has_changes);
+    }
+
+    #[test]
+    fn test_parse_git_status_rename_with_similarity() {
+        let status = GitTracker::parse_git_status("R100 old.txt -> new.txt\n");
+        assert_eq!(status.untracked, 0);
+        assert_eq!(status.modified, 0);
+        assert_eq!(status.staged, 1);
         assert!(status.has_changes);
     }
 

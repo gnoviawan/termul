@@ -4,6 +4,7 @@
 //! Provides migration history tracking and safe migration execution.
 
 use crate::commands::IpcResult;
+use chrono::{DateTime, SecondsFormat, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -300,27 +301,17 @@ impl MigrationManager {
 
         // Get sorted migrations
         let migrations_map = self.migrations.lock();
-        let mut migrations: Vec<MigrationEntry> = migrations_map
+        let mut pending_versions: Vec<String> = migrations_map
             .values()
-            .map(|m| MigrationEntry {
-                version: m.version.clone(),
-                description: m.description.clone(),
-                migration_fn: None, // We'll take() this from the original later if needed
-                rollback_fn: None,  // We don't need the rollback fn for running migrations
+            .filter(|migration| {
+                compare_versions(&migration.version, &current_version)
+                    == std::cmp::Ordering::Greater
             })
+            .map(|migration| migration.version.clone())
             .collect();
         drop(migrations_map);
 
-        migrations.sort_by(|a, b| compare_versions(&a.version, &b.version));
-
-        // Filter pending migrations
-        let pending_versions: Vec<String> = migrations
-            .into_iter()
-            .filter(|m| {
-                compare_versions(&m.version, &current_version) == std::cmp::Ordering::Greater
-            })
-            .map(|m| m.version)
-            .collect();
+        pending_versions.sort_by(|a, b| compare_versions(a, b));
 
         if pending_versions.is_empty() {
             return IpcResult::success(vec![]);
@@ -351,8 +342,12 @@ impl MigrationManager {
                             // Execute the migration function
                             migration_fn()
                         } else {
-                            // No migration function, simulate success
-                            Ok(())
+                            let error = format!(
+                                "Migration {} is registered without an implementation",
+                                version
+                            );
+                            log::error!("{}", error);
+                            Err(error)
                         };
                         result
                     }
@@ -540,21 +535,9 @@ fn chrono_timestamp() -> String {
 
 /// Format Unix timestamp to ISO 8601
 fn format_datetime(secs: u64) -> String {
-    // Days since epoch
-    let days = secs / 86400;
-    let year = 1970 + days / 365;
-    let day_of_year = (days % 365) as u32;
-
-    // Simple approximation - sufficient for migration timestamps
-    format!(
-        "{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year,
-        ((day_of_year / 30) + 1).min(12),
-        (day_of_year % 30) + 1,
-        ((secs % 86400) / 3600) % 24,
-        ((secs % 3600) / 60) % 60,
-        secs % 60
-    )
+    DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        .map(|datetime| datetime.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
 // ==================== Tests ====================

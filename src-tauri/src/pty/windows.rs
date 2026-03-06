@@ -12,6 +12,12 @@ pub struct ConPtyHandles {
     hpcon: *mut c_void,
 }
 
+impl ConPtyHandles {
+    pub fn raw_hpcon(&self) -> *mut c_void {
+        self.hpcon
+    }
+}
+
 // SAFETY: ConPtyHandles is only accessed through the Arc<Mutex<...>> wrapper in
 // TerminalInstance, ensuring exclusive access. The HPCON handle is valid for the
 // lifetime of the struct and closed exactly once in Drop.
@@ -52,7 +58,7 @@ fn validate_conpty_size(cols: u16, rows: u16) -> std::io::Result<winapi::um::win
 }
 
 pub fn resize_conpty(handles: &ConPtyHandles, cols: u16, rows: u16) -> std::io::Result<()> {
-    if handles.hpcon.is_null() {
+    if handles.raw_hpcon().is_null() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "ConPTY handle is null",
@@ -61,7 +67,7 @@ pub fn resize_conpty(handles: &ConPtyHandles, cols: u16, rows: u16) -> std::io::
 
     let size = validate_conpty_size(cols, rows)?;
 
-    let result = unsafe { winapi::um::consoleapi::ResizePseudoConsole(handles.hpcon, size) };
+    let result = unsafe { winapi::um::consoleapi::ResizePseudoConsole(handles.raw_hpcon(), size) };
     if result != 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -93,12 +99,12 @@ fn env_to_wide_block(env: &std::collections::HashMap<String, String>) -> Vec<u16
         block.push(0);
     }
 
-    if !block.ends_with(&[0, 0]) {
-        block.push(0);
-        if !block.ends_with(&[0, 0]) {
-            block.push(0);
-        }
+    while matches!(block.last(), Some(0)) {
+        block.pop();
     }
+
+    block.push(0);
+    block.push(0);
 
     block
 }

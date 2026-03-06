@@ -10,6 +10,8 @@ use portable_pty::{Child, MasterPty, PtySize};
 #[cfg(target_os = "windows")]
 use crate::pty::windows::{resize_conpty, spawn_conpty, ConPtyHandles};
 #[cfg(target_os = "windows")]
+use crate::shell_paths::git_bash_paths;
+#[cfg(target_os = "windows")]
 use parking_lot::Mutex as ParkingMutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -69,27 +71,6 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as AsyncMutex;
-
-// Git Bash path candidates - MUST match lib.rs git_bash_paths module
-// Version: v1.0 - When updating, update both files
-#[cfg(target_os = "windows")]
-mod git_bash_paths {
-    /// Primary Git Bash installation paths (Program Files)
-    pub const PRIMARY_PATHS: &[&str] = &[
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
-    ];
-
-    /// Fallback Git Bash paths for non-standard installations
-    pub const FALLBACK_PATHS: &[&str] = &[
-        r"C:\tools\msys64\usr\bin\bash.exe",
-        r"C:\msys64\usr\bin\bash.exe",
-        r"C:\Git\bin\bash.exe",
-        r"C:\Git\usr\bin\bash.exe",
-    ];
-}
 
 #[cfg(target_os = "windows")]
 fn has_windows_env_var(env_map: &HashMap<String, String>, key: &str) -> bool {
@@ -717,7 +698,7 @@ impl PtyManager {
     }
 
     /// Write data to a terminal
-    pub fn write(&self, id: &str, data: &str) -> Result<(), String> {
+    pub async fn write(&self, id: &str, data: &str) -> Result<(), String> {
         let instance = self
             .terminals
             .read()
@@ -727,10 +708,7 @@ impl PtyManager {
 
         instance.update_activity();
 
-        let mut writer_guard = instance
-            .writer
-            .try_lock()
-            .map_err(|_| "Failed to acquire PTY writer lock".to_string())?;
+        let mut writer_guard = instance.writer.lock().await;
 
         let writer = writer_guard
             .as_mut()
@@ -747,7 +725,7 @@ impl PtyManager {
     }
 
     /// Resize a terminal
-    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+    pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let instance = self
             .terminals
             .read()
@@ -773,10 +751,7 @@ impl PtyManager {
             }
         }
 
-        let master_guard = instance
-            .master
-            .try_lock()
-            .map_err(|_| "Failed to acquire PTY lock".to_string())?;
+        let master_guard = instance.master.lock().await;
 
         let master = master_guard
             .as_ref()

@@ -84,7 +84,7 @@ pub async fn terminal_write(
     data: String,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.write(&terminal_id, &data) {
+    match pty_manager.write(&terminal_id, &data).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
     }
@@ -98,7 +98,7 @@ pub async fn terminal_resize(
     rows: u16,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.resize(&terminal_id, cols, rows) {
+    match pty_manager.resize(&terminal_id, cols, rows).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
     }
