@@ -46,9 +46,66 @@ jobs:
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+  create_release:
+    name: Create Draft Release
+    needs: changelog
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.releaseId }}
+    steps:
+      - name: Create or update draft release
+        id: release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const tagName = context.ref.replace('refs/tags/', '')
+            const releaseName = `Termul Manager ${tagName}`
+            const releaseBody = process.env.RELEASE_BODY || ''
+            const prerelease = process.env.IS_PRERELEASE === 'true'
+
+            let release
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: tagName,
+              })
+
+              release = await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existing.data.id,
+                tag_name: tagName,
+                name: releaseName,
+                body: releaseBody,
+                draft: true,
+                prerelease,
+              })
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error
+              }
+
+              release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+                name: releaseName,
+                body: releaseBody,
+                draft: true,
+                prerelease,
+              })
+            }
+
+            core.setOutput('releaseId', String(release.data.id))
+
   build:
     name: Build (${{ matrix.platform }})
-    needs: changelog
+    needs: [changelog, create_release]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -117,7 +174,39 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Termul Manager ${{ github.ref_name }}'
           releaseBody: ${{ needs.changelog.outputs.changelog }}
-          releaseDraft: false
+          releaseId: ${{ needs.create_release.outputs.release_id }}
+          releaseDraft: true
           prerelease: ${{ needs.changelog.outputs.is_prerelease }}
           tauriScript: npm run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
+
+  publish_release:
+    name: Publish Release
+    needs: [changelog, create_release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
+          RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const releaseId = Number(process.env.RELEASE_ID)
+            const tagName = context.ref.replace('refs/tags/', '')
+            const releaseName = `Termul Manager ${tagName}`
+            const releaseBody = process.env.RELEASE_BODY || ''
+            const prerelease = process.env.IS_PRERELEASE === 'true'
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              tag_name: tagName,
+              name: releaseName,
+              body: releaseBody,
+              draft: false,
+              prerelease,
+            })

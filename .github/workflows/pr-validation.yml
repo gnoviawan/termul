@@ -103,9 +103,32 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+  rust-windows-check:
+    name: Rust Windows Smoke Check
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
   build-check:
     name: Verify Tauri Frontend Build
-    needs: [validate, rust-checks]
+    needs: [validate, rust-checks, rust-windows-check]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
