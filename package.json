@@ -1,7 +1,7 @@
 {
   "name": "termul-manager",
   "productName": "Termul Manager",
-  "version": "0.3.0-1",
+  "version": "0.3.0-2",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "gnoviawan",
   "contributors": [
