@@ -32,22 +32,28 @@ Original project by `gnoviawan`. This repository also includes Tauri port and mi
 ### Prerequisites
 
 #### Common Prerequisites
+
 - Node.js 18+ (recommended: use [nvm](https://github.com/nvm-sh/nvm))
 - npm or bun
 
 #### For Tauri Build
+
 Tauri requires additional system dependencies:
 
 **Windows:**
+
 - Microsoft Visual C++ Build Tools (included in Visual Studio 2022)
 - [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (usually pre-installed on Windows 10+)
 
 **macOS:**
+
 - Xcode Command Line Tools: `xcode-select --install`
 - Rust toolchain (see below)
 
 **Linux:**
-```bash# Debian/Ubuntu
+
+```bash
+# Debian/Ubuntu
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev \
     build-essential \
@@ -69,6 +75,7 @@ sudo dnf install webkit2gtk4.1-devel \
 ```
 
 **Rust Toolchain (all platforms):**
+
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -132,11 +139,11 @@ npm run build:tauri:linux      # Linux (x64)
 
 ### Keyboard Shortcuts
 
-| Action | Default Shortcut |
-|--------|------------------|
-| New Terminal | `Ctrl+T` |
-| Next Tab | `Ctrl+PageDown` |
-| Previous Tab | `Ctrl+PageUp` |
+| Action          | Default Shortcut           |
+| --------------- | -------------------------- |
+| New Terminal    | `Ctrl+T`                   |
+| Next Tab        | `Ctrl+PageDown`            |
+| Previous Tab    | `Ctrl+PageUp`              |
 | Command Palette | `Ctrl+K` or `Ctrl+Shift+P` |
 
 Shortcuts are customizable in Settings. On Tauri/WebView2, browser-reserved shortcuts such as `Ctrl+Tab` are not used as defaults because they are not reliably interceptable.
@@ -153,6 +160,7 @@ For archived migration history, see [Electron to Tauri Migration Status](docs/el
 ## Tech Stack
 
 ### Application
+
 - **Tauri 2.0** - Cross-platform desktop app framework
 - **Rust** - Backend logic
 - **React 18** - UI framework
@@ -166,6 +174,7 @@ For archived migration history, see [Electron to Tauri Migration Status](docs/el
 - **Framer Motion** - Animations
 
 #### Tauri Plugins Used
+
 - `@tauri-apps/plugin-fs` - Filesystem access
 - `@tauri-apps/plugin-store` - Configuration persistence
 - `@tauri-apps/plugin-os` - OS information
