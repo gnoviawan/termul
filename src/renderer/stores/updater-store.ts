@@ -5,7 +5,6 @@ import type {
   UpdateState,
   DownloadProgress
 } from '@shared/types/updater.types'
-import { isTauri } from '@/lib/api-bridge'
 import {
   checkForUpdates as tauriCheckForUpdates,
   downloadUpdate as tauriDownloadUpdate,
@@ -106,7 +105,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   hasActiveTerminals: false,
 
   /**
-   * Check for available updates via IPC / Tauri updater plugin
+   * Check for available updates via the Tauri updater plugin
    */
   checkForUpdates: async (): Promise<void> => {
     const { isChecking } = get()
@@ -115,59 +114,41 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ isChecking: true, error: null })
 
     try {
-      if (isTauri()) {
-        const activeTerminals = hasActiveTerminalSessions()
-        set({ hasActiveTerminals: activeTerminals })
+      const activeTerminals = hasActiveTerminalSessions()
+      set({ hasActiveTerminals: activeTerminals })
 
-        if (activeTerminals) {
-          set({
-            isChecking: false,
-            error: 'Update checks paused because active terminal sessions are running.'
-          })
-          return
-        }
-
-        const updateInfo = await tauriCheckForUpdates()
-        const checkedAt = new Date()
-
-        if (!updateInfo) {
-          await clearPendingUpdate()
-          set({
-            updateAvailable: false,
-            downloaded: false,
-            version: null,
-            downloadProgress: 0,
-            releaseNotes: null,
-            error: null,
-            lastChecked: checkedAt
-          })
-          return
-        }
-
-        const skippedVersion = await getSkippedVersion()
-        const shouldSkipVersion = await isVersionSkipped(updateInfo.version)
-
-        if (shouldSkipVersion) {
-          set({
-            skippedVersion,
-            updateAvailable: false,
-            downloaded: false,
-            version: updateInfo.version,
-            releaseNotes: updateInfo.releaseNotes ?? null,
-            downloadProgress: 0,
-            error: null,
-            lastChecked: checkedAt
-          })
-          return
-        }
-
-        if (skippedVersion && skippedVersion !== updateInfo.version) {
-          await clearSkippedVersion()
-          set({ skippedVersion: null })
-        }
-
+      if (activeTerminals) {
         set({
-          updateAvailable: true,
+          isChecking: false,
+          error: 'Update checks paused because active terminal sessions are running.'
+        })
+        return
+      }
+
+      const updateInfo = await tauriCheckForUpdates()
+      const checkedAt = new Date()
+
+      if (!updateInfo) {
+        await clearPendingUpdate()
+        set({
+          updateAvailable: false,
+          downloaded: false,
+          version: null,
+          downloadProgress: 0,
+          releaseNotes: null,
+          error: null,
+          lastChecked: checkedAt
+        })
+        return
+      }
+
+      const skippedVersion = await getSkippedVersion()
+      const shouldSkipVersion = await isVersionSkipped(updateInfo.version)
+
+      if (shouldSkipVersion) {
+        set({
+          skippedVersion,
+          updateAvailable: false,
           downloaded: false,
           version: updateInfo.version,
           releaseNotes: updateInfo.releaseNotes ?? null,
@@ -175,22 +156,23 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           error: null,
           lastChecked: checkedAt
         })
-
         return
       }
 
-      if (!window.api?.updater) {
-        set({ error: 'Updater API not available in this environment' })
-        return
+      if (skippedVersion && skippedVersion !== updateInfo.version) {
+        await clearSkippedVersion()
+        set({ skippedVersion: null })
       }
 
-      const result = await window.api.updater.checkForUpdates()
-
-      if (result?.success === false) {
-        set({ error: result.error ?? 'Failed to check for updates' })
-      }
-
-      set({ lastChecked: new Date() })
+      set({
+        updateAvailable: true,
+        downloaded: false,
+        version: updateInfo.version,
+        releaseNotes: updateInfo.releaseNotes ?? null,
+        downloadProgress: 0,
+        error: null,
+        lastChecked: checkedAt
+      })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to check for updates'
       set({ error: errorMessage })
@@ -200,7 +182,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   },
 
   /**
-   * Download the available update via IPC / Tauri updater plugin
+   * Download the available update via the Tauri updater plugin
    */
   downloadUpdate: async (): Promise<void> => {
     const { isDownloading, updateAvailable } = get()
@@ -209,36 +191,21 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ isDownloading: true, error: null, downloadProgress: 0 })
 
     try {
-      if (isTauri()) {
-        const result = await tauriDownloadUpdate((progress) => {
-          get()._setDownloadProgress(progress)
+      const result = await tauriDownloadUpdate((progress) => {
+        get()._setDownloadProgress(progress)
+      })
+
+      if (result.success) {
+        set({
+          downloaded: true,
+          downloadProgress: 100,
+          error: null
         })
-
-        if (result.success) {
-          set({
-            downloaded: true,
-            downloadProgress: 100,
-            error: null
-          })
-        } else {
-          set({
-            error: result.error ?? 'Failed to download update',
-            downloaded: false
-          })
-        }
-
-        return
-      }
-
-      if (!window.api?.updater) {
-        set({ error: 'Updater API not available in this environment' })
-        return
-      }
-
-      const result = await window.api.updater.downloadUpdate()
-
-      if (result?.success === false) {
-        set({ error: result.error ?? 'Failed to download update' })
+      } else {
+        set({
+          error: result.error ?? 'Failed to download update',
+          downloaded: false
+        })
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
@@ -258,22 +225,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ error: null })
 
     try {
-      if (isTauri()) {
-        const result = await tauriInstallAndRestart()
-        if (!result.success) {
-          set({ error: result.error ?? 'Failed to install update' })
-        }
-        return
-      }
-
-      if (!window.api?.updater) {
-        set({ error: 'Updater API not available in this environment' })
-        return
-      }
-
-      const result = await window.api.updater.installAndRestart()
-
-      if (result?.success === false) {
+      const result = await tauriInstallAndRestart()
+      if (!result.success) {
         set({ error: result.error ?? 'Failed to install update' })
       }
     } catch (err) {
@@ -289,24 +242,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     set({ error: null })
 
     try {
-      if (isTauri()) {
-        await tauriSkipVersion(version)
-        set({ skippedVersion: version, updateAvailable: false, downloaded: false })
-        return
-      }
-
-      if (!window.api?.updater) {
-        set({ error: 'Updater API not available in this environment' })
-        return
-      }
-
-      const result = await window.api.updater.skipVersion(version)
-
-      if (result?.success === false) {
-        set({ error: result.error ?? 'Failed to skip version' })
-      } else {
-        set({ skippedVersion: version, updateAvailable: false })
-      }
+      await tauriSkipVersion(version)
+      set({ skippedVersion: version, updateAvailable: false, downloaded: false })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to skip version'
       set({ error: errorMessage })
@@ -344,24 +281,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     }
 
     try {
-      if (isTauri()) {
-        const result = await tauriSetAutoUpdateEnabled(enabled)
-        if (result.success) {
-          await applyAutoUpdateSetting()
-        } else {
-          set({ error: result.error ?? 'Failed to update auto-update setting' })
-        }
-        return
-      }
-
-      if (!window.api?.updater) {
-        set({ error: 'Updater API not available in this environment' })
-        return
-      }
-
-      const result = await window.api.updater.setAutoUpdateEnabled(enabled)
-
-      if (result?.success === false) {
+      const result = await tauriSetAutoUpdateEnabled(enabled)
+      if (!result.success) {
         set({ error: result.error ?? 'Failed to update auto-update setting' })
       } else {
         await applyAutoUpdateSetting()
@@ -403,88 +324,61 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       isInitialized = true
 
       try {
-        if (isTauri()) {
-          const events: TauriUpdaterEventHandlers = {
-            onUpdateAvailable: (update) => {
-              get()._setUpdateAvailable({
-                version: update.version,
-                releaseDate: new Date().toISOString(),
-                releaseNotes: update.body ?? undefined,
-                isSecurityUpdate: false
-              })
-            },
-            onDownloadProgress: (progress) => {
-              get()._setDownloadProgress(progress)
-            },
-            onUpdateDownloaded: (update) => {
-              get()._setUpdateDownloaded({
-                version: update.version,
-                releaseDate: new Date().toISOString(),
-                releaseNotes: update.body ?? undefined,
-                isSecurityUpdate: false
-              })
-            },
-            onError: (error) => {
-              get()._setUpdaterError(error)
-            }
+        const events: TauriUpdaterEventHandlers = {
+          onUpdateAvailable: (update) => {
+            get()._setUpdateAvailable({
+              version: update.version,
+              releaseDate: new Date().toISOString(),
+              releaseNotes: update.body ?? undefined,
+              isSecurityUpdate: false
+            })
+          },
+          onDownloadProgress: (progress) => {
+            get()._setDownloadProgress(progress)
+          },
+          onUpdateDownloaded: (update) => {
+            get()._setUpdateDownloaded({
+              version: update.version,
+              releaseDate: new Date().toISOString(),
+              releaseNotes: update.body ?? undefined,
+              isSecurityUpdate: false
+            })
+          },
+          onError: (error) => {
+            get()._setUpdaterError(error)
           }
-
-          if (currentGeneration !== updaterLifecycleGeneration) return
-          activeTauriUpdaterUnsubscribe?.()
-          activeTauriUpdaterUnsubscribe = registerUpdateEventHandlers(events)
-
-          const stateResult = await tauriGetUpdaterState()
-          if (currentGeneration !== updaterLifecycleGeneration) return
-          if (stateResult.success) {
-            get()._initializeState(stateResult.data)
-          } else {
-            get()._setUpdaterError(stateResult.error ?? 'Failed to load updater state')
-          }
-
-          const autoUpdateResult = await tauriGetAutoUpdateEnabled()
-          if (currentGeneration !== updaterLifecycleGeneration) return
-          if (autoUpdateResult.success) {
-            set({ autoUpdateEnabled: autoUpdateResult.data })
-          }
-
-          const skippedVersion = await getSkippedVersion()
-          if (currentGeneration !== updaterLifecycleGeneration) return
-          set({ skippedVersion })
-
-          if (options?.autoCheck === true && get().autoUpdateEnabled) {
-            await get().runCheckWithRetry(currentGeneration)
-            if (currentGeneration !== updaterLifecycleGeneration) return
-            hasCompletedStartupAutoCheck = true
-          }
-
-          if (get().autoUpdateEnabled) {
-            get().schedulePeriodicChecks(currentGeneration)
-          }
-
-          return
         }
 
-        if (!window.api?.updater) {
-          set({ error: 'Updater API not available in this environment' })
-          return
-        }
-
-        const state = await window.api.updater.getState()
         if (currentGeneration !== updaterLifecycleGeneration) return
-        if (state.success) {
-          get()._initializeState(state.data)
-        }
+        activeTauriUpdaterUnsubscribe?.()
+        activeTauriUpdaterUnsubscribe = registerUpdateEventHandlers(events)
 
-        const autoUpdateEnabled = await window.api.updater.getAutoUpdateEnabled()
+        const stateResult = await tauriGetUpdaterState()
         if (currentGeneration !== updaterLifecycleGeneration) return
-        if (autoUpdateEnabled.success) {
-          set({ autoUpdateEnabled: autoUpdateEnabled.data })
+        if (stateResult.success) {
+          get()._initializeState(stateResult.data)
+        } else {
+          get()._setUpdaterError(stateResult.error ?? 'Failed to load updater state')
         }
 
-        if (options?.autoCheck === true && autoUpdateEnabled.success && autoUpdateEnabled.data) {
-          await get().checkForUpdates()
+        const autoUpdateResult = await tauriGetAutoUpdateEnabled()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        if (autoUpdateResult.success) {
+          set({ autoUpdateEnabled: autoUpdateResult.data })
+        }
+
+        const skippedVersion = await getSkippedVersion()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        set({ skippedVersion })
+
+        if (options?.autoCheck === true && get().autoUpdateEnabled) {
+          await get().runCheckWithRetry(currentGeneration)
           if (currentGeneration !== updaterLifecycleGeneration) return
           hasCompletedStartupAutoCheck = true
+        }
+
+        if (get().autoUpdateEnabled) {
+          get().schedulePeriodicChecks(currentGeneration)
         }
       } catch (err) {
         isInitialized = false

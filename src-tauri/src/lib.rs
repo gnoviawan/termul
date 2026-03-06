@@ -30,9 +30,40 @@ use migrations::MigrationManager;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
-use std::sync::Arc;
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
-use tauri::{Manager, RunEvent};
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    Emitter, Manager, RunEvent,
+};
+
+const MENU_ID_CHECK_FOR_UPDATES: &str = "check-for-updates";
+const MENU_ID_RELOAD: &str = "view-reload";
+const MENU_ID_TOGGLE_DEVTOOLS: &str = "view-toggle-devtools";
+const MENU_ID_ZOOM_RESET: &str = "view-zoom-reset";
+const MENU_ID_ZOOM_IN: &str = "view-zoom-in";
+const MENU_ID_ZOOM_OUT: &str = "view-zoom-out";
+const MENU_ID_TOGGLE_FULLSCREEN: &str = "view-toggle-fullscreen";
+const MENU_ID_LEARN_MORE: &str = "help-learn-more";
+const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
+const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
+const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
+const MIN_ZOOM_FACTOR: f64 = 0.5;
+const MAX_ZOOM_FACTOR: f64 = 3.0;
+const ZOOM_STEP: f64 = 0.1;
+
+struct ViewMenuState {
+    zoom_factor: Mutex<f64>,
+}
+
+impl Default for ViewMenuState {
+    fn default() -> Self {
+        Self {
+            zoom_factor: Mutex::new(DEFAULT_ZOOM_FACTOR),
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn resolve_executable_from_path(command: &str) -> Option<String> {
@@ -381,9 +412,246 @@ fn register_default_migrations(manager: &MigrationManager) {
     );
 }
 
+fn get_main_webview_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<tauri::WebviewWindow<R>, String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "Main webview window not found".to_string())
+}
+
+fn set_zoom_factor<R: tauri::Runtime>(app: &tauri::AppHandle<R>, zoom_factor: f64) -> Result<(), String> {
+    let state = app
+        .try_state::<ViewMenuState>()
+        .ok_or_else(|| "View menu state is not initialized".to_string())?;
+    let mut current_zoom = state
+        .zoom_factor
+        .lock()
+        .map_err(|_| "View menu zoom state is unavailable".to_string())?;
+
+    let clamped_zoom = zoom_factor.clamp(MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
+    get_main_webview_window(app)?
+        .set_zoom(clamped_zoom)
+        .map_err(|error| error.to_string())?;
+    *current_zoom = clamped_zoom;
+    Ok(())
+}
+
+fn adjust_zoom_factor<R: tauri::Runtime>(app: &tauri::AppHandle<R>, delta: f64) -> Result<(), String> {
+    let state = app
+        .try_state::<ViewMenuState>()
+        .ok_or_else(|| "View menu state is not initialized".to_string())?;
+    let current_zoom = state
+        .zoom_factor
+        .lock()
+        .map_err(|_| "View menu zoom state is unavailable".to_string())?;
+    let next_zoom = (*current_zoom + delta).clamp(MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
+    drop(current_zoom);
+
+    set_zoom_factor(app, next_zoom)
+}
+
+fn toggle_fullscreen<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let webview_window = get_main_webview_window(app)?;
+    let is_fullscreen = webview_window
+        .is_fullscreen()
+        .map_err(|error| error.to_string())?;
+    webview_window
+        .set_fullscreen(!is_fullscreen)
+        .map_err(|error| error.to_string())
+}
+
+fn reload_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    get_main_webview_window(app)?
+        .reload()
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(debug_assertions)]
+fn toggle_devtools<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let webview_window = get_main_webview_window(app)?;
+
+    if webview_window.is_devtools_open() {
+        webview_window.close_devtools();
+    } else {
+        webview_window.open_devtools();
+    }
+
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn toggle_devtools<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<(), String> {
+    Err("DevTools are not available in this build".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn open_external_url(url: &str) -> Result<(), String> {
+    Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_external_url(url: &str) -> Result<(), String> {
+    Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn open_external_url(url: &str) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    let file_menu = {
+        #[cfg(target_os = "macos")]
+        let builder = SubmenuBuilder::new(app, "File").close_window();
+
+        #[cfg(not(target_os = "macos"))]
+        let builder = SubmenuBuilder::new(app, "File").quit();
+
+        builder.build()?
+    };
+
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
+        .accelerator("CmdOrCtrl+R")
+        .build(app)?;
+    let toggle_devtools = MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
+        .accelerator("CmdOrCtrl+Shift+I")
+        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
+    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In")
+        .accelerator("CmdOrCtrl+=")
+        .build(app)?;
+    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out")
+        .accelerator("CmdOrCtrl+-")
+        .build(app)?;
+    let toggle_fullscreen = MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen")
+        .build(app)?;
+
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&reload)
+        .item(&toggle_devtools)
+        .separator()
+        .item(&zoom_reset)
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .separator()
+        .item(&toggle_fullscreen)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+
+    let check_for_updates = MenuItemBuilder::with_id(
+        MENU_ID_CHECK_FOR_UPDATES,
+        "Check for Updates...",
+    )
+    .accelerator("CmdOrCtrl+Shift+U")
+    .build(app)?;
+    let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
+
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .item(&check_for_updates)
+        .separator()
+        .item(&learn_more)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
+            .about(None)
+            .separator()
+            .services()
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+
+        MenuBuilder::new(app).item(&app_menu)
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = MenuBuilder::new(app);
+
+    menu
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&window_menu)
+        .item(&help_menu)
+        .build()
+}
+
+fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
+    if event.id() == MENU_ID_CHECK_FOR_UPDATES {
+        if let Err(error) = app.emit(MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED, ()) {
+            log::error!("Failed to emit updater menu event: {}", error);
+        }
+    } else if event.id() == MENU_ID_RELOAD {
+        if let Err(error) = reload_main_window(app) {
+            log::error!("Failed to reload main window from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_TOGGLE_DEVTOOLS {
+        if let Err(error) = toggle_devtools(app) {
+            log::error!("Failed to toggle devtools from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_ZOOM_RESET {
+        if let Err(error) = set_zoom_factor(app, DEFAULT_ZOOM_FACTOR) {
+            log::error!("Failed to reset zoom from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_ZOOM_IN {
+        if let Err(error) = adjust_zoom_factor(app, ZOOM_STEP) {
+            log::error!("Failed to zoom in from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_ZOOM_OUT {
+        if let Err(error) = adjust_zoom_factor(app, -ZOOM_STEP) {
+            log::error!("Failed to zoom out from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_TOGGLE_FULLSCREEN {
+        if let Err(error) = toggle_fullscreen(app) {
+            log::error!("Failed to toggle fullscreen from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_LEARN_MORE {
+        if let Err(error) = open_external_url(LEARN_MORE_URL) {
+            log::error!("Failed to open Learn More link from menu: {}", error);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
+        .menu(build_app_menu)
+        .on_menu_event(handle_menu_event)
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
@@ -398,6 +666,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+            app.manage(ViewMenuState::default());
 
             // Create CWD Tracker (takes app_handle directly)
             let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
@@ -426,6 +695,32 @@ pub fn run() {
 
             // Register default migrations
             register_default_migrations(migration_manager.as_ref());
+
+            let migration_result = migration_manager.run_migrations();
+            if !migration_result.success {
+                log::error!(
+                    "Data migration startup failed: {}",
+                    migration_result
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown migration error")
+                );
+            } else if let Some(results) = migration_result.data.as_ref() {
+                let mut failed_count = 0usize;
+
+                for result in results.iter().filter(|result| !result.success) {
+                    failed_count += 1;
+                    log::error!(
+                        "Data migration {} failed during startup: {}",
+                        result.version,
+                        result.error.as_deref().unwrap_or("unknown migration error")
+                    );
+                }
+
+                if failed_count == 0 && !results.is_empty() {
+                    log::info!("Completed {} data migration(s) during startup", results.len());
+                }
+            }
 
             Ok(())
         })

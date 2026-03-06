@@ -121,11 +121,18 @@ impl MigrationManager {
 
         // Try to get history from store
         if let Some(history_value) = store.get(&self.migration_history_key) {
-            if let Ok(history) =
-                serde_json::from_value::<Vec<MigrationRecord>>(history_value.clone())
-            {
-                *self.history.lock() = history;
-            }
+            let parsed_history = serde_json::from_value::<Vec<MigrationRecord>>(history_value.clone())
+                .or_else(|_| {
+                    history_value
+                        .as_str()
+                        .ok_or_else(|| "Migration history is not an array or JSON string".to_string())
+                        .and_then(|raw| {
+                            serde_json::from_str::<Vec<MigrationRecord>>(raw)
+                                .map_err(|e| format!("Failed to parse migration history: {}", e))
+                        })
+                })?;
+
+            *self.history.lock() = parsed_history;
         }
 
         Ok(())
@@ -134,7 +141,7 @@ impl MigrationManager {
     /// Save migration history to store
     fn save_history(&self) -> Result<(), String> {
         let history = self.history.lock();
-        let history_json = serde_json::to_string(&*history)
+        let history_json = serde_json::to_value(&*history)
             .map_err(|e| format!("Failed to serialize history: {}", e))?;
         drop(history); // Release lock before store operations
 

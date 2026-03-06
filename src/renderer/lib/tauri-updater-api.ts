@@ -1,18 +1,74 @@
+import { getVersion } from '@tauri-apps/api/app'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import type { IpcResult } from '@shared/types/ipc.types'
-import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
+import {
+  UpdaterErrorCodes,
+  type DownloadProgress,
+  type UpdateInfo,
+  type UpdateState
+} from '@shared/types/updater.types'
+import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
+import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
 let pendingUpdate: Update | null = null
 let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
 let downloadedVersion: string | null = null
+let preparedUpdateVersion: string | null = null
 
 export interface TauriUpdaterEventHandlers {
   onUpdateAvailable?: (update: Update) => void
   onDownloadProgress?: (progress: DownloadProgress) => void
   onUpdateDownloaded?: (update: Update) => void
   onError?: (error: string) => void
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
+async function syncRecoveryVersionMetadata(): Promise<string> {
+  const currentVersion = await getVersion()
+  await Promise.all([setAppVersion(currentVersion), setCurrentVersion(currentVersion)])
+  return currentVersion
+}
+
+async function prepareUpdateRecovery(): Promise<IpcResult<void>> {
+  let currentVersion: string
+
+  try {
+    currentVersion = await syncRecoveryVersionMetadata()
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to determine current app version: ${getErrorMessage(error, 'Unknown error')}`,
+      code: UpdaterErrorCodes.INSTALL_FAILED
+    }
+  }
+
+  const backupResult = await createBackup()
+  if (!backupResult.success) {
+    return {
+      success: false,
+      error: backupResult.error ?? 'Failed to create backup before update',
+      code:
+        backupResult.code === BackupErrorCodes.DISK_SPACE_ERROR
+          ? UpdaterErrorCodes.DISK_SPACE_INSUFFICIENT
+          : UpdaterErrorCodes.INSTALL_FAILED
+    }
+  }
+
+  const preserveResult = await keepPreviousVersion(currentVersion)
+  if (!preserveResult.success) {
+    return {
+      success: false,
+      error: preserveResult.error ?? 'Failed to preserve current version before update',
+      code: UpdaterErrorCodes.INSTALL_FAILED
+    }
+  }
+
+  return { success: true, data: undefined }
 }
 
 export function isUpdateAvailable(update: Update | null): update is Update {
@@ -80,6 +136,7 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
     const update = await check()
     pendingUpdate = update
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
+    preparedUpdateVersion = update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
     lastCheckedAt = new Date().toISOString()
     return update ? mapTauriUpdateToInfo(update) : null
   } catch {
@@ -100,6 +157,16 @@ export async function downloadUpdate(
   }
 
   try {
+    const updateVersion = pendingUpdate.version
+
+    if (preparedUpdateVersion !== updateVersion) {
+      const preparationResult = await prepareUpdateRecovery()
+      if (!preparationResult.success) {
+        return preparationResult
+      }
+      preparedUpdateVersion = updateVersion
+    }
+
     let downloadedSoFar = 0
     let totalBytes = 0
 
@@ -121,14 +188,14 @@ export async function downloadUpdate(
       onProgress(mapped.progress)
     })
 
-    downloadedVersion = pendingUpdate.version
+    downloadedVersion = updateVersion
 
     return { success: true, data: undefined }
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'DOWNLOAD_FAILED'
+      error: getErrorMessage(error, 'Failed to download update'),
+      code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
   }
 }
@@ -138,7 +205,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     return {
       success: false,
       error: 'No downloaded update ready to install',
-      code: 'UPDATE_NOT_AVAILABLE'
+      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
 
@@ -148,8 +215,8 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INSTALL_FAILED'
+      error: getErrorMessage(error, 'Failed to relaunch after update'),
+      code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
 }
@@ -179,7 +246,13 @@ export async function getAutoUpdateEnabled(): Promise<IpcResult<boolean>> {
   return { success: true, data: autoUpdateEnabled }
 }
 
-export function registerUpdateEventHandlers(_handlers: TauriUpdaterEventHandlers): () => void {
+export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers): () => void {
+  void syncRecoveryVersionMetadata().catch((error) => {
+    handlers.onError?.(
+      `Failed to initialize updater recovery metadata: ${getErrorMessage(error, 'Unknown error')}`
+    )
+  })
+
   return () => {
     // no-op cleanup
   }
@@ -188,11 +261,13 @@ export function registerUpdateEventHandlers(_handlers: TauriUpdaterEventHandlers
 export async function clearPendingUpdate(): Promise<void> {
   pendingUpdate = null
   downloadedVersion = null
+  preparedUpdateVersion = null
 }
 
 export function _resetUpdaterStateForTesting(): void {
   pendingUpdate = null
   downloadedVersion = null
+  preparedUpdateVersion = null
   lastCheckedAt = null
   autoUpdateEnabled = true
 }
