@@ -91,6 +91,63 @@ mod git_bash_paths {
     ];
 }
 
+#[cfg(target_os = "windows")]
+fn has_windows_env_var(env_map: &HashMap<String, String>, key: &str) -> bool {
+    env_map.keys().any(|existing| existing.eq_ignore_ascii_case(key))
+}
+
+#[cfg(target_os = "windows")]
+fn upsert_windows_env_var(env_map: &mut HashMap<String, String>, key: &str, value: String) {
+    if let Some(existing_key) = env_map
+        .keys()
+        .find(|existing| existing.eq_ignore_ascii_case(key))
+        .cloned()
+    {
+        env_map.remove(&existing_key);
+    }
+
+    env_map.insert(key.to_string(), value);
+}
+
+#[cfg(target_os = "windows")]
+fn merge_windows_environment_map<I>(
+    base_env: I,
+    custom_env: Option<HashMap<String, String>>,
+) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut env_map = HashMap::new();
+
+    for (key, value) in base_env {
+        upsert_windows_env_var(&mut env_map, &key, value);
+    }
+
+    if let Some(custom) = custom_env {
+        for (key, value) in custom {
+            upsert_windows_env_var(&mut env_map, &key, value);
+        }
+    }
+
+    if !has_windows_env_var(&env_map, "Path") {
+        upsert_windows_env_var(
+            &mut env_map,
+            "Path",
+            env::var("PATH").unwrap_or_default(),
+        );
+    }
+
+    if !has_windows_env_var(&env_map, "PATHEXT") {
+        upsert_windows_env_var(
+            &mut env_map,
+            "PATHEXT",
+            env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string()),
+        );
+    }
+
+    env_map
+}
+
 // Constants matching Electron implementation
 const GLOBAL_TERMINAL_LIMIT: usize = 30;
 const ORPHAN_TIMEOUT_MS: u64 = 300_000; // 5 minutes
@@ -1075,55 +1132,34 @@ impl PtyManager {
         &self,
         custom_env: Option<HashMap<String, String>>,
     ) -> HashMap<String, String> {
-        let mut env = HashMap::new();
-
-        // Copy current process environment
-        for (key, value) in env::vars() {
-            env.insert(key, value);
+        #[cfg(target_os = "windows")]
+        {
+            return merge_windows_environment_map(env::vars(), custom_env);
         }
 
-        // Apply custom environment (overriding existing)
-        if let Some(custom) = custom_env {
-            #[cfg(target_os = "windows")]
-            {
-                // On Windows, use case-insensitive merging
-                for (custom_key, custom_value) in custom {
-                    // Find and remove existing key with different case
-                    let existing_key = env
-                        .keys()
-                        .find(|k| k.eq_ignore_ascii_case(&custom_key))
-                        .cloned();
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut env = HashMap::new();
 
-                    if let Some(key) = existing_key {
-                        env.remove(&key);
-                    }
-
-                    env.insert(custom_key, custom_value);
-                }
+            // Copy current process environment
+            for (key, value) in env::vars() {
+                env.insert(key, value);
             }
 
-            #[cfg(not(target_os = "windows"))]
-            {
-                // On Unix, case-sensitive
+            // Apply custom environment (overriding existing)
+            if let Some(custom) = custom_env {
                 for (key, value) in custom {
                     env.insert(key, value);
                 }
             }
-        }
 
-        // Ensure PATH exists
-        if !env.contains_key("PATH") {
-            #[cfg(target_os = "windows")]
-            {
-                env.insert("PATH".to_string(), String::new());
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
+            // Ensure PATH exists
+            if !env.contains_key("PATH") {
                 env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
             }
-        }
 
-        env
+            env
+        }
     }
 }
 
@@ -1431,5 +1467,54 @@ mod tests {
         assert!(PtyManager::is_builtin_windows_shell("wsl"));
         assert!(!PtyManager::is_builtin_windows_shell("bash.exe"));
         assert!(!PtyManager::is_builtin_windows_shell("git-bash"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_env_merge_preserves_existing_path_case_insensitively() {
+        let env_map = merge_windows_environment_map(
+            vec![("Path".to_string(), r"C:\laragon\bin\nodejs".to_string())],
+            None,
+        );
+
+        let path_keys: Vec<&String> = env_map
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("path"))
+            .collect();
+
+        assert_eq!(path_keys.len(), 1);
+        assert_eq!(
+            env_map
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value.as_str()),
+            Some(r"C:\laragon\bin\nodejs")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_env_merge_overrides_path_case_insensitively() {
+        let mut custom_env = HashMap::new();
+        custom_env.insert("PATH".to_string(), r"C:\custom\node".to_string());
+
+        let env_map = merge_windows_environment_map(
+            vec![("Path".to_string(), r"C:\laragon\bin\nodejs".to_string())],
+            Some(custom_env),
+        );
+
+        let path_keys: Vec<&String> = env_map
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("path"))
+            .collect();
+
+        assert_eq!(path_keys.len(), 1);
+        assert_eq!(
+            env_map
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value.as_str()),
+            Some(r"C:\custom\node")
+        );
     }
 }
