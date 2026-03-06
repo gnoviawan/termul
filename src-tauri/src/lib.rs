@@ -8,7 +8,6 @@ mod trackers;
 /// When updating this list, ensure BOTH lib.rs and pty/manager.rs are updated.
 /// Version: v1.0
 mod git_bash_paths {
-    use super::*;
 
     /// Primary Git Bash installation paths (Program Files)
     pub const PRIMARY_PATHS: &[&str] = &[
@@ -393,10 +392,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
-    #[cfg(debug_assertions)]
-    {
-        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
-    }
+    // MCP Bridge in all builds
+    builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     builder
         .setup(|app| {

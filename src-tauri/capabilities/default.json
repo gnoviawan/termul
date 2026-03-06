@@ -17,21 +17,29 @@
     "core:window:allow-show",
     "core:window:allow-is-maximized",
     "store:default",
-    "fs:default",
-    "fs:read-all",
-    "fs:write-all",
-    "fs:allow-watch",
-    "fs:allow-read-dir",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
+    "fs:allow-read-dir",
     "fs:allow-mkdir",
     "fs:allow-remove",
     "fs:allow-rename",
     "fs:allow-stat",
+    "fs:allow-exists",
+    "fs:allow-watch",
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "**" }
+        { "path": "$APPDATA/termul/**" },
+        { "path": "$HOME/.termul/**" },
+        { "path": "$HOME/**" },
+        { "path": "$HOME/Documents/**" },
+        { "path": "$HOME/Downloads/**" },
+        { "path": "$HOME/Desktop/**" },
+        { "path": "$RESOURCE/**" },
+        { "path": "$TEMP/**" },
+        { "path": "C:/**" },
+        { "path": "D:/**" },
+        { "path": "E:/**" }
       ]
     },
     "dialog:default",
@@ -44,7 +52,6 @@
     "clipboard-manager:allow-write-text",
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "process:default",
     "mcp-bridge:default"
   ]
 }

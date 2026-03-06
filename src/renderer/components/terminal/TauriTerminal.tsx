@@ -94,12 +94,16 @@ export function TauriTerminal(): React.JSX.Element {
       try {
         shellInfo = await invoke<ShellInfo>('get_default_shell')
       } catch (err) {
+        if (disposedRef.current) return
         const msg = `Shell detection gagal: ${err}`
         setErrorMsg(msg)
         setStatus('error')
         term.writeln(`\r\n\x1b[31m[Error] ${msg}\x1b[0m`)
         return
       }
+
+      // Check if disposed after shell detection
+      if (disposedRef.current) return
 
       // Get home directory for initial CWD
       let cwd: string
@@ -109,14 +113,28 @@ export function TauriTerminal(): React.JSX.Element {
         cwd = isWindows ? 'C:\\' : '/tmp'
       }
 
+      // Check if disposed after getting home directory
+      if (disposedRef.current) return
+
       // Spawn PTY
       const { cols, rows } = fitAddon.proposeDimensions() ?? { cols: 80, rows: 24 }
+
+      // Check if disposed after fitAddon.proposeDimensions
+      if (disposedRef.current) return
+
       const pty = spawn(shellInfo.path, shellInfo.args ?? [], {
         cols,
         rows,
         cwd,
       })
       ptyRef.current = pty
+
+      // If disposed immediately after spawn, clean up the PTY
+      if (disposedRef.current) {
+        try { pty.kill() } catch { /* ignore */ }
+        ptyRef.current = null
+        return
+      }
 
       // Data I/O: PTY → Terminal
       const unlistenData = pty.onData((data) => {
@@ -136,7 +154,7 @@ export function TauriTerminal(): React.JSX.Element {
         console.log(`[TauriTerminal] PTY exited with code ${exitCode}`)
         term.writeln(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m`)
         term.options.disableStdin = true
-        setStatus('exited')
+        if (!disposedRef.current) setStatus('exited')
       })
       cleanupFnsRef.current.push(unlistenExit)
 
@@ -159,15 +177,17 @@ export function TauriTerminal(): React.JSX.Element {
       })
       resizeObserver.observe(containerRef.current)
 
-      setStatus('ready')
+      if (!disposedRef.current) setStatus('ready')
 
       // Store observer for cleanup
       ;(containerRef.current as HTMLDivElement & { _resizeObserver?: ResizeObserver })._resizeObserver = resizeObserver
     } catch (err) {
-      const msg = `Terminal initialization gagal: ${err}`
-      setErrorMsg(msg)
-      setStatus('error')
-      console.error('[TauriTerminal]', msg)
+      if (!disposedRef.current) {
+        const msg = `Terminal initialization gagal: ${err}`
+        setErrorMsg(msg)
+        setStatus('error')
+        console.error('[TauriTerminal]', msg)
+      }
     }
   }, [])
 

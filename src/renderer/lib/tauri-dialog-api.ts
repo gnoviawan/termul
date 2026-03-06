@@ -1,4 +1,4 @@
-import { open, confirm } from '@tauri-apps/plugin-dialog';
+import { open, save, message, confirm } from '@tauri-apps/plugin-dialog';
 import type { IpcResult } from '@shared/types/ipc.types';
 
 export const tauriDialogApi = {
@@ -29,8 +29,7 @@ export const tauriDialogApi = {
 
   async saveFile(options?: { filters?: Array<{ name: string; extensions: string[] }> }): Promise<IpcResult<string | null>> {
     try {
-      const saved = await open({
-        save: true,
+      const saved = await save({
         filters: options?.filters,
       });
       return { success: true, data: saved as string | null };
@@ -46,8 +45,8 @@ export const tauriDialogApi = {
     });
   },
 
-  async showMessage(message: string, title = 'Info'): Promise<void> {
-    await confirm(message, {
+  async showMessage(msg: string, title = 'Info'): Promise<void> {
+    await message(msg, {
       title,
     });
   },
