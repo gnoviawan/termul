@@ -2,8 +2,9 @@
  * APP BOOTSTRAP ENTRY POINT
  * =========================
  *
- * This is the primary entry point for Termul Manager. Following the Tauri-first
- * migration strategy, this entry point serves BOTH Tauri and Electron contexts.
+ * This is the generic renderer entry point for Termul Manager.
+ * The desktop runtime is Tauri-first, while this file remains useful for
+ * browser-based development, preview, and test harnesses.
  *
  * Bootstrap Strategy:
  * ------------------
@@ -11,12 +12,9 @@
  *    - Entry via: tauri-index.html -> tauri-main.tsx -> TauriApp
  *    - Includes: Window state management, Tauri IPC APIs
  *
- * 2. Electron Runtime (Legacy): Uses App component with browser-compatible hooks
+ * 2. Browser/Development Runtime: Uses App component with browser-compatible hooks
  *    - Entry via: index.html -> main.tsx -> App
- *    - Includes: Alt-key prevention, Electron IPC APIs
- *
- * 3. Development/Browser: Uses App component for hot reload
- *    - Entry via: vite dev server -> main.tsx -> App
+ *    - Includes: Alt-key prevention and non-native fallbacks needed for local preview
  *
  * Context Detection:
  * -----------------
@@ -27,16 +25,13 @@
  * NO SILENT FALLBACKS:
  * -------------------
  * - Tauri APIs are protected by explicit isTauriContext() guards
- * - Electron APIs are wrapped in similar guards for that context
  * - Each runtime path is deliberately chosen, not accidentally discovered
  *
- * Migration Path:
+ * Current State:
  * --------------
- * As we complete the Tauri-first migration:
- * - TauriApp becomes the canonical implementation
- * - App becomes the legacy Electron/development fallback
- * - All new features should be added to TauriApp first
- * - Electron compatibility is maintained via facade pattern in @/lib/api
+ * - TauriApp is the canonical desktop implementation
+ * - App is the browser/dev fallback used outside the Tauri runtime
+ * - New desktop-native behavior should be added to TauriApp first
  */
 
 import { createRoot } from 'react-dom/client'
@@ -59,7 +54,7 @@ function isTauriContext(): boolean {
  * Bootstrap the appropriate app component based on runtime context
  *
  * - Tauri context: Use TauriApp with window state management
- * - Browser/Electron: Use App with Alt-key prevention and browser hooks
+ * - Browser/dev context: Use App with browser-safe hooks
  */
 const AppComponent = isTauriContext() ? TauriApp : App
 

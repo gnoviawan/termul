@@ -71,9 +71,11 @@ const router = createHashRouter(
 )
 
 export default function TauriApp(): React.JSX.Element {
-  useWindowState()
+  const isWindowStateReady = useWindowState()
 
   useEffect(() => {
+    if (!isWindowStateReady) return
+
     // Show window immediately after mount (only in Tauri context)
     const showWindow = async () => {
       if (typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ === 'undefined') return
@@ -85,7 +87,7 @@ export default function TauriApp(): React.JSX.Element {
     }
 
     showWindow()
-  }, [])
+  }, [isWindowStateReady])
 
   return (
     <QueryClientProvider client={queryClient}>

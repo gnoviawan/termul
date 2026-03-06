@@ -1,64 +1,182 @@
-import { useEffect } from 'react'
-import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
+import { useEffect, useRef, useState } from 'react'
+import {
+  availableMonitors,
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+  primaryMonitor,
+  type Monitor
+} from '@tauri-apps/api/window'
 import { persistenceApi } from '@/lib/api'
+import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { PersistenceKeys, type WindowState } from '@shared/types/persistence.types'
 
-interface WindowState {
-  x: number
-  y: number
-  width: number
-  height: number
-  isMaximized: boolean
+const DEFAULT_WIDTH = 1200
+const DEFAULT_HEIGHT = 800
+const MIN_VISIBLE_PIXELS = 100
+
+function createDefaultWindowState(monitor: Monitor | null): WindowState {
+  const workArea = monitor?.workArea
+
+  const originX = workArea?.position.x ?? 0
+  const originY = workArea?.position.y ?? 0
+  const workWidth = workArea?.size.width ?? DEFAULT_WIDTH
+  const workHeight = workArea?.size.height ?? DEFAULT_HEIGHT
+
+  return {
+    x: Math.round(originX + (workWidth - DEFAULT_WIDTH) / 2),
+    y: Math.round(originY + (workHeight - DEFAULT_HEIGHT) / 2),
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    isMaximized: false
+  }
 }
 
-const WINDOW_STATE_KEY = 'window-state'
+async function getDefaultWindowState(): Promise<WindowState> {
+  const monitor = await primaryMonitor()
+  return createDefaultWindowState(monitor)
+}
 
-export function useWindowState() {
-  useEffect(() => {
-    const restoreWindowState = async () => {
-      try {
-        const result = await persistenceApi.read<WindowState>(WINDOW_STATE_KEY)
-        if (result.success && result.data) {
-          const state = result.data
-          const window = getCurrentWindow()
+function isPositionOnScreen(state: WindowState, monitors: Monitor[]): boolean {
+  if (monitors.length === 0) return true
 
-          await window.setPosition(new LogicalPosition(state.x, state.y))
-          await window.setSize(new LogicalSize(state.width, state.height))
+  return monitors.some((monitor) => {
+    const area = monitor.workArea
+    const dx = area.position.x
+    const dy = area.position.y
+    const dw = area.size.width
+    const dh = area.size.height
 
-          if (state.isMaximized) {
-            await window.maximize()
-          }
-        }
-      } catch (err) {
-        console.error('Failed to restore window state:', err)
-      }
-    }
+    const overlapX = Math.max(0, Math.min(state.x + state.width, dx + dw) - Math.max(state.x, dx))
+    const overlapY = Math.max(0, Math.min(state.y + state.height, dy + dh) - Math.max(state.y, dy))
 
-    // Delay restoration to ensure window is ready
-    const restoreTimeout = setTimeout(restoreWindowState, 100)
+    return overlapX >= MIN_VISIBLE_PIXELS && overlapY >= MIN_VISIBLE_PIXELS
+  })
+}
 
-    return () => clearTimeout(restoreTimeout)
-  }, [])
+async function loadWindowState(): Promise<WindowState> {
+  const result = await persistenceApi.read<WindowState>(PersistenceKeys.windowState)
 
-  const saveWindowState = async () => {
-    try {
-      const window = getCurrentWindow()
-      const pos = await window.outerPosition()
-      const size = await window.outerSize()
-      const maximized = await window.isMaximized()
-
-      const state: WindowState = {
-        x: pos.x,
-        y: pos.y,
-        width: size.width,
-        height: size.height,
-        isMaximized: maximized,
-      }
-
-      await persistenceApi.write(WINDOW_STATE_KEY, state)
-    } catch (err) {
-      console.error('Failed to save window state:', err)
-    }
+  if (!result.success || !result.data) {
+    return getDefaultWindowState()
   }
 
-  return { saveWindowState }
+  const persistedState = result.data
+  const monitors = await availableMonitors()
+
+  if (isPositionOnScreen(persistedState, monitors)) {
+    return persistedState
+  }
+
+  const defaultState = await getDefaultWindowState()
+  return {
+    ...defaultState,
+    width: persistedState.width,
+    height: persistedState.height,
+    isMaximized: persistedState.isMaximized
+  }
+}
+
+export function useWindowState(): boolean {
+  const [isReady, setIsReady] = useState(false)
+  const normalStateRef = useRef<WindowState | null>(null)
+
+  useEffect(() => {
+    if (!isTauriContext()) {
+      setIsReady(true)
+      return
+    }
+
+    const window = getCurrentWindow()
+    let disposed = false
+
+    const buildWindowState = async (): Promise<WindowState> => {
+      const isMaximized = await window.isMaximized()
+
+      if (isMaximized) {
+        const fallbackState = normalStateRef.current ?? (await getDefaultWindowState())
+        return {
+          ...fallbackState,
+          isMaximized: true
+        }
+      }
+
+      const position = await window.outerPosition()
+      const size = await window.outerSize()
+      const state: WindowState = {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        isMaximized: false
+      }
+
+      normalStateRef.current = state
+      return state
+    }
+
+    const persistWindowState = async (immediate = false): Promise<void> => {
+      const state = await buildWindowState()
+      const operation = immediate
+        ? persistenceApi.write(PersistenceKeys.windowState, state)
+        : persistenceApi.writeDebounced(PersistenceKeys.windowState, state)
+      await operation
+    }
+
+    const initialize = async (): Promise<Array<() => void>> => {
+      const restoredState = await loadWindowState()
+
+      normalStateRef.current = {
+        ...restoredState,
+        isMaximized: false
+      }
+
+      await window.setPosition(new LogicalPosition(restoredState.x, restoredState.y))
+      await window.setSize(new LogicalSize(restoredState.width, restoredState.height))
+
+      if (restoredState.isMaximized) {
+        await window.maximize()
+      }
+
+      const movedUnlisten = window.onMoved(() => void persistWindowState())
+      const resizedUnlisten = window.onResized(() => void persistWindowState())
+      const closeRequestedUnlisten = window.onCloseRequested(() => void persistWindowState(true))
+
+      const cleanups = [
+        () => cleanupTauriListener(movedUnlisten),
+        () => cleanupTauriListener(resizedUnlisten),
+        () => cleanupTauriListener(closeRequestedUnlisten)
+      ]
+
+      return cleanups
+    }
+
+    let cleanups: Array<() => void> = []
+
+    void initialize()
+      .then((listeners) => {
+        if (disposed) {
+          listeners.forEach((cleanup) => cleanup())
+          return
+        }
+
+        cleanups = listeners
+      })
+      .catch((error) => {
+        console.error('Failed to initialize window state:', error)
+      })
+      .finally(() => {
+        if (!disposed) {
+          setIsReady(true)
+        }
+      })
+
+    return () => {
+      disposed = true
+      void persistWindowState(true)
+      cleanups.forEach((cleanup) => cleanup())
+    }
+  }, [])
+
+  return isReady
 }

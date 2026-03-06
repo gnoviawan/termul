@@ -143,3 +143,14 @@ export const tauriSystemApi = {
     }
   }
 }
+
+/**
+ * @internal Testing only - reset heartbeat state between tests
+ */
+export function _resetSystemHeartbeatForTesting(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+  lastHeartbeat = Date.now()
+}

@@ -78,3 +78,11 @@ function createTauriShellApi(): ShellApi {
  * based on build environment.
  */
 export const shellApi: ShellApi = createTauriShellApi()
+
+/**
+ * @internal Testing only - reset module cache state
+ */
+export function _resetShellCacheForTesting(): void {
+  cachedShells = null
+  shellCachePromise = null
+}

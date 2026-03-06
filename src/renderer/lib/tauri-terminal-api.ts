@@ -13,6 +13,7 @@ import type {
   TerminalExitCodeChangedCallback,
   GitStatus
 } from '@shared/types/ipc.types'
+import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 /**
  * IPC Event names matching Rust commands in src-tauri/src/commands.rs
@@ -96,6 +97,34 @@ function captureStackTrace(): string {
  * It maintains the same interface as the Electron preload script for easy migration.
  */
 export function createTauriTerminalApi(): TerminalApi {
+  const registerListener = <T>(
+    eventName: string,
+    callback: (payload: T) => void,
+    debugLabel: string
+  ): (() => void) => {
+    if (!isTauriContext()) {
+      if (import.meta.env.DEV) {
+        devLog(`[TauriTerminalAPI] Skipping ${debugLabel} listener outside Tauri runtime`)
+      }
+      return () => {}
+    }
+
+    let unlisten: Promise<UnlistenFn> | undefined
+
+    try {
+      unlisten = listen<T>(eventName, ({ payload }) => {
+        callback(payload)
+      })
+    } catch (error) {
+      console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+      return () => {}
+    }
+
+    return () => {
+      cleanupTauriListener(unlisten)
+    }
+  }
+
   return {
     /**
      * Spawn a new terminal PTY
@@ -184,19 +213,13 @@ export function createTauriTerminalApi(): TerminalApi {
         devLog('[TauriTerminalAPI] Registering terminal-data listener')
       }
 
-      const unlisten = listen<{ id: string; data: string }>(
+      return registerListener<{ id: string; data: string }>(
         IPC_EVENTS.TERMINAL_DATA,
-        ({ payload }) => {
+        (payload) => {
           callback(payload.id, payload.data)
-        }
+        },
+        'terminal-data'
       )
-
-      return () => {
-        if (import.meta.env.DEV) {
-          devLog('[TauriTerminalAPI] Unregistering terminal-data listener')
-        }
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**
@@ -208,23 +231,18 @@ export function createTauriTerminalApi(): TerminalApi {
         devLog('[TauriTerminalAPI] Registering terminal-exit listener')
       }
 
-      const unlisten = listen<{ id: string; exitCode: number | null; signal: number | null }>(
+      return registerListener<{ id: string; exitCode: number | null; signal: number | null }>(
         IPC_EVENTS.TERMINAL_EXIT,
-        ({ payload }) => {
+        (payload) => {
           if (import.meta.env.DEV) {
             devLog(
               `[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`
             )
           }
           callback(payload.id, payload.exitCode ?? -1, payload.signal ?? undefined)
-        }
+        },
+        'terminal-exit'
       )
-      return () => {
-        if (import.meta.env.DEV) {
-          devLog('[TauriTerminalAPI] Unregistering terminal-exit listener')
-        }
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**
@@ -232,15 +250,13 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onCwdChanged(callback: TerminalCwdChangedCallback): () => void {
-      const unlisten = listen<{ terminalId: string; cwd: string }>(
+      return registerListener<{ terminalId: string; cwd: string }>(
         IPC_EVENTS.TERMINAL_CWD_CHANGED,
-        ({ payload }) => {
+        (payload) => {
           callback(payload.terminalId, payload.cwd)
-        }
+        },
+        'terminal-cwd-changed'
       )
-      return () => {
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**
@@ -255,15 +271,13 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitBranchChanged(callback: TerminalGitBranchChangedCallback): () => void {
-      const unlisten = listen<{ terminalId: string; branch: string | null }>(
+      return registerListener<{ terminalId: string; branch: string | null }>(
         IPC_EVENTS.TERMINAL_GIT_BRANCH_CHANGED,
-        ({ payload }) => {
+        (payload) => {
           callback(payload.terminalId, payload.branch)
-        }
+        },
+        'terminal-git-branch-changed'
       )
-      return () => {
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**
@@ -278,15 +292,13 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitStatusChanged(callback: TerminalGitStatusChangedCallback): () => void {
-      const unlisten = listen<{ terminalId: string; status: GitStatus | null }>(
+      return registerListener<{ terminalId: string; status: GitStatus | null }>(
         IPC_EVENTS.TERMINAL_GIT_STATUS_CHANGED,
-        ({ payload }) => {
+        (payload) => {
           callback(payload.terminalId, payload.status)
-        }
+        },
+        'terminal-git-status-changed'
       )
-      return () => {
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**
@@ -301,15 +313,13 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExitCodeChanged(callback: TerminalExitCodeChangedCallback): () => void {
-      const unlisten = listen<{ terminalId: string; exitCode: number }>(
+      return registerListener<{ terminalId: string; exitCode: number }>(
         IPC_EVENTS.TERMINAL_EXIT_CODE_CHANGED,
-        ({ payload }) => {
+        (payload) => {
           callback(payload.terminalId, payload.exitCode)
-        }
+        },
+        'terminal-exit-code-changed'
       )
-      return () => {
-        void unlisten.then((fn) => fn())
-      }
     },
 
     /**

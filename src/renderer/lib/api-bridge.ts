@@ -1,8 +1,5 @@
 /**
- * API Bridge - Unified entry point for all Tauri IPC APIs
- *
- * This module provides environment detection and exports appropriate
- * API implementations based on whether we're running in Tauri or web.
+ * API Bridge - Unified entry point for Tauri IPC APIs
  *
  * Usage:
  *   import { persistenceApi, systemApi } from '@/lib/api-bridge'
@@ -18,37 +15,38 @@ import { tauriWindowApi } from './tauri-window-api'
 /**
  * Detect if running in Tauri environment
  */
-export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window
+export const isTauri = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /**
- * Persistence API - unified interface
+ * Persistence API
  */
-export const persistenceApi = isTauri() ? tauriPersistenceApi : window.api?.persistence
+export const persistenceApi = tauriPersistenceApi
 
 /**
- * Filesystem API - unified interface
+ * Filesystem API
  */
-export const filesystemApi = isTauri() ? tauriFilesystemApi : window.api?.filesystem
+export const filesystemApi = tauriFilesystemApi
 
 /**
- * Dialog API - unified interface
+ * Dialog API
  */
-export const dialogApi = isTauri() ? tauriDialogApi : window.api?.dialog
+export const dialogApi = tauriDialogApi
 
 /**
- * Clipboard API - unified interface
+ * Clipboard API
  */
-export const clipboardApi = isTauri() ? tauriClipboardApi : window.api?.clipboard
+export const clipboardApi = tauriClipboardApi
 
 /**
- * System API - unified interface
+ * System API
  */
-export const systemApi = isTauri() ? tauriSystemApi : window.api?.system
+export const systemApi = tauriSystemApi
 
 /**
- * Window API - unified interface
+ * Window API
  */
-export const windowApi = isTauri() ? tauriWindowApi : window.api?.window
+export const windowApi = tauriWindowApi
 
 /**
  * Re-export all APIs for convenience
