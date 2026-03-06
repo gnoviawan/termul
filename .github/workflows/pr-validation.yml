@@ -45,27 +45,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Install npm dependencies
+        run: npm ci
 
       - name: Lint
-        run: bun run lint
+        run: npm run lint
 
       - name: Typecheck
-        run: bun run typecheck
+        run: npm run typecheck
 
       - name: Test
-        run: bun run test
+        run: npm run test
 
   rust-checks:
     name: Rust Checks
@@ -108,7 +104,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   build-check:
-    name: Verify Build
+    name: Verify Tauri Frontend Build
     needs: [validate, rust-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -116,18 +112,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Install npm dependencies
+        run: npm ci
 
-      - name: Build (verify compilation)
-        run: bun run build
+      - name: Build Tauri frontend assets
+        run: npm run build:frontend:tauri

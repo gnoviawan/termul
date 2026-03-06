@@ -1,12 +1,17 @@
 {
   "name": "termul-manager",
+  "productName": "Termul Manager",
   "version": "0.2.3",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
-  "main": "./out/main/index.js",
-  "author": {
-    "name": "Termul Manager",
-    "email": "termul@example.com"
+  "author": "gnoviawan",
+  "contributors": [
+    "mannnrachman (Tauri port)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gnoviawan/termul.git"
   },
+  "homepage": "https://github.com/gnoviawan/termul",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -14,13 +19,6 @@
     "dev": "tauri dev",
     "build": "tauri build --config src-tauri/tauri.conf.prod.json",
     "start": "tauri dev",
-    "dev:electron": "electron-vite dev",
-    "build:electron": "electron-vite build",
-    "start:electron": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps",
-    "build:electron:win": "electron-vite build && electron-builder --win --publish never",
-    "build:electron:mac": "electron-vite build && electron-builder --mac --publish never",
-    "build:electron:linux": "electron-vite build && electron-builder --linux --publish never",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -35,7 +33,8 @@
     "build:tauri:mac-x64": "tauri build --target x86_64-apple-darwin --config src-tauri/tauri.conf.prod.json",
     "build:tauri:linux": "tauri build --target x86_64-unknown-linux-gnu --config src-tauri/tauri.conf.prod.json",
     "tauri": "tauri",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build:frontend:tauri": "vite build --config vite.config.tauri.ts"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",
@@ -93,13 +92,11 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
-    "electron-updater": "^6.7.3",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.25.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.462.0",
     "next-themes": "^0.3.0",
-    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",
@@ -125,8 +122,6 @@
     "@tauri-apps/plugin-process": "^2"
   },
   "devDependencies": {
-    "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0",
     "@eslint/js": "^9.32.0",
     "@tailwindcss/typography": "^0.5.16",
     "@testing-library/jest-dom": "^6.9.1",
@@ -136,9 +131,6 @@
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react-swc": "^3.11.0",
     "autoprefixer": "^10.4.21",
-    "electron": "^39.2.7",
-    "electron-builder": "^26.4.0",
-    "electron-vite": "^5.0.0",
     "eslint": "^9.32.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
@@ -153,51 +145,5 @@
     "vite": "^5.4.19",
     "vitest": "^4.0.16",
     "@tauri-apps/cli": "^2"
-  },
-  "build": {
-    "appId": "com.termul-manager.app",
-    "productName": "Termul Manager",
-    "npmRebuild": false,
-    "publish": {
-      "provider": "github",
-      "owner": "gnoviawan",
-      "repo": "termul"
-    },
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "out/**/*"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        },
-        {
-          "target": "portable",
-          "arch": ["x64"]
-        }
-      ]
-    },
-    "nsis": {
-      "artifactName": "Termul-Manager-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "Termul-Manager-${version}.${ext}"
-    },
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    }
   }
 }

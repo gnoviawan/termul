@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -12,27 +16,17 @@ jobs:
   changelog:
     name: Generate Changelog
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     outputs:
-      release_body: ${{ steps.git-cliff.outputs.content }}
-      is_prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
+      changelog: ${{ steps.cliff.outputs.content }}
+      is_prerelease: ${{ steps.check.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check if prerelease
-        id: check-prerelease
-        run: |
-          if [[ "${{ github.ref_name }}" == *"-beta"* ]] || [[ "${{ github.ref_name }}" == *"-alpha"* ]] || [[ "${{ github.ref_name }}" == *"-rc"* ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Generate changelog
-        id: git-cliff
+        id: cliff
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
@@ -41,152 +35,88 @@ jobs:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
 
-  build-windows:
-    name: Build Windows
+      - name: Check prerelease
+        id: check
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" =~ (alpha|beta|rc) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build (${{ matrix.platform }})
     needs: changelog
-    runs-on: windows-latest
-    timeout-minutes: 30
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
+          - platform: macos-arm64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-x64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - name: Install Linux dependencies
+        if: matrix.runner == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Set version from tag
-        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
-
-      - name: Build Windows
-        run: bun run build:win
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: windows-builds
-          path: |
-            dist/*.exe
-            dist/*.zip
-            dist/*.yml
-          retention-days: 1
-          if-no-files-found: error
+          targets: ${{ matrix.rust_target }}
 
-  build-linux:
-    name: Build Linux
-    needs: changelog
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
         with:
-          bun-version: latest
+          workspaces: src-tauri
+          cache-on-failure: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Install npm dependencies
+        run: npm ci
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Set version from tag
-        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
-
-      - name: Build Linux
-        run: bun run build:linux
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-builds
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.yml
-          retention-days: 1
-          if-no-files-found: error
-
-  build-macos:
-    name: Build macOS
-    needs: changelog
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Set version from tag
-        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
-
-      - name: Build macOS
-        run: bun run build:mac
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-builds
-          path: |
-            dist/*.dmg
-            dist/*.yml
-          retention-days: 1
-          if-no-files-found: error
-
-  publish:
-    name: Publish Release
-    needs: [changelog, build-windows, build-linux, build-macos]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-builds
-          path: dist/
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-builds
-          path: dist/
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-builds
-          path: dist/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body: ${{ needs.changelog.outputs.release_body }}
-          prerelease: ${{ needs.changelog.outputs.is_prerelease == 'true' }}
-          files: |
-            dist/*
+      - name: Build and publish release artifacts
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Termul Manager ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.changelog }}
+          releaseDraft: false
+          prerelease: ${{ needs.changelog.outputs.is_prerelease }}
+          args: ${{ matrix.args }}
