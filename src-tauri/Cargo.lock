@@ -4592,7 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "termul-manager"
-version = "0.3.0-2"
+version = "0.3.0-4"
 dependencies = [
  "anyhow",
  "env_logger",
