@@ -70,8 +70,8 @@ function fileContains(relativePath: string, pattern: RegExp): boolean {
  * This supports two patterns:
  * 1. Direct import: export { terminalApi } from './terminal-api'
  *    where terminal-api.ts imports from tauri-terminal-api
- * 2. Facade pattern: export const sessionApi = isTauriContext() ? tauriSessionApi : electronSessionApi
- *    where the file imports from both tauri- and electron versions
+ * 2. Explicit Tauri export: export const sessionApi = tauriSessionApi
+ *    or export const dataMigrationApi = createTauriDataMigrationApi()
  */
 function apiBridgeUsesTauriAdapter(exportName: string, tauriAdapterFile: string): boolean {
   const apiPath = join(LIB_DIR, 'api.ts')
@@ -104,25 +104,17 @@ function apiBridgeUsesTauriAdapter(exportName: string, tauriAdapterFile: string)
     }
   }
 
-  // Pattern 2: Facade pattern with runtime context detection
+  // Pattern 2: Explicit Tauri export without Electron fallback.
   // The key indicators are:
   // a) Import from the Tauri adapter file (without .ts extension in imports)
   // b) Export of the API name (already checked above)
-  // c) isTauriContext() usage for runtime detection
 
   // Remove .ts extension for import check
   const adapterFileWithoutExt = tauriAdapterFile.replace('.ts', '')
   const hasTauriImport = content.includes(`from './${adapterFileWithoutExt}'`) ||
     content.includes(`from "./${adapterFileWithoutExt}"`)
 
-  const hasContextDetection = content.includes('isTauriContext()')
-
-  // If we have Tauri import and context detection, it's a facade pattern
-  if (hasTauriImport && hasContextDetection) {
-    return true
-  }
-
-  return false
+  return hasTauriImport
 }
 
 /**
@@ -274,37 +266,31 @@ describe('Parity Checklist Automation', () => {
   })
 
   describe('Regression Prevention', () => {
-    it('Session API uses Tauri-first facade pattern', () => {
+    it('Session API uses Tauri-only export pattern', () => {
       const apiPath = join(LIB_DIR, 'api.ts')
       const apiContent = readFileSync(apiPath, 'utf-8')
 
-      // Check for Tauri-first facade pattern:
-      // 1. Imports from tauri-session-api
-      // 2. Has isTauriContext() runtime detection
-      // 3. Uses conditional export with Tauri adapter
-
       const hasTauriImport = apiContent.includes("from './tauri-session-api'")
-      const hasContextDetection = apiContent.includes('isTauriContext()')
-      const hasFacadePattern = apiContent.includes('tauriSessionApi')
+      const hasDirectExport = apiContent.includes('export const sessionApi = tauriSessionApi')
+      const hasElectronFallback = apiContent.includes("from './session-api'")
 
       expect(
-        hasTauriImport && hasContextDetection && hasFacadePattern,
-        'api.ts should use Tauri-first facade pattern for sessionApi'
+        hasTauriImport && hasDirectExport && !hasElectronFallback,
+        'api.ts should export sessionApi directly from the Tauri adapter'
       ).toBe(true)
     })
 
-    it('Data Migration API uses Tauri-first facade pattern', () => {
+    it('Data Migration API uses Tauri-only export pattern', () => {
       const apiPath = join(LIB_DIR, 'api.ts')
       const apiContent = readFileSync(apiPath, 'utf-8')
 
-      // Check for Tauri-first facade pattern
       const hasTauriImport = apiContent.includes("from './tauri-data-migration-api'")
-      const hasContextDetection = apiContent.includes('isTauriContext()')
-      const hasCreateTauriApi = apiContent.includes('createTauriDataMigrationApi')
+      const hasCreateTauriApi = apiContent.includes('export const dataMigrationApi = createTauriDataMigrationApi()')
+      const hasElectronFallback = apiContent.includes("from './data-migration-api'")
 
       expect(
-        hasTauriImport && hasContextDetection && hasCreateTauriApi,
-        'api.ts should use Tauri-first facade pattern for dataMigrationApi'
+        hasTauriImport && hasCreateTauriApi && !hasElectronFallback,
+        'api.ts should export dataMigrationApi directly from the Tauri adapter'
       ).toBe(true)
     })
   })

@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, cleanup, act } from '@testing-library/react'
 import type { Terminal } from '@xterm/xterm'
 
+const { mockClipboardApi } = vi.hoisted(() => ({
+  mockClipboardApi: {
+    readText: vi.fn(),
+    writeText: vi.fn()
+  }
+}))
+
+vi.mock('@/lib/api', () => ({
+  clipboardApi: mockClipboardApi
+}))
+
 // Mock selection change callback
 let capturedSelectionCallback: (() => void) | null = null
 
@@ -15,21 +26,6 @@ const createMockTerminal = (hasSelectionValue = false, selectionText = '') => ({
     capturedSelectionCallback = cb
     return { dispose: vi.fn() }
   })
-})
-
-// Mock clipboard API
-const mockClipboardApi = {
-  readText: vi.fn<() => Promise<{ success: boolean; data?: string; error?: string }>>(),
-  writeText: vi.fn<() => Promise<{ success: boolean; error?: string }>>()
-}
-
-// Setup window.api mock
-Object.defineProperty(window, 'api', {
-  value: {
-    clipboard: mockClipboardApi
-  },
-  writable: true,
-  configurable: true
 })
 
 import { useTerminalClipboard } from './use-terminal-clipboard'
@@ -181,7 +177,9 @@ describe('useTerminalClipboard', () => {
     })
 
     it('should copy multiline text correctly', async () => {
-      const selectedText = 'Line 1\nLine 2\nLine 3'
+      const selectedText = `Line 1
+Line 2
+Line 3`
       const mockTerminal = createMockTerminal(true, selectedText)
       mockClipboardApi.writeText.mockResolvedValue({ success: true })
 
@@ -195,7 +193,7 @@ describe('useTerminalClipboard', () => {
     })
 
     it('should copy text with special characters correctly', async () => {
-      const selectedText = 'Special: !@#$%^&*()_+-=[]{}|\';":",./<>?'
+      const selectedText = `Special: !@#$%^&*()_+-=[]{}|';":",./<>?`
       const mockTerminal = createMockTerminal(true, selectedText)
       mockClipboardApi.writeText.mockResolvedValue({ success: true })
 
@@ -283,7 +281,9 @@ describe('useTerminalClipboard', () => {
     })
 
     it('should paste multiline text correctly', async () => {
-      const clipboardText = 'Line 1\nLine 2\nLine 3'
+      const clipboardText = `Line 1
+Line 2
+Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 
@@ -297,7 +297,7 @@ describe('useTerminalClipboard', () => {
     })
 
     it('should paste text with special characters correctly', async () => {
-      const clipboardText = 'Special: !@#$%^&*()_+-=[]{}|\';":",./<>?'
+      const clipboardText = `Special: !@#$%^&*()_+-=[]{}|';":",./<>?`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 

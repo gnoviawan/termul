@@ -150,6 +150,8 @@ const mockClipboardApi = {
 }
 
 // Define mock window.api
+type WindowWithOptionalApi = Window & { api?: unknown }
+
 const mockWindowApi = {
   terminal: mockTerminalApi,
   clipboard: mockClipboardApi,
@@ -1742,8 +1744,8 @@ describe('ConnectedTerminal', () => {
     it('should have terminalApi with CWD tracking capabilities', () => {
       // Verify the terminal API has CWD-related methods
       expect(terminalApi).toBeDefined()
-      expect(typeof (terminalApi as any).onCwdChanged).toBe('function')
-      expect(typeof (terminalApi as any).getCwd).toBe('function')
+      expect(typeof terminalApi.onCwdChanged).toBe('function')
+      expect(typeof terminalApi.getCwd).toBe('function')
     })
 
     it('should handle CWD tracking for terminal sessions', async () => {
@@ -1818,10 +1820,11 @@ describe('ConnectedTerminal', () => {
 
     it('should work without window.api for terminal operations', async () => {
       // Store original window.api if it exists
-      const originalWindowApi = (window as any).api
+      const windowWithOptionalApi = window as WindowWithOptionalApi
+      const originalWindowApi = windowWithOptionalApi.api
 
       // Remove window.api to simulate pure Tauri environment
-      delete (window as any).api
+      delete windowWithOptionalApi.api
 
       // Component should still work with Tauri APIs
       const { unmount } = render(<ConnectedTerminal />)
@@ -1832,7 +1835,7 @@ describe('ConnectedTerminal', () => {
 
       // Restore window.api
       if (originalWindowApi) {
-        (window as any).api = originalWindowApi
+        windowWithOptionalApi.api = originalWindowApi
       }
 
       unmount()

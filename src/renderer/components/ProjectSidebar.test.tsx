@@ -4,9 +4,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
 
-// Mock the shell API
-const mockGetAvailableShells = vi.fn()
-vi.mock('@/lib/shell-api', () => ({
+const { mockGetAvailableShells } = vi.hoisted(() => ({
+  mockGetAvailableShells: vi.fn()
+}))
+
+vi.mock('@/lib/api', () => ({
   shellApi: {
     getAvailableShells: mockGetAvailableShells
   }

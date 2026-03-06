@@ -250,46 +250,17 @@ describe('API Bridge (api.ts)', () => {
     })
 
     it('should use tauri-data-migration-api for dataMigrationApi in Tauri context', () => {
-      // The facade detects context at runtime:
-      // - Tauri: uses createTauriDataMigrationApi() with canonical method names
-      // - Electron: uses legacy data-migration-api.ts with legacy method names
-
-      // Check if we're in Tauri context
-      const isTauri = typeof window !== 'undefined' &&
-        typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
-
+      // The facade is now Tauri-only and should always expose the canonical migration contract.
       expect(dataMigrationApi).toBeDefined()
+      expect(typeof dataMigrationApi.getVersion).toBe('function')
+      expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
+      expect(typeof dataMigrationApi.getHistory).toBe('function')
+      expect(typeof dataMigrationApi.getRegistered).toBe('function')
+      expect(typeof dataMigrationApi.runMigration).toBe('function')
+      expect(typeof dataMigrationApi.rollback).toBe('function')
 
-      // In Tauri context, verify canonical method names
-      if (isTauri) {
-        expect('getVersion' in dataMigrationApi).toBe(true)
-        expect('getSchemaInfo' in dataMigrationApi).toBe(true)
-        expect('runMigration' in dataMigrationApi).toBe(true)
-
-        if ('getVersion' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getVersion).toBe('function')
-        }
-        if ('getSchemaInfo' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
-        }
-        if ('runMigration' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.runMigration).toBe('function')
-        }
-      } else {
-        // In Electron context (or tests), verify legacy method names
-        expect('runMigrations' in dataMigrationApi).toBe(true)
-        expect('getVersionInfo' in dataMigrationApi).toBe(true)
-        expect(typeof dataMigrationApi.getHistory).toBe('function')
-        expect(typeof dataMigrationApi.getRegistered).toBe('function')
-        expect(typeof dataMigrationApi.rollback).toBe('function')
-
-        if ('runMigrations' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.runMigrations).toBe('function')
-        }
-        if ('getVersionInfo' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
-        }
-      }
+      expect('runMigrations' in dataMigrationApi).toBe(false)
+      expect('getVersionInfo' in dataMigrationApi).toBe(false)
     })
 
     it('should not silently fallback to window.api for Tauri APIs', () => {
@@ -324,7 +295,7 @@ describe('API Bridge (api.ts)', () => {
       })
 
       // Call the method (using legacy name for test environment)
-      const result = await (dataMigrationApi as any).getHistory()
+      const result = await dataMigrationApi.getHistory()
 
       // Should return IpcResult pattern
       expect(typeof result.success).toBe('boolean')
@@ -341,46 +312,16 @@ describe('API Bridge (api.ts)', () => {
      * - Electron: Uses legacy method names (runMigrations, getVersionInfo)
      */
 
-    it('dataMigrationApi should have appropriate methods for its context', () => {
-      // Check if we're in Tauri context
-      const isTauri = typeof window !== 'undefined' &&
-        typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
+    it('dataMigrationApi should expose the canonical Tauri migration contract', () => {
+      expect(typeof dataMigrationApi.getVersion).toBe('function')
+      expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
+      expect(typeof dataMigrationApi.getHistory).toBe('function')
+      expect(typeof dataMigrationApi.getRegistered).toBe('function')
+      expect(typeof dataMigrationApi.runMigration).toBe('function')
+      expect(typeof dataMigrationApi.rollback).toBe('function')
 
-      if (isTauri) {
-        // These are the canonical method names from MigrationApi interface
-        expect(typeof dataMigrationApi.getHistory).toBe('function')
-        expect(typeof dataMigrationApi.getRegistered).toBe('function')
-        expect(typeof dataMigrationApi.rollback).toBe('function')
-
-        expect('getVersion' in dataMigrationApi).toBe(true)
-        expect('getSchemaInfo' in dataMigrationApi).toBe(true)
-        expect('runMigration' in dataMigrationApi).toBe(true)
-
-        if ('getVersion' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getVersion).toBe('function')
-        }
-        if ('getSchemaInfo' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getSchemaInfo).toBe('function')
-        }
-        if ('runMigration' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.runMigration).toBe('function')
-        }
-      } else {
-        // In Electron context, legacy method names are used
-        expect(typeof dataMigrationApi.getHistory).toBe('function')
-        expect(typeof dataMigrationApi.getRegistered).toBe('function')
-        expect(typeof dataMigrationApi.rollback).toBe('function')
-
-        expect('runMigrations' in dataMigrationApi).toBe(true)
-        expect('getVersionInfo' in dataMigrationApi).toBe(true)
-
-        if ('runMigrations' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.runMigrations).toBe('function')
-        }
-        if ('getVersionInfo' in dataMigrationApi) {
-          expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
-        }
-      }
+      expect('runMigrations' in dataMigrationApi).toBe(false)
+      expect('getVersionInfo' in dataMigrationApi).toBe(false)
     })
 
     it('sessionApi should implement all canonical SessionApi methods', () => {

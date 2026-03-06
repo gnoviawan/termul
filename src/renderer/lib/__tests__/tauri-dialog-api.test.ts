@@ -8,13 +8,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock @tauri-apps/plugin-dialog BEFORE importing
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(async () => null),
+  save: vi.fn(async () => null),
+  message: vi.fn(async () => undefined),
   confirm: vi.fn(async () => true)
 }))
 
-import { open, confirm } from '@tauri-apps/plugin-dialog'
+import { open, save, message, confirm } from '@tauri-apps/plugin-dialog'
 import { tauriDialogApi } from '../tauri-dialog-api'
 
 const mockOpen = open as ReturnType<typeof vi.fn>
+const mockSave = save as ReturnType<typeof vi.fn>
+const mockMessage = message as ReturnType<typeof vi.fn>
 const mockConfirm = confirm as ReturnType<typeof vi.fn>
 
 describe('tauriDialogApi', () => {
@@ -22,8 +26,10 @@ describe('tauriDialogApi', () => {
     vi.clearAllMocks()
 
     // Restore default mocks
-    vi.mocked(open).mockResolvedValue(null)
-    vi.mocked(confirm).mockResolvedValue(true)
+    mockOpen.mockResolvedValue(null)
+    mockSave.mockResolvedValue(null)
+    mockMessage.mockResolvedValue(undefined)
+    mockConfirm.mockResolvedValue(true)
   })
 
   describe('selectDirectory', () => {
@@ -121,7 +127,7 @@ describe('tauriDialogApi', () => {
   describe('saveFile', () => {
     it('should successfully select save path', async () => {
       const testPath = '/home/user/saved.txt'
-      mockOpen.mockResolvedValue(testPath)
+      mockSave.mockResolvedValue(testPath)
 
       const result = await tauriDialogApi.saveFile()
 
@@ -133,18 +139,17 @@ describe('tauriDialogApi', () => {
 
     it('should support file filters for save', async () => {
       const filters = [{ name: 'Documents', extensions: ['doc', 'docx'] }]
-      mockOpen.mockResolvedValue('/path/to/save.doc')
+      mockSave.mockResolvedValue('/path/to/save.doc')
 
       await tauriDialogApi.saveFile({ filters })
 
-      expect(mockOpen).toHaveBeenCalledWith({
-        save: true,
+      expect(mockSave).toHaveBeenCalledWith({
         filters
       })
     })
 
     it('should handle cancellation', async () => {
-      mockOpen.mockResolvedValue(null)
+      mockSave.mockResolvedValue(null)
 
       const result = await tauriDialogApi.saveFile()
 
@@ -186,21 +191,17 @@ describe('tauriDialogApi', () => {
 
   describe('showMessage', () => {
     it('should show message with default title', async () => {
-      mockConfirm.mockResolvedValue(true)
-
       await tauriDialogApi.showMessage('Test message')
 
-      expect(mockConfirm).toHaveBeenCalledWith('Test message', {
+      expect(mockMessage).toHaveBeenCalledWith('Test message', {
         title: 'Info',
       })
     })
 
     it('should show message with custom title', async () => {
-      mockConfirm.mockResolvedValue(true)
-
       await tauriDialogApi.showMessage('Test message', 'Custom Title')
 
-      expect(mockConfirm).toHaveBeenCalledWith('Test message', {
+      expect(mockMessage).toHaveBeenCalledWith('Test message', {
         title: 'Custom Title',
       })
     })

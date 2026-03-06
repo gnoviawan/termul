@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useFileExplorerStore } from './file-explorer-store'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 
 const mockEntries: DirectoryEntry[] = [
@@ -7,17 +6,26 @@ const mockEntries: DirectoryEntry[] = [
   { name: 'index.ts', path: '/project/index.ts', type: 'file', extension: '.ts', size: 100, modifiedAt: 1000 }
 ]
 
-const mockApi = {
-  filesystem: {
-    readDirectory: vi.fn().mockResolvedValue({ success: true, data: mockEntries }),
-    watchDirectory: vi.fn().mockResolvedValue({ success: true }),
-    unwatchDirectory: vi.fn().mockResolvedValue({ success: true })
+const { mockApi } = vi.hoisted(() => ({
+  mockApi: {
+    filesystem: {
+      readDirectory: vi.fn(),
+      watchDirectory: vi.fn(),
+      unwatchDirectory: vi.fn()
+    }
   }
-}
+}))
+
+vi.mock('@/lib/api', () => ({
+  filesystemApi: mockApi.filesystem
+}))
+
+import { useFileExplorerStore } from './file-explorer-store'
 
 beforeEach(() => {
-  vi.stubGlobal('api', mockApi)
-  vi.clearAllMocks()
+  mockApi.filesystem.readDirectory.mockReset().mockResolvedValue({ success: true, data: mockEntries })
+  mockApi.filesystem.watchDirectory.mockReset().mockResolvedValue({ success: true })
+  mockApi.filesystem.unwatchDirectory.mockReset().mockResolvedValue({ success: true })
 
   useFileExplorerStore.setState({
     rootPath: null,

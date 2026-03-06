@@ -4,8 +4,17 @@ import { useEditorPersistence, persistState } from './use-editor-persistence'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { PaneNode, SplitNode, LeafNode } from '@/types/workspace.types'
 
-const mockPersistenceRead = vi.fn()
-const mockPersistenceWriteDebounced = vi.fn()
+const { mockPersistenceRead, mockPersistenceWriteDebounced } = vi.hoisted(() => ({
+  mockPersistenceRead: vi.fn(),
+  mockPersistenceWriteDebounced: vi.fn()
+}))
+
+vi.mock('@/lib/api', () => ({
+  persistenceApi: {
+    read: mockPersistenceRead,
+    writeDebounced: mockPersistenceWriteDebounced
+  }
+}))
 
 function createEditorFileState(filePath: string): {
   filePath: string
@@ -159,12 +168,6 @@ beforeEach(() => {
   mockWorkspaceState.clearEditorTabs.mockReset()
   mockWorkspaceState.resetLayout.mockReset()
 
-  vi.stubGlobal('api', {
-    persistence: {
-      read: mockPersistenceRead,
-      writeDebounced: mockPersistenceWriteDebounced
-    }
-  })
 })
 
 afterEach(() => {

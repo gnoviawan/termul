@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: vi.fn()
+}))
+
 vi.mock('@tauri-apps/plugin-updater', () => ({
   check: vi.fn(),
   Update: class {}
@@ -10,8 +14,28 @@ vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: vi.fn()
 }))
 
+vi.mock('../tauri-backup-api', () => ({
+  BackupErrorCodes: {
+    BACKUP_FAILED: 'BACKUP_FAILED',
+    RESTORE_FAILED: 'RESTORE_FAILED',
+    BACKUP_NOT_FOUND: 'BACKUP_NOT_FOUND',
+    DISK_SPACE_ERROR: 'DISK_SPACE_ERROR',
+    INVALID_BACKUP: 'INVALID_BACKUP'
+  },
+  createBackup: vi.fn(),
+  setAppVersion: vi.fn()
+}))
+
+vi.mock('../tauri-rollback-api', () => ({
+  keepPreviousVersion: vi.fn(),
+  setCurrentVersion: vi.fn()
+}))
+
+import { getVersion } from '@tauri-apps/api/app'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { createBackup, setAppVersion } from '../tauri-backup-api'
+import { keepPreviousVersion, setCurrentVersion } from '../tauri-rollback-api'
 import {
   checkForUpdates,
   clearPendingUpdate,
@@ -35,10 +59,37 @@ function createMockUpdate(version: string, body?: string, date?: string) {
   }
 }
 
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 describe('tauri-updater-api', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     _resetUpdaterStateForTesting()
+    vi.mocked(getVersion).mockResolvedValue('0.2.3')
+    vi.mocked(setAppVersion).mockResolvedValue(undefined)
+    vi.mocked(setCurrentVersion).mockResolvedValue(undefined)
+    vi.mocked(createBackup).mockResolvedValue({
+      success: true,
+      data: {
+        id: 'backup-1',
+        timestamp: '2026-03-01T00:00:00.000Z',
+        version: '0.2.3',
+        size: 1024,
+        fileCount: 4,
+        path: '/mock/backups/backup-1'
+      }
+    } as never)
+    vi.mocked(keepPreviousVersion).mockResolvedValue({
+      success: true,
+      data: {
+        version: '0.2.3',
+        path: '/mock/versions/v0.2.3',
+        size: 2048
+      }
+    } as never)
   })
 
   describe('checkForUpdates', () => {
@@ -108,6 +159,14 @@ describe('tauri-updater-api', () => {
       })
 
       expect(result).toEqual({ success: true, data: undefined })
+      expect(createBackup).toHaveBeenCalledTimes(1)
+      expect(keepPreviousVersion).toHaveBeenCalledWith('0.2.3')
+      expect(vi.mocked(createBackup).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(update.downloadAndInstall).mock.invocationCallOrder[0]
+      )
+      expect(vi.mocked(keepPreviousVersion).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(update.downloadAndInstall).mock.invocationCallOrder[0]
+      )
       expect(progressEvents[0]).toBe(0)
       expect(progressEvents).toContain(40)
       expect(progressEvents).toContain(100)
@@ -133,6 +192,28 @@ describe('tauri-updater-api', () => {
         success: false,
         error: 'download failed',
         code: 'DOWNLOAD_FAILED'
+      })
+    })
+
+    it('returns DISK_SPACE_INSUFFICIENT when backup preparation fails', async () => {
+      const update = createMockUpdate('2.0.3')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(createBackup).mockResolvedValue({
+        success: false,
+        error: 'disk full',
+        code: 'DISK_SPACE_ERROR'
+      } as never)
+
+      const result = await downloadUpdate()
+
+      expect(update.downloadAndInstall).not.toHaveBeenCalled()
+      expect(keepPreviousVersion).not.toHaveBeenCalled()
+      expect(result).toEqual({
+        success: false,
+        error: 'disk full',
+        code: 'DISK_SPACE_INSUFFICIENT'
       })
     })
   })
@@ -225,13 +306,30 @@ describe('tauri-updater-api', () => {
       expect(isUpdateAvailable(createMockUpdate('1.0.0') as never)).toBe(true)
     })
 
-    it('registerUpdateEventHandlers returns cleanup function', () => {
+    it('registerUpdateEventHandlers initializes recovery metadata and returns cleanup', async () => {
       const cleanup = registerUpdateEventHandlers({
         onError: vi.fn()
       })
 
+      await flushPromises()
+
+      expect(getVersion).toHaveBeenCalledTimes(1)
+      expect(setAppVersion).toHaveBeenCalledWith('0.2.3')
+      expect(setCurrentVersion).toHaveBeenCalledWith('0.2.3')
       expect(typeof cleanup).toBe('function')
       expect(() => cleanup()).not.toThrow()
+    })
+
+    it('registerUpdateEventHandlers reports initialization errors via onError', async () => {
+      const onError = vi.fn()
+      vi.mocked(getVersion).mockRejectedValue(new Error('app unavailable'))
+
+      registerUpdateEventHandlers({ onError })
+      await flushPromises()
+
+      expect(onError).toHaveBeenCalledWith(
+        'Failed to initialize updater recovery metadata: app unavailable'
+      )
     })
   })
 })

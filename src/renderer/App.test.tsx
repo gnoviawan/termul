@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { render, waitFor } from '@testing-library/react'
 import App from './App'
+import { useUpdaterStore } from '@/stores/updater-store'
+
+const mockCheckForUpdates = vi.fn(async () => {})
+const mockInitializeUpdater = vi.fn(async () => {})
+const mockStopPeriodicChecks = vi.fn(() => {})
 
 // Mock window.api for hooks that use it
 const mockApi = {
@@ -58,7 +62,25 @@ const mockApi = {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.stubGlobal('api', mockApi)
+  useUpdaterStore.setState({
+    updateAvailable: false,
+    version: null,
+    downloaded: false,
+    downloadProgress: 0,
+    skippedVersion: null,
+    isChecking: false,
+    isDownloading: false,
+    error: null,
+    lastChecked: null,
+    autoUpdateEnabled: true,
+    releaseNotes: null,
+    hasActiveTerminals: false,
+    checkForUpdates: mockCheckForUpdates,
+    initializeUpdater: mockInitializeUpdater,
+    stopPeriodicChecks: mockStopPeriodicChecks
+  })
 })
 
 afterEach(() => {
@@ -88,26 +110,44 @@ describe('App Routes', () => {
 })
 
 describe('App Updater Integration', () => {
-  it('should register updater event listeners on mount', () => {
+  it('should not depend on legacy updater event listeners on mount', () => {
     render(<App />)
-    // useUpdateCheck mounts globally and registers IPC listeners
-    expect(mockApi.updater.onUpdateAvailable).toHaveBeenCalled()
-    expect(mockApi.updater.onUpdateDownloaded).toHaveBeenCalled()
-    expect(mockApi.updater.onDownloadProgress).toHaveBeenCalled()
-    expect(mockApi.updater.onError).toHaveBeenCalled()
+    // The current updater flow bootstraps from persisted state instead of
+    // wiring Electron-only event listeners during mount.
+    expect(mockApi.updater.onUpdateAvailable).not.toHaveBeenCalled()
+    expect(mockApi.updater.onUpdateDownloaded).not.toHaveBeenCalled()
+    expect(mockApi.updater.onDownloadProgress).not.toHaveBeenCalled()
+    expect(mockApi.updater.onError).not.toHaveBeenCalled()
   })
 
-  it('should initialize updater state from main process', () => {
+  it('should initialize updater through the Tauri store hooks on mount', async () => {
     render(<App />)
-    expect(mockApi.updater.getState).toHaveBeenCalled()
-    expect(mockApi.updater.getAutoUpdateEnabled).toHaveBeenCalled()
-  })
 
-  it('should auto-check for updates on mount', async () => {
-    render(<App />)
-    // After initialization completes, auto-check triggers
-    await vi.waitFor(() => {
-      expect(mockApi.updater.checkForUpdates).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: false })
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: true })
     })
+  })
+
+  it('should delegate startup auto-check through updater initialization', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: true })
+    })
+
+    expect(mockCheckForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('should stop updater periodic checks when the app unmounts', async () => {
+    const { unmount } = render(<App />)
+
+    await waitFor(() => {
+      expect(mockInitializeUpdater).toHaveBeenCalled()
+    })
+
+    unmount()
+
+    expect(mockStopPeriodicChecks).toHaveBeenCalledTimes(1)
   })
 })
