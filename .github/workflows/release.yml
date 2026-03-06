@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if [[ "$TAG" =~ (alpha|beta|rc) ]]; then
+          if [[ "$TAG" =~ (-[0-9A-Za-z]+|alpha|beta|rc) ]]; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"

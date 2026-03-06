@@ -147,6 +147,8 @@ docs/electron-old/  # Archived Electron docs and migration history
 
 ### Running Locally
 
+> **Prerequisite:** Before running `npm run dev`, install the Rust toolchain (`rustup`, `rustc`, and `cargo`) plus any platform-specific Tauri dependencies listed in the README [Prerequisites](README.md#prerequisites) section.
+
 ```bash
 # Install dependencies
 npm install
@@ -162,6 +164,8 @@ npm run build
 ```
 
 ### Platform Builds
+
+> **Prerequisite:** Platform-specific Tauri builds require the Rust toolchain, the required compilation targets, and the OS dependencies documented in the README [Prerequisites](README.md#prerequisites) section.
 
 ```bash
 npm run build:tauri:win        # Windows (x64)

@@ -161,7 +161,7 @@ For archived migration history, see [Electron to Tauri Migration Status](docs/el
 - **Tailwind CSS** - Styling
 - **shadcn/ui** - UI components
 - **Zustand** - State management
-- **tauri-plugin-pty** - Terminal emulation
+- **tauri-pty** - Terminal emulation
 - **xterm.js** - Terminal rendering
 - **Framer Motion** - Animations
 
@@ -204,7 +204,7 @@ npm run build:tauri:debug
 
 ### Project Structure
 
-```
+```text
 src/
 ├── renderer/       # React frontend used by the Tauri app
 │   ├── components/ # UI components
@@ -221,7 +221,7 @@ docs/electron-old/  # Archived Electron docs and migration history
 
 The renderer keeps an adapter/service layer so desktop integrations stay isolated from UI code:
 
-```
+```text
 src/renderer/lib/
 ├── tauri-*.ts    # Tauri-native integrations
 ├── *.ts          # Runtime-safe facades and helpers
