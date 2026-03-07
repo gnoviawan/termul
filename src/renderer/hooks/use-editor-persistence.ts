@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editor-store'
+import { persistenceApi } from '@/lib/api'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -249,7 +250,7 @@ export function useEditorPersistence(projectId: string): void {
         useEditorStore.getState().clearAllFiles()
 
         // Read new project's persisted state
-        const result = await window.api.persistence.read<PersistedEditorState>(
+        const result = await persistenceApi.read<PersistedEditorState>(
           editorStateKey(projectId)
         )
 
@@ -422,5 +423,5 @@ export function persistState(projectId: string): void {
     activePaneId: workspaceState.activePaneId
   }
 
-  window.api.persistence.writeDebounced(editorStateKey(projectId), data)
+  persistenceApi.writeDebounced(editorStateKey(projectId), data)
 }

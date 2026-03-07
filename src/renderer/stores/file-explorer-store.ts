@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { filesystemApi } from '@/lib/api'
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/')
@@ -51,7 +52,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     // Unwatch all previously expanded directories
     const { expandedDirs } = get()
     expandedDirs.forEach((dir) => {
-      window.api.filesystem.unwatchDirectory(dir)
+      filesystemApi.unwatchDirectory(dir)
     })
     set({
       rootPath: path ? normalizePath(path) : null,
@@ -95,7 +96,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
       // Unwatch collapsed directories (fire-and-forget)
       for (const dir of dirsToUnwatch) {
-        window.api.filesystem.unwatchDirectory(dir)
+        filesystemApi.unwatchDirectory(dir)
       }
     } else {
       // Prevent duplicate expand work if already loading
@@ -107,7 +108,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       set({ loadingDirs: newLoading })
 
       try {
-        const result = await window.api.filesystem.readDirectory(normalized)
+        const result = await filesystemApi.readDirectory(normalized)
         if (result.success) {
           const { expandedDirs: currentExpanded, directoryContents: currentContents } = get()
           const newExpanded = new Set(currentExpanded)
@@ -122,7 +123,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
           })
 
           // Watch this directory for changes (fire-and-forget)
-          window.api.filesystem.watchDirectory(normalized)
+          filesystemApi.watchDirectory(normalized)
         } else if (isRootLoad) {
           set({
             rootLoadError: {
@@ -152,7 +153,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   refreshDirectory: async (path: string): Promise<void> => {
     const normalized = normalizePath(path)
     try {
-      const result = await window.api.filesystem.readDirectory(normalized)
+      const result = await filesystemApi.readDirectory(normalized)
       if (result.success) {
         const { directoryContents, rootPath } = get()
         const newContents = new Map(directoryContents)
@@ -180,7 +181,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     // Unwatch all expanded dirs except root
     expandedDirs.forEach((dir) => {
       if (dir !== rootPath) {
-        window.api.filesystem.unwatchDirectory(dir)
+        filesystemApi.unwatchDirectory(dir)
       }
     })
     // Keep only root contents

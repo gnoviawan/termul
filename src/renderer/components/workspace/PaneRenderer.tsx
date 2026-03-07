@@ -13,7 +13,7 @@ interface PaneRendererProps {
   node: PaneNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -58,21 +58,13 @@ interface PaneLeafRendererProps {
   pane: LeafNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
 }
 
-function PaneLeafRenderer({
-  pane,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneLeafRendererProps): React.JSX.Element {
+const PaneLeafRenderer = memo(({ pane, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneLeafRendererProps): React.JSX.Element => {
   return (
     <PaneContent
       pane={pane}
@@ -84,27 +76,19 @@ function PaneLeafRenderer({
       defaultShell={defaultShell}
     />
   )
-}
+})
 
 interface PaneSplitRendererProps {
   node: SplitNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
 }
 
-function PaneSplitRenderer({
-  node,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneSplitRendererProps): React.JSX.Element {
+const PaneSplitRenderer = memo(({ node, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneSplitRendererProps): React.JSX.Element => {
   const updatePaneSizes = useWorkspaceStore((state) => state.updatePaneSizes)
   const pendingSizesRef = useRef<number[] | null>(null)
   const isDraggingRef = useRef(false)
@@ -166,7 +150,7 @@ function PaneSplitRenderer({
       ))}
     </ResizablePanelGroup>
   )
-}
+})
 
 interface PaneRendererPanelProps {
   child: PaneNode
@@ -176,25 +160,13 @@ interface PaneRendererPanelProps {
   onDragging: (isDragging: boolean) => void
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
 }
 
-const PaneRendererPanel = memo(function PaneRendererPanel({
-  child,
-  panelOrder,
-  defaultSize,
-  isLast,
-  onDragging,
-  onNewTerminal,
-  onNewTerminalWithShell,
-  onCloseTerminal,
-  onRenameTerminal,
-  onCloseEditorTab,
-  defaultShell
-}: PaneRendererPanelProps): React.JSX.Element {
+const PaneRendererPanel = memo(({ child, panelOrder, defaultSize, isLast, onDragging, onNewTerminal, onNewTerminalWithShell, onCloseTerminal, onRenameTerminal, onCloseEditorTab, defaultShell }: PaneRendererPanelProps): React.JSX.Element => {
   return (
     <>
       <ResizablePanel

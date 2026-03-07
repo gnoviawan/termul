@@ -1,18 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import {
-  useSnapshotStore,
-  useSnapshots,
-  useSnapshotActions,
-  useSnapshotLoading
-} from './snapshot-store'
 import type { PersistedSnapshotList } from '../../shared/types/persistence.types'
 
-// Mock window.api.persistence
-const mockPersistence = {
-  read: vi.fn(),
-  write: vi.fn()
-}
+const { mockPersistence } = vi.hoisted(() => ({
+  mockPersistence: {
+    read: vi.fn(),
+    write: vi.fn()
+  }
+}))
+
+vi.mock('@/lib/api', () => ({
+  persistenceApi: mockPersistence
+}))
 
 // Mock the project store
 vi.mock('./project-store', () => ({
@@ -22,6 +21,13 @@ vi.mock('./project-store', () => ({
   })
 }))
 
+import {
+  useSnapshotStore,
+  useSnapshots,
+  useSnapshotActions,
+  useSnapshotLoading
+} from './snapshot-store'
+
 beforeEach(() => {
   // Reset the store state before each test
   const { result } = renderHook(() => useSnapshotStore.getState())
@@ -29,13 +35,8 @@ beforeEach(() => {
     result.current.clearSnapshots()
   })
 
-  // Setup window.api mock
-  ;(window as unknown as { api: { persistence: typeof mockPersistence } }).api = {
-    persistence: mockPersistence
-  }
-
-  // Reset mocks
-  vi.clearAllMocks()
+  mockPersistence.read.mockReset()
+  mockPersistence.write.mockReset()
 })
 
 describe('snapshot-store', () => {

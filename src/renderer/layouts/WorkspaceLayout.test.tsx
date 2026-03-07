@@ -81,8 +81,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => ({
       commandHistory: { customKey: 'Ctrl+R', defaultKey: 'Ctrl+R' },
       newProject: { customKey: 'Ctrl+N', defaultKey: 'Ctrl+N' },
       newTerminal: { customKey: 'Ctrl+T', defaultKey: 'Ctrl+T' },
-      nextTerminal: { customKey: 'Ctrl+Tab', defaultKey: 'Ctrl+Tab' },
-      prevTerminal: { customKey: 'Ctrl+Shift+Tab', defaultKey: 'Ctrl+Shift+Tab' },
+      nextTerminal: { customKey: 'Ctrl+PageDown', defaultKey: 'Ctrl+PageDown' },
+      prevTerminal: { customKey: 'Ctrl+PageUp', defaultKey: 'Ctrl+PageUp' },
       zoomIn: { customKey: 'Ctrl+=', defaultKey: 'Ctrl+=' },
       zoomOut: { customKey: 'Ctrl+-', defaultKey: 'Ctrl+-' },
       zoomReset: { customKey: 'Ctrl+0', defaultKey: 'Ctrl+0' }
@@ -113,50 +113,119 @@ vi.mock('@/hooks/use-app-settings', () => ({
   useUpdateAppSetting: vi.fn(() => vi.fn())
 }))
 
-// Mock window.api
-const mockApi = {
-  keyboard: {
-    onShortcut: vi.fn(() => vi.fn())
-  },
-  shell: {
-    getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
-  },
-  terminal: {
-    getGitBranch: vi.fn().mockResolvedValue({ success: true, data: 'main' }),
-    getGitStatus: vi.fn().mockResolvedValue({ success: true, data: { hasChanges: false } }),
-    onData: vi.fn(() => vi.fn()),
-    onTitleChange: vi.fn(() => vi.fn()),
-    onExit: vi.fn(() => vi.fn()),
-    spawn: vi.fn().mockResolvedValue({ success: true, data: 'mock-pty-id' }),
-    resize: vi.fn().mockResolvedValue({ success: true }),
-    kill: vi.fn().mockResolvedValue({ success: true }),
-    write: vi.fn().mockResolvedValue({ success: true })
-  },
-  filesystem: {
-    onFileChanged: vi.fn(() => vi.fn()),
-    onFileCreated: vi.fn(() => vi.fn()),
-    onFileDeleted: vi.fn(() => vi.fn()),
-    watchDirectory: vi.fn().mockResolvedValue({ success: true }),
-    unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
-    readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
-  },
-  system: {
-    getHomeDirectory: vi.fn().mockResolvedValue({ success: true, data: '/home/user' }),
-    getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: [] })
-  },
-  persistence: {
-    writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
-    read: vi.fn(() => Promise.resolve({ success: true, data: null }))
-  },
-  window: {
-    minimize: vi.fn(),
-    toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
-    close: vi.fn(),
-    onMaximizeChange: vi.fn(() => vi.fn()),
-    onCloseRequested: vi.fn(() => vi.fn()),
-    respondToClose: vi.fn()
+vi.mock('@/hooks/use-file-watcher', () => ({
+  useFileWatcher: vi.fn()
+}))
+
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
+}))
+
+vi.mock('@/components/file-explorer/FileExplorer', () => ({
+  FileExplorer: () => <div data-testid="file-explorer" />
+}))
+
+// Mock the active Tauri API seam used by WorkspaceLayout and nested components.
+const { mockApi } = vi.hoisted(() => ({
+  mockApi: {
+    keyboard: {
+      onShortcut: vi.fn(() => vi.fn())
+    },
+    shell: {
+      getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
+    },
+    terminal: {
+      getGitBranch: vi.fn().mockResolvedValue({ success: true, data: 'main' }),
+      getGitStatus: vi.fn().mockResolvedValue({ success: true, data: { hasChanges: false } }),
+      onData: vi.fn(() => vi.fn()),
+      onTitleChange: vi.fn(() => vi.fn()),
+      onExit: vi.fn(() => vi.fn()),
+      spawn: vi.fn().mockResolvedValue({ success: true, data: 'mock-pty-id' }),
+      resize: vi.fn().mockResolvedValue({ success: true }),
+      kill: vi.fn().mockResolvedValue({ success: true }),
+      write: vi.fn().mockResolvedValue({ success: true })
+    },
+    filesystem: {
+      onFileChanged: vi.fn(() => vi.fn()),
+      onFileCreated: vi.fn(() => vi.fn()),
+      onFileDeleted: vi.fn(() => vi.fn()),
+      watchDirectory: vi.fn().mockResolvedValue({ success: true }),
+      unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
+      readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
+    },
+    system: {
+      getHomeDirectory: vi.fn().mockResolvedValue({ success: true, data: '/home/user' }),
+      getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: [] })
+    },
+    persistence: {
+      writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+      read: vi.fn(() => Promise.resolve({ success: true, data: null })),
+      write: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+      delete: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+    },
+    window: {
+      minimize: vi.fn(),
+      toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
+      close: vi.fn(),
+      onMaximizeChange: vi.fn(() => vi.fn()),
+      onCloseRequested: vi.fn(() => vi.fn()),
+      respondToClose: vi.fn()
+    },
+    clipboard: {
+      readText: vi.fn().mockResolvedValue({ success: true, data: '' }),
+      writeText: vi.fn().mockResolvedValue({ success: true })
+    },
+    dialog: {
+      selectDirectory: vi.fn(),
+      selectFile: vi.fn(),
+      saveFile: vi.fn(),
+      showConfirm: vi.fn(),
+      showMessage: vi.fn()
+    },
+    visibility: {
+      setVisibilityState: vi.fn()
+    },
+    session: {
+      save: vi.fn(),
+      restore: vi.fn(),
+      clear: vi.fn(),
+      flush: vi.fn(),
+      hasSession: vi.fn()
+    },
+    dataMigration: {
+      getVersion: vi.fn(),
+      getSchemaInfo: vi.fn(),
+      getHistory: vi.fn(),
+      getRegistered: vi.fn(),
+      runMigration: vi.fn(),
+      rollback: vi.fn()
+    },
+    addRendererRef: vi.fn(),
+    removeRendererRef: vi.fn(),
+    hasActiveTerminalSessions: vi.fn()
   }
-}
+}))
+
+vi.mock('@/lib/api', () => ({
+  keyboardApi: mockApi.keyboard,
+  shellApi: mockApi.shell,
+  terminalApi: mockApi.terminal,
+  filesystemApi: mockApi.filesystem,
+  systemApi: mockApi.system,
+  persistenceApi: mockApi.persistence,
+  windowApi: mockApi.window,
+  clipboardApi: mockApi.clipboard,
+  dialogApi: mockApi.dialog,
+  visibilityApi: mockApi.visibility,
+  sessionApi: mockApi.session,
+  dataMigrationApi: mockApi.dataMigration,
+  addRendererRef: mockApi.addRendererRef,
+  removeRendererRef: mockApi.removeRendererRef,
+  hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
+  tauriUpdaterApi: {},
+  tauriVersionSkipService: {}
+}))
 
 beforeEach(() => {
   vi.stubGlobal('api', mockApi)

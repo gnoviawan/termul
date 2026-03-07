@@ -28,6 +28,9 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
+import { terminalApi, systemApi } from '@/lib/api'
+import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
@@ -48,6 +51,7 @@ export interface ConnectedTerminalProps {
   terminalId?: string
   spawnOptions?: TerminalSpawnOptions
   onSpawned?: (terminalId: string) => void
+  autoSpawn?: boolean
   onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
   onError?: (error: string) => void
@@ -63,6 +67,7 @@ function ConnectedTerminalComponent({
   terminalId: externalTerminalId,
   spawnOptions,
   onSpawned,
+  autoSpawn = true,
   onExit,
   onError,
   onCommand,
@@ -73,6 +78,10 @@ function ConnectedTerminalComponent({
   searchRef,
   isVisible = true
 }: ConnectedTerminalProps): React.JSX.Element {
+  // DEBUG: Unique instance ID for tracking
+  const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`)
+  const instanceId = instanceIdRef.current
+
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -98,6 +107,9 @@ function ConnectedTerminalComponent({
   const cleanupExitListenerRef = useRef<(() => void) | null>(null)
   // Use ref to track current PTY ID for listener callbacks to avoid stale closures
   const ptyIdRef = useRef<string | null>(null)
+  const spawnInFlightRef = useRef(false)
+  const didInitRef = useRef(false)
+  const initializedTerminalIdRef = useRef<string | undefined>(undefined)
   // Use refs for callbacks to avoid dependency changes
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
@@ -107,6 +119,9 @@ function ConnectedTerminalComponent({
   onBoundToStoreTerminalRef.current = onBoundToStoreTerminal
   // Track current input line for command history
   const currentLineRef = useRef<string>('')
+  // Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
+  const terminalInitializedForRef = useRef<string | undefined>(undefined)
+  const needsResizeOnReadyRef = useRef<boolean>(false)
   // Resize debounce timer ref
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Activity timeout timer ref
@@ -175,7 +190,7 @@ function ConnectedTerminalComponent({
       }
 
       try {
-        const result = await window.api.terminal.write(ptyId, data)
+        const result = await terminalApi.write(ptyId, data)
         if (!result.success && onError) {
           onError(result.error)
         }
@@ -204,7 +219,7 @@ function ConnectedTerminalComponent({
       if (!currentPtyId) return
 
       try {
-        await window.api.terminal.resize(currentPtyId, cols, rows)
+        await terminalApi.resize(currentPtyId, cols, rows)
       } catch {
         // Ignore resize errors during rapid resize
       }
@@ -249,15 +264,55 @@ function ConnectedTerminalComponent({
       writeText: (text: string) => {
         const ptyId = ptyIdRef.current
         if (!ptyId) return
-        window.api.terminal.write(ptyId, text)
+        terminalApi.write(ptyId, text)
       }
     }),
     []
   )
 
+  const shouldDebugLog = import.meta.env.DEV
+  const devLog = (...args: unknown[]): void => {
+    if (shouldDebugLog) {
+      console.log(...args)
+    }
+  }
+
   // Initialize terminal, set up IPC listeners, and spawn PTY
   useEffect(() => {
-    if (!containerRef.current) return
+    const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`
+
+    devLog(`[ConnectedTerminal] MOUNT [${debugId}]`, {
+      instanceId,
+      externalTerminalId,
+      autoSpawn,
+      spawnOptions,
+      isVisible
+    })
+
+    if (!containerRef.current) {
+      devLog(`[ConnectedTerminal] SKIP [${debugId}]: no container`)
+      return
+    }
+
+    // Check if we're initializing a new terminal (different from previous)
+    const terminalKey = externalTerminalId ?? 'new'
+    devLog(`[ConnectedTerminal] terminalKey check [${debugId}]`, {
+      terminalKey,
+      didInit: didInitRef.current,
+      initializedKey: initializedTerminalIdRef.current,
+      willSkip: didInitRef.current && initializedTerminalIdRef.current === terminalKey
+    })
+
+    if (didInitRef.current && initializedTerminalIdRef.current === terminalKey) {
+      devLog(`[ConnectedTerminal] SKIP [${debugId}]: already initialized for ${terminalKey}`)
+      return
+    }
+
+    // Reset init state for new terminal
+    didInitRef.current = true
+    initializedTerminalIdRef.current = terminalKey
+
+    devLog(`[ConnectedTerminal] INITIALIZING [${debugId}] for key: ${terminalKey}`)
 
     // Merge platform-aware options with dynamic app settings
     const terminalOptions = {
@@ -389,7 +444,18 @@ function ConnectedTerminalComponent({
     // Store reference for recovery handlers to use
     loadWebglAddonRef.current = loadWebglAddon
 
-    fitAddon.fit()
+    // Defer initial fit to next animation frame so the WebGL renderer has time
+    // to fully initialize its internal _renderer.value before we call dimensions.
+    // Calling fit() synchronously after loadWebglAddon() causes an uncaught
+    // "Cannot read properties of undefined (reading 'dimensions')" from xterm.
+    requestAnimationFrame(() => {
+      if (!fitAddonRef.current) return
+      try {
+        fitAddonRef.current.fit()
+      } catch {
+        // Ignore fit errors on initial mount if container is 0x0
+      }
+    })
 
     if (autoFocus) {
       terminal.focus()
@@ -418,7 +484,7 @@ function ConnectedTerminalComponent({
     // Set up IPC listeners BEFORE spawning to avoid missing data
     // Cache ptyId -> terminalId mapping to avoid repeated store lookups
     let cachedTerminalId: string | null = null
-    cleanupDataListenerRef.current = window.api.terminal.onData((id: string, data: string) => {
+    cleanupDataListenerRef.current = terminalApi.onData((id: string, data: string) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
         // Resolve terminal record ID (cached to avoid linear scan)
@@ -466,7 +532,7 @@ function ConnectedTerminalComponent({
       }
     })
 
-    cleanupExitListenerRef.current = window.api.terminal.onExit(
+    cleanupExitListenerRef.current = terminalApi.onExit(
       (id: string, exitCode: number, signal?: number) => {
         if (id === ptyIdRef.current && onExitRef.current) {
           onExitRef.current(exitCode, signal)
@@ -474,27 +540,74 @@ function ConnectedTerminalComponent({
       }
     )
 
-    // Spawn terminal if no external ID provided
+    // Spawn terminal if no external ID provided and auto-spawn enabled
     const initTerminal = async (): Promise<void> => {
+      const spawnDebugId = `${instanceId}-spawn-${Date.now().toString().slice(-6)}`
+
+      devLog(`[ConnectedTerminal.initTerminal] START [${spawnDebugId}]`, {
+        externalTerminalId,
+        autoSpawn,
+        spawnInFlight: spawnInFlightRef.current,
+        hasPtyId: !!ptyIdRef.current
+      })
+
       // Fit to get real dimensions BEFORE spawning
       try {
         fitAddon.fit()
       } catch {
         // Ignore fit errors if container not properly laid out yet
       }
-      const spawnCols = terminal.cols
-      const spawnRows = terminal.rows
+      const spawnCols = terminal.cols || 80
+      const spawnRows = terminal.rows || 24
 
       if (!externalTerminalId) {
+        if (!autoSpawn) {
+          devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: autoSpawn is false`)
+          return
+        }
+        if (spawnInFlightRef.current || ptyIdRef.current) {
+          devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: already spawning or has PTY`)
+          return
+        }
+      } else if (isTerminalPendingPtyAssignment(externalTerminalId)) {
+        devLog(`SKIP autoSpawn: terminal ${externalTerminalId} pending PTY assignment from restore`)
+        return
+      }
+
+      if (!externalTerminalId) {
+
+        spawnInFlightRef.current = true
+        devLog(`[ConnectedTerminal.initTerminal] SPAWNING [${spawnDebugId}]`, {
+          cols: spawnCols,
+          rows: spawnRows,
+          spawnOpts: memoizedSpawnOptions
+        })
+
         try {
-          const result = await window.api.terminal.spawn({
+          const spawnOpts = {
             ...memoizedSpawnOptions,
+            // Ensure empty shell string is treated as undefined so Rust uses default
+            shell: memoizedSpawnOptions?.shell || undefined,
             cols: spawnCols,
             rows: spawnRows
+          }
+          const result = await terminalApi.spawn(spawnOpts)
+          devLog(`[ConnectedTerminal.initTerminal] SPAWN RESULT [${spawnDebugId}]`, {
+            success: result.success,
+            error: result.success ? undefined : result.error,
+            ptyId: result.success ? result.data.id : 'FAILED'
           })
+
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
+            void addRendererRef(result.data.id, instanceIdRef.current)
+            // If tab was visible before PTY was ready, flush deferred fit+resize now
+            if (needsResizeOnReadyRef.current) {
+              needsResizeOnReadyRef.current = false
+              try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+              terminalApi.resize(result.data.id, terminal.cols, terminal.rows).catch(() => { })
+            }
             // Register terminal for scrollback persistence
             registerTerminal(result.data.id, terminal)
             // Restore scrollback if provided
@@ -509,16 +622,26 @@ function ConnectedTerminalComponent({
             if (onBoundToStoreTerminalRef.current) {
               onBoundToStoreTerminalRef.current(result.data.id)
             }
-          } else if (onError) {
-            onError(result.error)
+          } else {
+            const errorMsg = result.error || 'Unknown spawn error'
+            console.error('[Terminal Spawn Failed]', errorMsg)
+            terminal.write(`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`)
+            if (onError) onError(errorMsg)
           }
         } catch (err) {
-          if (onError) {
-            onError(err instanceof Error ? err.message : 'Spawn failed')
-          }
+          const errorMsg = err instanceof Error ? err.message : 'Spawn failed'
+          console.error('[Terminal Spawn Exception]', errorMsg)
+          terminal.write(`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`)
+          if (onError) onError(errorMsg)
+        } finally {
+          spawnInFlightRef.current = false
         }
       } else {
         // External terminal ID provided - register and restore scrollback
+        devLog(`[ConnectedTerminal.initTerminal] EXTERNAL PTY [${spawnDebugId}]`, {
+          externalTerminalId
+        })
+        void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
@@ -531,13 +654,20 @@ function ConnectedTerminalComponent({
       }
     }
 
+    devLog(`[ConnectedTerminal] Calling initTerminal [${debugId}]`)
     initTerminal()
 
     return () => {
+      devLog(`[ConnectedTerminal] UNMOUNT [${debugId}]`, {
+        instanceId,
+        ptyId: ptyIdRef.current,
+        externalTerminalId
+      })
       // Capture scroll position BEFORE unregistering for pane transitions
       const terminalId = ptyIdRef.current || externalTerminalId
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
+        void removeRendererRef(terminalId, instanceIdRef.current)
       }
 
       // Unregister terminal from registry
@@ -599,20 +729,17 @@ function ConnectedTerminalComponent({
       fitAddonRef.current = null
       searchAddonRef.current = null
       ptyIdRef.current = null
+      spawnInFlightRef.current = false
+      // Reset init flag so a new terminal can be created if component remounts
+      didInitRef.current = false
+      initializedTerminalIdRef.current = undefined
       // Reset WebGL recovery state for next terminal creation
       webglRecoveryAttemptsRef.current = 0
       webglContextLostRef.current = false
       loadWebglAddonRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontFamily and fontSize handled by separate effect
-  }, [
-    onSpawned,
-    onError,
-    autoFocus,
-    handleTerminalData,
-    handleResize,
-    bufferSize
-  ])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Update terminal font settings when app settings change (without recreating terminal)
   useEffect(() => {
@@ -635,8 +762,6 @@ function ConnectedTerminalComponent({
   useEffect(() => {
     if (isVisible && fitAddonRef.current && terminalRef.current) {
       // Double RAF ensures DOM is fully rendered after pane transition
-      // First RAF waits for current frame to complete
-      // Second RAF waits for next frame when layout is settled
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           try {
@@ -647,15 +772,35 @@ function ConnectedTerminalComponent({
 
           const terminal = terminalRef.current
           const ptyId = ptyIdRef.current
-          if (terminal && ptyId) {
-            // Restore scroll position after fit (in case of pane transition)
-            restoreScrollPosition(ptyId, terminal)
+          if (terminal) {
+            // Only focus if no interactive element (button, input, etc.) currently has focus.
+            // This prevents stealing focus from TitleBar window controls when tab switch happens.
+            const active = document.activeElement
+            const isInteractiveElementFocused =
+              active &&
+              active !== document.body &&
+              (active.tagName === 'BUTTON' ||
+                active.tagName === 'INPUT' ||
+                active.tagName === 'TEXTAREA' ||
+                active.tagName === 'SELECT' ||
+                active.tagName === 'A')
+            if (!isInteractiveElementFocused) {
+              terminal.focus()
+            }
 
-            const resizePromise = window.api.terminal.resize(ptyId, terminal.cols, terminal.rows)
-            if (resizePromise && typeof resizePromise.catch === 'function') {
-              resizePromise.catch(() => {
-                // Ignore resize errors when toggling visibility
-              })
+            if (ptyId) {
+              // Restore scroll position after fit (in case of pane transition)
+              restoreScrollPosition(ptyId, terminal)
+
+              const resizePromise = terminalApi.resize(ptyId, terminal.cols, terminal.rows)
+              if (resizePromise && typeof resizePromise.catch === 'function') {
+                resizePromise.catch(() => {
+                  // Ignore resize errors when toggling visibility
+                })
+              }
+            } else {
+              // PTY not ready yet — defer resize until spawn completes
+              needsResizeOnReadyRef.current = true
             }
           }
         })
@@ -697,7 +842,7 @@ function ConnectedTerminalComponent({
     const terminal = terminalRef.current
     const ptyId = ptyIdRef.current
     if (terminal && ptyId) {
-      window.api.terminal.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
+      terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
         // Ignore resize errors - terminal may have been killed
       })
     }
@@ -735,7 +880,7 @@ function ConnectedTerminalComponent({
     // Track timeout to prevent firing after unmount
     let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null
 
-    const cleanup = window.api.system.onPowerResume(() => {
+    const cleanup = systemApi.onPowerResume(() => {
       // Clear any pending timeout before scheduling new one
       if (recoveryTimeoutId) {
         clearTimeout(recoveryTimeoutId)
@@ -780,6 +925,14 @@ function ConnectedTerminalComponent({
           className={`w-full h-full ${className}`}
           style={{ padding: '8px' }}
           onClick={handleContainerClick}
+          onMouseDown={(e) => {
+            // Prevent event from bubbling to window/parent handlers
+            // that might steal focus back or interfere with UI
+            e.stopPropagation()
+            if (terminalRef.current) {
+              terminalRef.current.focus()
+            }
+          }}
         />
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">

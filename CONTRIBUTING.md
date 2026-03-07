@@ -115,16 +115,14 @@ docs: update installation instructions
 
 ```
 src/
-├── main/           # Electron main process
-│   ├── ipc/        # IPC handlers
-│   └── services/   # Backend services
-├── preload/        # Preload scripts
 ├── renderer/       # React frontend
 │   ├── components/ # UI components
 │   ├── hooks/      # Custom hooks
 │   ├── pages/      # Page components
 │   └── stores/     # Zustand stores
-└── shared/         # Shared types
+├── shared/         # Shared types
+src-tauri/          # Tauri Rust code, configuration, and bundling
+docs/electron-old/  # Archived Electron docs and migration history
 ```
 
 ### Testing
@@ -149,11 +147,13 @@ src/
 
 ### Running Locally
 
+> **Prerequisite:** Before running `npm run dev`, install the Rust toolchain (`rustup`, `rustc`, and `cargo`) plus any platform-specific Tauri dependencies listed in the README [Prerequisites](README.md#prerequisites) section.
+
 ```bash
 # Install dependencies
 npm install
 
-# Start development server
+# Start the Tauri app in development mode
 npm run dev
 
 # Run tests
@@ -163,12 +163,15 @@ npm test
 npm run build
 ```
 
-### Building Installers
+### Platform Builds
+
+> **Prerequisite:** Platform-specific Tauri builds require the Rust toolchain, the required compilation targets, and the OS dependencies documented in the README [Prerequisites](README.md#prerequisites) section.
 
 ```bash
-npm run build:win    # Windows
-npm run build:mac    # macOS
-npm run build:linux  # Linux
+npm run build:tauri:win        # Windows (x64)
+npm run build:tauri:mac-arm    # macOS (Apple Silicon)
+npm run build:tauri:mac-x64    # macOS (Intel)
+npm run build:tauri:linux      # Linux (x64)
 ```
 
 ## Questions?

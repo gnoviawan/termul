@@ -40,7 +40,8 @@ import {
   usePaneRoot,
   editorTabId,
   getActiveTerminalIdFromTree,
-  getActiveFilePathFromTree
+  getActiveFilePathFromTree,
+  findPaneContainingTab
 } from '@/stores/workspace-store'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
@@ -49,6 +50,8 @@ import {
   useAddCommand,
   useCommandHistory
 } from '@/hooks/use-command-history'
+import type { KeyboardShortcutCallback } from '@shared/types/ipc.types'
+import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
   useTerminalFontSize,
@@ -67,7 +70,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
-  const [closeConfirmTerminalId, setCloseConfirmTerminalId] = useState<string | null>(null)
+  const [closeConfirmTerminal, setCloseConfirmTerminal] = useState<{
+    terminalId: string
+    tabId: string
+  } | null>(null)
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
@@ -124,10 +130,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
     async function applyProjectSwitch(): Promise<void> {
       try {
-        const watchResult = await window.api.filesystem.watchDirectory(nextRootPath)
+        const watchResult = await filesystemApi.watchDirectory(nextRootPath)
 
         if (cancelled || switchRequestId !== projectSwitchRequestIdRef.current) {
-          window.api.filesystem.unwatchDirectory(nextRootPath)
+          filesystemApi.unwatchDirectory(nextRootPath)
           return
         }
 
@@ -143,7 +149,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         useFileExplorerStore.getState().setRootPath(nextRootPath)
 
         if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-          window.api.filesystem.unwatchDirectory(previousWatchedRoot)
+          filesystemApi.unwatchDirectory(previousWatchedRoot)
         }
 
         watchedRootPathRef.current = nextRootPath
@@ -175,14 +181,36 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     return () => {
       if (watchedRootPathRef.current) {
-        window.api.filesystem.unwatchDirectory(watchedRootPathRef.current)
+        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
       }
     }
   }, [])
 
   // Sync terminal tabs with workspace store
+  // CRITICAL: Track sync calls to prevent loops
+  const syncCallCountRef = useRef(0)
+  const lastSyncTerminalsRef = useRef<string[]>([])
+
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id)
+
+    // Skip if terminals haven't actually changed (same IDs)
+    const prevIds = lastSyncTerminalsRef.current
+    if (terminalIds.length === prevIds.length &&
+        terminalIds.every((id, i) => id === prevIds[i])) {
+      return
+    }
+
+    const syncId = `sync-${syncCallCountRef.current++}-${Date.now().toString().slice(-6)}`
+
+    console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${syncId}]`, {
+      terminalCount: terminalIds.length,
+      terminalIds,
+      prevCount: prevIds.length,
+      callCount: syncCallCountRef.current
+    })
+
+    lastSyncTerminalsRef.current = terminalIds
     useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
   }, [terminals])
 
@@ -209,13 +237,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Intercept app close to check for unsaved files
   useEffect(() => {
-    return window.api.window.onCloseRequested(() => {
+    return windowApi.onCloseRequested(() => {
       const dirtyCount = useEditorStore.getState().getDirtyFileCount()
       if (dirtyCount > 0) {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        window.api.window.respondToClose('close')
+        windowApi.respondToClose('close')
       }
     })
   }, [])
@@ -306,7 +334,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             useWorkspaceStore.getState().removeTab(activeTab.id)
           }
         } else if (activeTab?.type === 'terminal') {
-          setCloseConfirmTerminalId(activeTab.terminalId)
+          setCloseConfirmTerminal({ terminalId: activeTab.terminalId, tabId: activeTab.id })
         }
         return
       }
@@ -378,13 +406,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
           toast.error(`Maximum ${maxTerminals} terminals per project`)
           return
         }
-        const shell = activeProject?.defaultShell || appDefaultShell || ''
-        const cwd = activeProject?.path
-        addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+        const paneId = useWorkspaceStore.getState().activePaneId
+        handleCreateTerminalInPane(paneId)
         return
       }
 
-      // Next terminal (Ctrl+Tab) - only on workspace routes
+      // Next terminal/tab (default: Ctrl+PageDown)
       if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
@@ -392,7 +419,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Previous terminal (Ctrl+Shift+Tab) - only on workspace routes
+      // Previous terminal/tab (default: Ctrl+PageUp)
       if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
         e.preventDefault()
         e.stopPropagation()
@@ -463,9 +490,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     activeTab
   ])
 
-  // Listen for keyboard shortcuts from main process (Ctrl+Tab, Ctrl+Shift+Tab, zoom shortcuts)
+  // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
-    return window.api.keyboard.onShortcut((shortcut) => {
+    return keyboardApi.onShortcut((shortcut) => {
       switch (shortcut) {
         case 'nextTerminal':
           cycleTab('next')
@@ -497,15 +524,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [cycleTab, fontSize, updateAppSetting])
 
   const handleCreateTerminalInPane = useCallback(
-    (paneId: string, shellName?: string) => {
+    async (paneId: string, shellName?: string) => {
       if (terminals.length >= maxTerminals) {
         toast.error(`Maximum ${maxTerminals} terminals per project`)
         return
       }
 
-      const shell = shellName ?? activeProject?.defaultShell ?? appDefaultShell ?? ''
+      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
       const cwd = activeProject?.path
+
+      const spawnResult = await terminalApi.spawn({ shell, cwd })
+      if (!spawnResult.success) {
+        toast.error(spawnResult.error || 'Failed to create terminal')
+        return
+      }
+
       const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
 
       useWorkspaceStore.getState().addTabToPane(paneId, {
         type: 'terminal',
@@ -521,30 +556,66 @@ export default function WorkspaceLayout(): React.JSX.Element {
     handleCreateTerminalInPane(paneId)
   }, [handleCreateTerminalInPane])
 
-  const handleCloseTerminal = useCallback((id: string) => {
-    setCloseConfirmTerminalId(id)
+  const handleCloseTerminal = useCallback((id: string, tabId: string) => {
+    setCloseConfirmTerminal({ terminalId: id, tabId })
   }, [])
 
+  const closeTerminalByRecordId = useCallback(
+    async (terminalRecordId: string) => {
+      const terminalToClose = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminalRecordId)
+
+      if (!terminalToClose) {
+        return
+      }
+
+      if (terminalToClose.ptyId) {
+        try {
+          await Promise.race([
+            terminalApi.kill(terminalToClose.ptyId),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
+          ])
+        } catch {
+          // Continue close flow even if PTY termination fails
+        }
+      }
+
+      closeTerminal(terminalRecordId, activeProjectId)
+    },
+    [activeProjectId, closeTerminal]
+  )
+
+  const closeTerminalTabByTabId = useCallback(
+    async (tabId: string) => {
+      const root = useWorkspaceStore.getState().root
+      const containingPane = findPaneContainingTab(root, tabId)
+      if (!containingPane) {
+        return
+      }
+
+      const tab = containingPane.tabs.find((t) => t.id === tabId)
+      if (!tab || tab.type !== 'terminal') {
+        return
+      }
+
+      await closeTerminalByRecordId(tab.terminalId)
+      useWorkspaceStore.getState().closeTab(containingPane.id, tabId)
+    },
+    [closeTerminalByRecordId]
+  )
+
   const handleConfirmCloseTerminal = useCallback(async () => {
-    if (!closeConfirmTerminalId) {
+    if (!closeConfirmTerminal) {
       return
     }
 
-    const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
-    if (terminalToClose?.ptyId) {
-      try {
-        await window.api.terminal.kill(terminalToClose.ptyId)
-      } catch {
-        // Continue close flow even if PTY termination fails
-      }
-    }
-
-    closeTerminal(closeConfirmTerminalId, activeProjectId)
-    setCloseConfirmTerminalId(null)
-  }, [closeTerminal, activeProjectId, closeConfirmTerminalId, terminals])
+    await closeTerminalTabByTabId(closeConfirmTerminal.tabId)
+    setCloseConfirmTerminal(null)
+  }, [closeConfirmTerminal, closeTerminalTabByTabId])
 
   const handleCancelCloseTerminal = useCallback(() => {
-    setCloseConfirmTerminalId(null)
+    setCloseConfirmTerminal(null)
   }, [])
 
   // Dirty file close handlers
@@ -592,17 +663,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
-    window.api.window.respondToClose('close')
+    windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])
 
   const handleDiscardAllAndClose = useCallback(() => {
-    window.api.window.respondToClose('close')
+    windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])
 
   const handleCancelAppClose = useCallback(() => {
-    window.api.window.respondToClose('cancel')
+    windowApi.respondToClose('cancel')
     setIsAppCloseDialogOpen(false)
   }, [])
 
@@ -610,11 +681,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleInsertCommand = useCallback((command: string) => {
     // TODO: Route to active terminal pane via context
     if (activeTerminal?.ptyId) {
-      window.api.terminal.write(activeTerminal.ptyId, command)
+      terminalApi.write(activeTerminal.ptyId, command)
     }
   }, [activeTerminal])
 
-  const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminalId)
+  const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminal?.terminalId)
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
@@ -633,97 +704,97 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <TitleBar />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-      {/* Sidebar */}
-      {isSidebarVisible && (
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={selectProject}
-        onNewProject={() => setIsNewProjectModalOpen(true)}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-      />
-      )}
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {projects.length === 0 ? (
-          /* No Projects Empty State */
-          <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.4, ease: 'easeOut' }}
-              className="flex flex-col items-center text-center max-w-md"
-            >
-              <div className="mb-6">
-                <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-              </div>
-              <h2 className="text-xl font-semibold text-foreground mb-2">
-                No Projects Yet
-              </h2>
-              <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                Create your first project to organize your terminals, snapshots, and commands
-              </p>
-              <button
-                onClick={() => setIsNewProjectModalOpen(true)}
-                className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-              >
-                Create Your First Project
-              </button>
-            </motion.div>
-          </div>
-        ) : (
-          <>
-            {isWorkspaceRoute ? (
-              <div className="flex-1 flex min-h-0">
-                <PaneDndProvider>
-                  <ResizablePanelGroup direction="horizontal">
-                    {/* Center Panel: Pane Tree */}
-                    <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
-                      <PaneRenderer
-                        node={paneRoot}
-                        onNewTerminal={(paneId) => {
-                          handleCreateTerminalInPane(paneId)
-                        }}
-                        onNewTerminalWithShell={(paneId, shell) => {
-                          handleCreateTerminalInPane(paneId, shell.name)
-                        }}
-                        onCloseTerminal={handleCloseTerminal}
-                        onRenameTerminal={renameTerminal}
-                        onCloseEditorTab={handleCloseEditorTab}
-                        defaultShell={activeProject?.defaultShell || appDefaultShell}
-                      />
-                    </ResizablePanel>
-
-                    {/* File Explorer Panel (Right, full height) */}
-                    {isExplorerVisible && (
-                      <>
-                        <ResizableHandle />
-                        <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
-                          <FileExplorer />
-                        </ResizablePanel>
-                      </>
-                    )}
-                  </ResizablePanelGroup>
-                </PaneDndProvider>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-hidden bg-terminal-bg relative">
-                <div className="w-full h-full">
-                  <Outlet />
-                </div>
-              </div>
-            )}
-
-            {/* Status Bar */}
-            <StatusBar project={activeProject} />
-          </>
+        {/* Sidebar */}
+        {isSidebarVisible && (
+          <ProjectSidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectProject={selectProject}
+            onNewProject={() => setIsNewProjectModalOpen(true)}
+            onUpdateProject={updateProject}
+            onDeleteProject={deleteProject}
+            onArchiveProject={archiveProject}
+            onRestoreProject={restoreProject}
+            onReorderProjects={reorderProjects}
+          />
         )}
-      </main>
+
+        {/* Main Content */}
+        <main className="flex-1 flex flex-col min-w-0">
+          {projects.length === 0 ? (
+            /* No Projects Empty State */
+            <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+                className="flex flex-col items-center text-center max-w-md"
+              >
+                <div className="mb-6">
+                  <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground mb-2">
+                  No Projects Yet
+                </h2>
+                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                  Create your first project to organize your terminals, snapshots, and commands
+                </p>
+                <button
+                  onClick={() => setIsNewProjectModalOpen(true)}
+                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                >
+                  Create Your First Project
+                </button>
+              </motion.div>
+            </div>
+          ) : (
+            <>
+              {isWorkspaceRoute ? (
+                <div className="flex-1 flex min-h-0">
+                  <PaneDndProvider>
+                    <ResizablePanelGroup direction="horizontal">
+                      {/* Center Panel: Pane Tree */}
+                      <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
+                        <PaneRenderer
+                          node={paneRoot}
+                          onNewTerminal={(paneId) => {
+                            handleCreateTerminalInPane(paneId)
+                          }}
+                          onNewTerminalWithShell={(paneId, shell) => {
+                            handleCreateTerminalInPane(paneId, shell.name)
+                          }}
+                          onCloseTerminal={handleCloseTerminal}
+                          onRenameTerminal={renameTerminal}
+                          onCloseEditorTab={handleCloseEditorTab}
+                          defaultShell={activeProject?.defaultShell || appDefaultShell}
+                        />
+                      </ResizablePanel>
+
+                      {/* File Explorer Panel (Right, full height) */}
+                      {isExplorerVisible && (
+                        <>
+                          <ResizableHandle />
+                          <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
+                            <FileExplorer />
+                          </ResizablePanel>
+                        </>
+                      )}
+                    </ResizablePanelGroup>
+                  </PaneDndProvider>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden bg-terminal-bg relative">
+                  <div className="w-full h-full">
+                    <Outlet />
+                  </div>
+                </div>
+              )}
+
+              {/* Status Bar */}
+              <StatusBar project={activeProject} />
+            </>
+          )}
+        </main>
       </div>
 
       {/* Modals */}
@@ -757,11 +828,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       {/* Close Terminal Confirmation */}
       <ConfirmDialog
-        isOpen={closeConfirmTerminalId !== null}
+        isOpen={closeConfirmTerminal !== null}
         title="Close Terminal"
-        message={`Are you sure you want to close "${
-          terminalToClose?.name || 'this terminal'
-        }"? Any running processes will be terminated.`}
+        message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'
+          }"? Any running processes will be terminated.`}
         confirmLabel="Close"
         cancelLabel="Cancel"
         variant="danger"

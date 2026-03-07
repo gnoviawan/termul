@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { persistenceApi, terminalApi } from '@/lib/api'
 import type { AppSettings } from '@/types/settings'
 import { DEFAULT_APP_SETTINGS, APP_SETTINGS_KEY } from '@/types/settings'
 
@@ -8,7 +9,7 @@ export function useAppSettingsLoader(): void {
 
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await window.api.persistence.read<AppSettings>(APP_SETTINGS_KEY)
+      const result = await persistenceApi.read<AppSettings>(APP_SETTINGS_KEY)
       let settings: AppSettings
 
       if (result.success && result.data) {
@@ -22,7 +23,7 @@ export function useAppSettingsLoader(): void {
 
       // Apply orphan detection settings to PtyManager after settings load
       try {
-        await window.api.terminal.updateOrphanDetection(
+        await terminalApi.updateOrphanDetection(
           settings.orphanDetectionEnabled,
           settings.orphanDetectionTimeout
         )
@@ -46,7 +47,7 @@ export function useUpdateAppSetting<K extends keyof AppSettings>(): (
       // Use callback to get the latest state after update
       // Note: Zustand updates are synchronous, so getState() after updateSetting() returns updated state
       const updatedSettings = useAppSettingsStore.getState().settings
-      await window.api.persistence.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
+      await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
     },
     [updateSetting]
   )
@@ -57,6 +58,6 @@ export function useResetAppSettings(): () => Promise<void> {
 
   return useCallback(async () => {
     resetToDefaults()
-    await window.api.persistence.write(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+    await persistenceApi.write(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
   }, [resetToDefaults])
 }

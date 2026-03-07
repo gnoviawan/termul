@@ -4,8 +4,13 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
+dist-tauri/
 out/
 *.tsbuildinfo
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
 
 # Logs
 logs/
@@ -44,6 +49,9 @@ nul
 tmpclaude-*/
 tmpclaude-*
 
+# Docs folder (local only, not tracked)
+docs/
+
 # ADR documentation
 docs/adr/
 
@@ -60,3 +68,8 @@ E2E_VERIFICATION_REPORT.md
 VERIFICATION_CHECKLIST.md
 *_VERIFICATION*.md
 /_bmad-bkp
+
+# Agent workflow & prompt files
+.agent/workflows/
+.github/prompts/
+.github/copilot-instructions.md

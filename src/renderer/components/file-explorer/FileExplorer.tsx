@@ -11,6 +11,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { toast } from 'sonner'
+import { clipboardApi, filesystemApi } from '@/lib/api'
 
 interface ContextMenuState {
   x: number
@@ -127,7 +128,7 @@ export function FileExplorer(): React.JSX.Element {
 
   const handleCopyPath = useCallback((path: string) => {
     setContextMenu(null)
-    window.api.clipboard.writeText(path)
+    void clipboardApi.writeText(path)
   }, [])
 
   const isSubmittingRef = useRef(false)
@@ -150,12 +151,12 @@ export function FileExplorer(): React.JSX.Element {
     try {
       if (inlineInput.mode === 'create') {
         if (inlineInput.type === 'file') {
-          await window.api.filesystem.createFile(fullPath)
+          await filesystemApi.createFile(fullPath)
         } else {
-          await window.api.filesystem.createDirectory(fullPath)
+          await filesystemApi.createDirectory(fullPath)
         }
       } else if (inlineInput.mode === 'rename' && inlineInput.existingEntry) {
-        await window.api.filesystem.renameFile(inlineInput.existingEntry.path, fullPath)
+        await filesystemApi.renameFile(inlineInput.existingEntry.path, fullPath)
 
         // If the renamed file was open in editor, close old tab
         const editorState = useEditorStore.getState()
@@ -190,7 +191,7 @@ export function FileExplorer(): React.JSX.Element {
     if (!deleteConfirm) return
 
     try {
-      await window.api.filesystem.deleteFile(deleteConfirm.path)
+      await filesystemApi.deleteFile(deleteConfirm.path)
 
       // Close editor tab if file was open
       const editorState = useEditorStore.getState()

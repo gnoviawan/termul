@@ -20,6 +20,7 @@ import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import type { Terminal } from '@/types/project'
 import { ContextMenu } from '@/components/ContextMenu'
 import type { ContextMenuItem } from '@/components/ContextMenu'
+import { shellApi, clipboardApi } from '@/lib/api'
 
 // Inline TerminalTab matching the style from TerminalTabBar
 
@@ -134,7 +135,7 @@ interface WorkspaceTabBarProps {
   activeTabId: string | null
   onNewTerminal?: () => void
   onNewTerminalWithShell?: (shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -195,7 +196,7 @@ export function WorkspaceTabBar({
   useEffect(() => {
     const fetchShells = async (): Promise<void> => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success) {
           setShells(result.data)
         }
@@ -205,7 +206,7 @@ export function WorkspaceTabBar({
         setLoading(false)
       }
     }
-    fetchShells()
+    void fetchShells()
   }, [])
 
   useEffect(() => {
@@ -339,7 +340,7 @@ export function WorkspaceTabBar({
                           setActivePane(paneId)
                         }}
                         onClose={() => {
-                          if (onCloseTerminal) onCloseTerminal(tab.terminalId)
+                          if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
                         }}
                         onRename={(name) => {
                           if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
@@ -359,7 +360,7 @@ export function WorkspaceTabBar({
                     onClose={() => handleCloseEditorTab(tab.filePath)}
                     onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
                     onCloseAll={handleCloseAllEditorTabs}
-                    onCopyPath={() => window.api.clipboard.writeText(tab.filePath)}
+                    onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
                     onDragStart={(e) => handleTabDragStart(tab.id, e)}
                   />
                 )}

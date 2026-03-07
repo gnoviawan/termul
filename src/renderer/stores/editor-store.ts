@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { toast } from 'sonner'
+import { filesystemApi } from '@/lib/api'
 
 const EDITOR_TAB_LIMIT = 15
 
@@ -89,7 +90,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     // Check file info first
-    const infoResult = await window.api.filesystem.getFileInfo(path)
+    const infoResult = await filesystemApi.getFileInfo(path)
     if (!infoResult.success) {
       throw new Error(infoResult.error)
     }
@@ -103,7 +104,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     // Read file content
-    const result = await window.api.filesystem.readFile(path)
+    const result = await filesystemApi.readFile(path)
     if (!result.success) {
       throw new Error(result.error)
     }
@@ -182,7 +183,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const file = openFiles.get(path)
     if (!file) return false
 
-    const result = await window.api.filesystem.writeFile(path, file.content)
+    const result = await filesystemApi.writeFile(path, file.content)
     if (!result.success) return false
 
     const newFiles = new Map(get().openFiles)
@@ -250,7 +251,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Don't reload dirty files silently
     if (file.isDirty) return
 
-    const result = await window.api.filesystem.readFile(path)
+    const result = await filesystemApi.readFile(path)
     if (!result.success) return
 
     const newFiles = new Map(get().openFiles)

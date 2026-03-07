@@ -207,32 +207,51 @@ describe('terminal-store', () => {
     it('should set ptyId on existing terminal', () => {
       const { setTerminalPtyId } = useTerminalStore.getState()
 
-      setTerminalPtyId('t1', 'terminal-123-1')
+      const didSet = setTerminalPtyId('t1', 'terminal-123-1')
 
       const { terminals } = useTerminalStore.getState()
       const terminal = terminals.find((t) => t.id === 't1')
+      expect(didSet).toBe(true)
       expect(terminal?.ptyId).toBe('terminal-123-1')
     })
 
     it('should not affect other terminals', () => {
       const { setTerminalPtyId } = useTerminalStore.getState()
 
-      setTerminalPtyId('t1', 'terminal-123-1')
+      const didSet = setTerminalPtyId('t1', 'terminal-123-1')
 
       const { terminals } = useTerminalStore.getState()
       const terminal2 = terminals.find((t) => t.id === 't2')
+      expect(didSet).toBe(true)
       expect(terminal2?.ptyId).toBeUndefined()
     })
 
-    it('should update ptyId on terminal that already has one', () => {
+    it('should reject assigning same ptyId to different terminal', () => {
       const { setTerminalPtyId } = useTerminalStore.getState()
 
-      setTerminalPtyId('t1', 'terminal-old')
-      setTerminalPtyId('t1', 'terminal-new')
+      setTerminalPtyId('t1', 'terminal-shared')
+      const secondSet = setTerminalPtyId('t2', 'terminal-shared')
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(secondSet).toBe(false)
+      expect(terminal1?.ptyId).toBe('terminal-shared')
+      expect(terminal2?.ptyId).toBeUndefined()
+    })
+
+    it('should ignore attempts to replace existing different ptyId', () => {
+      const { setTerminalPtyId } = useTerminalStore.getState()
+
+      const firstSet = setTerminalPtyId('t1', 'terminal-old')
+      const secondSet = setTerminalPtyId('t1', 'terminal-new')
 
       const { terminals } = useTerminalStore.getState()
       const terminal = terminals.find((t) => t.id === 't1')
-      expect(terminal?.ptyId).toBe('terminal-new')
+      expect(firstSet).toBe(true)
+      expect(secondSet).toBe(false)
+      expect(terminal?.ptyId).toBe('terminal-old')
     })
   })
 

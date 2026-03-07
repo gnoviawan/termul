@@ -10,6 +10,8 @@ export interface TerminalSpawnOptions {
   env?: Record<string, string>
   cols?: number
   rows?: number
+  // Index signature to satisfy Tauri's InvokeArgs constraint
+  [key: string]: unknown
 }
 
 // Terminal info returned after spawn
@@ -80,7 +82,18 @@ export const IpcErrorCodes = {
   PATH_INVALID: 'PATH_INVALID',
   FILE_EXISTS: 'FILE_EXISTS',
   DELETE_FAILED: 'DELETE_FAILED',
-  RENAME_FAILED: 'RENAME_FAILED'
+  RENAME_FAILED: 'RENAME_FAILED',
+  // Session persistence error codes
+  SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  SESSION_INVALID: 'SESSION_INVALID',
+  SESSION_STORE_ERROR: 'SESSION_STORE_ERROR',
+  // Data migration error codes
+  MIGRATION_VERSION_INVALID: 'MIGRATION_VERSION_INVALID',
+  MIGRATION_HISTORY_CORRUPT: 'MIGRATION_HISTORY_CORRUPT',
+  MIGRATION_EXECUTION_FAILED: 'MIGRATION_EXECUTION_FAILED',
+  MIGRATION_ALREADY_RUNNING: 'MIGRATION_ALREADY_RUNNING',
+  MIGRATION_NOT_FOUND: 'MIGRATION_NOT_FOUND',
+  ROLLBACK_FAILED: 'ROLLBACK_FAILED'
 } as const
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
@@ -195,3 +208,281 @@ export type {
   FileInfo,
   FileChangeEvent
 }
+
+// ============================================================================
+// Session Persistence Types
+// ============================================================================
+
+/**
+ * Terminal session data for persistence
+ * Subset of terminal instance with additional state for restoration
+ */
+export interface TerminalSession {
+  id: string
+  shell: string
+  cwd: string
+  history: string[]
+  env?: Record<string, string>
+}
+
+/**
+ * Workspace state for persistence
+ * Contains workspace configuration and active terminals
+ */
+export interface WorkspaceState {
+  projectId: string
+  activeTerminalId: string | null
+  terminals: TerminalSession[]
+}
+
+/**
+ * Complete session data structure
+ * Contains all application state needed to restore session on app launch
+ */
+export interface SessionData {
+  timestamp: string
+  terminals: TerminalSession[]
+  workspaces: WorkspaceState[]
+}
+
+/**
+ * Session API for renderer
+ * Handles session persistence operations (save, restore, clear, flush)
+ */
+export interface SessionApi {
+  /**
+   * Save complete session data
+   */
+  save: (sessionData: SessionData) => Promise<IpcResult<void>>
+
+  /**
+   * Restore session from disk
+   */
+  restore: () => Promise<IpcResult<SessionData>>
+
+  /**
+   * Clear saved session from disk
+   */
+  clear: () => Promise<IpcResult<void>>
+
+  /**
+   * Flush any pending auto-save operations
+   */
+  flush: () => Promise<IpcResult<void>>
+
+  /**
+   * Check if a saved session exists
+   */
+  hasSession: () => Promise<IpcResult<boolean>>
+}
+
+// ============================================================================
+// Data Migration Types
+// ============================================================================
+//
+// CANONICAL MIGRATION API CONTRACT
+// =================================
+// All layers must follow this contract for consistency.
+//
+// Method names (canonical):
+// - getVersion()     - Get current schema version
+// - getSchemaInfo()  - Get current and target schema versions
+// - getHistory()     - Get migration history records
+// - getRegistered()  - Get all registered migrations
+// - runMigration()   - Run all pending migrations (singular!)
+// - rollback()       - Rollback to a specific version
+//
+// Rust command names (snake_case):
+// - data_migration_get_version
+// - data_migration_get_schema_info
+// - data_migration_get_history
+// - data_migration_get_registered
+// - data_migration_run_migrations
+// - data_migration_rollback
+//
+// Error codes:
+// - MIGRATION_VERSION_INVALID: Current version is corrupted
+// - MIGRATION_HISTORY_CORRUPT: Migration history is corrupted
+// - MIGRATION_EXECUTION_FAILED: A migration function failed
+// - MIGRATION_ALREADY_RUNNING: Another migration is in progress
+// - MIGRATION_NOT_FOUND: Requested migration version not found
+// - ROLLBACK_FAILED: Rollback operation failed
+// ============================================================================
+
+/**
+ * Migration record in history
+ */
+export interface MigrationRecord {
+  version: string
+  timestamp: string
+  success: boolean
+  error?: string
+  duration?: number // in milliseconds
+}
+
+/**
+ * Migration result
+ */
+export interface MigrationResult {
+  version: string
+  success: boolean
+  error?: string
+  duration: number
+}
+
+/**
+ * Migration run result (can include partial results on failure)
+ *
+ * Note: The backend returns IpcResult<MigrationResult[]>, but we transform
+ * it to MigrationRunResult to preserve partial results on failure.
+ */
+export type MigrationRunResult =
+  | { success: true; data: MigrationResult[]; code?: never; error?: never }
+  | { success: false; error: string; code: string; partialResults?: MigrationResult[] }
+
+/**
+ * Schema version info
+ */
+export interface SchemaVersion {
+  current: string
+  target: string
+}
+
+/**
+ * Registered migration info
+ */
+export interface MigrationInfo {
+  version: string
+  description: string
+}
+
+/**
+ * Rollback request payload
+ *
+ * This type defines the structure for rollback requests.
+ * Tauri automatically flattens single-struct parameters when invoking.
+ *
+ * The Rust side defines:
+ * ```rust
+ * #[derive(Debug, Clone, Deserialize)]
+ * #[serde(rename_all = "camelCase")]
+ * pub struct RollbackRequest {
+ *     pub version: String,
+ * }
+ *
+ * #[tauri::command]
+ * pub async fn data_migration_rollback(request: RollbackRequest, ...) -> Result<IpcResult<()>, String>
+ * ```
+ *
+ * Invoke from TypeScript:
+ * ```ts
+ * // Tauri flattens single-struct parameters automatically
+ * invoke('data_migration_rollback', { version: '1.2.0' })
+ * ```
+ *
+ * Note: For multi-parameter commands, you would wrap in a payload object.
+ * Single-struct parameters are flattened for convenience.
+ */
+export interface RollbackRequest {
+  version: string
+}
+
+/**
+ * @deprecated Use RollbackRequest from the canonical contract instead.
+ * This is an alias for backward compatibility.
+ */
+export type RollbackRequestPayload = RollbackRequest
+
+/**
+ * Canonical Migration API Contract
+ *
+ * This interface defines the contract that all layers (Tauri, Electron)
+ * must implement for data migration operations.
+ *
+ * Implementation notes:
+ * - getVersion returns "0.0.0" for fresh installs (no migrations run)
+ * - runMigration returns MigrationRunResult (not IpcResult) to preserve partial results
+ * - rollback accepts a version string and returns IpcResult<void>
+ *
+ * All methods use the IpcResult<T> pattern for consistent error handling,
+ * except runMigration which uses MigrationRunResult to include partial results.
+ */
+export interface MigrationApi {
+  /**
+   * Get current schema version
+   *
+   * Returns the currently applied schema version.
+   * Returns "0.0.0" for fresh installs (no migrations have been run).
+   *
+   * @returns IpcResult with version string (e.g., "1.2.3")
+   */
+  getVersion: () => Promise<IpcResult<string>>
+
+  /**
+   * Get schema version info (current and target versions)
+   *
+   * Returns both the current version and the target (latest registered) version.
+   * Useful for checking if migrations are pending (current < target).
+   *
+   * @returns IpcResult with SchemaVersion containing current and target
+   */
+  getSchemaInfo: () => Promise<IpcResult<SchemaVersion>>
+
+  /**
+   * Get migration history
+   *
+   * Returns an array of all migration records including both successful
+   * and failed migrations. Each record contains version, timestamp,
+   * success status, optional error message, and duration.
+   *
+   * @returns IpcResult with array of MigrationRecord
+   */
+  getHistory: () => Promise<IpcResult<MigrationRecord[]>>
+
+  /**
+   * Get all registered migrations
+   *
+   * Returns info about all available migrations without running them.
+   * Useful for displaying available/pending migrations to the user.
+   *
+   * @returns IpcResult with array of MigrationInfo
+   */
+  getRegistered: () => Promise<IpcResult<MigrationInfo[]>>
+
+  /**
+   * Run all pending migrations
+   *
+   * Executes all migrations from current version to latest registered version.
+   * Returns an array of migration results, one for each migration executed.
+   *
+   * IMPORTANT: Returns MigrationRunResult (not IpcResult) to preserve
+   * partial results when some migrations succeed but others fail.
+   *
+   * Error codes:
+   * - MIGRATION_VERSION_INVALID: Current version is corrupted
+   * - MIGRATION_HISTORY_CORRUPT: Migration history is corrupted
+   * - MIGRATION_EXECUTION_FAILED: A migration function failed
+   * - MIGRATION_ALREADY_RUNNING: Another migration is in progress
+   *
+   * @returns MigrationRunResult with success status and migration results
+   */
+  runMigration: () => Promise<MigrationRunResult>
+
+  /**
+   * Rollback to a specific version
+   *
+   * Reverts the database to the specified version by running rollback
+   * functions for migrations newer than the target version.
+   *
+   * Note: Requires migrations to have rollback functions registered.
+   *
+   * Error codes:
+   * - MIGRATION_NOT_FOUND: Target version not found in migrations
+   * - ROLLBACK_FAILED: Rollback function failed or not available
+   *
+   * @param version - Version to rollback to (e.g., "1.2.0")
+   * @returns IpcResult<void>
+   */
+  rollback: (version: string) => Promise<IpcResult<void>>
+}
+

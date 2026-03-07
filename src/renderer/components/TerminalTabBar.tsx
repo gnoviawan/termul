@@ -15,6 +15,7 @@ import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
 import { ContextMenu, ContextMenuItem } from './ContextMenu'
 import { Skeleton } from './ui/skeleton'
+import { shellApi } from '@/lib/api'
 
 interface TerminalTabBarProps {
   terminals: Terminal[]
@@ -49,7 +50,7 @@ export function TerminalTabBar({
   useEffect(() => {
     const fetchShells = async () => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success) {
           setShells(result.data)
         }
@@ -59,7 +60,7 @@ export function TerminalTabBar({
         setLoading(false)
       }
     }
-    fetchShells()
+    void fetchShells()
   }, [])
 
   useEffect(() => {

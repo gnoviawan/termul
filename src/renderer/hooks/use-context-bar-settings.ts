@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
+import { persistenceApi } from '@/lib/api'
 import { CONTEXT_BAR_SETTINGS_KEY, DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import type { ContextBarSettings } from '@/types/settings'
 
@@ -14,7 +15,7 @@ export function useContextBarSettings(): void {
   useEffect(() => {
     async function loadSettings(): Promise<void> {
       try {
-        const result = await window.api.persistence.read<ContextBarSettings>(
+        const result = await persistenceApi.read<ContextBarSettings>(
           CONTEXT_BAR_SETTINGS_KEY
         )
 
