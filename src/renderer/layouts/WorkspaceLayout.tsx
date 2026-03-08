@@ -761,7 +761,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                             handleCreateTerminalInPane(paneId)
                           }}
                           onNewTerminalWithShell={(paneId, shell) => {
-                            handleCreateTerminalInPane(paneId, shell.name)
+                            handleCreateTerminalInPane(paneId, shell.path)
                           }}
                           onCloseTerminal={handleCloseTerminal}
                           onRenameTerminal={renameTerminal}
