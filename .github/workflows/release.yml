@@ -120,7 +120,7 @@ jobs:
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
           - platform: macos-x64
-            runner: macos-13
+            runner: macos-15-intel
             rust_target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
           - platform: linux-x64
