@@ -471,13 +471,13 @@ impl PtyManager {
                     if cfg!(windows)
                         && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
                     {
-                        "-NoLogo -NoProfile"
+                        "-NoLogo"  // Load user profile for custom prompts
                     } else {
                         ""
                     }
                 )
             } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
-                format!("{} -NoLogo -NoProfile", shell_path)
+                format!("{} -NoLogo", shell_path)  // Load user profile for custom prompts
             } else {
                 shell_path.clone()
             };
