@@ -46,8 +46,27 @@ export const FONT_FAMILY_OPTIONS = [
   { value: '"Courier New", Courier, monospace', label: 'Courier New' },
   { value: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
   { value: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
-  { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' }
+  { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' },
+  { value: '"FiraCode Nerd Font", "Fira Code", monospace', label: 'FiraCode Nerd Font ⚡' }
 ]
+
+// Custom font entry stored in persistence
+export interface CustomFont {
+  id: string
+  name: string
+  fontFamily: string
+  data: string // base64-encoded TTF
+  addedAt: number
+}
+
+// Maximum custom fonts allowed
+export const MAX_CUSTOM_FONTS = 5
+
+// Maximum file size for custom fonts (5MB)
+export const MAX_FONT_FILE_SIZE = 5 * 1024 * 1024
+
+// Persistence key for custom fonts
+export const CUSTOM_FONTS_KEY = 'settings/custom-fonts'
 
 // Max terminals per project options
 export const MAX_TERMINALS_OPTIONS = [
