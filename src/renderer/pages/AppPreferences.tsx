@@ -287,7 +287,21 @@ export default function AppPreferences(): React.JSX.Element {
                     Shell
                   </label>
                   <select
-                    value={defaultShell}
+                    value={(() => {
+                      // Normalize the stored defaultShell for display
+                      // If it's a path, use it directly; if it's a name, find matching shell's path
+                      if (!defaultShell) return ''
+                      if (defaultShell.includes('\\') || defaultShell.includes('/')) {
+                        return defaultShell
+                      }
+                      // Find shell by name or by basename of path
+                      const match = availableShells?.available.find((s) => {
+                        if (s.name === defaultShell) return true
+                        const pathBasename = s.path.split(/[\\/]/).pop()
+                        return pathBasename === defaultShell
+                      })
+                      return match?.path ?? defaultShell
+                    })()}
                     onChange={(e) => handleDefaultShellChange(e.target.value)}
                     className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >

@@ -216,7 +216,17 @@ export function ProjectSidebar({
       const shellSubmenu: ContextMenuSubItem[] = availableShells?.available.map((shell) => ({
         label: shell.displayName,
         value: shell.path,
-        isSelected: project?.defaultShell === shell.path
+        isSelected: (() => {
+          const projectShell = project?.defaultShell
+          if (!projectShell) return false
+          // Match by full path
+          if (projectShell === shell.path) return true
+          // Match by name
+          if (projectShell === shell.name) return true
+          // Match by basename of path
+          const pathBasename = shell.path.split(/[\\/]/).pop()
+          return projectShell === pathBasename
+        })()
       })) || []
 
       const items: ContextMenuItem[] = [
