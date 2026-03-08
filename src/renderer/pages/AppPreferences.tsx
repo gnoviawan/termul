@@ -293,8 +293,8 @@ export default function AppPreferences(): React.JSX.Element {
                   >
                     <option value="">System Default</option>
                     {availableShells?.available?.map((shell) => (
-                      <option key={shell.path} value={shell.name}>
-                        {shell.name} ({shell.path})
+                      <option key={shell.path} value={shell.path}>
+                        {shell.displayName}
                       </option>
                     ))}
                   </select>

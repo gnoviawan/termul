@@ -215,8 +215,8 @@ export function ProjectSidebar({
       const project = projects.find((p) => p.id === projectId)
       const shellSubmenu: ContextMenuSubItem[] = availableShells?.available.map((shell) => ({
         label: shell.displayName,
-        value: shell.name,
-        isSelected: project?.defaultShell === shell.name
+        value: shell.path,
+        isSelected: project?.defaultShell === shell.path
       })) || []
 
       const items: ContextMenuItem[] = [
@@ -237,8 +237,8 @@ export function ProjectSidebar({
           label: 'Set Default Shell',
           icon: <Terminal size={14} />,
           submenu: shellSubmenu,
-          onSubmenuSelect: (shellName: string) => {
-            onUpdateProject(projectId, { defaultShell: shellName })
+          onSubmenuSelect: (shellPath: string) => {
+            onUpdateProject(projectId, { defaultShell: shellPath })
           }
         })
       }
