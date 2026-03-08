@@ -994,12 +994,17 @@ impl PtyManager {
             }
 
             // Try PowerShell variants
+            // CRITICAL: Check explicit paths FIRST, then PATH
             if shell == "powershell" || shell == "pwsh" {
                 let paths = vec![
-                    "pwsh.exe",
-                    "powershell.exe",
+                    // PowerShell 7 explicit paths (checked first)
                     r"C:\Program Files\PowerShell\7\pwsh.exe",
                     r"C:\Program Files\PowerShell\6\pwsh.exe",
+                    // Windows PowerShell 5 explicit path
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    // PATH-based fallbacks (checked last)
+                    "pwsh.exe",
+                    "powershell.exe",
                 ];
                 for path in paths {
                     if let Some(abs_path) = self.get_absolute_shell_path(path) {
