@@ -327,6 +327,8 @@ export function useTerminalRestore(): void {
     restoreTerminals()
 
     // CRITICAL: Cleanup function to handle project switching mid-restore
+    // Capture projectId at effect run time to avoid stale closure in cleanup
+    const projectIdForCleanup = activeProjectId
     return () => {
       // Signal cancellation to the async function
       cancelRestore()
@@ -336,7 +338,8 @@ export function useTerminalRestore(): void {
       if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
 
       // FIX #5: Also clean up the restoring flag for this project on cleanup
-      isRestoringRef.current.delete(activeProjectId)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
+      isRestoringRef.current.delete(projectIdForCleanup)
     }
   }, [activeProjectId])
 }

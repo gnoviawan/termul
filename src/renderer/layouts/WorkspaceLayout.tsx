@@ -488,6 +488,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isWorkspaceRoute,
     cycleTab,
     activeTab
+    // Note: handleCreateTerminalInPane is defined after this useEffect, so it cannot be in deps
   ])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
