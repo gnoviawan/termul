@@ -967,16 +967,23 @@ impl PtyManager {
 
             // Standard shell resolution for other shells
             // CRITICAL: Check PowerShell variants BEFORE generic *.exe lookup
-            // so name-only tokens like "pwsh" or "powershell" hit explicit paths first
-            if shell == "powershell" || shell == "pwsh" {
+            // so name-only tokens hit explicit paths first
+            if shell == "pwsh" {
+                // PowerShell 7/6 resolution path
                 let paths = vec![
-                    // PowerShell 7 explicit paths (checked first)
                     r"C:\Program Files\PowerShell\7\pwsh.exe",
                     r"C:\Program Files\PowerShell\6\pwsh.exe",
-                    // Windows PowerShell 5 explicit path
-                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                    // PATH-based fallbacks (checked last)
                     "pwsh.exe",
+                ];
+                for path in paths {
+                    if let Some(abs_path) = self.get_absolute_shell_path(path) {
+                        return Ok(abs_path);
+                    }
+                }
+            } else if shell == "powershell" {
+                // Windows PowerShell 5 resolution path
+                let paths = vec![
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
                     "powershell.exe",
                 ];
                 for path in paths {

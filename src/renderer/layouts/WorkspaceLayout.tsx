@@ -302,6 +302,40 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [isWorkspaceRoute]
   )
 
+  // Terminal creation callbacks - defined before keyboard shortcut useEffect
+  const handleCreateTerminalInPane = useCallback(
+    async (paneId: string, shellName?: string) => {
+      if (terminals.length >= maxTerminals) {
+        toast.error(`Maximum ${maxTerminals} terminals per project`)
+        return
+      }
+
+      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
+      const cwd = activeProject?.path
+
+      const spawnResult = await terminalApi.spawn({ shell, cwd })
+      if (!spawnResult.success) {
+        toast.error(spawnResult.error || 'Failed to create terminal')
+        return
+      }
+
+      const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
+
+      useWorkspaceStore.getState().addTabToPane(paneId, {
+        type: 'terminal',
+        id: `term-${terminal.id}`,
+        terminalId: terminal.id
+      })
+    },
+    [activeProject?.defaultShell, activeProject?.path, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
+  )
+
+  const handleNewTerminal = useCallback(() => {
+    const paneId = useWorkspaceStore.getState().activePaneId
+    handleCreateTerminalInPane(paneId)
+  }, [handleCreateTerminalInPane])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
@@ -487,8 +521,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     maxTerminals,
     isWorkspaceRoute,
     cycleTab,
-    activeTab
-    // Note: handleCreateTerminalInPane is defined after this useEffect, so it cannot be in deps
+    activeTab,
+    handleCreateTerminalInPane
   ])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
@@ -523,39 +557,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
     })
   }, [cycleTab, fontSize, updateAppSetting])
-
-  const handleCreateTerminalInPane = useCallback(
-    async (paneId: string, shellName?: string) => {
-      if (terminals.length >= maxTerminals) {
-        toast.error(`Maximum ${maxTerminals} terminals per project`)
-        return
-      }
-
-      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
-      const cwd = activeProject?.path
-
-      const spawnResult = await terminalApi.spawn({ shell, cwd })
-      if (!spawnResult.success) {
-        toast.error(spawnResult.error || 'Failed to create terminal')
-        return
-      }
-
-      const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
-      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
-
-      useWorkspaceStore.getState().addTabToPane(paneId, {
-        type: 'terminal',
-        id: `term-${terminal.id}`,
-        terminalId: terminal.id
-      })
-    },
-    [activeProject?.defaultShell, activeProject?.path, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
-  )
-
-  const handleNewTerminal = useCallback(() => {
-    const paneId = useWorkspaceStore.getState().activePaneId
-    handleCreateTerminalInPane(paneId)
-  }, [handleCreateTerminalInPane])
 
   const handleCloseTerminal = useCallback((id: string, tabId: string) => {
     setCloseConfirmTerminal({ terminalId: id, tabId })
