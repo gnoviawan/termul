@@ -276,14 +276,13 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
+    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
         "cmd"
             | "cmd.exe"
             | "powershell"
             | "powershell.exe"
-            | "pwsh"
-            | "pwsh.exe"
             | "wsl"
             | "wsl.exe"
     )

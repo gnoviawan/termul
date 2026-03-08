@@ -147,6 +147,7 @@ export function normalizeShellForStartup(shell?: string): string {
  * Resolve shell identifier to an absolute path.
  * If the shell is already a path (contains \ or /), return it as-is.
  * If it's just a name (e.g., "pwsh", "bash"), look up the path from available shells.
+ * Also matches by executable basename (e.g., "pwsh.exe" matches shell with path ending in "pwsh.exe").
  */
 async function resolveShellToPath(shell: string): Promise<string> {
   // If shell is already a path, return it as-is
@@ -158,7 +159,13 @@ async function resolveShellToPath(shell: string): Promise<string> {
   try {
     const result = await shellApi.getAvailableShells()
     if (result.success && result.data.available) {
-      const match = result.data.available.find((s) => s.name === shell)
+      // Match by name or by executable basename
+      const match = result.data.available.find((s) => {
+        if (s.name === shell) return true
+        // Also match by basename of path (e.g., "pwsh.exe" matches "C:\...\pwsh.exe")
+        const pathBasename = s.path.split(/[\\/]/).pop()
+        return pathBasename === shell
+      })
       if (match) {
         return match.path
       }
