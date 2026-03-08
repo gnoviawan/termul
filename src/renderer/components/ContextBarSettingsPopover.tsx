@@ -4,6 +4,7 @@ import { Switch } from '@/components/ui/switch'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
 import type { ContextBarSettings } from '@/types/settings'
+import { persistenceApi } from '@/lib/api'
 
 interface SettingToggleProps {
   label: string
@@ -28,7 +29,7 @@ export function ContextBarSettingsPopover(): React.JSX.Element {
     toggleElement(element)
     // Persist to disk with debounce
     const newSettings = { ...settings, [element]: !settings[element] }
-    window.api.persistence.writeDebounced(CONTEXT_BAR_SETTINGS_KEY, newSettings)
+    void persistenceApi.writeDebounced(CONTEXT_BAR_SETTINGS_KEY, newSettings)
   }
 
   return (

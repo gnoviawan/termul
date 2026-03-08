@@ -13,6 +13,7 @@ import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
+import { dialogApi, shellApi } from '@/lib/api'
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
@@ -41,7 +42,7 @@ export default function ProjectSettings() {
   useEffect(() => {
     const fetchShells = async () => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success && result.data) {
           setAvailableShells(result.data)
         }
@@ -157,7 +158,7 @@ export default function ProjectSettings() {
                       />
                       <button
                         onClick={async () => {
-                          const result = await window.api.dialog.selectDirectory()
+                          const result = await dialogApi.selectDirectory()
                           if (result.success) {
                             setRootPath(result.data)
                             setHasChanges(true)

@@ -202,6 +202,11 @@ describe('formatKeyForDisplay', () => {
   it('should handle empty string', () => {
     expect(formatKeyForDisplay('')).toBe('')
   })
+
+  it('should format ctrl+pagedown for display', () => {
+    const result = formatKeyForDisplay('ctrl+pagedown')
+    expect(result).toContain('PageDown')
+  })
 })
 
 describe('matchesShortcut', () => {

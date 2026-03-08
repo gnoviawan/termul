@@ -7,6 +7,7 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
 import { Skeleton } from '@/components/ui/skeleton'
+import { dialogApi, shellApi } from '@/lib/api'
 
 interface NewProjectModalProps {
   isOpen: boolean
@@ -30,7 +31,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   useEffect(() => {
     const fetchShells = async () => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success && result.data) {
           setShells(result.data)
           setSelectedShell(result.data.default?.name || fallbackShell)
@@ -46,7 +47,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         setShellsLoading(false)
       }
     }
-    fetchShells()
+    void fetchShells()
   }, [fallbackShell])
 
   // Reset form when modal opens (use defaults)
@@ -84,7 +85,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   }, [name, selectedColor, path, selectedShell, fallbackShell, onCreateProject, onClose])
 
   const handleBrowse = useCallback(async () => {
-    const result = await window.api.dialog.selectDirectory()
+    const result = await dialogApi.selectDirectory()
     if (result.success) {
       setPath(result.data)
     }

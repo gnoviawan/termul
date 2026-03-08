@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 import { DropZoneOverlay } from './DropZoneOverlay'
@@ -11,11 +11,14 @@ import type { LeafNode } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import type { ShellInfo } from '@shared/types/ipc.types'
 
+// Import useShallow for selective re-rendering
+import { useShallow } from 'zustand/shallow'
+
 interface PaneContentProps {
   pane: LeafNode
   onNewTerminal?: (paneId: string) => void
   onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void
-  onCloseTerminal?: (id: string) => void
+  onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   defaultShell?: string
@@ -30,12 +33,30 @@ export function PaneContent({
   onCloseEditorTab,
   defaultShell
 }: PaneContentProps): React.JSX.Element {
-  const activePaneId = useWorkspaceStore((state) => state.activePaneId)
-  const hasMultiplePanes = useWorkspaceStore(
-    (state) => getAllLeafPanes(state.root).length > 1
+  const paneId = pane.id
+
+  // CRITICAL FIX: Get terminal IDs from this pane's tabs
+  const terminalIdsInPane = useMemo(
+    () => new Set(pane.tabs.filter(t => t.type === 'terminal').map(t => t.terminalId)),
+    [pane.tabs]
   )
-  const setActivePane = useWorkspaceStore((state) => state.setActivePane)
-  const allTerminals = useTerminalStore((state) => state.terminals)
+
+  // CRITICAL FIX: Only subscribe to terminals' essential properties (not output!)
+  // This prevents re-renders when terminal output changes
+  const terminalsInPane = useTerminalStore(
+    useShallow((state) => state.terminals.filter(t => terminalIdsInPane.has(t.id)))
+  )
+
+  // FIX: Batch workspace store subscriptions with useShallow to prevent cascading re-renders
+  const { activePaneId, setActivePane } = useWorkspaceStore(
+    useShallow((state) => ({
+      activePaneId: state.activePaneId,
+      setActivePane: state.setActivePane
+    }))
+  )
+
+  const hasMultiplePanes = useWorkspaceStore((state) => getAllLeafPanes(state.root).length > 1)
+
   const { setTerminalPtyId } = useTerminalActions()
   const { isDragging, previewTarget } = usePaneDnd()
 
@@ -83,12 +104,10 @@ export function PaneContent({
         paneId={pane.id}
         tabs={pane.tabs}
         activeTabId={pane.activeTabId}
-        onNewTerminal={onNewTerminal ? () => onNewTerminal(pane.id) : undefined}
-        onNewTerminalWithShell={
-          onNewTerminalWithShell
-            ? (shell) => onNewTerminalWithShell(pane.id, shell)
-            : undefined
-        }
+        onNewTerminal={useMemo(() => onNewTerminal ? () => onNewTerminal(pane.id) : undefined, [onNewTerminal, pane.id])}
+        onNewTerminalWithShell={useMemo(() => onNewTerminalWithShell
+          ? (shell) => onNewTerminalWithShell(pane.id, shell)
+          : undefined, [onNewTerminalWithShell, pane.id])}
         onCloseTerminal={onCloseTerminal}
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
@@ -127,9 +146,16 @@ export function PaneContent({
           >
             {pane.tabs
               .filter((t): t is WorkspaceTab & { type: 'terminal' } => t.type === 'terminal')
-              .map((tab) => {
-                const terminal = allTerminals.find((t) => t.id === tab.terminalId)
-                if (!terminal) return null
+              .map((tab, index) => {
+                const terminal = terminalsInPane.find(t => t.id === tab.terminalId)
+                if (!terminal) {
+                  return null
+                }
+                // CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
+                // This prevents spawn loops when workspace tabs aren't fully synced
+                if (!terminal.ptyId) {
+                  return null
+                }
                 const isVisible = activeTab?.id === tab.id
                 return (
                   <div
@@ -142,6 +168,7 @@ export function PaneContent({
                   >
                     <ConnectedTerminal
                       terminalId={terminal.ptyId}
+                      autoSpawn={false}
                       spawnOptions={{
                         shell: terminal.shell,
                         cwd: terminal.cwd

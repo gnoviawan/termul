@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+import { clipboardApi } from '@/lib/api'
 
 export interface UseTerminalClipboardOptions {
   terminal: Terminal | null
@@ -68,7 +69,7 @@ export function useTerminalClipboard(
       return
     }
 
-    const result = await window.api.clipboard.writeText(selection)
+    const result = await clipboardApi.writeText(selection)
     if (!result.success) {
       console.error('Failed to copy to clipboard:', result.error)
     }
@@ -88,7 +89,7 @@ export function useTerminalClipboard(
     isPastingRef.current = true
     
     try {
-      const result = await window.api.clipboard.readText()
+      const result = await clipboardApi.readText()
       if (result.success && result.data) {
         // Validate clipboard content size
         if (result.data.length > MAX_CLIPBOARD_SIZE) {

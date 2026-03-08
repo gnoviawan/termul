@@ -1,37 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { renderHook, waitFor, act } from '@testing-library/react'
 import { useUpdateCheck } from './use-updater'
 import { useUpdaterStore } from '@/stores/updater-store'
 
-// Mock window.api.updater
-const mockUpdaterApi = {
-  checkForUpdates: vi.fn(() => Promise.resolve({ success: true, data: null })),
-  downloadUpdate: vi.fn(),
-  installAndRestart: vi.fn(),
-  skipVersion: vi.fn(),
-  getState: vi.fn(() => Promise.resolve({
-    success: true,
-    data: {
-      updateAvailable: false,
-      downloaded: false,
-      version: null,
-      isChecking: false,
-      isDownloading: false,
-      downloadProgress: null,
-      error: null,
-      lastChecked: null
-    }
-  })),
-  setAutoUpdateEnabled: vi.fn(),
-  getAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: true })),
-  onUpdateAvailable: vi.fn(() => () => {}),
-  onUpdateDownloaded: vi.fn(() => () => {}),
-  onDownloadProgress: vi.fn(() => () => {}),
-  onError: vi.fn(() => () => {})
-}
+const mockCheckForUpdates = vi.fn(async () => {})
+const mockInitializeUpdater = vi.fn(async () => {})
+const mockStopPeriodicChecks = vi.fn(() => {})
 
 beforeEach(() => {
-  vi.stubGlobal('api', { updater: mockUpdaterApi })
+  vi.clearAllMocks()
+
   useUpdaterStore.setState({
     updateAvailable: false,
     version: null,
@@ -42,70 +20,73 @@ beforeEach(() => {
     isDownloading: false,
     error: null,
     lastChecked: null,
-    autoUpdateEnabled: true
+    autoUpdateEnabled: true,
+    releaseNotes: null,
+    hasActiveTerminals: false,
+    checkForUpdates: mockCheckForUpdates,
+    initializeUpdater: mockInitializeUpdater,
+    stopPeriodicChecks: mockStopPeriodicChecks
   })
-  vi.clearAllMocks()
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
 })
 
 describe('useUpdateCheck', () => {
-  it('should register IPC event listeners on mount', () => {
-    renderHook(() => useUpdateCheck(false))
-
-    expect(mockUpdaterApi.onUpdateAvailable).toHaveBeenCalledTimes(1)
-    expect(mockUpdaterApi.onUpdateDownloaded).toHaveBeenCalledTimes(1)
-    expect(mockUpdaterApi.onDownloadProgress).toHaveBeenCalledTimes(1)
-    expect(mockUpdaterApi.onError).toHaveBeenCalledTimes(1)
-  })
-
-  it('should initialize state from main process', async () => {
-    renderHook(() => useUpdateCheck(false))
+  it('should initialize updater with autoCheck true by default', async () => {
+    renderHook(() => useUpdateCheck())
 
     await waitFor(() => {
-      expect(mockUpdaterApi.getState).toHaveBeenCalled()
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: true })
     })
   })
 
-  it('should auto-check when autoCheck is true', async () => {
-    renderHook(() => useUpdateCheck(true))
-
-    await waitFor(() => {
-      expect(mockUpdaterApi.checkForUpdates).toHaveBeenCalled()
-    })
-  })
-
-  it('should not auto-check when autoCheck is false', async () => {
+  it('should initialize updater with provided autoCheck value', async () => {
     renderHook(() => useUpdateCheck(false))
 
-    // Wait for initialization to complete
     await waitFor(() => {
-      expect(mockUpdaterApi.getState).toHaveBeenCalled()
+      expect(mockInitializeUpdater).toHaveBeenCalledWith({ autoCheck: false })
     })
-
-    // checkForUpdates should not be called automatically
-    expect(mockUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('should clean up event listeners on unmount', () => {
-    const cleanupAvailable = vi.fn()
-    const cleanupDownloaded = vi.fn()
-    const cleanupProgress = vi.fn()
-    const cleanupError = vi.fn()
-
-    mockUpdaterApi.onUpdateAvailable.mockReturnValue(cleanupAvailable)
-    mockUpdaterApi.onUpdateDownloaded.mockReturnValue(cleanupDownloaded)
-    mockUpdaterApi.onDownloadProgress.mockReturnValue(cleanupProgress)
-    mockUpdaterApi.onError.mockReturnValue(cleanupError)
-
+  it('should stop periodic checks on unmount', async () => {
     const { unmount } = renderHook(() => useUpdateCheck(false))
+
+    await waitFor(() => {
+      expect(mockInitializeUpdater).toHaveBeenCalledTimes(1)
+    })
+
     unmount()
 
-    expect(cleanupAvailable).toHaveBeenCalled()
-    expect(cleanupDownloaded).toHaveBeenCalled()
-    expect(cleanupProgress).toHaveBeenCalled()
-    expect(cleanupError).toHaveBeenCalled()
+    expect(mockStopPeriodicChecks).toHaveBeenCalledTimes(1)
+  })
+
+  it('should call checkForUpdates when check action is invoked', () => {
+    const { result } = renderHook(() => useUpdateCheck(false))
+
+    act(() => {
+      result.current.check()
+    })
+
+    expect(mockCheckForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('should return empty version string when version is null', () => {
+    const { result } = renderHook(() => useUpdateCheck(false))
+
+    expect(result.current.version).toBe('')
+  })
+
+  it('should expose updater state values from store', () => {
+    useUpdaterStore.setState({
+      updateAvailable: true,
+      version: '2.0.0',
+      isChecking: true,
+      error: 'network error'
+    })
+
+    const { result } = renderHook(() => useUpdateCheck(false))
+
+    expect(result.current.updateAvailable).toBe(true)
+    expect(result.current.version).toBe('2.0.0')
+    expect(result.current.isChecking).toBe(true)
+    expect(result.current.error).toBe('network error')
   })
 })

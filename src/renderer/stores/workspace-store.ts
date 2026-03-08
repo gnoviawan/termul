@@ -12,6 +12,11 @@ export type WorkspaceTab =
   | { type: 'terminal'; id: string; terminalId: string }
   | { type: 'editor'; id: string; filePath: string }
 
+// CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
+// This prevents duplicate tab creation during rapid state changes
+let SYNC_TERMINAL_TABS_LOCK = false
+let SYNC_CALL_COUNT = 0
+
 // --- Tree helper functions ---
 
 export function findPaneById(root: PaneNode, id: string): PaneNode | null {
@@ -141,7 +146,7 @@ export interface WorkspaceState {
     targetPaneId: string,
     position: DropPosition
   ) => void
-  closeTab: (paneId: string, tabId: string) => void
+  closeTab: (paneId: string, tabId: string) => WorkspaceTab | null
   setActiveTab: (paneId: string, tabId: string) => void
   setActivePane: (paneId: string) => void
   updatePaneSizes: (splitId: string, sizes: number[]) => void
@@ -362,11 +367,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({ root: newRoot, activePaneId: newLeaf.id })
     },
 
-    closeTab: (paneId: string, tabId: string): void => {
+    closeTab: (paneId: string, tabId: string): WorkspaceTab | null => {
       const { root, activePaneId } = get()
+      let removedTab: WorkspaceTab | null = null
+
       let newRoot = updateLeaf(root, paneId, (leaf) => {
         const idx = leaf.tabs.findIndex((t) => t.id === tabId)
         if (idx === -1) return leaf
+        removedTab = leaf.tabs[idx]
         const newTabs = leaf.tabs.filter((t) => t.id !== tabId)
         let newActive = leaf.activeTabId
         if (leaf.activeTabId === tabId) {
@@ -379,6 +387,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
+
+      if (!removedTab) {
+        return null
+      }
 
       // If pane is now empty and not the only pane, collapse it
       const pane = findPaneById(newRoot, paneId)
@@ -398,11 +410,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           }
           newRoot = removeNode(newRoot, paneId) ?? createLeaf()
           set({ root: newRoot, activePaneId: newActivePaneId })
-          return
+          return removedTab
         }
       }
 
       set({ root: newRoot })
+      return removedTab
     },
 
     setActiveTab: (paneId: string, tabId: string): void => {
@@ -534,57 +547,71 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const { root } = get()
       const pane = findPaneContainingTab(root, tabId)
       if (pane) {
-        get().closeTab(pane.id, tabId)
+        void get().closeTab(pane.id, tabId)
       }
     },
 
     syncTerminalTabs: (terminalIds: string[]): void => {
-      const { root } = get()
-      const terminalTabIds = new Set(terminalIds.map(terminalTabId))
-      const allLeaves = getAllLeafPanes(root)
+      // CRITICAL: Skip if sync is already in progress to prevent duplicate tab creation
+      if (SYNC_TERMINAL_TABS_LOCK) {
+        console.warn('[syncTerminalTabs] SKIPPED: sync already in progress', { callCount: ++SYNC_CALL_COUNT })
+        return
+      }
 
-      let newRoot = root
+      SYNC_TERMINAL_TABS_LOCK = true
+      SYNC_CALL_COUNT++
 
-      // Remove orphaned terminal tabs from all panes
-      for (const leaf of allLeaves) {
-        const hasOrphans = leaf.tabs.some(
-          (t) => t.type === 'terminal' && !terminalTabIds.has(t.id)
-        )
-        if (hasOrphans) {
-          newRoot = updateLeaf(newRoot, leaf.id, (l) => {
-            const newTabs = l.tabs.filter(
-              (t) => t.type !== 'terminal' || terminalTabIds.has(t.id)
-            )
-            let newActive = l.activeTabId
-            if (newActive && !newTabs.some((t) => t.id === newActive)) {
-              newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
-            }
-            return { ...l, tabs: newTabs, activeTabId: newActive }
+      try {
+        const { root } = get()
+        const terminalTabIds = new Set(terminalIds.map(terminalTabId))
+        const allLeaves = getAllLeafPanes(root)
+
+        let newRoot = root
+
+        // Remove orphaned terminal tabs from all panes
+        for (const leaf of allLeaves) {
+          const hasOrphans = leaf.tabs.some(
+            (t) => t.type === 'terminal' && !terminalTabIds.has(t.id)
+          )
+          if (hasOrphans) {
+            newRoot = updateLeaf(newRoot, leaf.id, (l) => {
+              const newTabs = l.tabs.filter(
+                (t) => t.type !== 'terminal' || terminalTabIds.has(t.id)
+              )
+              let newActive = l.activeTabId
+              if (newActive && !newTabs.some((t) => t.id === newActive)) {
+                newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
+              }
+              return { ...l, tabs: newTabs, activeTabId: newActive }
+            })
+          }
+        }
+
+        // Add missing terminal tabs to the active pane
+        const { activePaneId } = get()
+        const existingTerminalIds = new Set<string>()
+        getAllLeafPanes(newRoot).forEach((leaf) => {
+          leaf.tabs.forEach((t) => {
+            if (t.type === 'terminal') existingTerminalIds.add(t.id)
           })
-        }
-      }
-
-      // Add missing terminal tabs to the active pane
-      const { activePaneId } = get()
-      const existingTerminalIds = new Set<string>()
-      getAllLeafPanes(newRoot).forEach((leaf) => {
-        leaf.tabs.forEach((t) => {
-          if (t.type === 'terminal') existingTerminalIds.add(t.id)
         })
-      })
 
-      for (const tid of terminalIds) {
-        const id = terminalTabId(tid)
-        if (!existingTerminalIds.has(id)) {
-          newRoot = updateLeaf(newRoot, activePaneId, (leaf) => ({
-            ...leaf,
-            tabs: [...leaf.tabs, { type: 'terminal' as const, id, terminalId: tid }],
-            activeTabId: id
-          }))
+        for (const tid of terminalIds) {
+          const id = terminalTabId(tid)
+          if (!existingTerminalIds.has(id)) {
+            newRoot = updateLeaf(newRoot, activePaneId, (leaf) => ({
+              ...leaf,
+              tabs: [...leaf.tabs, { type: 'terminal' as const, id, terminalId: tid }],
+              activeTabId: id
+            }))
+          }
         }
-      }
 
-      set({ root: normalizePaneTree(newRoot) })
+        set({ root: normalizePaneTree(newRoot) })
+      } finally {
+        // CRITICAL: Always release the lock
+        SYNC_TERMINAL_TABS_LOCK = false
+      }
     },
 
     clearEditorTabs: (): void => {

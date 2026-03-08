@@ -27,7 +27,7 @@ export interface TerminalState {
   renameTerminal: (id: string, name: string) => void
   reorderTerminals: (projectId: string, orderedIds: string[]) => void
   setTerminals: (terminals: Terminal[]) => void
-  setTerminalPtyId: (id: string, ptyId: string) => void
+  setTerminalPtyId: (id: string, ptyId: string) => boolean
   findTerminalByPtyId: (ptyId: string) => Terminal | undefined
   updateTerminalCwd: (id: string, cwd: string) => void
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
@@ -139,15 +139,36 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ terminals, ptyIdIndex: newIndex })
   },
 
-  setTerminalPtyId: (id: string, ptyId: string): void => {
+  setTerminalPtyId: (id: string, ptyId: string): boolean => {
+    let didSet = false
     set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      if (!target) {
+        return state
+      }
+
+      if (target.ptyId && target.ptyId !== ptyId) {
+        return state
+      }
+
+      const existingOwner = state.ptyIdIndex.get(ptyId)
+      if (existingOwner && existingOwner !== id) {
+        return state
+      }
+
       const newIndex = new Map(state.ptyIdIndex)
+      if (target.ptyId && target.ptyId !== ptyId) {
+        newIndex.delete(target.ptyId)
+      }
       newIndex.set(ptyId, id)
+      didSet = true
+
       return {
         terminals: state.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t)),
         ptyIdIndex: newIndex
       }
     })
+    return didSet
   },
 
   findTerminalByPtyId: (ptyId: string): Terminal | undefined => {

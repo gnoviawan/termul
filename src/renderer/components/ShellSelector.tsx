@@ -3,6 +3,7 @@ import { ChevronDown, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
+import { shellApi } from '@/lib/api'
 
 interface ShellSelectorProps {
   onSelectShell: (shell: ShellInfo) => void
@@ -19,7 +20,7 @@ export function ShellSelector({ onSelectShell, defaultShell, className }: ShellS
   useEffect(() => {
     const fetchShells = async () => {
       try {
-        const result = await window.api.shell.getAvailableShells()
+        const result = await shellApi.getAvailableShells()
         if (result.success) {
           setShells(result.data)
         }
@@ -30,7 +31,7 @@ export function ShellSelector({ onSelectShell, defaultShell, className }: ShellS
         setLoading(false)
       }
     }
-    fetchShells()
+    void fetchShells()
   }, [])
 
   useEffect(() => {

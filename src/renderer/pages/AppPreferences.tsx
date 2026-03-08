@@ -12,7 +12,7 @@ import {
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
 import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
-import type { ShellInfo } from '@shared/types/ipc.types'
+import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -25,6 +25,7 @@ import {
   useResetAllShortcuts
 } from '@/hooks/use-keyboard-shortcuts'
 import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
+import { shellApi, terminalApi } from '@/lib/api'
 
 export default function AppPreferences(): React.JSX.Element {
   const fontFamily = useTerminalFontFamily()
@@ -39,10 +40,9 @@ export default function AppPreferences(): React.JSX.Element {
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
-  const [availableShells, setAvailableShells] = useState<ShellInfo[]>([])
+  const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [isResetShortcutsDialogOpen, setIsResetShortcutsDialogOpen] = useState(false)
-
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const updateShortcut = useUpdateShortcut()
@@ -57,15 +57,15 @@ export default function AppPreferences(): React.JSX.Element {
   useEffect(() => {
     async function loadShells(): Promise<void> {
       try {
-        const result = await window.api.shell.getAvailableShells()
-        if (result.success && result.data?.available) {
-          setAvailableShells(result.data.available)
+        const result = await shellApi.getAvailableShells()
+        if (result.success && result.data) {
+          setAvailableShells(result.data)
         }
       } catch {
         // Silently fail - user will see empty dropdown with System Default option
       }
     }
-    loadShells()
+    void loadShells()
   }, [])
 
   const handleFontFamilyChange = (value: string) => {
@@ -96,7 +96,7 @@ export default function AppPreferences(): React.JSX.Element {
     await updateSetting('orphanDetectionEnabled', enabled)
     // Apply to PtyManager immediately
     try {
-      await window.api.terminal.updateOrphanDetection(enabled, orphanDetectionTimeout)
+      await terminalApi.updateOrphanDetection(enabled, orphanDetectionTimeout)
     } catch (error) {
       console.error('Failed to update orphan detection:', error)
     }
@@ -106,7 +106,7 @@ export default function AppPreferences(): React.JSX.Element {
     await updateSetting('orphanDetectionTimeout', value)
     // Apply to PtyManager immediately
     try {
-      await window.api.terminal.updateOrphanDetection(orphanDetectionEnabled, value)
+      await terminalApi.updateOrphanDetection(orphanDetectionEnabled, value)
     } catch (error) {
       console.error('Failed to update orphan detection timeout:', error)
     }
@@ -292,7 +292,7 @@ export default function AppPreferences(): React.JSX.Element {
                     className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
                     <option value="">System Default</option>
-                    {availableShells.map((shell) => (
+                    {availableShells?.available?.map((shell) => (
                       <option key={shell.path} value={shell.name}>
                         {shell.name} ({shell.path})
                       </option>
