@@ -17,6 +17,24 @@ export const DEFAULT_CONTEXT_BAR_SETTINGS: ContextBarSettings = {
 // Persistence key for context bar settings
 export const CONTEXT_BAR_SETTINGS_KEY = 'settings/context-bar'
 
+// Table of contents panel settings
+export interface TocSettings {
+  isVisible: boolean
+  maxHeadingLevel: number
+  width: number
+}
+
+export const TOC_MIN_WIDTH = 150
+export const TOC_MAX_WIDTH = 350
+
+export const DEFAULT_TOC_SETTINGS: TocSettings = {
+  isVisible: true,
+  maxHeadingLevel: 3,
+  width: 220
+}
+
+export const TOC_SETTINGS_KEY = 'settings/toc'
+
 // Application-wide settings
 export interface AppSettings {
   terminalFontFamily: string

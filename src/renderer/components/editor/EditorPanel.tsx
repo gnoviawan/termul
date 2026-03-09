@@ -4,6 +4,7 @@ import { MarkdownEditor } from './MarkdownEditor'
 import { EditorToolbar } from './EditorToolbar'
 import { useEditorStore } from '@/stores/editor-store'
 import type { EditorFileState } from '@/stores/editor-store'
+import { useTocSettings } from '@/hooks/use-toc-settings'
 
 interface EditorPanelProps {
   filePath: string
@@ -14,6 +15,8 @@ export function EditorPanel({
   filePath,
   isVisible
 }: EditorPanelProps): React.JSX.Element {
+  useTocSettings()
+
   const fileState = useEditorStore(
     (state) => state.openFiles.get(filePath)
   ) as EditorFileState | undefined
@@ -25,28 +28,28 @@ export function EditorPanel({
     (content: string) => {
       updateContent(filePath, content)
     },
-    [filePath]
+    [filePath, updateContent]
   )
 
   const handleCursorChange = useCallback(
     (line: number, col: number) => {
       updateCursorPosition(filePath, line, col)
     },
-    [filePath]
+    [filePath, updateCursorPosition]
   )
 
   const handleScrollChange = useCallback(
     (scrollTop: number) => {
       updateScrollTop(filePath, scrollTop)
     },
-    [filePath]
+    [filePath, updateScrollTop]
   )
 
   const handleToggleViewMode = useCallback(() => {
     if (!fileState) return
     const newMode = fileState.viewMode === 'markdown' ? 'code' : 'markdown'
     setViewMode(filePath, newMode)
-  }, [filePath, fileState?.viewMode])
+  }, [filePath, fileState, setViewMode])
 
   if (!fileState) {
     return (

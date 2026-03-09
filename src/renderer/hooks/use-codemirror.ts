@@ -76,6 +76,11 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
   return extension
 }
 
+export interface VisibleLineRange {
+  startLine: number
+  endLine: number
+}
+
 interface UseCodeMirrorOptions {
   content: string
   language: string
@@ -83,11 +88,23 @@ interface UseCodeMirrorOptions {
   onChange: (content: string) => void
   onCursorChange: (line: number, col: number) => void
   onScrollChange: (scrollTop: number) => void
+  onVisibleRangeChange?: (range: VisibleLineRange) => void
 }
 
 interface UseCodeMirrorResult {
   view: EditorView | null
   setContent: (content: string) => void
+  scrollToLine: (lineNumber: number) => void
+  getVisibleLineRange: () => VisibleLineRange | null
+}
+
+function getVisibleLineRangeForView(view: EditorView): VisibleLineRange {
+  const { from, to } = view.viewport
+
+  return {
+    startLine: view.state.doc.lineAt(from).number,
+    endLine: view.state.doc.lineAt(to).number
+  }
 }
 
 export function useCodeMirror(
@@ -99,15 +116,20 @@ export function useCodeMirror(
   const onChangeRef = useRef(options.onChange)
   const onCursorChangeRef = useRef(options.onCursorChange)
   const onScrollChangeRef = useRef(options.onScrollChange)
+  const onVisibleRangeChangeRef = useRef(options.onVisibleRangeChange)
+  const contentRef = useRef(options.content)
   const isExternalUpdate = useRef(false)
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
 
   // Keep refs up to date
   onChangeRef.current = options.onChange
   onCursorChangeRef.current = options.onCursorChange
   onScrollChangeRef.current = options.onScrollChange
+  onVisibleRangeChangeRef.current = options.onVisibleRangeChange
+  contentRef.current = options.content
 
   // Create editor
   useEffect(() => {
@@ -141,6 +163,13 @@ export function useCodeMirror(
         scrollDebounceRef.current = setTimeout(() => {
           onScrollChangeRef.current(view.scrollDOM.scrollTop)
         }, 300)
+
+        if (visibleRangeDebounceRef.current) {
+          clearTimeout(visibleRangeDebounceRef.current)
+        }
+        visibleRangeDebounceRef.current = setTimeout(() => {
+          onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
+        }, 100)
         return false
       }
     })
@@ -180,7 +209,7 @@ export function useCodeMirror(
       if (!containerRef.current) return
 
       const state = EditorState.create({
-        doc: options.content,
+        doc: contentRef.current,
         extensions
       })
 
@@ -197,6 +226,7 @@ export function useCodeMirror(
       }
 
       viewRef.current = view
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
       setViewReady(true)
     }
 
@@ -215,13 +245,16 @@ export function useCodeMirror(
       if (scrollDebounceRef.current) {
         clearTimeout(scrollDebounceRef.current)
       }
+      if (visibleRangeDebounceRef.current) {
+        clearTimeout(visibleRangeDebounceRef.current)
+      }
       if (viewRef.current) {
         viewRef.current.destroy()
         viewRef.current = null
       }
       setViewReady(false)
     }
-  }, [options.language, options.readOnly])
+  }, [containerRef, options.language, options.readOnly])
 
   // Watch for dark/light theme changes via MutationObserver
   useEffect(() => {
@@ -256,5 +289,45 @@ export function useCodeMirror(
     isExternalUpdate.current = false
   }, [])
 
-  return { view: viewReady ? viewRef.current : null, setContent }
+  const scrollToLine = useCallback((lineNumber: number) => {
+    const view = viewRef.current
+    if (!view) return
+
+    const safeLineNumber = Math.min(Math.max(1, lineNumber), view.state.doc.lines)
+    const line = view.state.doc.line(safeLineNumber)
+    const lineBlock = view.lineBlockAt(line.from)
+    const targetScrollTop = Math.max(
+      0,
+      lineBlock.top - view.scrollDOM.clientHeight / 2 + lineBlock.height / 2
+    )
+
+    view.dispatch({
+      selection: { anchor: line.from }
+    })
+
+    view.scrollDOM.scrollTo({
+      top: targetScrollTop,
+      behavior: 'smooth'
+    })
+
+    onScrollChangeRef.current(targetScrollTop)
+    onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
+    view.focus()
+  }, [])
+
+  const getVisibleLineRange = useCallback((): VisibleLineRange | null => {
+    const view = viewRef.current
+    if (!view) {
+      return null
+    }
+
+    return getVisibleLineRangeForView(view)
+  }, [])
+
+  return {
+    view: viewReady ? viewRef.current : null,
+    setContent,
+    scrollToLine,
+    getVisibleLineRange
+  }
 }
