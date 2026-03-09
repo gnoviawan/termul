@@ -503,11 +503,6 @@ async function restoreFromLayout(
           cwd: persistedTerminal.cwd
         })
 
-        if (isCancelled()) {
-          debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after spawn`)
-          return
-        }
-
         debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
           success: spawnResult.success,
           error: spawnResult.success ? undefined : spawnResult.error,
@@ -516,6 +511,18 @@ async function restoreFromLayout(
 
         if (!spawnResult.success) {
           debugLog('restoreFromLayout', `Spawn FAILED, skipping [${terminalCallId}]`)
+          continue
+        }
+
+        if (isCancelled()) {
+          debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after spawn; killing PTY`, {
+            ptyId: spawnResult.data.id
+          })
+
+          const killResult = await terminalApi.kill(spawnResult.data.id)
+          if (!killResult.success) {
+            console.error('Failed to kill cancelled restore PTY:', killResult.error)
+          }
           continue
         }
 
@@ -667,16 +674,27 @@ async function createDefaultTerminal(
       cwd: project?.path
     })
 
-    if (isCancelled()) {
-      debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after spawn`)
-      return
-    }
-
     debugLog('createDefaultTerminal', `Spawn result [${defaultId}]`, {
       success: spawnResult.success,
       error: spawnResult.success ? undefined : spawnResult.error,
       ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
     })
+
+    if (isCancelled()) {
+      if (spawnResult.success) {
+        debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after spawn; killing PTY`, {
+          ptyId: spawnResult.data.id
+        })
+
+        const killResult = await terminalApi.kill(spawnResult.data.id)
+        if (!killResult.success) {
+          console.error('Failed to kill cancelled default terminal PTY:', killResult.error)
+        }
+      } else {
+        debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after failed spawn`)
+      }
+      return
+    }
 
     if (!spawnResult.success) {
       debugLog('createDefaultTerminal', `Spawn FAILED [${defaultId}]`)
