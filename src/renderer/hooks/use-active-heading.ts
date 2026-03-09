@@ -121,7 +121,9 @@ export function useBlockNoteActiveHeading({
       return !!elementId && isHeadingBlock && headingIds.has(elementId)
     })
 
-    elements.forEach((element) => observer.observe(element))
+    elements.forEach((element) => {
+      observer.observe(element)
+    })
 
     return () => {
       observer.disconnect()
