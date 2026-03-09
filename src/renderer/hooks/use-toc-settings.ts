@@ -9,7 +9,8 @@ let hasSubscribedToPersistence = false
 
 async function initializeTocSettings(
   setSettings: (settings: TocSettings) => void,
-  setLoaded: (loaded: boolean) => void
+  setLoaded: (loaded: boolean) => void,
+  setLoadFailed: (failed: boolean) => void
 ): Promise<void> {
   try {
     const result = await persistenceApi.read<TocSettings>(TOC_SETTINGS_KEY)
@@ -19,22 +20,35 @@ async function initializeTocSettings(
         ...DEFAULT_TOC_SETTINGS,
         ...result.data
       })
+      setLoadFailed(false)
+      setLoaded(true)
+      return
     }
-  } catch {
+
+    if (!result.success && result.code === 'KEY_NOT_FOUND') {
+      setSettings(DEFAULT_TOC_SETTINGS)
+      setLoadFailed(false)
+      setLoaded(true)
+      return
+    }
+
+    setLoadFailed(true)
     console.error('Failed to load TOC settings')
-  } finally {
-    setLoaded(true)
+  } catch {
+    setLoadFailed(true)
+    console.error('Failed to load TOC settings')
   }
 }
 
 export function useTocSettings(): void {
   const setSettings = useTocSettingsStore((state) => state.setSettings)
   const setLoaded = useTocSettingsStore((state) => state.setLoaded)
+  const setLoadFailed = useTocSettingsStore((state) => state.setLoadFailed)
 
   useEffect(() => {
     if (!hasSubscribedToPersistence) {
       useTocSettingsStore.subscribe((state) => {
-        if (!state.isLoaded) {
+        if (!state.isLoaded || state.loadFailed) {
           return
         }
 
@@ -44,8 +58,9 @@ export function useTocSettings(): void {
       hasSubscribedToPersistence = true
     }
 
-    if (!loadPromise && !useTocSettingsStore.getState().isLoaded) {
-      loadPromise = initializeTocSettings(setSettings, setLoaded)
+    const storeState = useTocSettingsStore.getState()
+    if (!loadPromise && !storeState.isLoaded && !storeState.loadFailed) {
+      loadPromise = initializeTocSettings(setSettings, setLoaded, setLoadFailed)
     }
-  }, [setLoaded, setSettings])
+  }, [setLoadFailed, setLoaded, setSettings])
 }

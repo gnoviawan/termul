@@ -37,11 +37,12 @@ export function EditorToolbar({
           <span>TOC</span>
         </Button>
 
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onToggleViewMode}
           className={cn(
-            'flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors',
-            'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            'h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary'
           )}
           title={viewMode === 'markdown' ? 'Switch to source mode' : 'Switch to WYSIWYG mode'}
         >
@@ -56,7 +57,7 @@ export function EditorToolbar({
               <span>Preview</span>
             </>
           )}
-        </button>
+        </Button>
       </div>
     </div>
   )

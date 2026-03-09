@@ -73,6 +73,7 @@ export function useBlockNoteActiveHeading({
     }
 
     const headingIds = new Set(headings.map((heading) => heading.blockId ?? heading.id))
+    const blockIdToTocId = new Map(headings.map((heading) => [heading.blockId ?? heading.id, heading.id]))
     const visibleHeadings = new Map<string, number>()
 
     const updateActiveHeading = (): void => {
@@ -89,7 +90,8 @@ export function useBlockNoteActiveHeading({
       (entries) => {
         entries.forEach((entry) => {
           const element = entry.target as HTMLElement
-          const headingId = element.dataset.id
+          const blockId = element.dataset.id
+          const headingId = blockId ? blockIdToTocId.get(blockId) : undefined
 
           if (!headingId) {
             return

@@ -7,7 +7,8 @@ describe('toc-settings-store', () => {
   beforeEach(() => {
     useTocSettingsStore.setState({
       settings: { ...DEFAULT_TOC_SETTINGS },
-      isLoaded: false
+      isLoaded: false,
+      loadFailed: false
     })
   })
 
@@ -46,6 +47,20 @@ describe('toc-settings-store', () => {
 
     expect(result.current.settings.width).toBe(150)
     expect(result.current.settings.maxHeadingLevel).toBe(1)
+  })
+
+  it('sanitizes malformed persisted settings', () => {
+    const { result } = renderHook(() => useTocSettingsStore())
+
+    act(() => {
+      result.current.setSettings({
+        isVisible: 'yes' as unknown as boolean,
+        maxHeadingLevel: Number.NaN,
+        width: Number.POSITIVE_INFINITY
+      })
+    })
+
+    expect(result.current.settings).toEqual(DEFAULT_TOC_SETTINGS)
   })
 
   it('marks settings as loaded', () => {

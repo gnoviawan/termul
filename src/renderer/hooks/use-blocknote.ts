@@ -138,16 +138,28 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
   const scrollToBlock = useCallback(
     (blockId: string): void => {
-      editor.setTextCursorPosition(blockId, 'start')
-      editor.focus()
+      const targetElement = editor.domElement?.querySelector<HTMLElement>(
+        `[data-node-type="blockContainer"][data-id="${CSS.escape(blockId)}"]`
+      )
 
-      requestAnimationFrame(() => {
-        const targetElement = Array.from(
-          editor.domElement?.querySelectorAll<HTMLElement>('[data-node-type="blockContainer"][data-id]') ?? []
-        ).find((element) => element.dataset.id === blockId)
+      if (!targetElement) {
+        return
+      }
 
-        targetElement?.scrollIntoView({ block: 'center' })
-      })
+      try {
+        editor.setTextCursorPosition(blockId, 'start')
+        editor.focus()
+
+        requestAnimationFrame(() => {
+          try {
+            targetElement.scrollIntoView({ block: 'center' })
+          } catch {
+            console.error('Failed to scroll TOC heading into view')
+          }
+        })
+      } catch {
+        console.error('Failed to focus TOC heading block')
+      }
     },
     [editor]
   )

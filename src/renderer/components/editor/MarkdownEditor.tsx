@@ -4,7 +4,7 @@ import { useBlockNote } from '@/hooks/use-blocknote'
 import { BlockNoteViewRaw } from '@blocknote/react'
 import { TocPanel } from './TocPanel'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
-import { useTocIsVisible, useTocWidth, useTocSettingsStore } from '@/stores/toc-settings-store'
+import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
 import '@blocknote/react/style.css'
 
@@ -13,6 +13,16 @@ interface MarkdownEditorProps {
   content: string
   isVisible: boolean
   onChange: (content: string) => void
+}
+
+function getTocPercentBounds(panelWidth: number): { minPercent: number; maxPercent: number } {
+  const minPercent = (TOC_MIN_WIDTH / panelWidth) * 100
+  const maxPercent = (TOC_MAX_WIDTH / panelWidth) * 100
+
+  return {
+    minPercent,
+    maxPercent: Math.max(minPercent, maxPercent)
+  }
 }
 
 function useIsDark(): boolean {
@@ -37,6 +47,7 @@ function useIsDark(): boolean {
 }
 
 export function MarkdownEditor({
+  filePath,
   content,
   isVisible,
   onChange
@@ -44,6 +55,7 @@ export function MarkdownEditor({
   // Track whether the last content change came from this editor's onChange
   const isLocalChangeRef = useRef(false)
   const prevContentRef = useRef(content)
+  const prevFilePathRef = useRef(filePath)
 
   const wrappedOnChange = useCallback(
     (newContent: string) => {
@@ -64,43 +76,64 @@ export function MarkdownEditor({
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [blockNoteContainer, setBlockNoteContainer] = useState<HTMLDivElement | null>(null)
   const [layoutWidth, setLayoutWidth] = useState(0)
-  const isTocVisible = useTocIsVisible()
-  const tocWidth = useTocWidth()
-  const setTocWidth = useTocSettingsStore((state) => state.setWidth)
+  const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore((state) => ({
+    isTocHydrated: state.isLoaded || state.loadFailed,
+    isTocVisible: state.settings.isVisible,
+    tocWidth: state.settings.width,
+    setTocWidth: state.setWidth
+  }))
+
+  const getPanelWidth = useCallback((): number => {
+    return layoutWidth || layoutRef.current?.clientWidth || 1000
+  }, [layoutWidth])
 
   const getTocPanelSizePercent = useCallback((): number => {
-    const panelWidth = layoutWidth || layoutRef.current?.clientWidth || 1000
+    const panelWidth = getPanelWidth()
+    const { minPercent, maxPercent } = getTocPercentBounds(panelWidth)
     const widthRatio = panelWidth > 0 ? tocWidth / panelWidth : 0
-    return Math.min(40, Math.max(10, widthRatio * 100))
-  }, [layoutWidth, tocWidth])
 
+    return Math.min(maxPercent, Math.max(minPercent, widthRatio * 100))
+  }, [getPanelWidth, tocWidth])
+
+  const tocPanelBounds = useMemo(() => getTocPercentBounds(getPanelWidth()), [getPanelWidth])
   const tocPanelDefaultSize = useMemo(() => getTocPanelSizePercent(), [getTocPanelSizePercent])
+  const canRenderToc = isTocHydrated && isTocVisible
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
-      const layoutWidth = layoutRef.current?.clientWidth ?? 1000
-      const nextPixels = Math.round((size / 100) * layoutWidth)
+      const panelWidth = getPanelWidth()
+      const { minPercent, maxPercent } = getTocPercentBounds(panelWidth)
+      const clampedSize = Math.min(maxPercent, Math.max(minPercent, size))
+      const nextPixels = Math.round((clampedSize / 100) * panelWidth)
 
       if (prevSize !== size) {
         setTocWidth(nextPixels)
       }
     },
-    [setTocWidth]
+    [getPanelWidth, setTocWidth]
   )
 
   // Sync content only for external changes (e.g., file reload from disk)
   useEffect(() => {
+    if (filePath !== prevFilePathRef.current) {
+      isLocalChangeRef.current = false
+      prevFilePathRef.current = filePath
+      prevContentRef.current = content
+      void replaceContent(content)
+      return
+    }
+
     if (content !== prevContentRef.current) {
       if (isLocalChangeRef.current) {
         // This change came from the editor itself, don't push it back
         isLocalChangeRef.current = false
       } else {
         // External change - replace editor content
-        replaceContent(content)
+        void replaceContent(content)
       }
       prevContentRef.current = content
     }
-  }, [content, replaceContent])
+  }, [content, filePath, replaceContent])
 
   useEffect(() => {
     setBlockNoteContainer(blockNoteScrollRootRef.current)
@@ -129,7 +162,7 @@ export function MarkdownEditor({
   }, [])
 
   useEffect(() => {
-    if (!isTocVisible) {
+    if (!canRenderToc) {
       return
     }
 
@@ -146,13 +179,13 @@ export function MarkdownEditor({
     }
 
     group.setLayout([100 - tocSize, tocSize])
-  }, [getTocPanelSizePercent, isTocVisible])
+  }, [canRenderToc, getTocPanelSizePercent])
 
   return (
     <div className="w-full h-full" style={{ display: isVisible ? 'block' : 'none' }}>
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
-          <ResizablePanel defaultSize={isTocVisible ? 100 - tocPanelDefaultSize : 100} minSize={60}>
+          <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
             <div ref={blockNoteScrollRootRef} className="h-full overflow-auto">
               <BlockNoteViewRaw
                 editor={editor}
@@ -168,13 +201,13 @@ export function MarkdownEditor({
             </div>
           </ResizablePanel>
 
-          {isTocVisible && (
+          {canRenderToc && (
             <>
               <ResizableHandle />
               <ResizablePanel
                 defaultSize={tocPanelDefaultSize}
-                minSize={10}
-                maxSize={40}
+                minSize={tocPanelBounds.minPercent}
+                maxSize={tocPanelBounds.maxPercent}
                 onResize={handleTocResize}
               >
                 <div

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { renderHook } from '@testing-library/react'
-import { getActiveHeadingFromVisibleRange, useCodeMirrorActiveHeading } from './use-active-heading'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { getActiveHeadingFromVisibleRange, useBlockNoteActiveHeading, useCodeMirrorActiveHeading } from './use-active-heading'
 import type { TocHeading } from './use-toc-headings'
 
 const headings: TocHeading[] = [
@@ -8,6 +8,10 @@ const headings: TocHeading[] = [
   { id: 'heading-line-4', level: 2, text: 'Section', line: 4 },
   { id: 'heading-line-8', level: 3, text: 'Details', line: 8 }
 ]
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('use-active-heading', () => {
   it('returns the first heading when no visible range is available', () => {
@@ -39,5 +43,61 @@ describe('use-active-heading', () => {
     rerender({ visibleRange: { startLine: 8, endLine: 12 } })
 
     expect(result.current).toBe('heading-line-8')
+  })
+
+  it('maps visible BlockNote block ids back to TOC ids', () => {
+    const container = document.createElement('div')
+    const headingElement = document.createElement('div')
+    const headingContent = document.createElement('div')
+    headingElement.setAttribute('data-node-type', 'blockContainer')
+    headingElement.setAttribute('data-id', 'block-1')
+    headingContent.setAttribute('data-content-type', 'heading')
+    headingElement.appendChild(headingContent)
+    container.appendChild(headingElement)
+
+    const blockHeadings: TocHeading[] = [
+      { id: 'toc-heading-1', blockId: 'block-1', level: 1, text: 'Title' }
+    ]
+
+    let observerCallback: IntersectionObserverCallback | undefined
+
+    class MockIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+      unobserve = vi.fn()
+      root = null
+      rootMargin = '0px'
+      thresholds = [0]
+      takeRecords = () => []
+    }
+
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
+
+    const { result } = renderHook(() =>
+      useBlockNoteActiveHeading({
+        headings: blockHeadings,
+        container,
+        isEnabled: true
+      })
+    )
+
+    act(() => {
+      observerCallback?.(
+        [
+          {
+            target: headingElement,
+            isIntersecting: true,
+            boundingClientRect: { top: 24 }
+          } as unknown as IntersectionObserverEntry
+        ],
+        {} as IntersectionObserver
+      )
+    })
+
+    expect(result.current).toBe('toc-heading-1')
   })
 })

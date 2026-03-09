@@ -15,6 +15,7 @@ export function EditorPanel({
   filePath,
   isVisible
 }: EditorPanelProps): React.JSX.Element {
+  // Intentionally invoked for side effects: loads and persists shared TOC settings.
   useTocSettings()
 
   const fileState = useEditorStore(
