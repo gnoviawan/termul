@@ -143,7 +143,9 @@ describe('normalizeShellForStartup', () => {
 
 describe('useTerminalRestore', () => {
   it('does not apply cancelled live-terminal restore state after a project switch', async () => {
-    let resolveProjectALayout: ((value: null) => void) | undefined = undefined
+    const projectALayout = {
+      resolve: undefined as ((value: null) => void) | undefined
+    }
 
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' },
@@ -154,7 +156,7 @@ describe('useTerminalRestore', () => {
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolveProjectALayout = resolve
+            projectALayout.resolve = resolve
           })
       )
       .mockResolvedValueOnce(null)
@@ -172,7 +174,7 @@ describe('useTerminalRestore', () => {
       expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-active', 'term-b-live')
     })
 
-    resolveProjectALayout?.(null)
+    projectALayout.resolve?.(null)
 
     await waitFor(() => {
       expect(mockLoadPersistedTerminals).toHaveBeenCalledTimes(2)
@@ -181,33 +183,58 @@ describe('useTerminalRestore', () => {
     expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledTimes(1)
     expect(mockWorkspaceStore.ensureTerminalTab).toHaveBeenCalledWith('b-live', undefined, true)
     expect(mockWorkspaceStore.ensureTerminalTab).not.toHaveBeenCalledWith('a-live', undefined, true)
+    expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('b-live')
   })
 
   it('does not spawn a fallback terminal after cancelled restore errors', async () => {
-    let rejectProjectALayout: ((reason?: unknown) => void) | null = null
+    const projectALayout = {
+      reject: undefined as ((reason?: unknown) => void) | undefined
+    }
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    mockLoadPersistedTerminals.mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectProjectALayout = reject
-        })
-    )
+    mockTerminalStoreState.terminals = [
+      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+    ]
 
-    const { rerender } = renderHook(({ projectId }) => {
-      mockProjectState.activeProjectId = projectId
-      useTerminalRestore()
-    }, {
-      initialProps: { projectId: 'project-a' }
-    })
+    mockLoadPersistedTerminals
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            projectALayout.reject = reject
+          })
+      )
+      .mockResolvedValueOnce(null)
 
-    rerender({ projectId: 'project-b' })
-    if (rejectProjectALayout) rejectProjectALayout(new Error('restore failed'))
+    try {
+      const { rerender } = renderHook(({ projectId }) => {
+        mockProjectState.activeProjectId = projectId
+        useTerminalRestore()
+      }, {
+        initialProps: { projectId: 'project-a' }
+      })
 
-    await waitFor(() => {
-      expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith('project-b', true)
-    })
+      rerender({ projectId: 'project-b' })
 
-    expect(mockTerminalSpawn).not.toHaveBeenCalled()
-    expect(mockTerminalStoreState.addTerminal).not.toHaveBeenCalled()
+      await waitFor(() => {
+        expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-active', 'term-b-live')
+        expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('b-live')
+      })
+
+      projectALayout.reject?.(new Error('restore failed'))
+
+      await waitFor(() => {
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          'Failed to restore terminals:',
+          expect.any(Error)
+        )
+      })
+
+      await waitFor(() => {
+        expect(mockTerminalSpawn).not.toHaveBeenCalled()
+        expect(mockTerminalStoreState.addTerminal).not.toHaveBeenCalled()
+      })
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 })

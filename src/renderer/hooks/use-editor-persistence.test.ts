@@ -492,31 +492,34 @@ describe('useEditorPersistence', () => {
   })
 
   it('ignores stale restore results after switching projects', async () => {
-    let resolveProjectA:
-      | ((value: {
-          success: true
-          data: {
-            openFiles: never[]
-            activeFilePath: null
-            expandedDirs: string[]
-            fileExplorerVisible: boolean
-            activeTabId: null
-            activePaneId: string
-            paneLayout: {
-              type: 'leaf'
-              id: string
-              tabs: { type: 'editor'; filePath: string }[]
-              activeTabId: string
-            }
-          }
-        }) => void)
-      | undefined = undefined
+    const projectARead = {
+      resolve:
+        undefined as
+          | ((value: {
+              success: true
+              data: {
+                openFiles: never[]
+                activeFilePath: null
+                expandedDirs: string[]
+                fileExplorerVisible: boolean
+                activeTabId: null
+                activePaneId: string
+                paneLayout: {
+                  type: 'leaf'
+                  id: string
+                  tabs: { type: 'editor'; filePath: string }[]
+                  activeTabId: string
+                }
+              }
+            }) => void)
+          | undefined
+    }
 
     mockPersistenceRead
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolveProjectA = resolve
+            projectARead.resolve = resolve
           })
       )
       .mockResolvedValueOnce({ success: true, data: null })
@@ -548,7 +551,7 @@ describe('useEditorPersistence', () => {
       expect(mockWorkspaceState.resetLayout).toHaveBeenCalledTimes(1)
     })
 
-    resolveProjectA?.({
+    projectARead.resolve?.({
       success: true,
       data: {
         openFiles: [],
