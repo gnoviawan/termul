@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { serializeTerminalsForProject } from './useTerminalAutoSave'
+import {
+  serializeTerminalsForProject,
+  setTerminalRestoreInProgress,
+  isTerminalRestoreInProgress
+} from './useTerminalAutoSave'
 import { extractScrollback } from '../utils/terminal-registry'
 import type { Terminal } from '@/types/project'
 
@@ -31,6 +35,19 @@ vi.stubGlobal('window', {
 describe('useTerminalAutoSave', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  describe('setTerminalRestoreInProgress', () => {
+    it('only clears restore state for the matching owner', () => {
+      setTerminalRestoreInProgress('proj-1', true, 'owner-a')
+      expect(isTerminalRestoreInProgress()).toBe(true)
+
+      setTerminalRestoreInProgress('proj-1', false, 'owner-b')
+      expect(isTerminalRestoreInProgress()).toBe(true)
+
+      setTerminalRestoreInProgress('proj-1', false, 'owner-a')
+      expect(isTerminalRestoreInProgress()).toBe(false)
+    })
   })
 
   describe('serializeTerminalsForProject', () => {

@@ -186,32 +186,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [])
 
-  // Sync terminal tabs with workspace store
-  // CRITICAL: Track sync calls to prevent loops
-  const syncCallCountRef = useRef(0)
-  const lastSyncTerminalsRef = useRef<string[]>([])
+  // Ensure tabs exist for currently visible project terminals.
+  // Project workspace loading/removal is owned by persistence + restore flows.
+  const ensureCallCountRef = useRef(0)
+  const lastEnsuredTerminalIdsRef = useRef<string[]>([])
 
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id)
 
-    // Skip if terminals haven't actually changed (same IDs)
-    const prevIds = lastSyncTerminalsRef.current
-    if (terminalIds.length === prevIds.length &&
-        terminalIds.every((id, i) => id === prevIds[i])) {
+    const prevIds = lastEnsuredTerminalIdsRef.current
+    if (terminalIds.length === prevIds.length && terminalIds.every((id, i) => id === prevIds[i])) {
       return
     }
 
-    const syncId = `sync-${syncCallCountRef.current++}-${Date.now().toString().slice(-6)}`
+    const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`
 
-    console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${syncId}]`, {
+    console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
       terminalCount: terminalIds.length,
       terminalIds,
       prevCount: prevIds.length,
-      callCount: syncCallCountRef.current
+      callCount: ensureCallCountRef.current
     })
 
-    lastSyncTerminalsRef.current = terminalIds
-    useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
+    lastEnsuredTerminalIdsRef.current = terminalIds
+    const workspaceStore = useWorkspaceStore.getState()
+    for (const terminalId of terminalIds) {
+      workspaceStore.ensureTerminalTab(terminalId)
+    }
   }, [terminals])
 
   // Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree

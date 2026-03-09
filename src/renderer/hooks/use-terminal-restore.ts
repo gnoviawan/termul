@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
-import { useWorkspaceStore } from '../stores/workspace-store'
+import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import {
@@ -54,6 +54,41 @@ function releaseGlobalSpawnLock(ownerId: string): void {
     debugLog('SPAWN_LOCK', `LOCK RELEASED [${ownerId}]`)
   } else {
     debugLog('SPAWN_LOCK', `LOCK RELEASE FAILED [${ownerId}] - owned by ${GLOBAL_SPAWN_LOCK_OWNER}`)
+  }
+}
+
+function resetSpawnCallCount(sessionId: string): void {
+  SPAWN_CALL_COUNT = 0
+  debugLog('SPAWN_LOCK', `RESET SPAWN COUNT [${sessionId}]`)
+}
+
+async function cleanupSpawnedPtys(
+  terminals: Array<{ ptyId?: string }>,
+  restoreId: string,
+  phase: string
+): Promise<void> {
+  const ptyIds = Array.from(
+    new Set(
+      terminals
+        .map((terminal) => terminal.ptyId)
+        .filter((ptyId): ptyId is string => !!ptyId)
+    )
+  )
+
+  if (ptyIds.length === 0) {
+    return
+  }
+
+  debugLog('restoreFromLayout', `CLEANING UP SPAWNED PTYS [${restoreId}]`, {
+    phase,
+    ptyIds
+  })
+
+  for (const ptyId of ptyIds) {
+    const killResult = await terminalApi.kill(ptyId)
+    if (!killResult.success) {
+      console.error('Failed to kill cancelled restore PTY:', killResult.error)
+    }
   }
 }
 
@@ -204,6 +239,8 @@ export function useTerminalRestore(): void {
     // Skip if no project selected or same project
     if (!activeProjectId || activeProjectId === previousProjectIdRef.current) {
       debugLog('useTerminalRestore', `SKIPPED [${callId}]: no project or same project`)
+      const idx = RESTORE_CALL_STACK.indexOf(callId)
+      if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
       return
     }
 
@@ -213,14 +250,17 @@ export function useTerminalRestore(): void {
         isRestoring: Array.from(isRestoringRef.current),
         hasLock: PROJECT_RESTORE_LOCKS.has(activeProjectId)
       })
+      const idx = RESTORE_CALL_STACK.indexOf(callId)
+      if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
       return
     }
 
     // Set flag immediately to prevent race condition
     isRestoringRef.current.add(activeProjectId)
     PROJECT_RESTORE_LOCKS.add(activeProjectId)
-    setTerminalRestoreInProgress(true)
     const projectIdToRestore = activeProjectId
+    const restoreOwnerId = `${projectIdToRestore}:${callId}`
+    setTerminalRestoreInProgress(projectIdToRestore, true, restoreOwnerId)
 
     debugLog('useTerminalRestore', `STARTING RESTORE [${callId}]`, {
       projectId: projectIdToRestore
@@ -236,72 +276,100 @@ export function useTerminalRestore(): void {
     // FIX #5: Add cancellation token to handle cleanup properly
     let cancelled = false
     const cancelRestore = () => { cancelled = true }
+    const isCancelled = (): boolean => cancelled || previousProjectIdRef.current !== projectIdToRestore
 
     const restoreTerminals = async (): Promise<void> => {
       try {
         // Check for cancellation before starting
-        if (cancelled) {
+        if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] before restore`)
           return
         }
 
-        // CRITICAL FIX: Kill all PTYs from previous project before switching
-        // This prevents orphaned PTYs from accumulating and causing "terminal spam"
         if (actualPreviousProjectId && actualPreviousProjectId !== projectIdToRestore) {
-          // First kill all PTYs from previous project
-          const terminalStore = useTerminalStore.getState()
-          const previousTerminals = terminalStore.terminals.filter(
-            (t) => t.projectId === actualPreviousProjectId && t.ptyId
-          )
-
-          debugLog('useTerminalRestore', `KILLING ${previousTerminals.length} PTYs from previous project [${actualPreviousProjectId}]`)
-
-          for (const terminal of previousTerminals) {
-            if (!terminal.ptyId) {
-              continue
-            }
-            try {
-              await terminalApi.kill(terminal.ptyId)
-              debugLog('useTerminalRestore', `KILLED PTY [${terminal.ptyId}]`)
-            } catch (err) {
-              debugLog('useTerminalRestore', `FAILED TO KILL PTY [${terminal.ptyId}]`, {
-                error: err instanceof Error ? err.message : String(err)
-              })
-            }
-          }
-
-          // Then save the layout
           await saveTerminalLayout(actualPreviousProjectId)
         }
 
-        // Get fresh state after save completes
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after save`)
+          return
+        }
+
         const terminalStore = useTerminalStore.getState()
         const existingTerminals = terminalStore.terminals.filter(
           (t) => t.projectId === projectIdToRestore
         )
+        const liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
 
-        // If terminals already exist in memory, just restore selection
-        if (existingTerminals.length > 0) {
+        if (liveProjectTerminals.length > 0) {
           const layout = await loadPersistedTerminals(projectIdToRestore)
-          selectTerminalForProject(projectIdToRestore, existingTerminals, layout)
+          if (isCancelled()) {
+            debugLog('useTerminalRestore', `CANCELLED [${callId}] after live layout load`)
+            return
+          }
+
+          const workspaceStore = useWorkspaceStore.getState()
+          const terminalIdToSelect = selectTerminalForProject(
+            liveProjectTerminals,
+            layout
+          )
+
+          for (const terminal of liveProjectTerminals) {
+            workspaceStore.ensureTerminalTab(
+              terminal.id,
+              undefined,
+              terminal.id === terminalIdToSelect
+            )
+          }
+
+          if (isCancelled()) {
+            debugLog('useTerminalRestore', `CANCELLED [${callId}] before workspace selection`)
+            return
+          }
+
+          const terminalTab = terminalIdToSelect ? terminalTabId(terminalIdToSelect) : null
+          const containingPane = terminalTab
+            ? findPaneContainingTab(useWorkspaceStore.getState().root, terminalTab)
+            : null
+          const activePane = containingPane ?? workspaceStore.getActivePaneLeaf()
+          if (terminalTab && activePane) {
+            workspaceStore.setActiveTab(activePane.id, terminalTab)
+          }
+
+          if (terminalIdToSelect) {
+            if (isCancelled()) {
+              debugLog('useTerminalRestore', `CANCELLED [${callId}] before terminal selection`)
+              return
+            }
+
+            useTerminalStore.getState().selectTerminal(terminalIdToSelect)
+          }
           return
         }
 
         // No terminals in memory - load from disk or create default
         const layout = await loadPersistedTerminals(projectIdToRestore)
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after persisted layout load`)
+          return
+        }
 
         if (layout && layout.terminals.length > 0) {
-          await restoreFromLayout(projectIdToRestore, layout)
+          await restoreFromLayout(projectIdToRestore, layout, isCancelled)
         } else {
-          await createDefaultTerminal(projectIdToRestore)
+          await createDefaultTerminal(projectIdToRestore, isCancelled)
         }
       } catch (err: unknown) {
         debugLog('useTerminalRestore', `RESTORE ERROR [${callId}]`, {
           error: err instanceof Error ? err.message : String(err)
         })
         console.error('Failed to restore terminals:', err)
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after error`)
+          return
+        }
         // Fall back to default terminal
-        await createDefaultTerminal(projectIdToRestore)
+        await createDefaultTerminal(projectIdToRestore, isCancelled)
       } finally {
         // Only clean up if this restore was not cancelled
         if (!cancelled && isRestoringRef.current.has(projectIdToRestore) && PROJECT_RESTORE_LOCKS.has(projectIdToRestore)) {
@@ -310,7 +378,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(false)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
           const idx = RESTORE_CALL_STACK.indexOf(callId)
           if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
         } else if (cancelled) {
@@ -319,7 +387,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(false)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
         }
       }
     }
@@ -340,6 +408,8 @@ export function useTerminalRestore(): void {
       // FIX #5: Also clean up the restoring flag for this project on cleanup
       // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
       isRestoringRef.current.delete(projectIdForCleanup)
+      PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
+      setTerminalRestoreInProgress(projectIdForCleanup, false, restoreOwnerId)
     }
   }, [activeProjectId])
 }
@@ -349,15 +419,13 @@ export function useTerminalRestore(): void {
  * Uses multiple matching strategies: ID match, then name match, then fallback
  */
 function selectTerminalForProject(
-  projectId: string,
   existingTerminals: Array<{ id: string; name: string; projectId: string }>,
   layout: PersistedTerminalLayout | null
-): void {
+): string | null {
   if (existingTerminals.length === 0) {
-    return
+    return null
   }
 
-  const terminalStore = useTerminalStore.getState()
   let terminalIdToSelect: string | null = null
 
   if (layout?.activeTerminalId) {
@@ -388,14 +456,17 @@ function selectTerminalForProject(
     terminalIdToSelect = existingTerminals[0].id
   }
 
-  // Always select a terminal - ensures the project has an active terminal
-  terminalStore.selectTerminal(terminalIdToSelect)
+  return terminalIdToSelect
 }
 
 /**
  * Restore terminals from persisted layout (only when no terminals exist in memory)
  */
-async function restoreFromLayout(projectId: string, layout: PersistedTerminalLayout): Promise<void> {
+async function restoreFromLayout(
+  projectId: string,
+  layout: PersistedTerminalLayout,
+  isCancelled: () => boolean
+): Promise<void> {
   const restoreId = `restore-${Math.random().toString(36).slice(2, 7)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
@@ -404,9 +475,11 @@ async function restoreFromLayout(projectId: string, layout: PersistedTerminalLay
     return
   }
 
-  if (SPAWN_CALL_COUNT >= MAX_SPAWN_LIMIT) {
+  resetSpawnCallCount(restoreId)
+
+  if (layout.terminals.length > MAX_SPAWN_LIMIT) {
     debugLog('restoreFromLayout', `BLOCKED [${restoreId}] Spawn limit exceeded`, {
-      count: SPAWN_CALL_COUNT,
+      count: layout.terminals.length,
       limit: MAX_SPAWN_LIMIT
     })
     releaseGlobalSpawnLock(restoreId)
@@ -414,6 +487,11 @@ async function restoreFromLayout(projectId: string, layout: PersistedTerminalLay
   }
 
   try {
+    if (isCancelled()) {
+      debugLog('restoreFromLayout', `CANCELLED [${restoreId}] before restore`)
+      return
+    }
+
     const terminalStore = useTerminalStore.getState()
 
     debugLog('restoreFromLayout', `START [${restoreId}] ACQUIRING LOCK`, {
@@ -424,102 +502,132 @@ async function restoreFromLayout(projectId: string, layout: PersistedTerminalLay
       spawnCallCount: SPAWN_CALL_COUNT
     })
 
-  // Create all terminals at once to avoid multiple re-renders
-  const newTerminals: Array<{
-    id: string
-    name: string
-    projectId: string
-    shell: string
-    cwd?: string
-    output: never[]
-    pendingScrollback?: string[]
-    ptyId?: string
-  }> = []
+    // Create all terminals at once to avoid multiple re-renders
+    const newTerminals: Array<{
+      id: string
+      name: string
+      projectId: string
+      shell: string
+      cwd?: string
+      output: never[]
+      pendingScrollback?: string[]
+      ptyId?: string
+    }> = []
 
-  // Map old IDs to new IDs for active terminal selection and pane remapping
-  const idMap = new Map<string, string>()
+    // Map old IDs to new IDs for active terminal selection and pane remapping
+    const idMap = new Map<string, string>()
 
-  for (const persistedTerminal of layout.terminals) {
-    const terminalCallId = `${restoreId}-${persistedTerminal.name}-${Math.random().toString(36).slice(2, 5)}`
-    SPAWN_TRACKER.set(terminalCallId, (SPAWN_TRACKER.get(terminalCallId) || 0) + 1)
-
-    debugLog('restoreFromLayout', `Spawning terminal [${terminalCallId}]`, {
-      name: persistedTerminal.name,
-      shell: persistedTerminal.shell,
-      cwd: persistedTerminal.cwd,
-      spawnCount: SPAWN_TRACKER.get(terminalCallId)
-    })
-
-    const newId = Date.now().toString() + Math.random().toString(36).slice(2, 5)
-    TERMINALS_PENDING_PTY_ASSIGNMENT.add(newId)
-
-    try {
-      const resolvedShell = await resolveShellToPath(persistedTerminal.shell)
-      const normalizedShell = normalizeShellForStartup(resolvedShell)
-      const spawnResult = await terminalApi.spawn({
-        shell: normalizedShell,
-        cwd: persistedTerminal.cwd
-      })
-
-      debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
-        success: spawnResult.success,
-        error: spawnResult.success ? undefined : spawnResult.error,
-        ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
-      })
-
-      if (!spawnResult.success) {
-        debugLog('restoreFromLayout', `Spawn FAILED, skipping [${terminalCallId}]`)
-        continue
+    for (const persistedTerminal of layout.terminals) {
+      if (isCancelled()) {
+        await cleanupSpawnedPtys(newTerminals, restoreId, 'during restore loop')
+        debugLog('restoreFromLayout', `CANCELLED [${restoreId}] during restore loop`)
+        return
       }
 
-      // FIX #6: Increment SPAWN_CALL_COUNT for each successful spawn in the loop
-      SPAWN_CALL_COUNT++
+      const terminalCallId = `${restoreId}-${persistedTerminal.name}-${Math.random().toString(36).slice(2, 5)}`
+      SPAWN_TRACKER.set(terminalCallId, (SPAWN_TRACKER.get(terminalCallId) || 0) + 1)
 
-      idMap.set(persistedTerminal.id, newId)
-      newTerminals.push({
-        id: newId,
+      debugLog('restoreFromLayout', `Spawning terminal [${terminalCallId}]`, {
         name: persistedTerminal.name,
-        projectId,
-        shell: normalizedShell,
+        shell: persistedTerminal.shell,
         cwd: persistedTerminal.cwd,
-        output: [],
-        pendingScrollback: persistedTerminal.scrollback,
-        ptyId: spawnResult.data.id
+        spawnCount: SPAWN_TRACKER.get(terminalCallId)
       })
-    } finally {
-      TERMINALS_PENDING_PTY_ASSIGNMENT.delete(newId)
+
+      const newId = Date.now().toString() + Math.random().toString(36).slice(2, 5)
+      TERMINALS_PENDING_PTY_ASSIGNMENT.add(newId)
+
+      try {
+        const resolvedShell = await resolveShellToPath(persistedTerminal.shell)
+        if (isCancelled()) {
+          await cleanupSpawnedPtys(newTerminals, restoreId, 'after shell resolution')
+          debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after shell resolution`)
+          return
+        }
+
+        const normalizedShell = normalizeShellForStartup(resolvedShell)
+        const spawnResult = await terminalApi.spawn({
+          shell: normalizedShell,
+          cwd: persistedTerminal.cwd
+        })
+
+        debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
+          success: spawnResult.success,
+          error: spawnResult.success ? undefined : spawnResult.error,
+          ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
+        })
+
+        if (!spawnResult.success) {
+          debugLog('restoreFromLayout', `Spawn FAILED, skipping [${terminalCallId}]`)
+          continue
+        }
+
+        if (isCancelled()) {
+          debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after spawn; killing PTY`, {
+            ptyId: spawnResult.data.id
+          })
+
+          const killResult = await terminalApi.kill(spawnResult.data.id)
+          if (!killResult.success) {
+            console.error('Failed to kill cancelled restore PTY:', killResult.error)
+          }
+          continue
+        }
+
+        // FIX #6: Increment SPAWN_CALL_COUNT for each successful spawn in the loop
+        SPAWN_CALL_COUNT++
+
+        idMap.set(persistedTerminal.id, newId)
+        newTerminals.push({
+          id: newId,
+          name: persistedTerminal.name,
+          projectId,
+          shell: normalizedShell,
+          cwd: persistedTerminal.cwd,
+          output: [],
+          pendingScrollback: persistedTerminal.scrollback,
+          ptyId: spawnResult.data.id
+        })
+      } finally {
+        TERMINALS_PENDING_PTY_ASSIGNMENT.delete(newId)
+      }
     }
-  }
 
-  // Add all terminals at once
-  const existingTerminals = terminalStore.terminals
-  terminalStore.setTerminals([...existingTerminals, ...newTerminals])
+    if (isCancelled()) {
+      await cleanupSpawnedPtys(newTerminals, restoreId, 'before store mutation')
+      debugLog('restoreFromLayout', `CANCELLED [${restoreId}] before store mutation`)
+      return
+    }
 
-  if (idMap.size > 0) {
-    useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))
-  }
+    // Add all terminals at once
+    const existingTerminals = terminalStore.terminals
+    terminalStore.setTerminals([...existingTerminals, ...newTerminals])
 
-  // Determine which terminal should be active
-  let activeId = newTerminals[0]?.id || ''
-  if (layout.activeTerminalId && idMap.has(layout.activeTerminalId)) {
-    activeId = idMap.get(layout.activeTerminalId)!
-  }
+    if (idMap.size > 0) {
+      useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))
+    }
 
-  // Select the active terminal
-  if (activeId) {
-    terminalStore.selectTerminal(activeId)
-  }
+    // Determine which terminal should be active
+    let activeId = newTerminals[0]?.id || ''
+    if (layout.activeTerminalId && idMap.has(layout.activeTerminalId)) {
+      activeId = idMap.get(layout.activeTerminalId)!
+    }
 
-  // CRITICAL: Get fresh state after mutations for accurate logging
-  const freshTerminalStore = useTerminalStore.getState()
+    // Select the active terminal
+    if (activeId) {
+      terminalStore.selectTerminal(activeId)
+    }
 
-  debugLog('restoreFromLayout', `COMPLETE [${restoreId}]`, {
-    terminalsCreated: newTerminals.length,
-    totalTerminalsInStore: freshTerminalStore.terminals.length,
-    terminalIds: freshTerminalStore.terminals.map(t => ({ id: t.id, ptyId: t.ptyId })),
-    spawnTrackerEntries: SPAWN_TRACKER.size,
-    totalSpawnCalls: SPAWN_CALL_COUNT
-  })
+    // CRITICAL: Get fresh state after mutations for accurate logging
+    const freshTerminalStore = useTerminalStore.getState()
+
+    debugLog('restoreFromLayout', `COMPLETE [${restoreId}]`, {
+      terminalsCreated: newTerminals.length,
+      totalTerminalsInStore: freshTerminalStore.terminals.length,
+      terminalIds: freshTerminalStore.terminals.map(t => ({ id: t.id, ptyId: t.ptyId })),
+      spawnTrackerEntries: SPAWN_TRACKER.size,
+      totalSpawnCalls: SPAWN_CALL_COUNT
+    })
   } finally {
     // FIX #2: Always release the global spawn lock
     releaseGlobalSpawnLock(restoreId)
@@ -532,7 +640,10 @@ async function restoreFromLayout(projectId: string, layout: PersistedTerminalLay
 /**
  * Create a default terminal when no persisted data exists
  */
-async function createDefaultTerminal(projectId: string): Promise<void> {
+async function createDefaultTerminal(
+  projectId: string,
+  isCancelled: () => boolean
+): Promise<void> {
   const defaultId = `default-${Math.random().toString(36).slice(2, 7)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
@@ -541,16 +652,14 @@ async function createDefaultTerminal(projectId: string): Promise<void> {
     return
   }
 
-  if (SPAWN_CALL_COUNT >= MAX_SPAWN_LIMIT) {
-    debugLog('createDefaultTerminal', `BLOCKED [${defaultId}] Spawn limit exceeded`, {
-      count: SPAWN_CALL_COUNT,
-      limit: MAX_SPAWN_LIMIT
-    })
-    releaseGlobalSpawnLock(defaultId)
-    return
-  }
+  resetSpawnCallCount(defaultId)
 
   try {
+    if (isCancelled()) {
+      debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] before restore`)
+      return
+    }
+
     const terminalStore = useTerminalStore.getState()
     const projectStore = useProjectStore.getState()
     const appSettings = useAppSettingsStore.getState()
@@ -590,6 +699,11 @@ async function createDefaultTerminal(projectId: string): Promise<void> {
     const project = projectStore.projects.find((p) => p.id === projectId)
     const shellSetting = project?.defaultShell || appSettings.settings.defaultShell || ''
     const resolvedShell = await resolveShellToPath(shellSetting)
+    if (isCancelled()) {
+      debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after shell resolution`)
+      return
+    }
+
     const shell = normalizeShellForStartup(resolvedShell)
 
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
@@ -608,6 +722,22 @@ async function createDefaultTerminal(projectId: string): Promise<void> {
       ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
     })
 
+    if (isCancelled()) {
+      if (spawnResult.success) {
+        debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after spawn; killing PTY`, {
+          ptyId: spawnResult.data.id
+        })
+
+        const killResult = await terminalApi.kill(spawnResult.data.id)
+        if (!killResult.success) {
+          console.error('Failed to kill cancelled default terminal PTY:', killResult.error)
+        }
+      } else {
+        debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after failed spawn`)
+      }
+      return
+    }
+
     if (!spawnResult.success) {
       debugLog('createDefaultTerminal', `Spawn FAILED [${defaultId}]`)
       return
@@ -616,21 +746,21 @@ async function createDefaultTerminal(projectId: string): Promise<void> {
     SPAWN_CALL_COUNT++
 
     // Create default terminal - addTerminal also sets it as active
-  const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
-  terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
+    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
+    terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
 
-  // Explicitly select to ensure activeTerminalId is set correctly
-  terminalStore.selectTerminal(newTerminal.id)
+    // Explicitly select to ensure activeTerminalId is set correctly
+    terminalStore.selectTerminal(newTerminal.id)
 
-  // CRITICAL: Get fresh state after mutations for accurate logging
-  const freshTerminalStore = useTerminalStore.getState()
+    // CRITICAL: Get fresh state after mutations for accurate logging
+    const freshTerminalStore = useTerminalStore.getState()
 
-  debugLog('createDefaultTerminal', `COMPLETE [${defaultId}]`, {
-    terminalId: newTerminal.id,
-    ptyId: spawnResult.data.id,
-    totalTerminalsInStore: freshTerminalStore.terminals.length,
-    totalSpawnCalls: SPAWN_CALL_COUNT
-  })
+    debugLog('createDefaultTerminal', `COMPLETE [${defaultId}]`, {
+      terminalId: newTerminal.id,
+      ptyId: spawnResult.data.id,
+      totalTerminalsInStore: freshTerminalStore.terminals.length,
+      totalSpawnCalls: SPAWN_CALL_COUNT
+    })
   } finally {
     // FIX #2: Always release the global spawn lock
     releaseGlobalSpawnLock(defaultId)

@@ -10,14 +10,29 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
-let terminalRestoreInProgress = false
+const terminalRestoreProjectsInProgress = new Map<string, string>()
 
-export function setTerminalRestoreInProgress(isRestoring: boolean): void {
-  terminalRestoreInProgress = isRestoring
+export function setTerminalRestoreInProgress(
+  projectId: string,
+  isRestoring: boolean,
+  ownerId: string
+): void {
+  if (!projectId || !ownerId) {
+    return
+  }
+
+  if (isRestoring) {
+    terminalRestoreProjectsInProgress.set(projectId, ownerId)
+    return
+  }
+
+  if (terminalRestoreProjectsInProgress.get(projectId) === ownerId) {
+    terminalRestoreProjectsInProgress.delete(projectId)
+  }
 }
 
 export function isTerminalRestoreInProgress(): boolean {
-  return terminalRestoreInProgress
+  return terminalRestoreProjectsInProgress.size > 0
 }
 
 /**
