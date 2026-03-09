@@ -492,7 +492,25 @@ describe('useEditorPersistence', () => {
   })
 
   it('ignores stale restore results after switching projects', async () => {
-    let resolveProjectA: ((value: { success: true; data: { openFiles: never[]; activeFilePath: null; expandedDirs: string[]; fileExplorerVisible: boolean; activeTabId: null; activePaneId: string; paneLayout: { type: 'leaf'; id: string; tabs: { type: 'editor'; filePath: string }[]; activeTabId: string } } }) => void) | null = null
+    let resolveProjectA:
+      | ((value: {
+          success: true
+          data: {
+            openFiles: never[]
+            activeFilePath: null
+            expandedDirs: string[]
+            fileExplorerVisible: boolean
+            activeTabId: null
+            activePaneId: string
+            paneLayout: {
+              type: 'leaf'
+              id: string
+              tabs: { type: 'editor'; filePath: string }[]
+              activeTabId: string
+            }
+          }
+        }) => void)
+      | undefined = undefined
 
     mockPersistenceRead
       .mockImplementationOnce(

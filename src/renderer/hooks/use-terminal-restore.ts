@@ -270,7 +270,6 @@ export function useTerminalRestore(): void {
 
           const workspaceStore = useWorkspaceStore.getState()
           const terminalIdToSelect = selectTerminalForProject(
-            projectIdToRestore,
             liveProjectTerminals,
             layout
           )
@@ -367,7 +366,6 @@ export function useTerminalRestore(): void {
  * Uses multiple matching strategies: ID match, then name match, then fallback
  */
 function selectTerminalForProject(
-  _projectId: string,
   existingTerminals: Array<{ id: string; name: string; projectId: string }>,
   layout: PersistedTerminalLayout | null
 ): string | null {

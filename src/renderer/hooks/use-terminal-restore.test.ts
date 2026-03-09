@@ -143,7 +143,7 @@ describe('normalizeShellForStartup', () => {
 
 describe('useTerminalRestore', () => {
   it('does not apply cancelled live-terminal restore state after a project switch', async () => {
-    let resolveProjectALayout: ((value: null) => void) | null = null
+    let resolveProjectALayout: ((value: null) => void) | undefined = undefined
 
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' },
@@ -201,7 +201,7 @@ describe('useTerminalRestore', () => {
     })
 
     rerender({ projectId: 'project-b' })
-    rejectProjectALayout?.(new Error('restore failed'))
+    if (rejectProjectALayout) rejectProjectALayout(new Error('restore failed'))
 
     await waitFor(() => {
       expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith('project-b', true)
