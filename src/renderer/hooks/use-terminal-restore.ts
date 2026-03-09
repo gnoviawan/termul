@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
-import { useWorkspaceStore, terminalTabId } from '../stores/workspace-store'
+import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import {
@@ -54,6 +54,41 @@ function releaseGlobalSpawnLock(ownerId: string): void {
     debugLog('SPAWN_LOCK', `LOCK RELEASED [${ownerId}]`)
   } else {
     debugLog('SPAWN_LOCK', `LOCK RELEASE FAILED [${ownerId}] - owned by ${GLOBAL_SPAWN_LOCK_OWNER}`)
+  }
+}
+
+function resetSpawnCallCount(sessionId: string): void {
+  SPAWN_CALL_COUNT = 0
+  debugLog('SPAWN_LOCK', `RESET SPAWN COUNT [${sessionId}]`)
+}
+
+async function cleanupSpawnedPtys(
+  terminals: Array<{ ptyId?: string }>,
+  restoreId: string,
+  phase: string
+): Promise<void> {
+  const ptyIds = Array.from(
+    new Set(
+      terminals
+        .map((terminal) => terminal.ptyId)
+        .filter((ptyId): ptyId is string => !!ptyId)
+    )
+  )
+
+  if (ptyIds.length === 0) {
+    return
+  }
+
+  debugLog('restoreFromLayout', `CLEANING UP SPAWNED PTYS [${restoreId}]`, {
+    phase,
+    ptyIds
+  })
+
+  for (const ptyId of ptyIds) {
+    const killResult = await terminalApi.kill(ptyId)
+    if (!killResult.success) {
+      console.error('Failed to kill cancelled restore PTY:', killResult.error)
+    }
   }
 }
 
@@ -204,6 +239,8 @@ export function useTerminalRestore(): void {
     // Skip if no project selected or same project
     if (!activeProjectId || activeProjectId === previousProjectIdRef.current) {
       debugLog('useTerminalRestore', `SKIPPED [${callId}]: no project or same project`)
+      const idx = RESTORE_CALL_STACK.indexOf(callId)
+      if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
       return
     }
 
@@ -213,6 +250,8 @@ export function useTerminalRestore(): void {
         isRestoring: Array.from(isRestoringRef.current),
         hasLock: PROJECT_RESTORE_LOCKS.has(activeProjectId)
       })
+      const idx = RESTORE_CALL_STACK.indexOf(callId)
+      if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
       return
     }
 
@@ -220,7 +259,8 @@ export function useTerminalRestore(): void {
     isRestoringRef.current.add(activeProjectId)
     PROJECT_RESTORE_LOCKS.add(activeProjectId)
     const projectIdToRestore = activeProjectId
-    setTerminalRestoreInProgress(projectIdToRestore, true)
+    const restoreOwnerId = `${projectIdToRestore}:${callId}`
+    setTerminalRestoreInProgress(projectIdToRestore, true, restoreOwnerId)
 
     debugLog('useTerminalRestore', `STARTING RESTORE [${callId}]`, {
       projectId: projectIdToRestore
@@ -287,9 +327,13 @@ export function useTerminalRestore(): void {
             return
           }
 
-          const activePane = workspaceStore.getActivePaneLeaf()
-          if (terminalIdToSelect && activePane) {
-            workspaceStore.setActiveTab(activePane.id, terminalTabId(terminalIdToSelect))
+          const terminalTab = terminalIdToSelect ? terminalTabId(terminalIdToSelect) : null
+          const containingPane = terminalTab
+            ? findPaneContainingTab(useWorkspaceStore.getState().root, terminalTab)
+            : null
+          const activePane = containingPane ?? workspaceStore.getActivePaneLeaf()
+          if (terminalTab && activePane) {
+            workspaceStore.setActiveTab(activePane.id, terminalTab)
           }
 
           if (terminalIdToSelect) {
@@ -334,7 +378,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(projectIdToRestore, false)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
           const idx = RESTORE_CALL_STACK.indexOf(callId)
           if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
         } else if (cancelled) {
@@ -343,7 +387,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(projectIdToRestore, false)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
         }
       }
     }
@@ -365,7 +409,7 @@ export function useTerminalRestore(): void {
       // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
       isRestoringRef.current.delete(projectIdForCleanup)
       PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
-      setTerminalRestoreInProgress(projectIdForCleanup, false)
+      setTerminalRestoreInProgress(projectIdForCleanup, false, restoreOwnerId)
     }
   }, [activeProjectId])
 }
@@ -431,9 +475,11 @@ async function restoreFromLayout(
     return
   }
 
-  if (SPAWN_CALL_COUNT >= MAX_SPAWN_LIMIT) {
+  resetSpawnCallCount(restoreId)
+
+  if (layout.terminals.length > MAX_SPAWN_LIMIT) {
     debugLog('restoreFromLayout', `BLOCKED [${restoreId}] Spawn limit exceeded`, {
-      count: SPAWN_CALL_COUNT,
+      count: layout.terminals.length,
       limit: MAX_SPAWN_LIMIT
     })
     releaseGlobalSpawnLock(restoreId)
@@ -473,6 +519,7 @@ async function restoreFromLayout(
 
     for (const persistedTerminal of layout.terminals) {
       if (isCancelled()) {
+        await cleanupSpawnedPtys(newTerminals, restoreId, 'during restore loop')
         debugLog('restoreFromLayout', `CANCELLED [${restoreId}] during restore loop`)
         return
       }
@@ -493,6 +540,7 @@ async function restoreFromLayout(
       try {
         const resolvedShell = await resolveShellToPath(persistedTerminal.shell)
         if (isCancelled()) {
+          await cleanupSpawnedPtys(newTerminals, restoreId, 'after shell resolution')
           debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after shell resolution`)
           return
         }
@@ -546,6 +594,7 @@ async function restoreFromLayout(
     }
 
     if (isCancelled()) {
+      await cleanupSpawnedPtys(newTerminals, restoreId, 'before store mutation')
       debugLog('restoreFromLayout', `CANCELLED [${restoreId}] before store mutation`)
       return
     }
@@ -603,14 +652,7 @@ async function createDefaultTerminal(
     return
   }
 
-  if (SPAWN_CALL_COUNT >= MAX_SPAWN_LIMIT) {
-    debugLog('createDefaultTerminal', `BLOCKED [${defaultId}] Spawn limit exceeded`, {
-      count: SPAWN_CALL_COUNT,
-      limit: MAX_SPAWN_LIMIT
-    })
-    releaseGlobalSpawnLock(defaultId)
-    return
-  }
+  resetSpawnCallCount(defaultId)
 
   try {
     if (isCancelled()) {

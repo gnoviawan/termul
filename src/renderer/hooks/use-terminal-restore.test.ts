@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
+import type { PaneNode } from '@/types/workspace.types'
 import { normalizeShellForStartup, useTerminalRestore } from './use-terminal-restore'
 
 const {
@@ -71,7 +72,13 @@ vi.mock('../stores/terminal-store', () => ({
 const mockWorkspaceStore = {
   ensureTerminalTab: vi.fn(),
   getActivePaneLeaf: vi.fn(() => ({ id: 'pane-active', type: 'leaf', tabs: [], activeTabId: null })),
-  setActiveTab: vi.fn()
+  setActiveTab: vi.fn(),
+  root: {
+    type: 'leaf',
+    id: 'pane-active',
+    tabs: [],
+    activeTabId: null
+  } as PaneNode
 }
 
 vi.mock('../stores/workspace-store', async () => {
@@ -95,6 +102,12 @@ beforeEach(() => {
   mockProjectState.activeProjectId = ''
   mockTerminalStoreState.terminals = []
   mockTerminalStoreState.activeTerminalId = ''
+  mockWorkspaceStore.root = {
+    type: 'leaf',
+    id: 'pane-active',
+    tabs: [],
+    activeTabId: null
+  } as PaneNode
   mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
     id: 'pane-active',
     type: 'leaf',
@@ -146,6 +159,56 @@ describe('normalizeShellForStartup', () => {
 })
 
 describe('useTerminalRestore', () => {
+  it('uses the pane containing the restored terminal tab when selecting a live terminal', async () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+    ]
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'a-live',
+      terminals: [
+        {
+          id: 'a-live',
+          name: 'A',
+          shell: 'bash',
+          cwd: '/projects/a',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockWorkspaceStore.root = {
+      type: 'split',
+      id: 'split-root',
+      direction: 'horizontal',
+      sizes: [50, 50],
+      children: [
+        { type: 'leaf', id: 'pane-other', tabs: [], activeTabId: null },
+        {
+          type: 'leaf',
+          id: 'pane-restored',
+          tabs: [{ type: 'terminal', id: 'term-a-live', terminalId: 'a-live' }],
+          activeTabId: null
+        }
+      ]
+    } as PaneNode
+    mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
+      id: 'pane-active',
+      type: 'leaf',
+      tabs: [],
+      activeTabId: null
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-restored', 'term-a-live')
+      expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('a-live')
+    })
+  })
+
   it('does not apply cancelled live-terminal restore state after a project switch', async () => {
     const projectALayout = {
       resolve: undefined as ((value: null) => void) | undefined
@@ -306,6 +369,33 @@ describe('useTerminalRestore', () => {
 
     expect(mockTerminalStoreState.setTerminals).not.toHaveBeenCalled()
     expect(mockTerminalStoreState.selectTerminal).not.toHaveBeenCalledWith('new-terminal')
+  })
+
+  it('passes a stable owner token when marking restore progress', async () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+    ]
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+
+    const { unmount } = renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
+        'project-a',
+        true,
+        expect.any(String)
+      )
+    })
+
+    const ownerToken = mockSetTerminalRestoreInProgress.mock.calls[0][2]
+    unmount()
+
+    await waitFor(() => {
+      expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith('project-a', false, ownerToken)
+    })
   })
 
   it('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
