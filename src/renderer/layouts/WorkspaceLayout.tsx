@@ -51,7 +51,7 @@ import {
   useCommandHistory
 } from '@/hooks/use-command-history'
 import type { KeyboardShortcutCallback } from '@shared/types/ipc.types'
-import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
+import { filesystemApi, windowApi, keyboardApi, terminalApi, persistenceApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
   useTerminalFontSize,
@@ -236,6 +236,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [])
 
+  const closeAppWithPersistenceFlush = useCallback(async () => {
+    try {
+      const result = await persistenceApi.flushPendingWrites()
+      if (!result.success) {
+        console.error('Failed to flush pending persistence writes before close:', result.error)
+      }
+    } catch (error) {
+      console.error('Failed to flush pending persistence writes before close:', error)
+    } finally {
+      windowApi.respondToClose('close')
+      setIsAppCloseDialogOpen(false)
+    }
+  }, [])
+
   // Intercept app close to check for unsaved files
   useEffect(() => {
     return windowApi.onCloseRequested(() => {
@@ -244,10 +258,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        windowApi.respondToClose('close')
+        void closeAppWithPersistenceFlush()
       }
     })
-  }, [])
+  }, [closeAppWithPersistenceFlush])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -666,14 +680,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+    await closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
   const handleDiscardAllAndClose = useCallback(() => {
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+    void closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
   const handleCancelAppClose = useCallback(() => {
     windowApi.respondToClose('cancel')

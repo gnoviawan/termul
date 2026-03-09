@@ -212,18 +212,17 @@ describe('tauriPersistenceApi', () => {
       expect(currentMockStore.set).toHaveBeenCalledTimes(2)
     })
 
-    it('should cancel previous debounce for same key', async () => {
+    it('should persist only the latest value for the same key and resolve all promises', async () => {
       const data1 = { value: 'test1' }
       const data2 = { value: 'test2' }
 
-      tauriPersistenceApi.writeDebounced('same-key', data1)
-
-      // Call again before debounce completes
-      tauriPersistenceApi.writeDebounced('same-key', data2)
+      const firstWrite = tauriPersistenceApi.writeDebounced('same-key', data1)
+      const secondWrite = tauriPersistenceApi.writeDebounced('same-key', data2)
 
       await vi.advanceTimersByTimeAsync(500)
 
-      // Should only call once with latest data
+      await expect(firstWrite).resolves.toEqual({ success: true, data: undefined })
+      await expect(secondWrite).resolves.toEqual({ success: true, data: undefined })
       expect(currentMockStore.set).toHaveBeenCalledTimes(1)
       expect(currentMockStore.set).toHaveBeenCalledWith('same-key', {
         _version: 1,
@@ -273,13 +272,16 @@ describe('tauriPersistenceApi', () => {
     it('should flush all pending debounced writes', async () => {
       const testData = { value: 'test' }
 
-      // Start a debounced write
-      tauriPersistenceApi.writeDebounced('flush-key', testData)
+      const pendingWrite = tauriPersistenceApi.writeDebounced('flush-key', testData)
 
-      // Flush before debounce completes
-      await tauriPersistenceApi.flushPendingWrites()
+      const result = await tauriPersistenceApi.flushPendingWrites()
 
-      // Should clear pending writes and call save
+      await expect(pendingWrite).resolves.toEqual({ success: true, data: undefined })
+      expect(result).toEqual({ success: true, data: undefined })
+      expect(currentMockStore.set).toHaveBeenCalledWith('flush-key', {
+        _version: 1,
+        data: testData
+      })
       expect(currentMockStore.save).toHaveBeenCalled()
     })
   })
