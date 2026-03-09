@@ -243,7 +243,6 @@ describe('useEditorPersistence', () => {
           activeTabId: null
         }
       })
-      .mockResolvedValueOnce({ success: true, data: null })
       .mockResolvedValueOnce({
         success: true,
         data: {
@@ -254,20 +253,19 @@ describe('useEditorPersistence', () => {
           activeTabId: null
         }
       })
-      .mockResolvedValueOnce({ success: true, data: null })
 
     const { rerender } = renderHook(({ projectId }) => useEditorPersistence(projectId), {
       initialProps: { projectId: 'project-a' }
     })
 
     await waitFor(() => {
-      expect(mockExplorerState.restoreExpandedDirs).toHaveBeenCalledWith(['/projects/a/src'])
+      expect(mockExplorerState.restoreExpandedDirs).toHaveBeenLastCalledWith(['/projects/a/src'])
     })
 
     rerender({ projectId: 'project-b' })
 
     await waitFor(() => {
-      expect(mockExplorerState.restoreExpandedDirs).toHaveBeenCalledWith(['/projects/b/docs'])
+      expect(mockExplorerState.restoreExpandedDirs).toHaveBeenLastCalledWith(['/projects/b/docs'])
     })
   })
 
@@ -570,7 +568,7 @@ describe('useEditorPersistence', () => {
     })
 
     await waitFor(() => {
-      expect(mockPersistenceRead).toHaveBeenCalledTimes(3)
+      expect(mockPersistenceRead).toHaveBeenCalledTimes(2)
     })
 
     expect(mockWorkspaceState.loadProjectWorkspace).not.toHaveBeenCalled()
