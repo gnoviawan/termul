@@ -50,7 +50,6 @@ import {
   useAddCommand,
   useCommandHistory
 } from '@/hooks/use-command-history'
-import type { KeyboardShortcutCallback } from '@shared/types/ipc.types'
 import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
@@ -58,7 +57,11 @@ import {
   useDefaultShell,
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
-import { useUpdateAppSetting } from '@/hooks/use-app-settings'
+import {
+  useUpdateAppSetting,
+  useUpdatePanelVisibility,
+  waitForPendingAppSettingsPersistence
+} from '@/hooks/use-app-settings'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
@@ -243,7 +246,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        windowApi.respondToClose('close')
+        void waitForPendingAppSettingsPersistence().then(() => {
+          windowApi.respondToClose('close')
+        })
       }
     })
   }, [])
@@ -276,6 +281,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
+  const updatePanelVisibility = useUpdatePanelVisibility()
 
   // Helper to get active key for a shortcut
   const getActiveKey = useCallback(
@@ -339,7 +345,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
-      const target = e.target as HTMLElement
+      const target = e.target instanceof HTMLElement ? e.target : document.body
       const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
       const isInInput =
         target.tagName === 'INPUT' ||
@@ -377,7 +383,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
         if (!isInEditor && !isInInput) {
           e.preventDefault()
-          useFileExplorerStore.getState().toggleVisibility()
+          void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : 'Failed to update file explorer visibility'
+            )
+          })
+        }
+        return
+      }
+
+      if (matchesShortcut(e, getActiveKey('sidebarToggle'))) {
+        if (!isInEditor && !isInInput) {
+          e.preventDefault()
+          e.stopPropagation()
+          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
+            toast.error(
+              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
+            )
+          })
         }
         return
       }
@@ -522,7 +547,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isWorkspaceRoute,
     cycleTab,
     activeTab,
-    handleCreateTerminalInPane
+    handleCreateTerminalInPane,
+    updatePanelVisibility,
+    isExplorerVisible,
+    isSidebarVisible
   ])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
@@ -554,9 +582,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
             updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
           }
           break
+        case 'sidebarToggle':
+          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+          })
+          break
       }
     })
-  }, [cycleTab, fontSize, updateAppSetting])
+  }, [cycleTab, fontSize, updateAppSetting, updatePanelVisibility, isSidebarVisible])
 
   const handleCloseTerminal = useCallback((id: string, tabId: string) => {
     setCloseConfirmTerminal({ terminalId: id, tabId })
@@ -665,11 +698,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
+    await waitForPendingAppSettingsPersistence()
     windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])
 
-  const handleDiscardAllAndClose = useCallback(() => {
+  const handleDiscardAllAndClose = useCallback(async () => {
+    await waitForPendingAppSettingsPersistence()
     windowApi.respondToClose('close')
     setIsAppCloseDialogOpen(false)
   }, [])

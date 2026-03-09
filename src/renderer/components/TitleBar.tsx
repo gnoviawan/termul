@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useSidebarStore, useSidebarVisible } from '@/stores/sidebar-store'
-import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useSidebarVisible } from '@/stores/sidebar-store'
+import { useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { windowApi } from '@/lib/api'
+import { toast } from 'sonner'
 
 const focusableButtonClass = 'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
@@ -11,8 +13,27 @@ export function TitleBar(): React.JSX.Element {
   const [isMaximized, setIsMaximized] = useState(false)
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
+  const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
   const location = useLocation()
+
+  const handleToggleSidebar = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
+    e.stopPropagation()
+    try {
+      await updatePanelVisibility('sidebarVisible', !isSidebarVisible)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+    }
+  }
+
+  const handleToggleFileExplorer = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
+    e.stopPropagation()
+    try {
+      await updatePanelVisibility('fileExplorerVisible', !isExplorerVisible)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update file explorer visibility')
+    }
+  }
 
   useEffect(() => {
     return windowApi.onMaximizeChange((maximized) => {
@@ -42,7 +63,9 @@ export function TitleBar(): React.JSX.Element {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          onClick={(e) => { e.stopPropagation(); useSidebarStore.getState().toggleVisibility(); }}
+          onClick={(e) => {
+            void handleToggleSidebar(e)
+          }}
           className={focusableButtonClass}
           title="Toggle sidebar"
           aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
@@ -55,7 +78,9 @@ export function TitleBar(): React.JSX.Element {
         </button>
 
         <button
-          onClick={(e) => { e.stopPropagation(); useFileExplorerStore.getState().toggleVisibility(); }}
+          onClick={(e) => {
+            void handleToggleFileExplorer(e)
+          }}
           className={focusableButtonClass}
           title="Toggle file explorer"
           aria-label={isExplorerVisible ? 'Hide file explorer' : 'Show file explorer'}

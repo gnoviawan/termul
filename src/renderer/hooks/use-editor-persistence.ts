@@ -67,7 +67,6 @@ interface PersistedEditorState {
   openFiles: PersistedEditorFile[]
   activeFilePath: string | null
   expandedDirs: string[]
-  fileExplorerVisible: boolean
   activeTabId: string | null
   // v2: pane layout
   paneLayout?: PersistedPaneNodeInput
@@ -262,9 +261,8 @@ export function useEditorPersistence(projectId: string): void {
 
         const persisted = result.data
 
-        // Restore file explorer visibility and expanded dirs for this project root
+        // Restore expanded dirs for this project root
         const explorerStore = useFileExplorerStore.getState()
-        explorerStore.setVisible(persisted.fileExplorerVisible)
 
         const rootPath = useProjectStore
           .getState()
@@ -375,7 +373,11 @@ export function useEditorPersistence(projectId: string): void {
     }
 
     const unsubEditor = useEditorStore.subscribe(schedulePersist)
-    const unsubExplorer = useFileExplorerStore.subscribe(schedulePersist)
+    const unsubExplorer = useFileExplorerStore.subscribe((state, prevState) => {
+      if (state.expandedDirs !== prevState.expandedDirs) {
+        schedulePersist()
+      }
+    })
     const unsubWorkspace = useWorkspaceStore.subscribe(schedulePersist)
 
     return () => {
@@ -414,7 +416,6 @@ export function persistState(projectId: string): void {
     openFiles,
     activeFilePath: editorState.activeFilePath,
     expandedDirs,
-    fileExplorerVisible: explorerState.isVisible,
     activeTabId: (() => {
       const pane = findPaneById(workspaceState.root, workspaceState.activePaneId)
       return pane && pane.type === 'leaf' ? pane.activeTabId : null

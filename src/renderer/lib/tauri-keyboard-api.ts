@@ -50,7 +50,7 @@ const IPC_EVENTS = {
  */
 export function createTauriKeyboardApi(): KeyboardApi {
   return {
-    onShortcut(callback: (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset') => void): () => void {
+    onShortcut(callback: (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'sidebarToggle') => void): () => void {
       if (!isTauriContext()) {
         return () => {}
       }
@@ -61,7 +61,15 @@ export function createTauriKeyboardApi(): KeyboardApi {
 
       try {
         unlisten = listen<string>(IPC_EVENTS.SHORTCUT, ({ payload }) => {
-          callback(payload as 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset')
+          callback(
+            payload as
+              | 'nextTerminal'
+              | 'prevTerminal'
+              | 'zoomIn'
+              | 'zoomOut'
+              | 'zoomReset'
+              | 'sidebarToggle'
+          )
         })
       } catch (error) {
         console.error('[TauriKeyboardAPI] Failed to register shortcut listener:', error)

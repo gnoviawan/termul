@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useSidebarStore } from '@/stores/sidebar-store'
 import type { Project, Terminal, ProjectColor } from '@/types/project'
 
 function createProject(id: string, path: string, color: ProjectColor): Project {
@@ -72,24 +74,35 @@ vi.mock('@/stores/app-settings-store', () => ({
   useDefaultProjectColor: vi.fn(() => 'blue')
 }))
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn(() => ({
-    shortcuts: {
-      commandPalette: { customKey: 'Ctrl+K', defaultKey: 'Ctrl+K' },
-      commandPaletteAlt: { customKey: 'Ctrl+Shift+P', defaultKey: 'Ctrl+Shift+P' },
-      terminalSearch: { customKey: 'Ctrl+F', defaultKey: 'Ctrl+F' },
-      commandHistory: { customKey: 'Ctrl+R', defaultKey: 'Ctrl+R' },
-      newProject: { customKey: 'Ctrl+N', defaultKey: 'Ctrl+N' },
-      newTerminal: { customKey: 'Ctrl+T', defaultKey: 'Ctrl+T' },
-      nextTerminal: { customKey: 'Ctrl+PageDown', defaultKey: 'Ctrl+PageDown' },
-      prevTerminal: { customKey: 'Ctrl+PageUp', defaultKey: 'Ctrl+PageUp' },
-      zoomIn: { customKey: 'Ctrl+=', defaultKey: 'Ctrl+=' },
-      zoomOut: { customKey: 'Ctrl+-', defaultKey: 'Ctrl+-' },
-      zoomReset: { customKey: 'Ctrl+0', defaultKey: 'Ctrl+0' }
-    }
-  })),
-  matchesShortcut: vi.fn(() => false)
-}))
+vi.mock('@/stores/keyboard-shortcuts-store', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/keyboard-shortcuts-store')>(
+    '@/stores/keyboard-shortcuts-store'
+  )
+
+  const shortcuts = {
+    commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' },
+    commandPaletteAlt: { customKey: 'ctrl+shift+p', defaultKey: 'ctrl+shift+p' },
+    terminalSearch: { customKey: 'ctrl+f', defaultKey: 'ctrl+f' },
+    commandHistory: { customKey: 'ctrl+r', defaultKey: 'ctrl+r' },
+    newProject: { customKey: 'ctrl+n', defaultKey: 'ctrl+n' },
+    newTerminal: { customKey: 'ctrl+t', defaultKey: 'ctrl+t' },
+    nextTerminal: { customKey: 'ctrl+pagedown', defaultKey: 'ctrl+pagedown' },
+    prevTerminal: { customKey: 'ctrl+pageup', defaultKey: 'ctrl+pageup' },
+    zoomIn: { customKey: 'ctrl+=', defaultKey: 'ctrl+=' },
+    zoomOut: { customKey: 'ctrl+-', defaultKey: 'ctrl+-' },
+    zoomReset: { customKey: 'ctrl+0', defaultKey: 'ctrl+0' },
+    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' }
+  }
+
+  return {
+    ...actual,
+    useKeyboardShortcutsStore: vi.fn((selector?: (state: { shortcuts: typeof shortcuts }) => unknown) => {
+      const state = { shortcuts }
+      return selector ? selector(state) : state
+    }),
+    matchesShortcut: actual.matchesShortcut
+  }
+})
 
 // Mock hooks
 vi.mock('@/hooks/use-snapshots', () => ({
@@ -109,8 +122,15 @@ vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistory: vi.fn(() => [])
 }))
 
+const { mockUpdatePanelVisibility, mockWaitForPendingAppSettingsPersistence } = vi.hoisted(() => ({
+  mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
+  mockWaitForPendingAppSettingsPersistence: vi.fn(() => Promise.resolve())
+}))
+
 vi.mock('@/hooks/use-app-settings', () => ({
-  useUpdateAppSetting: vi.fn(() => vi.fn())
+  useUpdateAppSetting: vi.fn(() => vi.fn()),
+  useUpdatePanelVisibility: vi.fn(() => mockUpdatePanelVisibility),
+  waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))
 
 vi.mock('@/hooks/use-file-watcher', () => ({
@@ -130,7 +150,7 @@ vi.mock('@/components/file-explorer/FileExplorer', () => ({
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     keyboard: {
-      onShortcut: vi.fn(() => vi.fn())
+      onShortcut: vi.fn((_callback: () => void) => vi.fn())
     },
     shell: {
       getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
@@ -169,7 +189,7 @@ const { mockApi } = vi.hoisted(() => ({
       toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
       close: vi.fn(),
       onMaximizeChange: vi.fn(() => vi.fn()),
-      onCloseRequested: vi.fn(() => vi.fn()),
+      onCloseRequested: vi.fn<(callback: () => void) => () => void>((_callback) => vi.fn()),
       respondToClose: vi.fn()
     },
     clipboard: {
@@ -238,9 +258,16 @@ beforeEach(() => {
   mockUseAllTerminals.mockReturnValue([])
   mockUseActiveTerminal.mockReturnValue(null)
   mockUseActiveTerminalId.mockReturnValue('')
+  mockUpdatePanelVisibility.mockReset()
+  mockWaitForPendingAppSettingsPersistence.mockReset()
+  useFileExplorerStore.setState({ isVisible: true })
+  useSidebarStore.setState({ isVisible: true })
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+  mockApi.window.onCloseRequested.mockReset()
+  mockApi.window.onCloseRequested.mockImplementation(() => vi.fn())
+  mockApi.window.respondToClose.mockReset()
 })
 
 afterEach(() => {
@@ -522,6 +549,149 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
       expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Keyboard panel visibility shortcuts', () => {
+    beforeEach(() => {
+      const project = createProject('a', '/workspace/a', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('a')
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+    })
+
+    it('keeps Ctrl+B toggling file explorer and persists globally', () => {
+      renderWithRouter()
+
+      fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
+    })
+
+    it('toggles sidebar with configured sidebar shortcut and persists globally', () => {
+      renderWithRouter()
+
+      fireEvent.keyDown(window, { key: 'B', ctrlKey: true, shiftKey: true })
+
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
+    })
+
+    it('does not toggle panel shortcuts when focus is in input', () => {
+      renderWithRouter()
+
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      input.focus()
+
+      fireEvent.keyDown(input, { key: 'b', ctrlKey: true })
+      fireEvent.keyDown(input, { key: 'B', ctrlKey: true, shiftKey: true })
+
+      expect(useFileExplorerStore.getState().isVisible).toBe(true)
+      expect(useSidebarStore.getState().isVisible).toBe(true)
+      expect(mockUpdatePanelVisibility).not.toHaveBeenCalled()
+
+      document.body.removeChild(input)
+    })
+  })
+
+  describe('Close flow persistence coordination', () => {
+    it('waits for pending app-settings persistence before responding to close with no dirty files', async () => {
+      let closeRequestedCallback: (() => void) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => void) => {
+        closeRequestedCallback = callback
+        return vi.fn()
+      })
+
+      const project = createProject('a', '/workspace/a', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      const deferred = new Promise<void>((resolve) => {
+        mockWaitForPendingAppSettingsPersistence.mockImplementationOnce(async () => {
+          await new Promise<void>((r) => setTimeout(r, 0))
+          resolve()
+        })
+      })
+
+      renderWithRouter()
+      expect(closeRequestedCallback).toBeDefined()
+      if (!closeRequestedCallback) throw new Error('close callback missing')
+
+      closeRequestedCallback()
+
+      expect(mockApi.window.respondToClose).not.toHaveBeenCalled()
+      await deferred
+      await waitFor(() => {
+        expect(mockApi.window.respondToClose).toHaveBeenCalledWith('close')
+      })
+    })
+
+    it('waits for pending app-settings persistence before confirm-dialog discard close', async () => {
+      let closeRequestedCallback: (() => void) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => void) => {
+        closeRequestedCallback = callback
+        return vi.fn()
+      })
+
+      const project = createProject('a', '/workspace/a', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      const dirtyEditorState = {
+        activeFilePath: '/workspace/a/src/file.ts',
+        openFiles: new Map([
+          [
+            '/workspace/a/src/file.ts',
+            {
+              filePath: '/workspace/a/src/file.ts',
+              isDirty: true
+            }
+          ]
+        ]),
+        getDirtyFileCount: vi.fn(() => 1),
+        saveAllDirty: vi.fn().mockResolvedValue(undefined),
+        closeFile: vi.fn(),
+        saveFile: vi.fn().mockResolvedValue(true)
+      }
+
+      const useEditorStoreModule = await import('@/stores/editor-store')
+      const getStateSpy = vi.spyOn(useEditorStoreModule.useEditorStore, 'getState').mockReturnValue(
+        dirtyEditorState as unknown as ReturnType<typeof useEditorStoreModule.useEditorStore.getState>
+      )
+
+      renderWithRouter()
+      expect(closeRequestedCallback).toBeDefined()
+      if (!closeRequestedCallback) throw new Error('close callback missing')
+
+      closeRequestedCallback()
+
+      const dontSaveButton = await screen.findByRole('button', { name: "Don't Save" })
+
+      let resolveWait: (() => void) | undefined
+      mockWaitForPendingAppSettingsPersistence.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveWait = resolve
+          })
+      )
+
+      await act(async () => {
+        fireEvent.click(dontSaveButton)
+      })
+
+      expect(mockApi.window.respondToClose).not.toHaveBeenCalled()
+      resolveWait?.()
+      await waitFor(() => {
+        expect(mockApi.window.respondToClose).toHaveBeenCalledWith('close')
+      })
+
+      getStateSpy.mockRestore()
     })
   })
 
