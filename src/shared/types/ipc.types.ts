@@ -125,6 +125,7 @@ export interface PersistenceApi {
   read: <T>(key: string) => Promise<IpcResult<T>>
   write: <T>(key: string, data: T) => Promise<IpcResult<void>>
   writeDebounced: <T>(key: string, data: T) => Promise<IpcResult<void>>
+  flushPendingWrites: () => Promise<IpcResult<void>>
   delete: (key: string) => Promise<IpcResult<void>>
 }
 

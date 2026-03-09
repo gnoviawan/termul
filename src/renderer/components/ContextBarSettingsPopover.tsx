@@ -2,9 +2,8 @@ import { Settings } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
-import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
+import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'
 import type { ContextBarSettings } from '@/types/settings'
-import { persistenceApi } from '@/lib/api'
 
 interface SettingToggleProps {
   label: string
@@ -23,13 +22,10 @@ function SettingToggle({ label, checked, onCheckedChange }: SettingToggleProps):
 
 export function ContextBarSettingsPopover(): React.JSX.Element {
   const settings = useContextBarSettingsStore((state) => state.settings)
-  const toggleElement = useContextBarSettingsStore((state) => state.toggleElement)
+  const updateContextBarSetting = useUpdateContextBarSetting()
 
   const handleToggle = (element: keyof ContextBarSettings): void => {
-    toggleElement(element)
-    // Persist to disk with debounce
-    const newSettings = { ...settings, [element]: !settings[element] }
-    void persistenceApi.writeDebounced(CONTEXT_BAR_SETTINGS_KEY, newSettings)
+    void updateContextBarSetting(element)
   }
 
   return (
