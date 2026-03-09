@@ -431,6 +431,6 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     })
     fireEvent.click(screen.getByText('Zsh'))
 
-    expect(onUpdateProject).toHaveBeenCalledWith('1', { defaultShell: 'zsh' })
+    expect(onUpdateProject).toHaveBeenCalledWith('1', { defaultShell: '/usr/bin/zsh' })
   })
 })

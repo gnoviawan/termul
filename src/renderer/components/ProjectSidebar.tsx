@@ -215,8 +215,18 @@ export function ProjectSidebar({
       const project = projects.find((p) => p.id === projectId)
       const shellSubmenu: ContextMenuSubItem[] = availableShells?.available.map((shell) => ({
         label: shell.displayName,
-        value: shell.name,
-        isSelected: project?.defaultShell === shell.name
+        value: shell.path,
+        isSelected: (() => {
+          const projectShell = project?.defaultShell
+          if (!projectShell) return false
+          // Match by full path
+          if (projectShell === shell.path) return true
+          // Match by name
+          if (projectShell === shell.name) return true
+          // Match by basename of path
+          const pathBasename = shell.path.split(/[\\/]/).pop()
+          return projectShell === pathBasename
+        })()
       })) || []
 
       const items: ContextMenuItem[] = [
@@ -237,8 +247,8 @@ export function ProjectSidebar({
           label: 'Set Default Shell',
           icon: <Terminal size={14} />,
           submenu: shellSubmenu,
-          onSubmenuSelect: (shellName: string) => {
-            onUpdateProject(projectId, { defaultShell: shellName })
+          onSubmenuSelect: (shellPath: string) => {
+            onUpdateProject(projectId, { defaultShell: shellPath })
           }
         })
       }

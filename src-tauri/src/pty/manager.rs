@@ -471,13 +471,13 @@ impl PtyManager {
                     if cfg!(windows)
                         && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
                     {
-                        "-NoLogo -NoProfile"
+                        "-NoLogo"  // Load user profile for custom prompts
                     } else {
                         ""
                     }
                 )
             } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
-                format!("{} -NoLogo -NoProfile", shell_path)
+                format!("{} -NoLogo", shell_path)  // Load user profile for custom prompts
             } else {
                 shell_path.clone()
             };
@@ -966,13 +966,40 @@ impl PtyManager {
             }
 
             // Standard shell resolution for other shells
-            // Try shell.exe variant
+            // CRITICAL: Check PowerShell variants BEFORE generic *.exe lookup
+            // so name-only tokens hit explicit paths first
+            if shell == "pwsh" {
+                // PowerShell 7/6 resolution path
+                let paths = vec![
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    r"C:\Program Files\PowerShell\6\pwsh.exe",
+                    "pwsh.exe",
+                ];
+                for path in paths {
+                    if let Some(abs_path) = self.get_absolute_shell_path(path) {
+                        return Ok(abs_path);
+                    }
+                }
+            } else if shell == "powershell" {
+                // Windows PowerShell 5 resolution path
+                let paths = vec![
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    "powershell.exe",
+                ];
+                for path in paths {
+                    if let Some(abs_path) = self.get_absolute_shell_path(path) {
+                        return Ok(abs_path);
+                    }
+                }
+            }
+
+            // Try shell.exe variant for non-PowerShell shells
             let exe_shell = format!("{}.exe", shell);
             if let Some(abs_path) = self.get_absolute_shell_path(&exe_shell) {
                 return Ok(abs_path);
             }
 
-            // Try the shell name directly
+            // Try the shell name directly for non-PowerShell shells
             if let Some(abs_path) = self.get_absolute_shell_path(shell) {
                 return Ok(abs_path);
             }
@@ -989,21 +1016,6 @@ impl PtyManager {
                 for path in git_bash_paths::FALLBACK_PATHS {
                     if Path::new(path).exists() {
                         return Ok(path.to_string());
-                    }
-                }
-            }
-
-            // Try PowerShell variants
-            if shell == "powershell" || shell == "pwsh" {
-                let paths = vec![
-                    "pwsh.exe",
-                    "powershell.exe",
-                    r"C:\Program Files\PowerShell\7\pwsh.exe",
-                    r"C:\Program Files\PowerShell\6\pwsh.exe",
-                ];
-                for path in paths {
-                    if let Some(abs_path) = self.get_absolute_shell_path(path) {
-                        return Ok(abs_path);
                     }
                 }
             }

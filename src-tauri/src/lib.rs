@@ -204,10 +204,17 @@ fn get_available_shells() -> Vec<ShellInfo> {
 
     #[cfg(target_os = "windows")]
     {
+        // CRITICAL: Check explicit paths FIRST, then PATH entries
+        // This ensures the correct shell is found when multiple versions exist
         let mut candidates = vec![
+            // PowerShell 7 explicit paths (checked first)
+            ("pwsh", r"C:\Program Files\PowerShell\7\pwsh.exe", None),
+            ("pwsh", r"C:\Program Files\PowerShell\6\pwsh.exe", None),
+            // Windows PowerShell 5 (explicit path)
+            ("powershell", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", None),
+            // PATH-based fallbacks (checked last)
+            ("pwsh", "pwsh.exe", None),
             ("powershell", "powershell.exe", None),
-            ("pwsh", "pwsh.exe", None), // PowerShell 7 via PATH
-            ("pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", None), // PowerShell 7 explicit path
             ("cmd", "cmd.exe", None),
             ("wsl", "wsl.exe", None),
         ];
@@ -269,14 +276,13 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
+    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
         "cmd"
             | "cmd.exe"
             | "powershell"
             | "powershell.exe"
-            | "pwsh"
-            | "pwsh.exe"
             | "wsl"
             | "wsl.exe"
     )

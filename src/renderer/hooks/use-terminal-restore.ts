@@ -4,6 +4,7 @@ import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
+import { shellApi } from '@/lib/shell-api'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -139,6 +140,41 @@ export function normalizeShellForStartup(shell?: string): string {
     }
   }
 
+  return shell
+}
+
+/**
+ * Resolve shell identifier to an absolute path.
+ * If the shell is already a path (contains \ or /), return it as-is.
+ * If it's just a name (e.g., "pwsh", "bash"), look up the path from available shells.
+ * Also matches by executable basename (e.g., "pwsh.exe" matches shell with path ending in "pwsh.exe").
+ */
+async function resolveShellToPath(shell: string): Promise<string> {
+  // If shell is already a path, return it as-is
+  if (shell.includes('\\') || shell.includes('/')) {
+    return shell
+  }
+
+  // Otherwise, look up the path from available shells
+  try {
+    const result = await shellApi.getAvailableShells()
+    if (result.success && result.data.available) {
+      // Match by name or by executable basename
+      const match = result.data.available.find((s) => {
+        if (s.name === shell) return true
+        // Also match by basename of path (e.g., "pwsh.exe" matches "C:\...\pwsh.exe")
+        const pathBasename = s.path.split(/[\\/]/).pop()
+        return pathBasename === shell
+      })
+      if (match) {
+        return match.path
+      }
+    }
+  } catch (error) {
+    console.error('Failed to resolve shell path:', error)
+  }
+
+  // Fallback: return original value
   return shell
 }
 
@@ -291,6 +327,8 @@ export function useTerminalRestore(): void {
     restoreTerminals()
 
     // CRITICAL: Cleanup function to handle project switching mid-restore
+    // Capture projectId at effect run time to avoid stale closure in cleanup
+    const projectIdForCleanup = activeProjectId
     return () => {
       // Signal cancellation to the async function
       cancelRestore()
@@ -300,7 +338,8 @@ export function useTerminalRestore(): void {
       if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
 
       // FIX #5: Also clean up the restoring flag for this project on cleanup
-      isRestoringRef.current.delete(activeProjectId)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
+      isRestoringRef.current.delete(projectIdForCleanup)
     }
   }, [activeProjectId])
 }
@@ -415,7 +454,8 @@ async function restoreFromLayout(projectId: string, layout: PersistedTerminalLay
     TERMINALS_PENDING_PTY_ASSIGNMENT.add(newId)
 
     try {
-      const normalizedShell = normalizeShellForStartup(persistedTerminal.shell)
+      const resolvedShell = await resolveShellToPath(persistedTerminal.shell)
+      const normalizedShell = normalizeShellForStartup(resolvedShell)
       const spawnResult = await terminalApi.spawn({
         shell: normalizedShell,
         cwd: persistedTerminal.cwd
@@ -546,10 +586,11 @@ async function createDefaultTerminal(projectId: string): Promise<void> {
     }
 
     // Get shell from fallback chain: project -> app settings -> system default
+    // Then resolve shell name to path for backward compatibility
     const project = projectStore.projects.find((p) => p.id === projectId)
-    const shell = normalizeShellForStartup(
-      project?.defaultShell || appSettings.settings.defaultShell || ''
-    )
+    const shellSetting = project?.defaultShell || appSettings.settings.defaultShell || ''
+    const resolvedShell = await resolveShellToPath(shellSetting)
+    const shell = normalizeShellForStartup(resolvedShell)
 
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
