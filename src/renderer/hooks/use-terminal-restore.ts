@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
-import { useWorkspaceStore } from '../stores/workspace-store'
+import { useWorkspaceStore, terminalTabId } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import {
@@ -219,8 +219,8 @@ export function useTerminalRestore(): void {
     // Set flag immediately to prevent race condition
     isRestoringRef.current.add(activeProjectId)
     PROJECT_RESTORE_LOCKS.add(activeProjectId)
-    setTerminalRestoreInProgress(true)
     const projectIdToRestore = activeProjectId
+    setTerminalRestoreInProgress(projectIdToRestore, true)
 
     debugLog('useTerminalRestore', `STARTING RESTORE [${callId}]`, {
       projectId: projectIdToRestore
@@ -236,59 +236,71 @@ export function useTerminalRestore(): void {
     // FIX #5: Add cancellation token to handle cleanup properly
     let cancelled = false
     const cancelRestore = () => { cancelled = true }
+    const isCancelled = (): boolean => cancelled || previousProjectIdRef.current !== projectIdToRestore
 
     const restoreTerminals = async (): Promise<void> => {
       try {
         // Check for cancellation before starting
-        if (cancelled) {
+        if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] before restore`)
           return
         }
 
-        // CRITICAL FIX: Kill all PTYs from previous project before switching
-        // This prevents orphaned PTYs from accumulating and causing "terminal spam"
         if (actualPreviousProjectId && actualPreviousProjectId !== projectIdToRestore) {
-          // First kill all PTYs from previous project
-          const terminalStore = useTerminalStore.getState()
-          const previousTerminals = terminalStore.terminals.filter(
-            (t) => t.projectId === actualPreviousProjectId && t.ptyId
-          )
-
-          debugLog('useTerminalRestore', `KILLING ${previousTerminals.length} PTYs from previous project [${actualPreviousProjectId}]`)
-
-          for (const terminal of previousTerminals) {
-            if (!terminal.ptyId) {
-              continue
-            }
-            try {
-              await terminalApi.kill(terminal.ptyId)
-              debugLog('useTerminalRestore', `KILLED PTY [${terminal.ptyId}]`)
-            } catch (err) {
-              debugLog('useTerminalRestore', `FAILED TO KILL PTY [${terminal.ptyId}]`, {
-                error: err instanceof Error ? err.message : String(err)
-              })
-            }
-          }
-
-          // Then save the layout
           await saveTerminalLayout(actualPreviousProjectId)
         }
 
-        // Get fresh state after save completes
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after save`)
+          return
+        }
+
         const terminalStore = useTerminalStore.getState()
         const existingTerminals = terminalStore.terminals.filter(
           (t) => t.projectId === projectIdToRestore
         )
+        const liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
 
-        // If terminals already exist in memory, just restore selection
-        if (existingTerminals.length > 0) {
+        if (liveProjectTerminals.length > 0) {
           const layout = await loadPersistedTerminals(projectIdToRestore)
-          selectTerminalForProject(projectIdToRestore, existingTerminals, layout)
+          if (isCancelled()) {
+            debugLog('useTerminalRestore', `CANCELLED [${callId}] after live layout load`)
+            return
+          }
+
+          const workspaceStore = useWorkspaceStore.getState()
+          const terminalIdToSelect = selectTerminalForProject(
+            projectIdToRestore,
+            liveProjectTerminals,
+            layout
+          )
+
+          for (const terminal of liveProjectTerminals) {
+            workspaceStore.ensureTerminalTab(
+              terminal.id,
+              undefined,
+              terminal.id === terminalIdToSelect
+            )
+          }
+
+          if (isCancelled()) {
+            debugLog('useTerminalRestore', `CANCELLED [${callId}] before workspace selection`)
+            return
+          }
+
+          const activePane = workspaceStore.getActivePaneLeaf()
+          if (terminalIdToSelect && activePane) {
+            workspaceStore.setActiveTab(activePane.id, terminalTabId(terminalIdToSelect))
+          }
           return
         }
 
         // No terminals in memory - load from disk or create default
         const layout = await loadPersistedTerminals(projectIdToRestore)
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after persisted layout load`)
+          return
+        }
 
         if (layout && layout.terminals.length > 0) {
           await restoreFromLayout(projectIdToRestore, layout)
@@ -300,6 +312,10 @@ export function useTerminalRestore(): void {
           error: err instanceof Error ? err.message : String(err)
         })
         console.error('Failed to restore terminals:', err)
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after error`)
+          return
+        }
         // Fall back to default terminal
         await createDefaultTerminal(projectIdToRestore)
       } finally {
@@ -310,7 +326,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(false)
+          setTerminalRestoreInProgress(projectIdToRestore, false)
           const idx = RESTORE_CALL_STACK.indexOf(callId)
           if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
         } else if (cancelled) {
@@ -319,7 +335,7 @@ export function useTerminalRestore(): void {
           })
           isRestoringRef.current.delete(projectIdToRestore)
           PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(false)
+          setTerminalRestoreInProgress(projectIdToRestore, false)
         }
       }
     }
@@ -340,6 +356,8 @@ export function useTerminalRestore(): void {
       // FIX #5: Also clean up the restoring flag for this project on cleanup
       // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
       isRestoringRef.current.delete(projectIdForCleanup)
+      PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
+      setTerminalRestoreInProgress(projectIdForCleanup, false)
     }
   }, [activeProjectId])
 }
@@ -349,15 +367,14 @@ export function useTerminalRestore(): void {
  * Uses multiple matching strategies: ID match, then name match, then fallback
  */
 function selectTerminalForProject(
-  projectId: string,
+  _projectId: string,
   existingTerminals: Array<{ id: string; name: string; projectId: string }>,
   layout: PersistedTerminalLayout | null
-): void {
+): string | null {
   if (existingTerminals.length === 0) {
-    return
+    return null
   }
 
-  const terminalStore = useTerminalStore.getState()
   let terminalIdToSelect: string | null = null
 
   if (layout?.activeTerminalId) {
@@ -388,8 +405,7 @@ function selectTerminalForProject(
     terminalIdToSelect = existingTerminals[0].id
   }
 
-  // Always select a terminal - ensures the project has an active terminal
-  terminalStore.selectTerminal(terminalIdToSelect)
+  return terminalIdToSelect
 }
 
 /**

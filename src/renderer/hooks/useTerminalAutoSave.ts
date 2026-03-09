@@ -10,14 +10,23 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
-let terminalRestoreInProgress = false
+const terminalRestoreProjectsInProgress = new Set<string>()
 
-export function setTerminalRestoreInProgress(isRestoring: boolean): void {
-  terminalRestoreInProgress = isRestoring
+export function setTerminalRestoreInProgress(projectId: string, isRestoring: boolean): void {
+  if (!projectId) {
+    return
+  }
+
+  if (isRestoring) {
+    terminalRestoreProjectsInProgress.add(projectId)
+    return
+  }
+
+  terminalRestoreProjectsInProgress.delete(projectId)
 }
 
 export function isTerminalRestoreInProgress(): boolean {
-  return terminalRestoreInProgress
+  return terminalRestoreProjectsInProgress.size > 0
 }
 
 /**

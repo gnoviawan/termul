@@ -181,6 +181,36 @@ describe('workspace-store split/move invariants', () => {
     expect(remappedRight.activeTabId).toBe('term-new-b')
   })
 
+  it('ensureTerminalTab adds missing terminal without stealing active tab', () => {
+    const store = useWorkspaceStore.getState()
+    const editorTab = createEditorTab('edit-/focused.ts')
+
+    store.addTabToPane('pane-root', editorTab)
+    store.ensureTerminalTab('terminal-a')
+
+    const pane = useWorkspaceStore.getState().root as LeafNode
+    expect(pane.tabs).toEqual([
+      editorTab,
+      { type: 'terminal', id: 'term-terminal-a', terminalId: 'terminal-a' }
+    ])
+    expect(pane.activeTabId).toBe(editorTab.id)
+  })
+
+  it('ensureTerminalTab can activate inserted terminal when requested', () => {
+    const store = useWorkspaceStore.getState()
+    const editorTab = createEditorTab('edit-/focused.ts')
+
+    store.addTabToPane('pane-root', editorTab)
+    store.ensureTerminalTab('terminal-a', undefined, true)
+
+    const pane = useWorkspaceStore.getState().root as LeafNode
+    expect(pane.tabs).toEqual([
+      editorTab,
+      { type: 'terminal', id: 'term-terminal-a', terminalId: 'terminal-a' }
+    ])
+    expect(pane.activeTabId).toBe('term-terminal-a')
+  })
+
   it('syncTerminalTabs prunes orphan tabs and preserves split shape', () => {
     const store = useWorkspaceStore.getState()
     const terminalA = createTerminalTab('a')
