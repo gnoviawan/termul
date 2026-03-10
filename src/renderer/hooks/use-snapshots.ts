@@ -114,7 +114,8 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
   const project = projectStore.projects.find((p) => p.id === projectId)
 
   // Resolve project env vars for spawn
-  const { env } = resolveEnvForSpawn(project?.envVars)
+  // TODO: Pass actual system env from backend for variable expansion
+  const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
   // Close all existing terminals for this project
   // CRITICAL: Kill PTYs before removing from store to prevent orphaned processes
@@ -138,7 +139,7 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
     const spawnResult = await terminalApi.spawn({
       shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
       cwd: persistedTerminal.cwd,
-      env
+      ...(hasProjectEnv ? { env } : {})
     })
 
     if (!spawnResult.success) {

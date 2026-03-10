@@ -127,12 +127,15 @@ export interface ResolvedEnvResult {
  * - Windows: %VAR%
  *
  * @param projectEnvVars - Project's saved environment variables
- * @param inheritedEnv - Inherited system/process environment (from window or backend)
+ * @param inheritedEnv - Inherited system/process environment. IMPORTANT: In the renderer
+ *   context, this should be fetched from the backend via a system API. Passing an empty
+ *   object will cause $VAR references to resolve to empty strings. TODO: Add a system
+ *   API to fetch process environment from Tauri backend.
  * @returns Resolved environment map and metadata
  */
 export function resolveEnvForSpawn(
   projectEnvVars: EnvVariable[] | undefined,
-  inheritedEnv: Record<string, string> = {}
+  inheritedEnv: Record<string, string>
 ): ResolvedEnvResult {
   if (!projectEnvVars || projectEnvVars.length === 0) {
     return { env: {}, hasProjectEnv: false }

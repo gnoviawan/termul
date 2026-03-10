@@ -355,9 +355,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
       const cwd = activeProject?.path
 
       // Resolve project env vars for spawn
-      const { env } = resolveEnvForSpawn(activeProject?.envVars)
+      // TODO: Pass actual system env from backend for variable expansion
+      const { env, hasProjectEnv } = resolveEnvForSpawn(activeProject?.envVars, {})
 
-      const spawnResult = await terminalApi.spawn({ shell, cwd, env })
+      const spawnResult = await terminalApi.spawn({
+        shell,
+        cwd,
+        ...(hasProjectEnv ? { env } : {})
+      })
       if (!spawnResult.success) {
         toast.error(spawnResult.error || 'Failed to create terminal')
         return

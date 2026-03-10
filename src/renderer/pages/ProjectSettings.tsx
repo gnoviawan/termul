@@ -103,6 +103,9 @@ export default function ProjectSettings() {
   }
 
   const handleImportEnvFile = async () => {
+    // Capture the current project ID to detect concurrent project switches
+    const projectIdAtStart = activeProjectId
+
     setImportError(null)
     setImportWarnings(null)
 
@@ -111,12 +114,23 @@ export default function ProjectSettings() {
       title: 'Select .env File'
     })
 
+    // Check if project switched during dialog
+    if (projectIdAtStart !== activeProjectId) {
+      return
+    }
+
     if (!fileResult.success) {
       // User cancelled - not an error
       return
     }
 
     const readResult = await filesystemApi.readFile(fileResult.data)
+
+    // Check if project switched during file read
+    if (projectIdAtStart !== activeProjectId) {
+      return
+    }
+
     if (!readResult.success) {
       setImportError(`Failed to read file: ${readResult.error}`)
       return
@@ -129,9 +143,8 @@ export default function ProjectSettings() {
       return
     }
 
-    // Merge with existing env vars (imported keys overwrite existing)
-    const merged = mergeEnvVars(envVars, parseResult.vars)
-    setEnvVars(merged)
+    // Merge with existing env vars using functional update to avoid stale state
+    setEnvVars((prevEnvVars) => mergeEnvVars(prevEnvVars, parseResult.vars))
     setHasChanges(true)
 
     // Show warnings for invalid lines if any

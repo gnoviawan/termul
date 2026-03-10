@@ -14,6 +14,9 @@ function toPersistedProject(project: Project): PersistedProject {
     isArchived: project.isArchived,
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
+    // TODO: Secret values (isSecret===true) should be stored in secure OS storage (keyring/secureStore)
+    // instead of plaintext. For now, we persist all values but this is a security concern.
+    // A future PR should implement secure storage for secrets.
     envVars: project.envVars?.map((envVar) => ({
       key: envVar.key,
       value: envVar.value,

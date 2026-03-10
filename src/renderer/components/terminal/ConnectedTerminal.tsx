@@ -651,6 +651,12 @@ function ConnectedTerminalComponent({
         if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
         }
+        // Write one-time info line if project env vars were applied
+        // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
+        if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
+          const envCount = Object.keys(memoizedSpawnOptions.env).length
+          terminal.write(`\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`)
+        }
         // Restore scroll position if cached from previous pane
         restoreScrollPosition(externalTerminalId, terminal)
         if (onBoundToStoreTerminalRef.current) {

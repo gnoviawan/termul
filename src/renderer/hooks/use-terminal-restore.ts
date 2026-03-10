@@ -498,7 +498,8 @@ async function restoreFromLayout(
     const project = projectStore.projects.find((p) => p.id === projectId)
 
     // Resolve project env vars for spawn
-    const { env } = resolveEnvForSpawn(project?.envVars)
+    // TODO: Pass actual system env from backend for variable expansion
+    const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
     debugLog('restoreFromLayout', `START [${restoreId}] ACQUIRING LOCK`, {
       projectId,
@@ -555,7 +556,7 @@ for (const persistedTerminal of layout.terminals) {
         const spawnResult = await terminalApi.spawn({
           shell: normalizedShell,
           cwd: persistedTerminal.cwd,
-          env
+          ...(hasProjectEnv ? { env } : {})
         })
 
         debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
@@ -714,7 +715,8 @@ async function createDefaultTerminal(
     const shell = normalizeShellForStartup(resolvedShell)
 
     // Resolve project env vars for spawn
-    const { env } = resolveEnvForSpawn(project?.envVars)
+    // TODO: Pass actual system env from backend for variable expansion
+    const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
@@ -724,7 +726,7 @@ async function createDefaultTerminal(
     const spawnResult = await terminalApi.spawn({
       shell,
       cwd: project?.path,
-      env
+      ...(hasProjectEnv ? { env } : {})
     })
 
     debugLog('createDefaultTerminal', `Spawn result [${defaultId}]`, {

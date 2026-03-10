@@ -149,14 +149,14 @@ describe('env-parser', () => {
 
   describe('resolveEnvForSpawn', () => {
     it('should return empty env for undefined project env vars', () => {
-      const result = resolveEnvForSpawn(undefined)
+      const result = resolveEnvForSpawn(undefined, {})
 
       expect(result.env).toEqual({})
       expect(result.hasProjectEnv).toBe(false)
     })
 
     it('should return empty env for empty project env vars', () => {
-      const result = resolveEnvForSpawn([])
+      const result = resolveEnvForSpawn([], {})
 
       expect(result.env).toEqual({})
       expect(result.hasProjectEnv).toBe(false)
@@ -168,7 +168,7 @@ describe('env-parser', () => {
         { key: 'PORT', value: '3000' }
       ]
 
-      const result = resolveEnvForSpawn(envVars)
+      const result = resolveEnvForSpawn(envVars, {})
 
       expect(result.env).toEqual({
         NODE_ENV: 'production',
@@ -184,7 +184,7 @@ describe('env-parser', () => {
         { key: '   ', value: 'whitespace-key' }
       ]
 
-      const result = resolveEnvForSpawn(envVars)
+      const result = resolveEnvForSpawn(envVars, {})
 
       expect(result.env).toEqual({ VALID: 'value' })
     })
