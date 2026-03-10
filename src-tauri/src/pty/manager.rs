@@ -1578,14 +1578,4 @@ mod tests {
     // 1. Compile-time check: kill() is now async and returns impl Future
     // 2. Existing orphan cleanup code at line 403-406 demonstrates the pattern
     // 3. Manual testing during development
-
-    /// Verify that cleanup_terminal_resources_sync exists and is accessible
-    /// This test ensures the function signature is correct for spawn_blocking usage
-    #[test]
-    fn test_cleanup_function_exists() {
-        // The function exists and compiles - that's the assertion
-        // spawn_blocking(move || Self::cleanup_terminal_resources_sync(instance, true))
-        // compiles correctly when instance is Arc<TerminalInstance>
-        assert!(true);
-    }
 }
