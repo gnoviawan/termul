@@ -287,6 +287,8 @@ export function useTerminalRestore(): void {
           return
         }
 
+// Save layout for crash recovery purposes, but preserve live PTYs
+        // PTYs are kept alive across project switches to preserve TUI sessions
         if (actualPreviousProjectId && actualPreviousProjectId !== projectIdToRestore) {
           await saveTerminalLayout(actualPreviousProjectId)
         }

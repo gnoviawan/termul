@@ -697,9 +697,23 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
+        if let RunEvent::ExitRequested { api, .. } = event {
+            // Prevent the default exit behavior so we can cleanup first
+            api.prevent_exit();
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
-                pty_manager.kill_all();
+                let pty_manager_clone = pty_manager.inner().clone();
+                let app_handle_clone = app_handle.clone();
+
+                // Spawn async cleanup task
+                tokio::spawn(async move {
+                    pty_manager_clone.kill_all().await;
+                    // After cleanup completes, allow the app to exit with code 0
+                    app_handle_clone.exit(0);
+                });
+            } else {
+                // No PTY manager, just exit
+                app_handle.exit(0);
             }
         }
     });
