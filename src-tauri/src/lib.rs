@@ -699,7 +699,11 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { .. } = event {
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
-                pty_manager.kill_all();
+                // Clone the Arc before spawning async task
+                let pty_manager_clone = pty_manager.inner().clone();
+                tokio::spawn(async move {
+                    pty_manager_clone.kill_all().await;
+                });
             }
         }
     });

@@ -445,4 +445,104 @@ describe('terminal-store', () => {
       expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(secondTimestamp)
     })
   })
+
+  // ========== Multi-Project Terminal Preservation Tests ==========
+  // These tests verify AC1, AC3, AC6 from the tech spec:
+  // - AC1: Terminals are NOT killed when switching projects
+  // - AC3: Terminals with live PTY reconnect when returning to project
+  // - AC6: Workspace tabs remain stable across project switches
+
+  describe('multi-project terminal preservation', () => {
+    it('should preserve terminals from project A when project B becomes active', () => {
+      // Setup: Terminals exist for both projects
+      const { setTerminalPtyId } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-project-1-a')
+      setTerminalPtyId('t2', 'pty-project-1-b')
+      setTerminalPtyId('t3', 'pty-project-2')
+
+      // Simulate switching to project 2
+      useProjectStore.setState({ activeProjectId: '2' })
+
+      // Verify: All terminals still exist
+      const { terminals } = useTerminalStore.getState()
+      const project1Terminals = terminals.filter((t) => t.projectId === '1')
+      const project2Terminals = terminals.filter((t) => t.projectId === '2')
+
+      // AC1: Terminals from project 1 should NOT be removed
+      expect(project1Terminals.length).toBe(2)
+      expect(project2Terminals.length).toBe(1)
+
+      // AC3: ptyId bindings should be preserved
+      expect(project1Terminals[0].ptyId).toBe('pty-project-1-a')
+      expect(project1Terminals[1].ptyId).toBe('pty-project-1-b')
+    })
+
+    it('should find terminals by ptyId across multiple projects', () => {
+      // Setup: Terminals with ptyIds across projects
+      const { setTerminalPtyId, findTerminalByPtyId } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-cross-project-1')
+      setTerminalPtyId('t3', 'pty-cross-project-2')
+
+      // Test: findTerminalByPtyId should work regardless of which project is active
+      const terminal1 = findTerminalByPtyId('pty-cross-project-1')
+      const terminal2 = findTerminalByPtyId('pty-cross-project-2')
+
+      expect(terminal1?.projectId).toBe('1')
+      expect(terminal2?.projectId).toBe('2')
+    })
+
+    it('should maintain ptyIdIndex across project switches', () => {
+      // Setup: Assign ptyIds
+      const { setTerminalPtyId, findTerminalByPtyId } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-index-test-1')
+      setTerminalPtyId('t3', 'pty-index-test-2')
+
+      // Switch to project 2
+      useProjectStore.setState({ activeProjectId: '2' })
+
+      // The ptyIdIndex should still work for lookups
+      const terminal = findTerminalByPtyId('pty-index-test-1')
+      expect(terminal).toBeDefined()
+      expect(terminal?.projectId).toBe('1')
+    })
+
+    it('should allow re-selecting terminals when returning to a project', () => {
+      // Setup: Terminals exist for project 1 with ptyIds
+      const { setTerminalPtyId, selectTerminal } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-return-test')
+      setTerminalPtyId('t2', 'pty-return-test-2')
+
+      // Switch to project 2
+      useProjectStore.setState({ activeProjectId: '2' })
+      useTerminalStore.setState({ activeTerminalId: 't3' })
+
+      // Switch back to project 1
+      useProjectStore.setState({ activeProjectId: '1' })
+
+      // Select a terminal from project 1
+      selectTerminal('t2')
+
+      const { activeTerminalId, terminals } = useTerminalStore.getState()
+      expect(activeTerminalId).toBe('t2')
+
+      // Terminal should still have its ptyId
+      const terminal = terminals.find((t) => t.id === 't2')
+      expect(terminal?.ptyId).toBe('pty-return-test-2')
+    })
+
+    it('should maintain separate terminal lists per project', () => {
+      const { terminals } = useTerminalStore.getState()
+
+      // Verify terminals are properly associated with their projects
+      const project1Ids = terminals.filter((t) => t.projectId === '1').map((t) => t.id)
+      const project2Ids = terminals.filter((t) => t.projectId === '2').map((t) => t.id)
+
+      expect(project1Ids).toEqual(expect.arrayContaining(['t1', 't2']))
+      expect(project2Ids).toEqual(['t3'])
+
+      // No overlap between projects
+      const overlap = project1Ids.filter((id) => project2Ids.includes(id))
+      expect(overlap).toHaveLength(0)
+    })
+  })
 })

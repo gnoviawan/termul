@@ -446,4 +446,33 @@ describe('useTerminalRestore', () => {
     expect(mockTerminalStoreState.setTerminalPtyId).not.toHaveBeenCalled()
     expect(mockTerminalStoreState.selectTerminal).not.toHaveBeenCalledWith('new-terminal')
   })
+
+  // Project Switch Terminal Preservation tests
+  // These tests verify the behavioral contract that PTYs are NOT killed when switching projects
+  it('should NOT call terminalApi.kill when switching projects with live terminals', async () => {
+    // Setup: terminals exist in both projects with live PTYs
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' },
+      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+    ]
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+
+    const { rerender } = renderHook(({ projectId }) => {
+      mockProjectState.activeProjectId = projectId
+      useTerminalRestore()
+    }, {
+      initialProps: { projectId: 'project-a' }
+    })
+
+    // Switch to project-b
+    rerender({ projectId: 'project-b' })
+
+    await waitFor(() => {
+      expect(mockSaveTerminalLayout).toHaveBeenCalledWith('project-a')
+    })
+
+    // The key assertion: terminalApi.kill should NOT be called during project switch
+    // (the old implementation would have called kill for project-a's terminals)
+    expect(mockTerminalKill).not.toHaveBeenCalled()
+  })
 })

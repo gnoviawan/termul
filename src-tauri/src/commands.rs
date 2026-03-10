@@ -110,7 +110,7 @@ pub async fn terminal_kill(
     terminal_id: String,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.kill(&terminal_id) {
+    match pty_manager.kill(&terminal_id).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
     }
