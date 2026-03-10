@@ -182,7 +182,8 @@ const { mockApi } = vi.hoisted(() => ({
       writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
       read: vi.fn(() => Promise.resolve({ success: true, data: null })),
       write: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
-      delete: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+      delete: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+      flushPendingWrites: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
     },
     window: {
       minimize: vi.fn(),
@@ -265,6 +266,8 @@ beforeEach(() => {
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+  mockApi.persistence.flushPendingWrites.mockReset()
+  mockApi.persistence.flushPendingWrites.mockResolvedValue({ success: true, data: undefined })
   mockApi.window.onCloseRequested.mockReset()
   mockApi.window.onCloseRequested.mockImplementation(() => vi.fn())
   mockApi.window.respondToClose.mockReset()

@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
 import App from './App'
 import { useUpdaterStore } from '@/stores/updater-store'
+import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
+
+const { mockContextBarSettingsRead } = vi.hoisted(() => ({
+  mockContextBarSettingsRead: vi.fn()
+}))
+
+vi.mock('./hooks/use-context-bar-settings', () => ({
+  useContextBarSettings: () => {
+    void mockContextBarSettingsRead(CONTEXT_BAR_SETTINGS_KEY)
+  }
+}))
 
 const mockCheckForUpdates = vi.fn(async () => {})
 const mockInitializeUpdater = vi.fn(async () => {})
@@ -32,7 +43,8 @@ const mockApi = {
     saveProjects: vi.fn(),
     getHomeDirectory: vi.fn(() => Promise.resolve({ success: true, data: '/home/user' })),
     read: vi.fn(() => Promise.resolve({ success: true, data: null })),
-    writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+    writeDebounced: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
+    flushPendingWrites: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
   },
   updater: {
     checkForUpdates: vi.fn(() => Promise.resolve({ success: true, data: null })),
@@ -106,6 +118,14 @@ describe('App Routes', () => {
     // WorkspaceDashboard should be rendered by default
     // Check for presence of rendered content (indicates route matched)
     expect(document.body.innerHTML).toBeTruthy()
+  })
+
+  it('loads context bar settings on mount', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(mockContextBarSettingsRead).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY)
+    })
   })
 })
 

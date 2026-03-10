@@ -50,7 +50,7 @@ import {
   useAddCommand,
   useCommandHistory
 } from '@/hooks/use-command-history'
-import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
+import { filesystemApi, windowApi, keyboardApi, terminalApi, persistenceApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
   useTerminalFontSize,
@@ -189,32 +189,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [])
 
-  // Sync terminal tabs with workspace store
-  // CRITICAL: Track sync calls to prevent loops
-  const syncCallCountRef = useRef(0)
-  const lastSyncTerminalsRef = useRef<string[]>([])
+  // Ensure tabs exist for currently visible project terminals.
+  // Project workspace loading/removal is owned by persistence + restore flows.
+  const ensureCallCountRef = useRef(0)
+  const lastEnsuredTerminalIdsRef = useRef<string[]>([])
 
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id)
 
-    // Skip if terminals haven't actually changed (same IDs)
-    const prevIds = lastSyncTerminalsRef.current
-    if (terminalIds.length === prevIds.length &&
-        terminalIds.every((id, i) => id === prevIds[i])) {
+    const prevIds = lastEnsuredTerminalIdsRef.current
+    if (terminalIds.length === prevIds.length && terminalIds.every((id, i) => id === prevIds[i])) {
       return
     }
 
-    const syncId = `sync-${syncCallCountRef.current++}-${Date.now().toString().slice(-6)}`
+    const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`
 
-    console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${syncId}]`, {
+    console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
       terminalCount: terminalIds.length,
       terminalIds,
       prevCount: prevIds.length,
-      callCount: syncCallCountRef.current
+      callCount: ensureCallCountRef.current
     })
 
-    lastSyncTerminalsRef.current = terminalIds
-    useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
+    lastEnsuredTerminalIdsRef.current = terminalIds
+    const workspaceStore = useWorkspaceStore.getState()
+    for (const terminalId of terminalIds) {
+      workspaceStore.ensureTerminalTab(terminalId)
+    }
   }, [terminals])
 
   // Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree
@@ -238,6 +239,39 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [])
 
+  const closeAppWithPersistenceFlush = useCallback(async () => {
+    try {
+      const [pendingAppSettingsResult, pendingPersistenceResult] = await Promise.allSettled([
+        waitForPendingAppSettingsPersistence(),
+        persistenceApi.flushPendingWrites()
+      ])
+
+      if (pendingAppSettingsResult.status === 'rejected') {
+        console.error(
+          'Failed to wait for app settings persistence before close:',
+          pendingAppSettingsResult.reason
+        )
+      }
+
+      if (pendingPersistenceResult.status === 'fulfilled') {
+        if (!pendingPersistenceResult.value.success) {
+          console.error(
+            'Failed to flush pending persistence writes before close:',
+            pendingPersistenceResult.value.error
+          )
+        }
+      } else {
+        console.error(
+          'Failed to flush pending persistence writes before close:',
+          pendingPersistenceResult.reason
+        )
+      }
+    } finally {
+      windowApi.respondToClose('close')
+      setIsAppCloseDialogOpen(false)
+    }
+  }, [])
+
   // Intercept app close to check for unsaved files
   useEffect(() => {
     return windowApi.onCloseRequested(() => {
@@ -246,14 +280,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        void waitForPendingAppSettingsPersistence().then(() => {
-          windowApi.respondToClose('close')
-        })
+        void closeAppWithPersistenceFlush()
       }
 
       return Promise.resolve(false)
     })
-  }, [])
+  }, [closeAppWithPersistenceFlush])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -700,16 +732,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
-    await waitForPendingAppSettingsPersistence()
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+    await closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
-  const handleDiscardAllAndClose = useCallback(async () => {
-    await waitForPendingAppSettingsPersistence()
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+  const handleDiscardAllAndClose = useCallback(() => {
+    void closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
   const handleCancelAppClose = useCallback(() => {
     windowApi.respondToClose('cancel')

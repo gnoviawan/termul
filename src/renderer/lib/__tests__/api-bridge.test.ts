@@ -126,6 +126,7 @@ describe('API Bridge (api.ts)', () => {
       expect(typeof persistenceApi.read).toBe('function')
       expect(typeof persistenceApi.write).toBe('function')
       expect(typeof persistenceApi.writeDebounced).toBe('function')
+      expect(typeof persistenceApi.flushPendingWrites).toBe('function')
       expect(typeof persistenceApi.delete).toBe('function')
     })
 
