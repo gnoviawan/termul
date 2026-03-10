@@ -27,6 +27,8 @@ export interface AppSettings {
   maxTerminalsPerProject: number // Maximum terminals allowed per project
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
+  sidebarVisible: boolean
+  fileExplorerVisible: boolean
 }
 
 // Terminal buffer size options
@@ -76,7 +78,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   defaultProjectColor: 'blue',
   maxTerminalsPerProject: 10,
   orphanDetectionEnabled: true,
-  orphanDetectionTimeout: 600000 // 10 minutes
+  orphanDetectionTimeout: 600000, // 10 minutes
+  sidebarVisible: true,
+  fileExplorerVisible: true
 }
 
 // Persistence key for app settings
@@ -161,6 +165,12 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Reset Zoom',
     description: 'Reset terminal font size to default',
     defaultKey: 'ctrl+0'
+  },
+  sidebarToggle: {
+    id: 'sidebarToggle',
+    label: 'Toggle Sidebar',
+    description: 'Show or hide the project sidebar',
+    defaultKey: 'ctrl+shift+b'
   }
 }
 

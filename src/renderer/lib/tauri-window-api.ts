@@ -1,5 +1,5 @@
 import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
-import type { IpcResult, WindowApi } from '@shared/types/ipc.types'
+import type { AppCloseRequestedCallback, IpcResult, WindowApi } from '@shared/types/ipc.types'
 
 /**
  * Wrap window operations in IpcResult<T> pattern with try/catch
@@ -86,12 +86,14 @@ export function createTauriWindowApi(): WindowApi {
       }
     },
 
-    onCloseRequested(callback: () => void): () => void {
+    onCloseRequested(callback: AppCloseRequestedCallback): () => void {
       if (!isTauriContext()) return () => { /* noop in browser */ }
       const window = getCurrentWindow()
-      const unlisten = window.onCloseRequested((event) => {
-        event.preventDefault()
-        callback()
+      const unlisten = window.onCloseRequested(async (event) => {
+        const shouldClose = await callback()
+        if (!shouldClose) {
+          event.preventDefault()
+        }
       })
       // Return sync cleanup function - unwrap the Promise
       return () => {

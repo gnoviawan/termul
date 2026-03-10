@@ -18,6 +18,8 @@ const {
   mockWatchDirectory,
   mockUnwatchDirectory,
   mockKeyboardOnShortcut,
+  mockUpdatePanelVisibility,
+  mockWaitForPendingAppSettingsPersistence,
   mockToastError
 } = vi.hoisted(() => ({
   activeProject: {
@@ -76,6 +78,8 @@ const {
   mockWatchDirectory: vi.fn(async () => ({ success: true })),
   mockUnwatchDirectory: vi.fn(async () => ({ success: true })),
   mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
+  mockUpdatePanelVisibility: vi.fn(async () => undefined),
+  mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
   mockToastError: vi.fn()
 }))
 
@@ -168,7 +172,9 @@ vi.mock('@/hooks/use-command-history', () => ({
 }))
 
 vi.mock('@/hooks/use-app-settings', () => ({
-  useUpdateAppSetting: () => vi.fn()
+  useUpdateAppSetting: () => vi.fn(),
+  useUpdatePanelVisibility: () => mockUpdatePanelVisibility,
+  waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))
 
 vi.mock('@/hooks/use-file-watcher', () => ({
@@ -290,6 +296,8 @@ describe('WorkspaceLayout close persistence', () => {
     mockEditorStoreState.getDirtyFileCount.mockReturnValue(0)
     mockEditorStoreState.saveAllDirty.mockResolvedValue(undefined)
     mockFlushPendingWrites.mockResolvedValue({ success: true, data: undefined })
+    mockUpdatePanelVisibility.mockResolvedValue(undefined)
+    mockWaitForPendingAppSettingsPersistence.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
   })
 

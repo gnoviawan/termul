@@ -43,3 +43,7 @@ export const useOrphanDetectionEnabled = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
 export const useOrphanDetectionTimeout = () =>
   useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
+export const useSidebarVisibilitySetting = () =>
+  useAppSettingsStore((state) => state.settings.sidebarVisible)
+export const useFileExplorerVisibilitySetting = () =>
+  useAppSettingsStore((state) => state.settings.fileExplorerVisible)

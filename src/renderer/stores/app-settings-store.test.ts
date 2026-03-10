@@ -83,7 +83,9 @@ describe('app-settings-store', () => {
         defaultProjectColor: 'blue',
         maxTerminalsPerProject: 10,
         orphanDetectionEnabled: true,
-        orphanDetectionTimeout: 600000
+        orphanDetectionTimeout: 600000,
+        sidebarVisible: false,
+        fileExplorerVisible: true
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -107,7 +109,9 @@ describe('app-settings-store', () => {
           defaultProjectColor: 'red',
           maxTerminalsPerProject: 5,
           orphanDetectionEnabled: false,
-          orphanDetectionTimeout: 300000
+          orphanDetectionTimeout: 300000,
+          sidebarVisible: false,
+          fileExplorerVisible: false
         },
         isLoaded: true
       })
@@ -117,6 +121,28 @@ describe('app-settings-store', () => {
 
       const { settings } = useAppSettingsStore.getState()
       expect(settings).toEqual(DEFAULT_APP_SETTINGS)
+    })
+  })
+
+  describe('panel visibility settings', () => {
+    it('should default sidebar and file explorer visibility to true', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.sidebarVisible).toBe(true)
+      expect(settings.fileExplorerVisible).toBe(true)
+    })
+
+    it('should update sidebar visibility setting', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('sidebarVisible', false)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.sidebarVisible).toBe(false)
+    })
+
+    it('should update file explorer visibility setting', () => {
+      const { updateSetting } = useAppSettingsStore.getState()
+      updateSetting('fileExplorerVisible', false)
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.fileExplorerVisible).toBe(false)
     })
   })
 

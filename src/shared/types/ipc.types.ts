@@ -136,7 +136,9 @@ export interface SystemApi {
 }
 
 // Keyboard shortcut callback for main -> renderer communication
-export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset') => void
+export type KeyboardShortcutCallback = (
+  shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'sidebarToggle'
+) => void
 
 // Keyboard API for renderer
 export interface KeyboardApi {
@@ -148,7 +150,7 @@ export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
 
 // App close coordination types
 export type AppCloseResponse = 'close' | 'cancel'
-export type AppCloseRequestedCallback = () => void
+export type AppCloseRequestedCallback = () => Promise<boolean>
 
 // Window API for renderer
 export interface WindowApi {

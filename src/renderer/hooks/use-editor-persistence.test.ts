@@ -59,7 +59,6 @@ const mockEditorState = {
 const mockExplorerState = {
   expandedDirs: new Set<string>(),
   isVisible: true,
-  setVisible: vi.fn(),
   setExpandedDirs: vi.fn(),
   restoreExpandedDirs: vi.fn().mockResolvedValue(undefined)
 }
@@ -178,7 +177,6 @@ beforeEach(() => {
 
   mockExplorerState.expandedDirs = new Set<string>()
   mockExplorerState.isVisible = true
-  mockExplorerState.setVisible.mockReset()
   mockExplorerState.setExpandedDirs.mockReset()
   mockExplorerState.restoreExpandedDirs.mockReset()
   mockExplorerState.restoreExpandedDirs.mockResolvedValue(undefined)
@@ -213,7 +211,6 @@ describe('useEditorPersistence', () => {
         openFiles: [],
         activeFilePath: null,
         expandedDirs: ['/projects/a', '/projects/a/src', '/projects/b/src', '/outside/path'],
-        fileExplorerVisible: true,
         activeTabId: null
       }
     })
@@ -231,6 +228,29 @@ describe('useEditorPersistence', () => {
     })
   })
 
+  it('ignores legacy fileExplorerVisible in persisted payload', async () => {
+    mockExplorerState.isVisible = true
+
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: ['/projects/a/src'],
+        fileExplorerVisible: false,
+        activeTabId: null
+      }
+    })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockExplorerState.restoreExpandedDirs).toHaveBeenCalledWith(['/projects/a/src'])
+    })
+
+    expect(mockExplorerState.isVisible).toBe(true)
+  })
+
   it('keeps expanded dir persistence isolated per project', async () => {
     mockPersistenceRead
       .mockResolvedValueOnce({
@@ -239,7 +259,6 @@ describe('useEditorPersistence', () => {
           openFiles: [],
           activeFilePath: null,
           expandedDirs: ['/projects/a/src'],
-          fileExplorerVisible: true,
           activeTabId: null
         }
       })
@@ -249,7 +268,6 @@ describe('useEditorPersistence', () => {
           openFiles: [],
           activeFilePath: null,
           expandedDirs: ['/projects/b/docs'],
-          fileExplorerVisible: true,
           activeTabId: null
         }
       })
@@ -349,7 +367,6 @@ describe('useEditorPersistence', () => {
         ],
         activeFilePath: '/projects/a/src/existing.ts',
         expandedDirs: ['/projects/a/src'],
-        fileExplorerVisible: true,
         activeTabId: null,
         activePaneId: 'pane-drop',
         paneLayout: {
@@ -590,7 +607,6 @@ describe('useEditorPersistence', () => {
         ],
         activeFilePath: '/projects/a/src/legacy.ts',
         expandedDirs: ['/projects/a/src'],
-        fileExplorerVisible: true,
         activeTabId: null,
         activePaneId: 'pane-legacy',
         paneLayout: {
