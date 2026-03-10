@@ -101,6 +101,10 @@ export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
 // Dialog API for file/directory selection
 export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>
+  selectFile: (options?: {
+    filters?: Array<{ name: string; extensions: string[] }>
+    title?: string
+  }) => Promise<IpcResult<string>>
 }
 
 // Shell detection types

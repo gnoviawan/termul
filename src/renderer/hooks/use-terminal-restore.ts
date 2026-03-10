@@ -5,6 +5,7 @@ import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -493,6 +494,12 @@ async function restoreFromLayout(
     }
 
     const terminalStore = useTerminalStore.getState()
+    const projectStore = useProjectStore.getState()
+    const project = projectStore.projects.find((p) => p.id === projectId)
+
+    // Resolve project env vars for spawn
+    // TODO: Pass actual system env from backend for variable expansion
+    const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
     debugLog('restoreFromLayout', `START [${restoreId}] ACQUIRING LOCK`, {
       projectId,
@@ -517,7 +524,7 @@ async function restoreFromLayout(
     // Map old IDs to new IDs for active terminal selection and pane remapping
     const idMap = new Map<string, string>()
 
-    for (const persistedTerminal of layout.terminals) {
+for (const persistedTerminal of layout.terminals) {
       if (isCancelled()) {
         await cleanupSpawnedPtys(newTerminals, restoreId, 'during restore loop')
         debugLog('restoreFromLayout', `CANCELLED [${restoreId}] during restore loop`)
@@ -548,7 +555,8 @@ async function restoreFromLayout(
         const normalizedShell = normalizeShellForStartup(resolvedShell)
         const spawnResult = await terminalApi.spawn({
           shell: normalizedShell,
-          cwd: persistedTerminal.cwd
+          cwd: persistedTerminal.cwd,
+          ...(hasProjectEnv ? { env } : {})
         })
 
         debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
@@ -706,6 +714,10 @@ async function createDefaultTerminal(
 
     const shell = normalizeShellForStartup(resolvedShell)
 
+    // Resolve project env vars for spawn
+    // TODO: Pass actual system env from backend for variable expansion
+    const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
+
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
       cwd: project?.path
@@ -713,7 +725,8 @@ async function createDefaultTerminal(
 
     const spawnResult = await terminalApi.spawn({
       shell,
-      cwd: project?.path
+      cwd: project?.path,
+      ...(hasProjectEnv ? { env } : {})
     })
 
     debugLog('createDefaultTerminal', `Spawn result [${defaultId}]`, {
