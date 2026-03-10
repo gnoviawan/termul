@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { KeyboardApi } from '@shared/types/ipc.types'
+import type { KeyboardApi, KeyboardShortcutCallback } from '@shared/types/ipc.types'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 /**
@@ -50,7 +50,7 @@ const IPC_EVENTS = {
  */
 export function createTauriKeyboardApi(): KeyboardApi {
   return {
-    onShortcut(callback: (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'sidebarToggle') => void): () => void {
+    onShortcut(callback: KeyboardShortcutCallback): () => void {
       if (!isTauriContext()) {
         return () => {}
       }
@@ -61,15 +61,7 @@ export function createTauriKeyboardApi(): KeyboardApi {
 
       try {
         unlisten = listen<string>(IPC_EVENTS.SHORTCUT, ({ payload }) => {
-          callback(
-            payload as
-              | 'nextTerminal'
-              | 'prevTerminal'
-              | 'zoomIn'
-              | 'zoomOut'
-              | 'zoomReset'
-              | 'sidebarToggle'
-          )
+          callback(payload as Parameters<KeyboardShortcutCallback>[0])
         })
       } catch (error) {
         console.error('[TauriKeyboardAPI] Failed to register shortcut listener:', error)

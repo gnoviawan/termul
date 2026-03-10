@@ -8,11 +8,21 @@ import { DEFAULT_APP_SETTINGS, APP_SETTINGS_KEY } from '@/types/settings'
 
 type PanelSettingKey = 'sidebarVisible' | 'fileExplorerVisible'
 
+type PanelWriteRequest = {
+  panel: PanelSettingKey
+  visible: boolean
+  requestId: number
+  revision: number
+}
+
 let panelWriteChain: Promise<void> = Promise.resolve()
 const panelWriteRequestIds: Record<PanelSettingKey, number> = {
   sidebarVisible: 0,
   fileExplorerVisible: 0
 }
+let panelWriteRevision = 0
+let lastSuccessfulPanelWriteRevision = 0
+let persistedPanelSettingsSnapshot: AppSettings = { ...DEFAULT_APP_SETTINGS }
 let pendingPanelWriteCount = 0
 let pendingPanelWriteWaiters: Array<() => void> = []
 
@@ -20,13 +30,49 @@ function notifyPanelWriteSettled(): void {
   if (pendingPanelWriteCount === 0 && pendingPanelWriteWaiters.length > 0) {
     const waiters = pendingPanelWriteWaiters
     pendingPanelWriteWaiters = []
-    waiters.forEach((resolve) => resolve())
+    waiters.forEach((resolve) => {
+      resolve()
+    })
   }
 }
 
-function enqueuePanelWrite(task: () => Promise<void>): Promise<void> {
+function syncPersistedPanelSettingsSnapshot(settings: AppSettings): void {
+  persistedPanelSettingsSnapshot = { ...settings }
+}
+
+function buildPanelWriteSnapshot(request: PanelWriteRequest): AppSettings {
+  const currentSettings = useAppSettingsStore.getState().settings
+
+  return {
+    ...currentSettings,
+    sidebarVisible: persistedPanelSettingsSnapshot.sidebarVisible,
+    fileExplorerVisible: persistedPanelSettingsSnapshot.fileExplorerVisible,
+    [request.panel]: request.visible
+  }
+}
+
+function enqueuePanelWrite(request: PanelWriteRequest): Promise<void> {
   pendingPanelWriteCount += 1
-  const run = panelWriteChain.then(task)
+  const run = panelWriteChain.then(async () => {
+    const settingsSnapshot = buildPanelWriteSnapshot(request)
+    const result = await persistenceApi.write(APP_SETTINGS_KEY, settingsSnapshot)
+
+    if (!result.success) {
+      const isLatestPanelRequest = panelWriteRequestIds[request.panel] === request.requestId
+      const canRollbackToLastPersistedValue = request.revision > lastSuccessfulPanelWriteRevision
+
+      if (isLatestPanelRequest && canRollbackToLastPersistedValue) {
+        const rollbackValue = persistedPanelSettingsSnapshot[request.panel]
+        useAppSettingsStore.getState().updateSetting(request.panel, rollbackValue)
+        applyPanelVisibilityToUi(request.panel, rollbackValue)
+      }
+
+      throw new Error(result.error || `Failed to persist ${request.panel}`)
+    }
+
+    syncPersistedPanelSettingsSnapshot(settingsSnapshot)
+    lastSuccessfulPanelWriteRevision = request.revision
+  })
   panelWriteChain = run.catch(() => undefined)
 
   return run.finally(() => {
@@ -51,6 +97,9 @@ export function resetAppSettingsPersistenceQueueForTests(): void {
   panelWriteChain = Promise.resolve()
   panelWriteRequestIds.sidebarVisible = 0
   panelWriteRequestIds.fileExplorerVisible = 0
+  panelWriteRevision = 0
+  lastSuccessfulPanelWriteRevision = 0
+  persistedPanelSettingsSnapshot = { ...DEFAULT_APP_SETTINGS }
   pendingPanelWriteCount = 0
   pendingPanelWriteWaiters = []
 }
@@ -62,14 +111,6 @@ function applyPanelVisibilityToUi(panel: PanelSettingKey, visible: boolean): voi
   }
 
   useFileExplorerStore.getState().setVisible(visible)
-}
-
-function getPanelVisibility(panel: PanelSettingKey): boolean {
-  if (panel === 'sidebarVisible') {
-    return useSidebarStore.getState().isVisible
-  }
-
-  return useFileExplorerStore.getState().isVisible
 }
 
 export function useAppSettingsLoader(): void {
@@ -88,6 +129,8 @@ export function useAppSettingsLoader(): void {
         settings = DEFAULT_APP_SETTINGS
         setSettings(settings)
       }
+
+      syncPersistedPanelSettingsSnapshot(settings)
 
       useSidebarStore.getState().setVisible(settings.sidebarVisible)
       useFileExplorerStore.getState().setVisible(settings.fileExplorerVisible)
@@ -133,24 +176,17 @@ export function useUpdatePanelVisibility(): (
   return useCallback(
     async (panel: PanelSettingKey, visible: boolean) => {
       const requestId = ++panelWriteRequestIds[panel]
-      const previousValue = getPanelVisibility(panel)
+      const request: PanelWriteRequest = {
+        panel,
+        visible,
+        requestId,
+        revision: ++panelWriteRevision
+      }
 
       updateSetting(panel, visible)
       applyPanelVisibilityToUi(panel, visible)
 
-      return enqueuePanelWrite(async () => {
-        const settingsSnapshot = useAppSettingsStore.getState().settings
-        const result = await persistenceApi.write(APP_SETTINGS_KEY, settingsSnapshot)
-
-        if (!result.success) {
-          // Revert only if no newer panel write request has superseded this one.
-          if (panelWriteRequestIds[panel] === requestId) {
-            updateSetting(panel, previousValue)
-            applyPanelVisibilityToUi(panel, previousValue)
-          }
-          throw new Error(result.error || `Failed to persist ${panel}`)
-        }
-      })
+      return enqueuePanelWrite(request)
     },
     [updateSetting]
   )
@@ -163,6 +199,10 @@ export function useResetAppSettings(): () => Promise<void> {
     resetToDefaults()
     useSidebarStore.getState().setVisible(DEFAULT_APP_SETTINGS.sidebarVisible)
     useFileExplorerStore.getState().setVisible(DEFAULT_APP_SETTINGS.fileExplorerVisible)
-    await persistenceApi.write(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+
+    const result = await persistenceApi.write(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+    if (result.success) {
+      syncPersistedPanelSettingsSnapshot(DEFAULT_APP_SETTINGS)
+    }
   }, [resetToDefaults])
 }

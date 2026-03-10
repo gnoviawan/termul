@@ -250,6 +250,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
           windowApi.respondToClose('close')
         })
       }
+
+      return Promise.resolve(false)
     })
   }, [])
 

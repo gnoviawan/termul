@@ -83,7 +83,7 @@ describe('use-app-settings', () => {
     expect(mockPersistenceWriteDebounced).not.toHaveBeenCalled()
   })
 
-  it('serializes rapid panel writes and keeps last state', async () => {
+  it('serializes rapid panel writes and persists each queued request payload', async () => {
     const deferredResolvers: Array<(result: IpcResult<void>) => void> = []
     mockPersistenceWrite.mockImplementation(
       () =>
@@ -101,12 +101,24 @@ describe('use-app-settings', () => {
       expect(mockPersistenceWrite).toHaveBeenCalledTimes(1)
     })
 
+    expect(mockPersistenceWrite).toHaveBeenNthCalledWith(
+      1,
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ sidebarVisible: false })
+    )
+
     deferredResolvers[0]?.({ success: true, data: undefined })
     await first
 
     await waitFor(() => {
       expect(mockPersistenceWrite).toHaveBeenCalledTimes(2)
     })
+
+    expect(mockPersistenceWrite).toHaveBeenNthCalledWith(
+      2,
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ sidebarVisible: true })
+    )
 
     deferredResolvers[1]?.({ success: true, data: undefined })
     await second
@@ -156,6 +168,16 @@ describe('use-app-settings', () => {
     expect(firstError).toBeInstanceOf(Error)
     expect((firstError as Error).message).toBe('first failed')
 
+    expect(mockPersistenceWrite).toHaveBeenNthCalledWith(
+      1,
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ fileExplorerVisible: false })
+    )
+    expect(mockPersistenceWrite).toHaveBeenNthCalledWith(
+      2,
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ fileExplorerVisible: true })
+    )
     expect(useAppSettingsStore.getState().settings.fileExplorerVisible).toBe(true)
     expect(useFileExplorerStore.getState().isVisible).toBe(true)
   })
@@ -214,5 +236,37 @@ describe('use-app-settings', () => {
     await waiter
 
     expect(waiterResolved).toBe(true)
+  })
+
+  it('does not let an older failed revision roll back a newer successful state', async () => {
+    const deferredResolvers: Array<(result: IpcResult<void>) => void> = []
+    mockPersistenceWrite.mockImplementation(
+      () =>
+        new Promise<IpcResult<void>>((resolve) => {
+          deferredResolvers.push(resolve)
+        })
+    )
+
+    const { result } = renderHook(() => useUpdatePanelVisibility())
+
+    const first = result.current('sidebarVisible', false).catch((error) => error)
+    const second = result.current('sidebarVisible', true)
+
+    await waitFor(() => {
+      expect(mockPersistenceWrite).toHaveBeenCalledTimes(1)
+    })
+
+    deferredResolvers[0]?.({ success: false, error: 'first failed', code: 'WRITE_FAILED' })
+    await first
+
+    await waitFor(() => {
+      expect(mockPersistenceWrite).toHaveBeenCalledTimes(2)
+    })
+
+    deferredResolvers[1]?.({ success: true, data: undefined })
+    await second
+
+    expect(useAppSettingsStore.getState().settings.sidebarVisible).toBe(true)
+    expect(useSidebarStore.getState().isVisible).toBe(true)
   })
 })

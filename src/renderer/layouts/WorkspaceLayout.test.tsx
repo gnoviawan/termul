@@ -150,7 +150,7 @@ vi.mock('@/components/file-explorer/FileExplorer', () => ({
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     keyboard: {
-      onShortcut: vi.fn((_callback: () => void) => vi.fn())
+      onShortcut: vi.fn((_callback: () => Promise<boolean>) => vi.fn())
     },
     shell: {
       getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
@@ -189,7 +189,7 @@ const { mockApi } = vi.hoisted(() => ({
       toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
       close: vi.fn(),
       onMaximizeChange: vi.fn(() => vi.fn()),
-      onCloseRequested: vi.fn<(callback: () => void) => () => void>((_callback) => vi.fn()),
+      onCloseRequested: vi.fn<(callback: () => Promise<boolean>) => () => void>((_callback) => vi.fn()),
       respondToClose: vi.fn()
     },
     clipboard: {
@@ -600,8 +600,8 @@ describe('WorkspaceLayout - Empty States', () => {
 
   describe('Close flow persistence coordination', () => {
     it('waits for pending app-settings persistence before responding to close with no dirty files', async () => {
-      let closeRequestedCallback: (() => void) | undefined
-      mockApi.window.onCloseRequested.mockImplementation((callback: () => void) => {
+      let closeRequestedCallback: (() => Promise<boolean>) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => Promise<boolean>) => {
         closeRequestedCallback = callback
         return vi.fn()
       })
@@ -622,7 +622,7 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(closeRequestedCallback).toBeDefined()
       if (!closeRequestedCallback) throw new Error('close callback missing')
 
-      closeRequestedCallback()
+      await expect(closeRequestedCallback()).resolves.toBe(false)
 
       expect(mockApi.window.respondToClose).not.toHaveBeenCalled()
       await deferred
@@ -632,8 +632,8 @@ describe('WorkspaceLayout - Empty States', () => {
     })
 
     it('waits for pending app-settings persistence before confirm-dialog discard close', async () => {
-      let closeRequestedCallback: (() => void) | undefined
-      mockApi.window.onCloseRequested.mockImplementation((callback: () => void) => {
+      let closeRequestedCallback: (() => Promise<boolean>) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => Promise<boolean>) => {
         closeRequestedCallback = callback
         return vi.fn()
       })
@@ -669,7 +669,7 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(closeRequestedCallback).toBeDefined()
       if (!closeRequestedCallback) throw new Error('close callback missing')
 
-      closeRequestedCallback()
+      await expect(closeRequestedCallback()).resolves.toBe(false)
 
       const dontSaveButton = await screen.findByRole('button', { name: "Don't Save" })
 

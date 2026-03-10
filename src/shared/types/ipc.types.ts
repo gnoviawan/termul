@@ -149,7 +149,7 @@ export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
 
 // App close coordination types
 export type AppCloseResponse = 'close' | 'cancel'
-export type AppCloseRequestedCallback = () => void
+export type AppCloseRequestedCallback = () => Promise<boolean>
 
 // Window API for renderer
 export interface WindowApi {
