@@ -60,6 +60,12 @@ export interface PersistedProjectData {
   updatedAt: string // ISO timestamp
 }
 
+export interface PersistedEnvVariable {
+  key: string
+  value: string
+  isSecret?: boolean
+}
+
 // Minimal project data for persistence (matches Project from renderer)
 export interface PersistedProject {
   id: string
@@ -69,4 +75,5 @@ export interface PersistedProject {
   isArchived?: boolean
   gitBranch?: string
   defaultShell?: string
+  envVars?: PersistedEnvVariable[]
 }

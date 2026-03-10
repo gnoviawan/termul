@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Save, Info, Plus, X, ChevronDown } from 'lucide-react'
+import { Settings, Save, Info, Plus, X, ChevronDown, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
@@ -13,7 +13,8 @@ import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
-import { dialogApi, shellApi } from '@/lib/api'
+import { dialogApi, shellApi, filesystemApi } from '@/lib/api'
+import { parseEnvFile, mergeEnvVars } from '@/lib/env-parser'
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
@@ -34,6 +35,8 @@ export default function ProjectSettings() {
   const [hasChanges, setHasChanges] = useState(false)
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [shellsLoading, setShellsLoading] = useState(true)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importWarnings, setImportWarnings] = useState<string | null>(null)
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -70,13 +73,21 @@ export default function ProjectSettings() {
 
   const handleSave = () => {
     if (activeProject) {
+      const normalizedEnvVars = envVars
+        .map((envVar) => ({
+          ...envVar,
+          key: envVar.key.trim()
+        }))
+        .filter((envVar) => envVar.key !== '')
+
       updateProject(activeProject.id, {
         name: projectName,
         color: selectedColor,
         path: rootPath,
-        envVars: envVars.filter((v) => v.key.trim() !== ''),
+        envVars: normalizedEnvVars,
         defaultShell: shell
       })
+      setEnvVars(normalizedEnvVars)
       setHasChanges(false)
     }
   }
@@ -89,6 +100,49 @@ export default function ProjectSettings() {
   const removeEnvVar = (index: number) => {
     setEnvVars(envVars.filter((_, i) => i !== index))
     setHasChanges(true)
+  }
+
+  const handleImportEnvFile = async () => {
+    setImportError(null)
+    setImportWarnings(null)
+
+    const fileResult = await dialogApi.selectFile({
+      filters: [{ name: 'Environment Files', extensions: ['env'] }],
+      title: 'Select .env File'
+    })
+
+    if (!fileResult.success) {
+      // User cancelled - not an error
+      return
+    }
+
+    const readResult = await filesystemApi.readFile(fileResult.data)
+    if (!readResult.success) {
+      setImportError(`Failed to read file: ${readResult.error}`)
+      return
+    }
+
+    const parseResult = parseEnvFile(readResult.data.content)
+
+    if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
+      setImportError('The .env file is empty.')
+      return
+    }
+
+    // Merge with existing env vars (imported keys overwrite existing)
+    const merged = mergeEnvVars(envVars, parseResult.vars)
+    setEnvVars(merged)
+    setHasChanges(true)
+
+    // Show warnings for invalid lines if any
+    if (parseResult.invalidLines.length > 0) {
+      const warningDetails = parseResult.invalidLines
+        .slice(0, 3)
+        .map((l) => `Line ${l.line}: ${l.content}`)
+        .join('\n')
+      const moreCount = parseResult.invalidLines.length > 3 ? ` (+${parseResult.invalidLines.length - 3} more)` : ''
+      setImportWarnings(`Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`)
+    }
   }
 
   return (
@@ -218,6 +272,18 @@ export default function ProjectSettings() {
                   >
                     <Plus size={14} className="mr-1" /> Add Variable
                   </button>
+                  <button
+                    onClick={handleImportEnvFile}
+                    className="mt-2 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
+                  >
+                    <Upload size={14} className="mr-1" /> Import from .env
+                  </button>
+                  {importError && (
+                    <p className="mt-2 text-xs text-destructive">{importError}</p>
+                  )}
+                  {importWarnings && (
+                    <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">{importWarnings}</p>
+                  )}
                 </div>
                 <div className="w-2/3">
                   <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">

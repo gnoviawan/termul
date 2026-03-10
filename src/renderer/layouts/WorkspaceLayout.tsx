@@ -67,6 +67,7 @@ import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
 import { TitleBar } from '@/components/TitleBar'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
@@ -353,7 +354,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
       const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
       const cwd = activeProject?.path
 
-      const spawnResult = await terminalApi.spawn({ shell, cwd })
+      // Resolve project env vars for spawn
+      const { env } = resolveEnvForSpawn(activeProject?.envVars)
+
+      const spawnResult = await terminalApi.spawn({ shell, cwd, env })
       if (!spawnResult.success) {
         toast.error(spawnResult.error || 'Failed to create terminal')
         return
@@ -368,7 +372,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         terminalId: terminal.id
       })
     },
-    [activeProject?.defaultShell, activeProject?.path, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
+    [activeProject?.defaultShell, activeProject?.path, activeProject?.envVars, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
   )
 
   const handleNewTerminal = useCallback(() => {

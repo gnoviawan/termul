@@ -13,7 +13,12 @@ function toPersistedProject(project: Project): PersistedProject {
     path: project.path,
     isArchived: project.isArchived,
     gitBranch: project.gitBranch,
-    defaultShell: project.defaultShell
+    defaultShell: project.defaultShell,
+    envVars: project.envVars?.map((envVar) => ({
+      key: envVar.key,
+      value: envVar.value,
+      isSecret: envVar.isSecret
+    }))
   }
 }
 
@@ -25,7 +30,12 @@ function fromPersistedProject(persisted: PersistedProject): Project {
     path: persisted.path,
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
-    defaultShell: persisted.defaultShell
+    defaultShell: persisted.defaultShell,
+    envVars: persisted.envVars?.map((envVar) => ({
+      key: envVar.key,
+      value: envVar.value,
+      isSecret: envVar.isSecret
+    }))
   }
 }
 

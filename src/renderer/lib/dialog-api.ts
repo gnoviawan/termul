@@ -31,6 +31,25 @@ function createTauriDialogApi(): DialogApi {
       } catch (err) {
         return { success: false, error: String(err), code: 'DIALOG_ERROR' }
       }
+    },
+
+    async selectFile(options?: {
+      filters?: Array<{ name: string; extensions: string[] }>
+      title?: string
+    }): Promise<IpcResult<string>> {
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: options?.filters,
+          title: options?.title || 'Select File'
+        })
+        if (!selected) {
+          return { success: false, error: 'No file selected', code: 'CANCELLED' }
+        }
+        return { success: true, data: selected as string }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'DIALOG_ERROR' }
+      }
     }
   }
 }
