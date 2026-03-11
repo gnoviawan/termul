@@ -171,6 +171,18 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Toggle Sidebar',
     description: 'Show or hide the project sidebar',
     defaultKey: 'ctrl+shift+b'
+  },
+  fileExplorerRename: {
+    id: 'fileExplorerRename',
+    label: 'Rename File',
+    description: 'Rename selected file',
+    defaultKey: 'f2'
+  },
+  fileExplorerDelete: {
+    id: 'fileExplorerDelete',
+    label: 'Delete Files',
+    description: 'Delete selected files',
+    defaultKey: 'delete'
   }
 }
 

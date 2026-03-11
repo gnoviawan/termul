@@ -18,44 +18,32 @@ const ALWAYS_IGNORE = [
   'dist', 'build', '.output', '.nuxt', '.svelte-kit',
   '__pycache__', '.pytest_cache', 'venv', '.env',
   'coverage', '.nyc_output'
-];
+]
 
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+const MAX_FILE_SIZE = 1024 * 1024 // 1MB
 
-let gitignorePatterns: string[] = [];
-const activeWatchers = new Map<string, () => void>();
-const activeCallbacks = new Map<string, Set<FileChangeCallback>>();
-const globalCallbacks = new Set<FileChangeCallback>();
+const activeWatchers = new Map<string, () => void>()
+const activeCallbacks = new Map<string, Set<FileChangeCallback>>()
+const globalCallbacks = new Set<FileChangeCallback>()
 
-function shouldIgnore(name: string, path: string): boolean {
-  if (ALWAYS_IGNORE.includes(name)) return true;
-
-  // Check .gitignore patterns
-  for (const pattern of gitignorePatterns) {
-    if (pattern.startsWith('*')) {
-      const ext = pattern.slice(1);
-      if (name.endsWith(ext)) return true;
-    } else if (pattern.endsWith('/')) {
-      if (name === pattern.slice(0, -1)) return true;
-    } else {
-      if (name === pattern) return true;
-    }
-  }
-  return false;
+function shouldIgnore(name: string): boolean {
+  return ALWAYS_IGNORE.includes(name)
 }
 
+/**
+ * Sort directory entries: directories first (A-Z), then files (A-Z)
+ */
+function sortDirectoryEntries(entries: DirectoryEntry[]): DirectoryEntry[] {
+  return [...entries].sort((a, b) => {
+    // Directories come before files
+    if (a.type === 'directory' && b.type === 'file') return -1
+    if (a.type === 'file' && b.type === 'directory') return 1
 
-
-async function loadGitignore(rootPath: string): Promise<void> {
-  try {
-    const content = await readTextFile(`${rootPath}/.gitignore`);
-    gitignorePatterns = content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line && !line.startsWith('#'));
-  } catch {
-    gitignorePatterns = [];
-  }
+    // Within same type, sort alphabetically by name (case-insensitive)
+    const nameA = a.name.toLowerCase()
+    const nameB = b.name.toLowerCase()
+    return nameA.localeCompare(nameB)
+  })
 }
 
 function isBinaryFile(content: string): boolean {
@@ -80,28 +68,26 @@ export function createTauriFilesystemApi(): FilesystemApi {
   return {
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
       try {
-        const normalizedDirPath = dirPath.replace(/\\/g, '/');
-        await loadGitignore(normalizedDirPath);
-        const entries = await readDir(dirPath);
+        const normalizedDirPath = dirPath.replace(/\\/g, '/')
+        const entries = await readDir(dirPath)
 
-        const filtered: DirectoryEntry[] = [];
+        const filtered: DirectoryEntry[] = []
         for (const entry of entries) {
-          const name = entry.name;
-          // DirEntry doesn't have 'path' property - construct it manually
-          const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/');
-          if (shouldIgnore(name, fullPath)) continue;
+          const name = entry.name
+          if (shouldIgnore(name)) continue
 
-          let size = 0;
-          let modified = Date.now();
+          const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
+          let size = 0
+          let modified = Date.now()
           try {
-            const info = await stat(fullPath);
-            size = info.size;
-            modified = info.mtime?.getTime() ?? Date.now();
+            const info = await stat(fullPath)
+            size = info.size
+            modified = info.mtime?.getTime() ?? Date.now()
           } catch {
             // Ignore stat errors, use defaults
           }
 
-          const isDir = entry.isDirectory ?? false;
+          const isDir = entry.isDirectory ?? false
           filtered.push({
             name,
             path: fullPath,
@@ -109,12 +95,14 @@ export function createTauriFilesystemApi(): FilesystemApi {
             extension: isDir ? null : getExtension(name),
             size,
             modifiedAt: modified
-          });
+          })
         }
 
-        return { success: true, data: filtered };
+        // Sort: directories first, then files, both A-Z
+        const sorted = sortDirectoryEntries(filtered)
+        return { success: true, data: sorted }
       } catch (err) {
-        return { success: false, error: String(err), code: 'READ_DIR_ERROR' };
+        return { success: false, error: String(err), code: 'READ_DIR_ERROR' }
       }
     },
 
@@ -301,8 +289,7 @@ export const tauriFilesystemApi = createTauriFilesystemApi();
  * @internal Testing only - reset module state
  */
 export function _resetFilesystemStateForTesting() {
-  gitignorePatterns = [];
-  activeWatchers.clear();
-  activeCallbacks.clear();
-  globalCallbacks.clear();
+  activeWatchers.clear()
+  activeCallbacks.clear()
+  globalCallbacks.clear()
 }

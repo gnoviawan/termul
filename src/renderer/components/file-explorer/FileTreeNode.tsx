@@ -14,6 +14,7 @@ interface FileTreeNodeProps {
   onToggle: (path: string) => void
   onSelect: (path: string) => void
   onContextMenu: (e: React.MouseEvent, entry: DirectoryEntry) => void
+  onClick?: (e: React.MouseEvent, entry: DirectoryEntry) => void
 }
 
 export function FileTreeNode({
@@ -25,13 +26,20 @@ export function FileTreeNode({
   children,
   onToggle,
   onSelect,
-  onContextMenu
+  onContextMenu,
+  onClick
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const Icon = getFileIcon(entry.extension, isDir, isExpanded)
   const { startFileDrag } = usePaneDnd()
 
-  const handleClick = (): void => {
+  const handleClick = (e: React.MouseEvent): void => {
+    // Pass click event if handler provided (for multi-select handling)
+    if (onClick) {
+      onClick(e, entry)
+      return
+    }
+
     if (isDir) {
       onToggle(entry.path)
     } else {
@@ -113,6 +121,7 @@ interface FileTreeNodeWrapperProps {
   onToggle: (path: string) => void
   onSelect: (path: string) => void
   onContextMenu: (e: React.MouseEvent, entry: DirectoryEntry) => void
+  onClick?: (e: React.MouseEvent, entry: DirectoryEntry) => void
 }
 
 function FileTreeNodeWrapper({
@@ -120,10 +129,11 @@ function FileTreeNodeWrapper({
   depth,
   onToggle,
   onSelect,
-  onContextMenu
+  onContextMenu,
+  onClick
 }: FileTreeNodeWrapperProps): React.JSX.Element {
   const isExpanded = useFileExplorerStore((state) => state.expandedDirs.has(entry.path))
-  const isSelected = useFileExplorerStore((state) => state.selectedPath === entry.path)
+  const isSelected = useFileExplorerStore((state) => state.selectedPaths.has(entry.path))
   const isLoading = useFileExplorerStore((state) => state.loadingDirs.has(entry.path))
   const children = useFileExplorerStore((state) => state.directoryContents.get(entry.path))
 
@@ -138,6 +148,7 @@ function FileTreeNodeWrapper({
       onToggle={onToggle}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
+      onClick={onClick}
     />
   )
 }

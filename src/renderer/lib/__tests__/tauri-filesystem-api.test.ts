@@ -76,7 +76,7 @@ describe('tauriFilesystemApi', () => {
   })
 
   describe('readDirectory', () => {
-    it('should successfully read directory entries', async () => {
+    it('should successfully read directory entries with folders-first sorting', async () => {
       const mockEntries: DirEntry[] = [
         { name: 'file1.txt', isDirectory: false, isFile: true, isSymlink: false },
         { name: 'dir1', isDirectory: true, isFile: false, isSymlink: false }
@@ -88,10 +88,11 @@ describe('tauriFilesystemApi', () => {
       expect(result.success).toBe(true)
       if (result.success) {
         expect(result.data).toHaveLength(2)
-        expect(result.data![0].name).toBe('file1.txt')
-        expect(result.data![0].type).toBe('file')
-        expect(result.data![1].name).toBe('dir1')
-        expect(result.data![1].type).toBe('directory')
+        // Directories come first with folders-first sorting
+        expect(result.data![0].name).toBe('dir1')
+        expect(result.data![0].type).toBe('directory')
+        expect(result.data![1].name).toBe('file1.txt')
+        expect(result.data![1].type).toBe('file')
       }
     })
 

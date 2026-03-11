@@ -68,6 +68,17 @@ vi.mock('@tauri-apps/plugin-os', () => ({
   homedir: vi.fn()
 }))
 
+vi.mock('@tauri-apps/plugin-shell', () => ({
+  Command: vi.fn(),
+  open: vi.fn()
+}))
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: vi.fn(),
+  openUrl: vi.fn(),
+  revealItemInDir: vi.fn()
+}))
+
 vi.mock('react-virtuoso', () => {
   const VirtuosoComponent = React.forwardRef(
     (
