@@ -766,14 +766,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleClearCommandHistory = useCallback(async () => {
     if (!activeProjectId) return
-    const { clearHistory } = useCommandHistoryStore.getState()
-    clearHistory(activeProjectId)
-    // Persist the cleared state
+    // Persist empty array first, then clear in-memory on success
     const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
     if (!result.success) {
       toast.error(`Failed to clear history: ${result.error}`)
       throw new Error(result.error)
     }
+    // Only clear in-memory state after successful persistence
+    const { clearHistory } = useCommandHistoryStore.getState()
+    clearHistory(activeProjectId)
   }, [activeProjectId])
 
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminal?.terminalId)

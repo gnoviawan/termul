@@ -252,6 +252,7 @@ export function CommandHistoryModal({
         confirmLabel="Clear"
         cancelLabel="Cancel"
         variant="danger"
+        isLoading={isClearing}
         onConfirm={handleClearConfirm}
         onCancel={() => setShowClearConfirm(false)}
       />
