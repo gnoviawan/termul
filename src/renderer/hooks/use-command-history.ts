@@ -73,3 +73,9 @@ export function useCommandHistory(projectId: string | null): CommandHistoryEntry
   if (!projectId) return []
   return entries.filter((e) => e.projectId === projectId)
 }
+
+export function useAllCommandHistory(): CommandHistoryEntry[] {
+  const entries = useCommandHistoryStore((state) => state.entries)
+  // Return a sorted copy (newest-first) across all projects
+  return [...entries].sort((a, b) => b.timestamp - a.timestamp)
+}

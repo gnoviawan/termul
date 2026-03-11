@@ -1,46 +1,66 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { History, Terminal, Clock } from 'lucide-react'
+import { History, Terminal, Clock, Trash2 } from 'lucide-react'
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { CommandHistoryEntry } from '@/stores/command-history-store'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+
+type FilterMode = 'this-project' | 'all-projects'
 
 interface CommandHistoryModalProps {
   isOpen: boolean
   onClose: () => void
   entries: CommandHistoryEntry[]
+  allEntries: CommandHistoryEntry[]
   onSelectCommand: (command: string) => void
+  onClearHistory: () => Promise<void>
 }
 
 export function CommandHistoryModal({
   isOpen,
   onClose,
   entries,
-  onSelectCommand
+  allEntries,
+  onSelectCommand,
+  onClearHistory
 }: CommandHistoryModalProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [filterMode, setFilterMode] = useState<FilterMode>('this-project')
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
+  // Get entries based on filter mode
+  const baseEntries = useMemo(() => {
+    return filterMode === 'this-project' ? entries : allEntries
+  }, [filterMode, entries, allEntries])
+
   // Filter entries based on query
   const filteredEntries = useMemo(() => {
-    if (!query) return entries
+    if (!query) return baseEntries
     const lowerQuery = query.toLowerCase()
-    return entries.filter((e) => e.command.toLowerCase().includes(lowerQuery))
-  }, [entries, query])
+    return baseEntries.filter((e) => e.command.toLowerCase().includes(lowerQuery))
+  }, [baseEntries, query])
 
-  // Reset selection when query changes
+  // Reset selection when query or filter changes
   useEffect(() => {
     setSelectedIndex(0)
-  }, [query])
+  }, [query, filterMode])
 
-  // Focus input when opened
+  // Reset state when modal opens or closes
   useEffect(() => {
-    if (isOpen && inputRef.current) {
+    if (isOpen) {
       setQuery('')
       setSelectedIndex(0)
+      setFilterMode('this-project')
       setTimeout(() => inputRef.current?.focus(), 50)
     }
+    // Always reset confirmation state on any isOpen change
+    setShowClearConfirm(false)
+    setIsClearing(false)
   }, [isOpen])
 
   // Scroll selected item into view using Virtuoso
@@ -71,6 +91,19 @@ export function CommandHistoryModal({
     },
     [filteredEntries, selectedIndex, onSelectCommand, onClose]
   )
+
+  const handleClearConfirm = useCallback(async () => {
+    if (isClearing) return
+    setIsClearing(true)
+    try {
+      await onClearHistory()
+      setShowClearConfirm(false)
+    } catch {
+      // Keep dialog open on failure - parent already showed toast
+    } finally {
+      setIsClearing(false)
+    }
+  }, [onClearHistory, isClearing])
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp)
@@ -106,9 +139,23 @@ export function CommandHistoryModal({
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-              <History size={18} className="text-muted-foreground" />
-              <span className="text-sm font-medium">Command History</span>
+            <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border">
+              <div className="flex items-center gap-2">
+                <History size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium">Command History</span>
+              </div>
+              <Select
+                value={filterMode}
+                onValueChange={(value) => setFilterMode(value as FilterMode)}
+              >
+                <SelectTrigger className="w-[140px] h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="this-project">This Project</SelectItem>
+                  <SelectItem value="all-projects">All Projects</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Search Input */}
@@ -129,7 +176,7 @@ export function CommandHistoryModal({
               <div className="p-8 text-center text-muted-foreground">
                 <History size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm">
-                  {entries.length === 0 ? 'No command history yet' : 'No matching commands'}
+                  {baseEntries.length === 0 ? 'No command history yet' : 'No matching commands'}
                 </p>
               </div>
             ) : (
@@ -171,20 +218,43 @@ export function CommandHistoryModal({
             )}
 
             {/* Footer */}
-            <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-end space-x-4 text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
-              <span className="flex items-center">
-                <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to navigate
-              </span>
-              <span className="flex items-center">
-                <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd> to insert
-              </span>
-              <span className="flex items-center">
-                <kbd className="bg-secondary text-foreground px-1 rounded mr-1">Esc</kbd> to close
-              </span>
+            <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-between text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+              <div className="flex items-center space-x-4">
+                <span className="flex items-center">
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to navigate
+                </span>
+                <span className="flex items-center">
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd> to insert
+                </span>
+                <span className="flex items-center">
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">Esc</kbd> to close
+                </span>
+              </div>
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded hover:bg-secondary/50 text-red-400 hover:text-red-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={entries.length === 0 || filterMode !== 'this-project' || isClearing}
+                title={filterMode === 'all-projects' ? 'Switch to "This Project" to clear history' : undefined}
+              >
+                <Trash2 size={12} />
+                <span>{isClearing ? 'Clearing...' : 'Clear History'}</span>
+              </button>
             </div>
           </motion.div>
         </motion.div>
       )}
+
+      {/* Clear History Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={showClearConfirm}
+        title="Clear Command History"
+        message="Are you sure you want to clear the command history for this project? This action cannot be undone."
+        confirmLabel="Clear"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleClearConfirm}
+        onCancel={() => setShowClearConfirm(false)}
+      />
     </AnimatePresence>
   )
 }

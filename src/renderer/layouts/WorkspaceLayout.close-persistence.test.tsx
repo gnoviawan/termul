@@ -168,7 +168,8 @@ vi.mock('@/hooks/use-recent-commands', () => ({
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: () => undefined,
   useAddCommand: () => vi.fn(),
-  useCommandHistory: () => []
+  useCommandHistory: () => [],
+  useAllCommandHistory: () => []
 }))
 
 vi.mock('@/hooks/use-app-settings', () => ({
