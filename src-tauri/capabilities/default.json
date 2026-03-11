@@ -56,8 +56,8 @@
     "shell:default",
     "shell:allow-open",
     "opener:default",
-    "opener:allow-open-item",
-    "opener:allow-reveal-item-in-folder",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir",
     "mcp-bridge:default"
   ]
 }
