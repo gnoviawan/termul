@@ -370,6 +370,53 @@ describe('terminal-store', () => {
     })
   })
 
+  describe('updateTerminalScrollback', () => {
+    it('should update pendingScrollback field when called with scrollback array', () => {
+      const { updateTerminalScrollback } = useTerminalStore.getState()
+
+      updateTerminalScrollback('t1', ['line 1', 'line 2', 'line 3'])
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal = terminals.find((t) => t.id === 't1')
+      expect(terminal?.pendingScrollback).toEqual(['line 1', 'line 2', 'line 3'])
+    })
+
+    it('should set pendingScrollback to undefined when called with undefined', () => {
+      const { updateTerminalScrollback } = useTerminalStore.getState()
+
+      // First set a value
+      updateTerminalScrollback('t1', ['existing line 1', 'existing line 2'])
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback).toHaveLength(2)
+
+      // Then clear it
+      updateTerminalScrollback('t1', undefined)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback).toBeUndefined()
+    })
+
+    it('should not affect other terminals', () => {
+      const { updateTerminalScrollback } = useTerminalStore.getState()
+
+      updateTerminalScrollback('t1', ['terminal 1 lines'])
+
+      const { terminals } = useTerminalStore.getState()
+      const terminal1 = terminals.find((t) => t.id === 't1')
+      const terminal2 = terminals.find((t) => t.id === 't2')
+
+      expect(terminal1?.pendingScrollback).toEqual(['terminal 1 lines'])
+      expect(terminal2?.pendingScrollback).toBeUndefined()
+    })
+
+    it('should handle non-existent terminal id gracefully', () => {
+      const { updateTerminalScrollback } = useTerminalStore.getState()
+
+      // Should not throw
+      expect(() => updateTerminalScrollback('non-existent-id', ['lines'])).not.toThrow()
+
+      const { terminals } = useTerminalStore.getState()
+      expect(terminals).toHaveLength(3)
+    })
+  })
+
   describe('updateTerminalActivity', () => {
     it('should set hasActivity to true', () => {
       const { updateTerminalActivity } = useTerminalStore.getState()

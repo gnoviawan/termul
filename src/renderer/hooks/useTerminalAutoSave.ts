@@ -36,6 +36,20 @@ export function isTerminalRestoreInProgress(): boolean {
 }
 
 /**
+ * Sync extracted scrollback to the terminal store
+ * Updates each terminal's pendingScrollback field in memory
+ * Skips terminals where scrollback extraction returns undefined
+ */
+export function syncScrollbackToStore(terminals: PersistedTerminal[]): void {
+  const store = useTerminalStore.getState()
+  for (const t of terminals) {
+    // Skip if scrollback is undefined (terminal not in registry)
+    if (t.scrollback === undefined) continue
+    store.updateTerminalScrollback(t.id, t.scrollback)
+  }
+}
+
+/**
  * Serialize terminal store state for persistence
  * Includes scrollback extraction from terminal registry
  */
@@ -126,6 +140,9 @@ export function useTerminalAutoSave(): void {
         state.activeTerminalId
       )
 
+      // Sync scrollback to store before debounced write
+      syncScrollbackToStore(layout.terminals)
+
       // Use debounced write via API
       persistenceApi
         .writeDebounced(PersistenceKeys.terminals(projectId), layout)
@@ -171,6 +188,9 @@ export async function loadPersistedTerminals(
 export async function saveTerminalLayout(projectId: string): Promise<void> {
   const state = useTerminalStore.getState()
   const layout = serializeTerminalsForProject(state.terminals, projectId, state.activeTerminalId)
+
+  // Sync scrollback to store before writing to disk
+  syncScrollbackToStore(layout.terminals)
 
   const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
 
