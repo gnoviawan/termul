@@ -140,7 +140,9 @@ export function useTerminalAutoSave(): void {
         state.activeTerminalId
       )
 
-      // Sync scrollback to store before debounced write
+      // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
+      // This ensures extractScrollback() values survive xterm disposal during project switches,
+      // preserving scrollback in memory so it can be restored when switching back.
       syncScrollbackToStore(layout.terminals)
 
       // Use debounced write via API
@@ -189,7 +191,9 @@ export async function saveTerminalLayout(projectId: string): Promise<void> {
   const state = useTerminalStore.getState()
   const layout = serializeTerminalsForProject(state.terminals, projectId, state.activeTerminalId)
 
-  // Sync scrollback to store before writing to disk
+  // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
+  // This preserves scrollback across project switches by updating the store before
+  // the xterm instance is disposed, avoiding state loss when switching projects.
   syncScrollbackToStore(layout.terminals)
 
   const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
