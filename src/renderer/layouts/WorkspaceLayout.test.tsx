@@ -119,7 +119,8 @@ vi.mock('@/hooks/use-recent-commands', () => ({
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: vi.fn(),
   useAddCommand: vi.fn(() => vi.fn()),
-  useCommandHistory: vi.fn(() => [])
+  useCommandHistory: vi.fn(() => []),
+  useAllCommandHistory: vi.fn(() => [])
 }))
 
 const { mockUpdatePanelVisibility, mockWaitForPendingAppSettingsPersistence } = vi.hoisted(() => ({

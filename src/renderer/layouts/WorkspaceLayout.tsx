@@ -34,6 +34,7 @@ import {
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useEditorStore } from '@/stores/editor-store'
+import { useCommandHistoryStore } from '@/stores/command-history-store'
 import {
   useWorkspaceStore,
   useActiveTab,
@@ -48,7 +49,8 @@ import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import {
   useCommandHistoryLoader,
   useAddCommand,
-  useCommandHistory
+  useCommandHistory,
+  useAllCommandHistory
 } from '@/hooks/use-command-history'
 import { filesystemApi, windowApi, keyboardApi, terminalApi, persistenceApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
@@ -296,6 +298,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useCommandHistoryLoader(activeProjectId)
   const addCommand = useAddCommand()
   const commandHistory = useCommandHistory(activeProjectId)
+  const allCommandHistory = useAllCommandHistory()
   const createSnapshot = useCreateSnapshot()
 
   const handleCreateSnapshot = useCallback(
@@ -761,6 +764,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [activeTerminal])
 
+  const handleClearCommandHistory = useCallback(async () => {
+    if (!activeProjectId) return
+    // Persist empty array first, then clear in-memory on success
+    const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
+    if (!result.success) {
+      toast.error(`Failed to clear history: ${result.error}`)
+      throw new Error(result.error)
+    }
+    // Only clear in-memory state after successful persistence
+    const { clearHistory } = useCommandHistoryStore.getState()
+    clearHistory(activeProjectId)
+  }, [activeProjectId])
+
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminal?.terminalId)
 
   // Show loading state while projects are being loaded
@@ -899,7 +915,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         isOpen={isCommandHistoryOpen}
         onClose={() => setIsCommandHistoryOpen(false)}
         entries={commandHistory}
+        allEntries={allCommandHistory}
         onSelectCommand={handleInsertCommand}
+        onClearHistory={handleClearCommandHistory}
       />
 
       {/* Close Terminal Confirmation */}
