@@ -2,10 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   serializeTerminalsForProject,
   setTerminalRestoreInProgress,
-  isTerminalRestoreInProgress
+  isTerminalRestoreInProgress,
+  syncScrollbackToStore,
+  saveTerminalLayout
 } from './useTerminalAutoSave'
 import { extractScrollback } from '../utils/terminal-registry'
+import { useTerminalStore } from '../stores/terminal-store'
 import type { Terminal } from '@/types/project'
+import type { PersistedTerminal } from '../../shared/types/persistence.types'
 
 // Mock terminal-registry
 vi.mock('../utils/terminal-registry', () => ({
@@ -146,6 +150,101 @@ describe('useTerminalAutoSave', () => {
       serializeTerminalsForProject(terminals, 'proj-1', '1')
 
       expect(extractScrollback).toHaveBeenCalledWith('pty-1')
+    })
+  })
+
+  describe('syncScrollbackToStore', () => {
+    beforeEach(() => {
+      useTerminalStore.setState({
+        terminals: [],
+        activeTerminalId: '',
+        ptyIdIndex: new Map()
+      })
+    })
+
+    it('should update pendingScrollback in store for each terminal', () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: terminal.id,
+          name: 'Terminal 1',
+          shell: 'bash',
+          scrollback: ['new scrollback line 1', 'new scrollback line 2']
+        }
+      ]
+
+      syncScrollbackToStore(persistedTerminals)
+
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual([
+        'new scrollback line 1',
+        'new scrollback line 2'
+      ])
+    })
+
+    it('should skip terminals with undefined scrollback', () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash', undefined, [
+        'existing scrollback'
+      ])
+
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: terminal.id,
+          name: 'Terminal 1',
+          shell: 'bash',
+          scrollback: undefined
+        }
+      ]
+
+      syncScrollbackToStore(persistedTerminals)
+
+      // Should not update - existing scrollback preserved
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual(['existing scrollback'])
+    })
+
+    it('should handle non-existent terminal ids gracefully', () => {
+      const persistedTerminals: PersistedTerminal[] = [
+        {
+          id: 'non-existent-id',
+          name: 'Ghost Terminal',
+          shell: 'bash',
+          scrollback: ['some lines']
+        }
+      ]
+
+      // Should not throw
+      expect(() => syncScrollbackToStore(persistedTerminals)).not.toThrow()
+    })
+  })
+
+  describe('saveTerminalLayout', () => {
+    beforeEach(() => {
+      useTerminalStore.setState({
+        terminals: [],
+        activeTerminalId: '',
+        ptyIdIndex: new Map()
+      })
+    })
+
+    it('should sync scrollback to store before writing to disk', async () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+      store.setTerminalPtyId(terminal.id, 'pty-1')
+
+      await saveTerminalLayout('proj-1')
+
+      const updatedTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+      expect(updatedTerminal?.pendingScrollback).toEqual(['line 1', 'line 2'])
     })
   })
 })
