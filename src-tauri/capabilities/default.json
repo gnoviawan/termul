@@ -53,6 +53,11 @@
     "updater:allow-check",
     "updater:allow-download-and-install",
     "process:allow-restart",
+    "shell:default",
+    "shell:allow-open",
+    "opener:default",
+    "opener:allow-open-item",
+    "opener:allow-reveal-item-in-folder",
     "mcp-bridge:default"
   ]
 }

@@ -10,11 +10,12 @@ export interface ContextMenuSubItem {
 }
 
 export interface ContextMenuItem {
-  label: string
+  label?: string
   icon?: React.ReactNode
   onClick?: () => void
   variant?: 'default' | 'danger'
   disabled?: boolean
+  type?: 'separator'
   submenu?: ContextMenuSubItem[]
   onSubmenuSelect?: (value: string) => void
 }
@@ -85,63 +86,70 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
       className="fixed z-50 bg-card border border-border rounded-md shadow-lg py-1 min-w-[180px]"
       style={{ left: position.left, top: position.top }}
     >
-      {items.map((item, index) => (
-        <div
-          key={index}
-          className="relative"
-          onMouseEnter={() => setHoveredIndex(index)}
-          onMouseLeave={() => setHoveredIndex(null)}
-        >
-          <button
-            onClick={() => {
-              if (!item.disabled && item.onClick) {
-                item.onClick()
-                onClose()
-              }
-            }}
-            disabled={item.disabled}
-            className={cn(
-              'w-full flex items-center px-3 py-2 text-sm transition-colors',
-              item.disabled && 'opacity-50 cursor-not-allowed',
-              item.variant === 'danger'
-                ? 'text-red-400 hover:bg-red-500/10'
-                : 'text-foreground hover:bg-secondary'
-            )}
-          >
-            {item.icon && <span className="mr-2">{item.icon}</span>}
-            {item.label}
-            {item.submenu && <ChevronRight size={14} className="ml-auto" />}
-          </button>
+      {items.map((item, index) => {
+          // Render separator
+          if (item.type === 'separator') {
+            return <div key={index} className="my-1 border-t border-border" />
+          }
 
-          {/* Submenu */}
-          {item.submenu && hoveredIndex === index && (
+          return (
             <div
-              className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-1 min-w-[160px]"
+              key={index}
+              className="relative"
+              onMouseEnter={() => setHoveredIndex(index)}
+              onMouseLeave={() => setHoveredIndex(null)}
             >
-              {item.submenu.map((subItem) => (
-                <button
-                  key={subItem.value}
-                  onClick={() => {
-                    if (item.onSubmenuSelect) {
-                      item.onSubmenuSelect(subItem.value)
-                    }
+              <button
+                onClick={() => {
+                  if (!item.disabled && item.onClick) {
+                    item.onClick()
                     onClose()
-                  }}
-                  className="w-full flex items-center px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors"
+                  }
+                }}
+                disabled={item.disabled}
+                className={cn(
+                  'w-full flex items-center px-3 py-2 text-sm transition-colors',
+                  item.disabled && 'opacity-50 cursor-not-allowed',
+                  item.variant === 'danger'
+                    ? 'text-red-400 hover:bg-red-500/10'
+                    : 'text-foreground hover:bg-secondary'
+                )}
+              >
+                {item.icon && <span className="mr-2">{item.icon}</span>}
+                {item.label}
+                {item.submenu && <ChevronRight size={14} className="ml-auto" />}
+              </button>
+
+              {/* Submenu */}
+              {item.submenu && hoveredIndex === index && (
+                <div
+                  className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-1 min-w-[160px]"
                 >
-                  {subItem.isSelected ? (
-                    <Check size={14} className="mr-2 text-primary" />
-                  ) : (
-                    <span className="w-[14px] mr-2" />
-                  )}
-                  {subItem.icon && <span className="mr-2">{subItem.icon}</span>}
-                  {subItem.label}
-                </button>
-              ))}
+                  {item.submenu.map((subItem) => (
+                    <button
+                      key={subItem.value}
+                      onClick={() => {
+                        if (item.onSubmenuSelect) {
+                          item.onSubmenuSelect(subItem.value)
+                        }
+                        onClose()
+                      }}
+                      className="w-full flex items-center px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors"
+                    >
+                      {subItem.isSelected ? (
+                        <Check size={14} className="mr-2 text-primary" />
+                      ) : (
+                        <span className="w-[14px] mr-2" />
+                      )}
+                      {subItem.icon && <span className="mr-2">{subItem.icon}</span>}
+                      {subItem.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      ))}
+          )
+        })}
     </div>
   )
 }

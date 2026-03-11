@@ -171,6 +171,42 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Toggle Sidebar',
     description: 'Show or hide the project sidebar',
     defaultKey: 'ctrl+shift+b'
+  },
+  fileExplorerCopy: {
+    id: 'fileExplorerCopy',
+    label: 'Copy Files',
+    description: 'Copy selected files to clipboard',
+    defaultKey: 'ctrl+c'
+  },
+  fileExplorerCut: {
+    id: 'fileExplorerCut',
+    label: 'Cut Files',
+    description: 'Cut selected files to clipboard',
+    defaultKey: 'ctrl+x'
+  },
+  fileExplorerPaste: {
+    id: 'fileExplorerPaste',
+    label: 'Paste Files',
+    description: 'Paste files from clipboard',
+    defaultKey: 'ctrl+v'
+  },
+  fileExplorerRename: {
+    id: 'fileExplorerRename',
+    label: 'Rename File',
+    description: 'Rename selected file',
+    defaultKey: 'f2'
+  },
+  fileExplorerDelete: {
+    id: 'fileExplorerDelete',
+    label: 'Delete Files',
+    description: 'Delete selected files',
+    defaultKey: 'delete'
+  },
+  fileExplorerSelectAll: {
+    id: 'fileExplorerSelectAll',
+    label: 'Select All Files',
+    description: 'Select all files in the current directory',
+    defaultKey: 'ctrl+a'
   }
 }
 
