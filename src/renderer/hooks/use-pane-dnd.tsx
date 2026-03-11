@@ -1,13 +1,19 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { useWorkspaceStore, findPaneById } from '@/stores/workspace-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { editorTabId } from '@/stores/workspace-store'
-import type { DragPayload, DropPosition } from '@/types/workspace.types'
+import type { DragPayload, DropPosition, TabReorderPosition } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 
 interface DropPreviewTarget {
   paneId: string
   position: DropPosition
+}
+
+export interface ReorderPreview {
+  paneId: string
+  targetTabId: string
+  position: TabReorderPosition
 }
 
 interface PaneDndContextValue {
@@ -16,9 +22,13 @@ interface PaneDndContextValue {
   previewTarget: DropPreviewTarget | null
   setPreviewTarget: (paneId: string, position: DropPosition) => void
   clearPreviewTarget: (paneId?: string, position?: DropPosition) => void
+  reorderPreview: ReorderPreview | null
+  setReorderPreview: (paneId: string, targetTabId: string, position: TabReorderPosition) => void
+  clearReorderPreview: () => void
   startTabDrag: (tabId: string, paneId: string, event: React.DragEvent) => void
   startFileDrag: (filePath: string, event: React.DragEvent) => void
   handleDrop: (targetPaneId: string, position: DropPosition, event: React.DragEvent) => void
+  handleTabReorder: (sourcePaneId: string, targetTabId: string, position: TabReorderPosition) => void
 }
 
 const PaneDndContext = createContext<PaneDndContextValue | null>(null)
@@ -76,6 +86,7 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
   const [isDragging, setIsDragging] = useState(false)
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null)
   const [previewTarget, setPreviewTargetState] = useState<DropPreviewTarget | null>(null)
+  const [reorderPreview, setReorderPreviewState] = useState<ReorderPreview | null>(null)
 
   const clearPreviewTarget = useCallback((paneId?: string, position?: DropPosition) => {
     setPreviewTargetState((current) => {
@@ -95,19 +106,40 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
     })
   }, [])
 
+  const setReorderPreview = useCallback(
+    (paneId: string, targetTabId: string, position: TabReorderPosition) => {
+      setReorderPreviewState((current) => {
+        if (
+          current?.paneId === paneId &&
+          current.targetTabId === targetTabId &&
+          current.position === position
+        ) {
+          return current
+        }
+        return { paneId, targetTabId, position }
+      })
+    },
+    []
+  )
+
+  const clearReorderPreview = useCallback(() => {
+    setReorderPreviewState(null)
+  }, [])
+
   // Track drag state via document-level events
   useEffect(() => {
     const handleDragEnd = (): void => {
       setIsDragging(false)
       setDragPayload(null)
       clearPreviewTarget()
+      clearReorderPreview()
     }
 
     document.addEventListener('dragend', handleDragEnd)
     return () => {
       document.removeEventListener('dragend', handleDragEnd)
     }
-  }, [clearPreviewTarget])
+  }, [clearPreviewTarget, clearReorderPreview])
 
   const startTabDrag = useCallback(
     (tabId: string, paneId: string, event: React.DragEvent) => {
@@ -199,6 +231,57 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
     [dragPayload, clearPreviewTarget]
   )
 
+  const handleTabReorder = useCallback(
+    (sourcePaneId: string, targetTabId: string, position: TabReorderPosition) => {
+      if (!dragPayload || dragPayload.type !== 'tab' || !dragPayload.tabId) {
+        return
+      }
+
+      const sourceTabId = dragPayload.tabId
+
+      // Don't reorder if dropping on self
+      if (sourceTabId === targetTabId) {
+        return
+      }
+
+      const store = useWorkspaceStore.getState()
+      const pane = findPaneById(store.root, sourcePaneId)
+
+      if (!pane || pane.type !== 'leaf') {
+        return
+      }
+
+      const tabs = pane.tabs
+      const sourceIndex = tabs.findIndex((t: WorkspaceTab) => t.id === sourceTabId)
+      const targetIndex = tabs.findIndex((t: WorkspaceTab) => t.id === targetTabId)
+
+      if (sourceIndex === -1 || targetIndex === -1) {
+        return
+      }
+
+      // Calculate new order
+      const newTabs = [...tabs]
+      const [movedTab] = newTabs.splice(sourceIndex, 1)
+
+      // Adjust target index if source was before target
+      let insertIndex = targetIndex
+      if (sourceIndex < targetIndex) {
+        insertIndex = targetIndex - 1
+      }
+
+      // Add offset for 'after' position
+      if (position === 'after') {
+        insertIndex += 1
+      }
+
+      newTabs.splice(insertIndex, 0, movedTab)
+
+      store.reorderTabsInPane(sourcePaneId, newTabs.map((t: WorkspaceTab) => t.id))
+      clearReorderPreview()
+    },
+    [dragPayload, clearReorderPreview]
+  )
+
   return (
     <PaneDndContext.Provider
       value={{
@@ -207,9 +290,13 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
         previewTarget,
         setPreviewTarget,
         clearPreviewTarget,
+        reorderPreview,
+        setReorderPreview,
+        clearReorderPreview,
         startTabDrag,
         startFileDrag,
-        handleDrop
+        handleDrop,
+        handleTabReorder
       }}
     >
       {children}

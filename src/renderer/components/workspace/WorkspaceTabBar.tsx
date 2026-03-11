@@ -7,7 +7,6 @@ import {
   Edit2,
   Skull
 } from 'lucide-react'
-import { Reorder } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { EditorTab } from './EditorTab'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,22 +17,49 @@ import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import type { Terminal } from '@/types/project'
+import type { TabReorderPosition } from '@/types/workspace.types'
 import { ContextMenu } from '@/components/ContextMenu'
-import type { ContextMenuItem } from '@/components/ContextMenu'
 import { shellApi, clipboardApi } from '@/lib/api'
+
+// Helper to compute drop position from mouse coordinates
+function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
+  const rect = target.getBoundingClientRect()
+  const x = clientX - rect.left
+  const halfWidth = rect.width / 2
+  return x < halfWidth ? 'before' : 'after'
+}
 
 // Inline TerminalTab matching the style from TerminalTabBar
 
 interface TerminalTabInlineProps {
   terminal: Terminal
   isActive: boolean
+  isDragging: boolean
+  isDropTarget: boolean
+  dropPosition: TabReorderPosition | null
   onSelect: () => void
   onClose: () => void
   onRename: (name: string) => void
   onDragStart: (e: React.DragEvent) => void
+  onDragOver: (e: React.DragEvent) => void
+  onDragLeave: () => void
+  onDrop: (e: React.DragEvent) => void
 }
 
-function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, onDragStart }: TerminalTabInlineProps): React.JSX.Element {
+function TerminalTabInline({
+  terminal,
+  isActive,
+  isDragging,
+  isDropTarget,
+  dropPosition,
+  onSelect,
+  onClose,
+  onRename,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop
+}: TerminalTabInlineProps): React.JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(terminal.name)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -69,6 +95,9 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
       <div
         draggable={!isEditing}
         onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -76,12 +105,21 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
           setContextMenu({ x: e.clientX, y: e.clientY })
         }}
         className={cn(
-          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors border-b-2 border-b-transparent',
+          'relative h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
             ? 'bg-background border-b-primary'
-            : 'hover:bg-secondary/50 text-muted-foreground'
+            : 'hover:bg-secondary/50 text-muted-foreground',
+          isDragging && 'opacity-50 scale-[0.98]'
         )}
       >
+        {/* Drop indicator line */}
+        {isDropTarget && dropPosition === 'before' && (
+          <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+        )}
+        {isDropTarget && dropPosition === 'after' && (
+          <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+        )}
+
         <TerminalIcon size={14} className={cn('mr-2', isActive ? 'text-primary' : '')} />
         {isEditing ? (
           <input
@@ -90,8 +128,13 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); handleSave() }
-              else if (e.key === 'Escape') { e.preventDefault(); handleCancel() }
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                handleSave()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                handleCancel()
+              }
             }}
             onBlur={handleSave}
             onClick={(e) => e.stopPropagation()}
@@ -106,7 +149,10 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
           </span>
         )}
         <button
-          onClick={(e) => { e.stopPropagation(); onClose() }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose()
+          }}
           className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
         >
           <XIcon size={12} />
@@ -116,9 +162,21 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
       {contextMenu && (
         <ContextMenu
           items={[
-            { label: 'Rename', icon: <Edit2 size={14} />, onClick: () => { setEditName(terminal.name); setIsEditing(true) } },
+            {
+              label: 'Rename',
+              icon: <Edit2 size={14} />,
+              onClick: () => {
+                setEditName(terminal.name)
+                setIsEditing(true)
+              }
+            },
             { label: 'Close', icon: <XIcon size={14} />, onClick: onClose },
-            { label: 'Kill Process', icon: <Skull size={14} />, onClick: onClose, variant: 'danger' }
+            {
+              label: 'Kill Process',
+              icon: <Skull size={14} />,
+              onClick: onClose,
+              variant: 'danger'
+            }
           ]}
           x={contextMenu.x}
           y={contextMenu.y}
@@ -126,6 +184,70 @@ function TerminalTabInline({ terminal, isActive, onSelect, onClose, onRename, on
         />
       )}
     </>
+  )
+}
+
+interface EditorTabWrapperProps {
+  tab: { type: 'editor'; id: string; filePath: string }
+  isActive: boolean
+  isDragging: boolean
+  isDropTarget: boolean
+  dropPosition: TabReorderPosition | null
+  onSelect: () => void
+  onClose: () => void
+  onCloseOthers: () => void
+  onCloseAll: () => void
+  onCopyPath: () => void
+  onDragStart: (e: React.DragEvent) => void
+  onDragOver: (e: React.DragEvent) => void
+  onDragLeave: () => void
+  onDrop: (e: React.DragEvent) => void
+}
+
+function EditorTabWrapper({
+  tab,
+  isActive,
+  isDragging,
+  isDropTarget,
+  dropPosition,
+  onSelect,
+  onClose,
+  onCloseOthers,
+  onCloseAll,
+  onCopyPath,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop
+}: EditorTabWrapperProps): React.JSX.Element {
+  const isDirty = useEditorStore((state) => state.openFiles.get(tab.filePath)?.isDirty ?? false)
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={cn('relative h-full transition-all duration-150 ease-out', isDragging && 'opacity-50 scale-[0.98]')}
+    >
+      {/* Drop indicator line */}
+      {isDropTarget && dropPosition === 'before' && (
+        <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full z-10" />
+      )}
+      {isDropTarget && dropPosition === 'after' && (
+        <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full z-10" />
+      )}
+      <EditorTab
+        filePath={tab.filePath}
+        isActive={isActive}
+        isDirty={isDirty}
+        onSelect={onSelect}
+        onClose={onClose}
+        onCloseOthers={onCloseOthers}
+        onCloseAll={onCloseAll}
+        onCopyPath={onCopyPath}
+      />
+    </div>
   )
 }
 
@@ -141,35 +263,6 @@ interface WorkspaceTabBarProps {
   defaultShell?: string
 }
 
-interface EditorTabWrapperProps {
-  tab: { type: 'editor'; id: string; filePath: string }
-  isActive: boolean
-  onSelect: () => void
-  onClose: () => void
-  onCloseOthers: () => void
-  onCloseAll: () => void
-  onCopyPath: () => void
-  onDragStart: (e: React.DragEvent) => void
-}
-
-function EditorTabWrapper({ tab, isActive, onSelect, onClose, onCloseOthers, onCloseAll, onCopyPath, onDragStart }: EditorTabWrapperProps): React.JSX.Element {
-  const isDirty = useEditorStore((state) => state.openFiles.get(tab.filePath)?.isDirty ?? false)
-  return (
-    <div draggable onDragStart={onDragStart} className="h-full">
-      <EditorTab
-        filePath={tab.filePath}
-        isActive={isActive}
-        isDirty={isDirty}
-        onSelect={onSelect}
-        onClose={onClose}
-        onCloseOthers={onCloseOthers}
-        onCloseAll={onCloseAll}
-        onCopyPath={onCopyPath}
-      />
-    </div>
-  )
-}
-
 export function WorkspaceTabBar({
   paneId,
   tabs,
@@ -183,8 +276,14 @@ export function WorkspaceTabBar({
 }: WorkspaceTabBarProps): React.JSX.Element {
   const setActiveTab = useWorkspaceStore((state) => state.setActiveTab)
   const setActivePane = useWorkspaceStore((state) => state.setActivePane)
-  const reorderTabsInPane = useWorkspaceStore((state) => state.reorderTabsInPane)
-  const { startTabDrag, dragPayload } = usePaneDnd()
+  const {
+    startTabDrag,
+    dragPayload,
+    reorderPreview,
+    setReorderPreview,
+    clearReorderPreview,
+    handleTabReorder
+  } = usePaneDnd()
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
@@ -293,6 +392,54 @@ export function WorkspaceTabBar({
     [startTabDrag, paneId]
   )
 
+  const handleTabDragOver = useCallback(
+    (tabId: string, e: React.DragEvent) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+
+      if (!dragPayload || dragPayload.type !== 'tab') return
+      if (dragPayload.sourcePaneId !== paneId) return
+
+      const position = computeTabPosition(e.currentTarget as HTMLElement, e.clientX)
+      setReorderPreview(paneId, tabId, position)
+    },
+    [dragPayload, paneId, setReorderPreview]
+  )
+
+  const handleTabDragLeave = useCallback(() => {
+    // Only clear if we're not entering a child element
+    // This is handled by the individual tab components
+  }, [])
+
+  const handleContainerDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      // Only clear preview if actually leaving the container (not moving to child)
+      const relatedTarget = e.relatedTarget as Node | null
+      if (relatedTarget && e.currentTarget.contains(relatedTarget)) {
+        return
+      }
+      clearReorderPreview()
+    },
+    [clearReorderPreview]
+  )
+
+  const handleTabDrop = useCallback(
+    (tabId: string, e: React.DragEvent) => {
+      // Only prevent/stop if this is a same-pane tab reorder
+      // Otherwise, let the event bubble for cross-pane drops
+      if (!dragPayload || dragPayload.type !== 'tab' || dragPayload.sourcePaneId !== paneId) {
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const position = computeTabPosition(e.currentTarget as HTMLElement, e.clientX)
+      handleTabReorder(paneId, tabId, position)
+    },
+    [dragPayload, paneId, handleTabReorder]
+  )
+
   const sortedShells = shells?.available?.slice().sort((a, b) => {
     if (defaultShell) {
       if (a.name === defaultShell) return -1
@@ -303,70 +450,90 @@ export function WorkspaceTabBar({
 
   const terminalStoreTerminals = useTerminalStore((state) => state.terminals)
 
+  // Check if this tab is being dragged
+  const isTabDragging = (tabId: string): boolean =>
+    dragPayload?.type === 'tab' && dragPayload.tabId === tabId
+
+  // Check if this tab is a drop target
+  const isTabDropTarget = (tabId: string): { isTarget: boolean; position: TabReorderPosition | null } => {
+    if (!reorderPreview || reorderPreview.paneId !== paneId) {
+      return { isTarget: false, position: null }
+    }
+    if (reorderPreview.targetTabId === tabId) {
+      return { isTarget: true, position: reorderPreview.position }
+    }
+    return { isTarget: false, position: null }
+  }
+
   return (
     <div className="h-10 bg-card border-b border-border flex items-center">
       <div className="relative flex items-center h-full min-w-0 shrink">
         <div
           ref={tabsContainerRef}
           onWheel={handleWheel}
+          onDragLeave={handleContainerDragLeave}
           className="overflow-x-auto scrollbar-hide flex items-center h-full"
         >
-          <Reorder.Group
-            axis="x"
-            values={tabs}
-            onReorder={(reordered: WorkspaceTab[]) => {
-              if (dragPayload) return
-              reorderTabsInPane(paneId, reordered.map((t) => t.id))
-            }}
-            className="flex items-center h-full"
-          >
-            {tabs.map((tab) => (
-              <Reorder.Item
-                key={tab.id}
-                value={tab}
-                className="list-none h-full"
-                whileDrag={{ scale: 1.02, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
-              >
-                {tab.type === 'terminal' ? (
-                  (() => {
-                    const terminal = terminalStoreTerminals.find((t) => t.id === tab.terminalId)
-                    if (!terminal) return null
-                    return (
-                      <TerminalTabInline
-                        terminal={terminal}
-                        isActive={tab.id === activeTabId}
-                        onSelect={() => {
-                          setActiveTab(paneId, tab.id)
-                          setActivePane(paneId)
-                        }}
-                        onClose={() => {
-                          if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
-                        }}
-                        onRename={(name) => {
-                          if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
-                        }}
-                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      />
-                    )
-                  })()
-                ) : (
-                  <EditorTabWrapper
-                    tab={tab as { type: 'editor'; id: string; filePath: string }}
-                    isActive={tab.id === activeTabId}
-                    onSelect={() => {
-                      setActiveTab(paneId, tab.id)
-                      setActivePane(paneId)
-                    }}
-                    onClose={() => handleCloseEditorTab(tab.filePath)}
-                    onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
-                    onCloseAll={handleCloseAllEditorTabs}
-                    onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
-                    onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                  />
-                )}
-              </Reorder.Item>
-            ))}
-          </Reorder.Group>
+          <div className="flex items-center h-full">
+            {tabs.map((tab) => {
+              const dragging = isTabDragging(tab.id)
+              const { isTarget, position } = isTabDropTarget(tab.id)
+
+              return (
+                <div key={tab.id} className="list-none h-full">
+                  {tab.type === 'terminal' ? (
+                    (() => {
+                      const terminal = terminalStoreTerminals.find((t) => t.id === tab.terminalId)
+                      if (!terminal) return null
+                      return (
+                        <TerminalTabInline
+                          terminal={terminal}
+                          isActive={tab.id === activeTabId}
+                          isDragging={dragging}
+                          isDropTarget={isTarget}
+                          dropPosition={position}
+                          onSelect={() => {
+                            setActiveTab(paneId, tab.id)
+                            setActivePane(paneId)
+                          }}
+                          onClose={() => {
+                            if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
+                          }}
+                          onRename={(name) => {
+                            if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
+                          }}
+                          onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                          onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                          onDragLeave={handleTabDragLeave}
+                          onDrop={(e) => handleTabDrop(tab.id, e)}
+                        />
+                      )
+                    })()
+                  ) : (
+                    <EditorTabWrapper
+                      tab={tab as { type: 'editor'; id: string; filePath: string }}
+                      isActive={tab.id === activeTabId}
+                      isDragging={dragging}
+                      isDropTarget={isTarget}
+                      dropPosition={position}
+                      onSelect={() => {
+                        setActiveTab(paneId, tab.id)
+                        setActivePane(paneId)
+                      }}
+                      onClose={() => handleCloseEditorTab(tab.filePath)}
+                      onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
+                      onCloseAll={handleCloseAllEditorTabs}
+                      onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
+                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                      onDragLeave={handleTabDragLeave}
+                      onDrop={(e) => handleTabDrop(tab.id, e)}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
 
         {hasOverflow && (
