@@ -392,7 +392,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
       const target = e.target instanceof HTMLElement ? e.target : document.body
-      const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
+      const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor') || target.closest('.xterm')
       const isInInput =
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
@@ -814,7 +814,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         )}
 
         {/* Main Content and File Explorer Container */}
-        <div className="flex-1 flex min-h-0 h-full gap-0">
+        <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
           {/* Main Content Area */}
           <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
             {projects.length === 0 ? (

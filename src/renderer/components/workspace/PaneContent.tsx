@@ -154,7 +154,12 @@ export function PaneContent({
                 // CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
                 // This prevents spawn loops when workspace tabs aren't fully synced
                 if (!terminal.ptyId) {
-                  return null
+                  const isVisible = activeTab?.id === tab.id
+                  return (
+                    <div key={tab.id} className={isVisible ? 'w-full h-full flex items-center justify-center text-muted-foreground text-sm' : 'hidden'}>
+                      Connecting...
+                    </div>
+                  )
                 }
                 const isVisible = activeTab?.id === tab.id
                 return (
