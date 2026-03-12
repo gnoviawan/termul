@@ -22,7 +22,8 @@
         "minHeight": 600,
         "decorations": false,
         "visible": false,
-        "transparent": false
+        "transparent": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {
