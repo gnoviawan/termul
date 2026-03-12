@@ -138,12 +138,12 @@ function TerminalTabInline({
             }}
             onBlur={handleSave}
             onClick={(e) => e.stopPropagation()}
-            className="text-sm font-medium bg-transparent border-b border-primary outline-none w-full"
+            className="text-xs font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
           <span
             onDoubleClick={handleDoubleClick}
-            className={cn('text-sm font-medium', isActive && 'text-foreground')}
+            className={cn('text-xs font-medium', isActive && 'text-foreground')}
           >
             {terminal.name}
           </span>
