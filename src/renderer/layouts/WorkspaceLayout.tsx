@@ -864,9 +864,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     </ResizablePanelGroup>
                   </PaneDndProvider>
 
-                  {/* File Explorer - separate floating panel like ProjectSidebar */}
+                  {/* File Explorer - separate floating panel with its own PaneDndProvider */}
                   {isExplorerVisible && (
-                    <FileExplorer />
+                    <PaneDndProvider>
+                      <FileExplorer />
+                    </PaneDndProvider>
                   )}
                 </div>
               ) : (
