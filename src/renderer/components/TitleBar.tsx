@@ -7,7 +7,7 @@ import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { windowApi } from '@/lib/api'
 import { toast } from 'sonner'
 
-const focusableButtonClass = 'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
+const focusableButtonClass = 'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
 export function TitleBar(): React.JSX.Element {
   const [isMaximized, setIsMaximized] = useState(false)

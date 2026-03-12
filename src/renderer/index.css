@@ -6,15 +6,15 @@
 
 @layer base {
   :root {
-    /* Background layers */
-    --background: 0 0% 12%; /* #1E1E1E */
+    /* Background layers - Codex dark theme */
+    --background: 0 0% 7%; /* #121212 - darker main background */
     --foreground: 0 0% 90%;
 
     /* Surface colors for layered UI */
-    --card: 0 0% 14%; /* #252526 */
+    --card: 0 0% 11%; /* #1c1c1c - slightly elevated surface */
     --card-foreground: 0 0% 90%;
 
-    --popover: 0 0% 14%;
+    --popover: 0 0% 11%;
     --popover-foreground: 0 0% 90%;
 
     /* Primary - IDE Blue */
@@ -22,11 +22,11 @@
     --primary-foreground: 0 0% 100%;
 
     /* Secondary - Muted surface */
-    --secondary: 0 0% 18%;
+    --secondary: 0 0% 15%; /* #262626 */
     --secondary-foreground: 0 0% 70%;
 
     /* Muted elements */
-    --muted: 0 0% 20%;
+    --muted: 0 0% 18%; /* #2e2e2e */
     --muted-foreground: 0 0% 50%;
 
     /* Accent for highlights */
@@ -37,20 +37,20 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Borders */
-    --border: 240 4% 26%; /* #3F3F46 zinc-700 */
-    --input: 240 4% 26%;
+    /* Borders - subtle dark borders */
+    --border: 0 0% 20%; /* #333333 */
+    --input: 0 0% 20%;
     --ring: 217 91% 60%;
 
-    --radius: 0.25rem;
+    --radius: 0.5rem; /* 8px - rounded corners */
 
     /* Terminal-specific */
     --terminal-bg: 0 0% 7%; /* #121212 */
     --terminal-fg: 0 0% 85%;
 
     /* Surface layers */
-    --surface-dark: 0 0% 14%; /* #252526 */
-    --surface-darker: 0 0% 10%;
+    --surface-dark: 0 0% 11%; /* #1c1c1c */
+    --surface-darker: 0 0% 7%;
 
     /* Status bar (VS Code style) */
     --status-bar: 217 91% 40%; /* #007acc */
@@ -65,14 +65,14 @@
     --project-pink: 330 81% 60%;
     --project-orange: 25 95% 53%;
 
-    /* Sidebar */
-    --sidebar-background: 0 0% 14%;
+    /* Sidebar - darker than main content */
+    --sidebar-background: 0 0% 9%; /* #171717 */
     --sidebar-foreground: 0 0% 70%;
     --sidebar-primary: 217 91% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 18%;
+    --sidebar-accent: 0 0% 15%; /* #262626 */
     --sidebar-accent-foreground: 0 0% 90%;
-    --sidebar-border: 240 4% 26%;
+    --sidebar-border: 0 0% 20%;
     --sidebar-ring: 217 91% 60%;
   }
 }
@@ -86,7 +86,7 @@
     @apply bg-background text-foreground font-sans antialiased;
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar - Codex style */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -97,12 +97,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: hsl(0 0% 35%);
+    background: hsl(0 0% 25%);
     border-radius: 5px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(0 0% 45%);
+    background: hsl(0 0% 35%);
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -121,9 +121,9 @@
     @apply inline-block w-2.5 h-5 bg-muted-foreground animate-pulse;
   }
 
-  /* Glass effect for modals */
+  /* Glass effect for modals - Codex style */
   .glass-panel {
-    background: hsla(0, 0%, 14%, 0.95);
+    background: hsla(0, 0%, 11%, 0.95);
     backdrop-filter: blur(12px);
   }
 
