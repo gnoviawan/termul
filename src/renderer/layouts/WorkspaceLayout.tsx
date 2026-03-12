@@ -811,82 +811,79 @@ export default function WorkspaceLayout(): React.JSX.Element {
           />
         )}
 
-        {/* Main Content */}
-        <main className="flex-1 flex flex-col min-w-0 m-2 rounded-xl bg-card overflow-hidden">
-          {projects.length === 0 ? (
-            /* No Projects Empty State */
-            <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.4, ease: 'easeOut' }}
-                className="flex flex-col items-center text-center max-w-md"
-              >
-                <div className="mb-6">
-                  <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">
-                  No Projects Yet
-                </h2>
-                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                  Create your first project to organize your terminals, snapshots, and commands
-                </p>
-                <button
-                  onClick={() => setIsNewProjectModalOpen(true)}
-                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+        {/* Main Content and File Explorer Container */}
+        <div className="flex-1 flex min-h-0 gap-0">
+          {/* Main Content Area */}
+          <main className="flex-1 flex flex-col min-w-0 m-2 mr-0 rounded-xl bg-card overflow-hidden">
+            {projects.length === 0 ? (
+              /* No Projects Empty State */
+              <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  className="flex flex-col items-center text-center max-w-md"
                 >
-                  Create Your First Project
-                </button>
-              </motion.div>
-            </div>
-          ) : (
-            <>
-              {isWorkspaceRoute ? (
-                <div className="flex-1 flex min-h-0 gap-0">
-                  <div className="flex-1 min-w-0">
+                  <div className="mb-6">
+                    <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-foreground mb-2">
+                    No Projects Yet
+                  </h2>
+                  <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                    Create your first project to organize your terminals, snapshots, and commands
+                  </p>
+                  <button
+                    onClick={() => setIsNewProjectModalOpen(true)}
+                    className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                  >
+                    Create Your First Project
+                  </button>
+                </motion.div>
+              </div>
+            ) : (
+              <>
+                {isWorkspaceRoute ? (
+                  <div className="flex-1 min-h-0">
                     <PaneDndProvider>
-                      <ResizablePanelGroup direction="horizontal" className="h-full">
-                        <ResizablePanel defaultSize={100}>
-                          <PaneRenderer
-                            node={paneRoot}
-                            onNewTerminal={(paneId) => {
-                              handleCreateTerminalInPane(paneId)
-                            }}
-                            onNewTerminalWithShell={(paneId, shell) => {
-                              handleCreateTerminalInPane(paneId, shell.path)
-                            }}
-                            onCloseTerminal={handleCloseTerminal}
-                            onRenameTerminal={renameTerminal}
-                            onCloseEditorTab={handleCloseEditorTab}
-                            defaultShell={activeProject?.defaultShell || appDefaultShell}
-                          />
-                        </ResizablePanel>
-                      </ResizablePanelGroup>
+                      <PaneRenderer
+                        node={paneRoot}
+                        onNewTerminal={(paneId) => {
+                          handleCreateTerminalInPane(paneId)
+                        }}
+                        onNewTerminalWithShell={(paneId, shell) => {
+                          handleCreateTerminalInPane(paneId, shell.path)
+                        }}
+                        onCloseTerminal={handleCloseTerminal}
+                        onRenameTerminal={renameTerminal}
+                        onCloseEditorTab={handleCloseEditorTab}
+                        defaultShell={activeProject?.defaultShell || appDefaultShell}
+                      />
                     </PaneDndProvider>
                   </div>
-
-                  {/* File Explorer - separate floating panel with its own PaneDndProvider */}
-                  {isExplorerVisible && (
-                    <div className="flex-shrink-0">
-                      <PaneDndProvider>
-                        <FileExplorer />
-                      </PaneDndProvider>
+                ) : (
+                  <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
+                    <div className="w-full h-full">
+                      <Outlet />
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex-1 overflow-hidden bg-background relative rounded-xl m-2">
-                  <div className="w-full h-full">
-                    <Outlet />
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Status Bar */}
-              <StatusBar project={activeProject} />
-            </>
+                {/* Status Bar */}
+                <StatusBar project={activeProject} />
+              </>
+            )}
+          </main>
+
+          {/* File Explorer - separate floating panel */}
+          {isExplorerVisible && (
+            <div className="flex-shrink-0">
+              <PaneDndProvider>
+                <FileExplorer />
+              </PaneDndProvider>
+            </div>
           )}
-        </main>
+        </div>
       </div>
 
       {/* Modals */}
