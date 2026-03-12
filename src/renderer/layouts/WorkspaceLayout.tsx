@@ -392,7 +392,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
       const target = e.target instanceof HTMLElement ? e.target : document.body
-      const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor') || target.closest('.xterm')
+      const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
+      const isInTerminal = !!target.closest('.xterm')
       const isInInput =
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
@@ -425,9 +426,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Ctrl+B - toggle file explorer (skip when in editor/input so BlockNote bold works)
+      // Ctrl+B - toggle file explorer (skip when in editor/input/terminal)
       if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
-        if (!isInEditor && !isInInput) {
+        if (!isInEditor && !isInInput && !isInTerminal) {
           e.preventDefault()
           void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
             toast.error(
@@ -441,7 +442,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
 
       if (matchesShortcut(e, getActiveKey('sidebarToggle'))) {
-        if (!isInEditor && !isInInput) {
+        if (!isInEditor && !isInInput && !isInTerminal) {
           e.preventDefault()
           e.stopPropagation()
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {

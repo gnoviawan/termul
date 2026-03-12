@@ -402,17 +402,11 @@ export function ProjectSidebar({
         )}
       </div>
 
-      {/* Bottom toolbar - New Project only */}
-      <div className="border-t border-sidebar-border p-2 rounded-b-xl">
-        <button
-          onClick={onNewProject}
-          className="group w-full h-8 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          title="New Project"
-          aria-label="Create new project from toolbar"
-          data-testid="bottom-new-project"
-        >
-          <Plus size={16} className="text-muted-foreground group-hover:text-foreground" />
-        </button>
+      {/* Bottom toolbar - Version */}
+      <div className="p-2 rounded-b-xl">
+        <div className="w-full h-8 inline-flex items-center justify-center">
+          <span className="text-xs text-muted-foreground">Termul v0.3.0-4</span>
+        </div>
       </div>
 
       {/* Context Menu */}
