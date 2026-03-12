@@ -123,7 +123,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
     const nextRootPathCandidate = activeProject?.path
-    if (typeof nextRootPathCandidate !== 'string' || activeProjectId === prevProjectIdRef.current) {
+    if (!activeProject || typeof nextRootPathCandidate !== 'string' || nextRootPathCandidate === '') {
+      // Project removed or has no path — clear explorer root and unwatch
+      useFileExplorerStore.getState().setRootPath('')
+      if (watchedRootPathRef.current) {
+        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
+        watchedRootPathRef.current = null
+      }
+      prevProjectIdRef.current = activeProjectId
+      return
+    }
+    if (activeProjectId === prevProjectIdRef.current) {
       return
     }
 
@@ -393,6 +403,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Skip if typing in an input/textarea/editable element
       const target = e.target instanceof HTMLElement ? e.target : document.body
       const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
+      const isInTerminal = !!target.closest('.xterm')
       const isInInput =
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
@@ -425,9 +436,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Ctrl+B - toggle file explorer (skip when in editor/input so BlockNote bold works)
+      // Ctrl+B - toggle file explorer (skip when in editor/input/terminal)
       if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
-        if (!isInEditor && !isInInput) {
+        if (!isInEditor && !isInInput && !isInTerminal) {
           e.preventDefault()
           void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
             toast.error(
@@ -795,98 +806,97 @@ export default function WorkspaceLayout(): React.JSX.Element {
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <TitleBar />
 
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
         {/* Sidebar */}
         {isSidebarVisible && (
-          <ProjectSidebar
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onSelectProject={selectProject}
-            onNewProject={() => setIsNewProjectModalOpen(true)}
-            onUpdateProject={updateProject}
-            onDeleteProject={deleteProject}
-            onArchiveProject={archiveProject}
-            onRestoreProject={restoreProject}
-            onReorderProjects={reorderProjects}
-          />
+          <div className="mr-2">
+            <ProjectSidebar
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onSelectProject={selectProject}
+              onNewProject={() => setIsNewProjectModalOpen(true)}
+              onUpdateProject={updateProject}
+              onDeleteProject={deleteProject}
+              onArchiveProject={archiveProject}
+              onRestoreProject={restoreProject}
+              onReorderProjects={reorderProjects}
+            />
+          </div>
         )}
 
-        {/* Main Content */}
-        <main className="flex-1 flex flex-col min-w-0">
-          {projects.length === 0 ? (
-            /* No Projects Empty State */
-            <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.4, ease: 'easeOut' }}
-                className="flex flex-col items-center text-center max-w-md"
-              >
-                <div className="mb-6">
-                  <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">
-                  No Projects Yet
-                </h2>
-                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                  Create your first project to organize your terminals, snapshots, and commands
-                </p>
-                <button
-                  onClick={() => setIsNewProjectModalOpen(true)}
-                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+        {/* Main Content and File Explorer Container */}
+        <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+          {/* Main Content Area */}
+          <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+            {projects.length === 0 ? (
+              /* No Projects Empty State */
+              <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  className="flex flex-col items-center text-center max-w-md"
                 >
-                  Create Your First Project
-                </button>
-              </motion.div>
-            </div>
-          ) : (
-            <>
-              {isWorkspaceRoute ? (
-                <div className="flex-1 flex min-h-0">
-                  <PaneDndProvider>
-                    <ResizablePanelGroup direction="horizontal">
-                      {/* Center Panel: Pane Tree */}
-                      <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
-                        <PaneRenderer
-                          node={paneRoot}
-                          onNewTerminal={(paneId) => {
-                            handleCreateTerminalInPane(paneId)
-                          }}
-                          onNewTerminalWithShell={(paneId, shell) => {
-                            handleCreateTerminalInPane(paneId, shell.path)
-                          }}
-                          onCloseTerminal={handleCloseTerminal}
-                          onRenameTerminal={renameTerminal}
-                          onCloseEditorTab={handleCloseEditorTab}
-                          defaultShell={activeProject?.defaultShell || appDefaultShell}
-                        />
-                      </ResizablePanel>
-
-                      {/* File Explorer Panel (Right, full height) */}
-                      {isExplorerVisible && (
-                        <>
-                          <ResizableHandle />
-                          <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
-                            <FileExplorer />
-                          </ResizablePanel>
-                        </>
-                      )}
-                    </ResizablePanelGroup>
-                  </PaneDndProvider>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-hidden bg-terminal-bg relative">
-                  <div className="w-full h-full">
-                    <Outlet />
+                  <div className="mb-6">
+                    <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
                   </div>
-                </div>
-              )}
+                  <h2 className="text-xl font-semibold text-foreground mb-2">
+                    No Projects Yet
+                  </h2>
+                  <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                    Create your first project to organize your terminals, snapshots, and commands
+                  </p>
+                  <button
+                    onClick={() => setIsNewProjectModalOpen(true)}
+                    className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                  >
+                    Create Your First Project
+                  </button>
+                </motion.div>
+              </div>
+            ) : (
+              <>
+                {isWorkspaceRoute ? (
+                  <div className="flex-1 min-h-0 h-full overflow-hidden">
+                    <PaneDndProvider>
+                      <PaneRenderer
+                        node={paneRoot}
+                        onNewTerminal={(paneId) => {
+                          handleCreateTerminalInPane(paneId)
+                        }}
+                        onNewTerminalWithShell={(paneId, shell) => {
+                          handleCreateTerminalInPane(paneId, shell.path)
+                        }}
+                        onCloseTerminal={handleCloseTerminal}
+                        onRenameTerminal={renameTerminal}
+                        onCloseEditorTab={handleCloseEditorTab}
+                        defaultShell={activeProject?.defaultShell || appDefaultShell}
+                      />
+                    </PaneDndProvider>
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
+                    <div className="w-full h-full">
+                      <Outlet />
+                    </div>
+                  </div>
+                )}
 
-              {/* Status Bar */}
-              <StatusBar project={activeProject} />
-            </>
+                {/* Status Bar */}
+                <StatusBar project={activeProject} />
+              </>
+            )}
+          </main>
+
+          {/* File Explorer - separate floating panel */}
+          {isExplorerVisible && activeProject?.path && (
+            <div className="flex-shrink-0 ml-2">
+              <PaneDndProvider>
+                <FileExplorer />
+              </PaneDndProvider>
+            </div>
           )}
-        </main>
+        </div>
       </div>
 
       {/* Modals */}

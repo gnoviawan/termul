@@ -114,7 +114,7 @@ export function PaneContent({
         defaultShell={defaultShell}
       />
 
-      <div className="flex-1 overflow-hidden bg-terminal-bg relative">
+      <div className="flex-1 overflow-hidden bg-terminal-bg relative h-full">
         <div
           className={cn(
             'w-full h-full relative transition-all duration-150 ease-out',
@@ -154,7 +154,12 @@ export function PaneContent({
                 // CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
                 // This prevents spawn loops when workspace tabs aren't fully synced
                 if (!terminal.ptyId) {
-                  return null
+                  const isVisible = activeTab?.id === tab.id
+                  return (
+                    <div key={tab.id} className={isVisible ? 'w-full h-full flex items-center justify-center text-muted-foreground text-sm' : 'hidden'}>
+                      Connecting...
+                    </div>
+                  )
                 }
                 const isVisible = activeTab?.id === tab.id
                 return (
