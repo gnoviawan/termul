@@ -123,7 +123,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
     const nextRootPathCandidate = activeProject?.path
-    if (typeof nextRootPathCandidate !== 'string' || activeProjectId === prevProjectIdRef.current) {
+    if (!activeProject || typeof nextRootPathCandidate !== 'string') {
+      // Project removed or has no path — clear explorer root
+      useFileExplorerStore.getState().setRootPath('')
+      prevProjectIdRef.current = activeProjectId
+      return
+    }
+    if (activeProjectId === prevProjectIdRef.current) {
       return
     }
 
@@ -442,7 +448,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
 
       if (matchesShortcut(e, getActiveKey('sidebarToggle'))) {
-        if (!isInEditor && !isInInput && !isInTerminal) {
+        if (!isInEditor && !isInInput) {
           e.preventDefault()
           e.stopPropagation()
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
@@ -879,7 +885,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           </main>
 
           {/* File Explorer - separate floating panel */}
-          {isExplorerVisible && (
+          {isExplorerVisible && activeProject?.path && (
             <div className="flex-shrink-0 ml-2">
               <PaneDndProvider>
                 <FileExplorer />
