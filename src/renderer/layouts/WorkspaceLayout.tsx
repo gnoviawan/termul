@@ -844,9 +844,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
               {isWorkspaceRoute ? (
                 <div className="flex-1 flex min-h-0">
                   <PaneDndProvider>
-                    <ResizablePanelGroup direction="horizontal">
-                      {/* Center Panel: Pane Tree */}
-                      <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
+                    <ResizablePanelGroup direction="horizontal" className="flex-1">
+                      {/* Center Panel: Pane Tree - takes full width when explorer hidden */}
+                      <ResizablePanel defaultSize={100}>
                         <PaneRenderer
                           node={paneRoot}
                           onNewTerminal={(paneId) => {
@@ -861,18 +861,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
                           defaultShell={activeProject?.defaultShell || appDefaultShell}
                         />
                       </ResizablePanel>
-
-                      {/* File Explorer Panel (Right, full height) */}
-                      {isExplorerVisible && (
-                        <>
-                          <ResizableHandle />
-                          <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
-                            <FileExplorer />
-                          </ResizablePanel>
-                        </>
-                      )}
                     </ResizablePanelGroup>
                   </PaneDndProvider>
+
+                  {/* File Explorer - separate floating panel like ProjectSidebar */}
+                  {isExplorerVisible && (
+                    <FileExplorer />
+                  )}
                 </div>
               ) : (
                 <div className="flex-1 overflow-hidden bg-background relative rounded-xl m-2">

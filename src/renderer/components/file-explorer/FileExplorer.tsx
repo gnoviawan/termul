@@ -418,7 +418,7 @@ export function FileExplorer(): React.JSX.Element {
   return (
     <div
       ref={containerRef}
-      className="h-full flex flex-col bg-background text-foreground m-2 ml-0 rounded-xl"
+      className="w-64 flex flex-col bg-background text-foreground m-2 mr-0 rounded-xl flex-shrink-0"
       tabIndex={0}
     >
       {/* Header */}
