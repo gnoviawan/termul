@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, Upload, Trash2, Type } from 'lucide-react'
 import {
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -11,7 +11,9 @@ import {
   useOrphanDetectionTimeout
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
-import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
+import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS, MAX_CUSTOM_FONTS } from '@/types/settings'
+import { useCustomFonts } from '@/stores/custom-font-store'
+import { useAddCustomFont, useRemoveCustomFont } from '@/hooks/use-custom-fonts'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -39,6 +41,14 @@ export default function AppPreferences(): React.JSX.Element {
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
+
+  // Custom fonts
+  const customFonts = useCustomFonts()
+  const addCustomFont = useAddCustomFont()
+  const removeCustomFont = useRemoveCustomFont()
+  const fontFileInputRef = useRef<HTMLInputElement>(null)
+  const [fontError, setFontError] = useState<string | null>(null)
+  const [fontSuccess, setFontSuccess] = useState<string | null>(null)
 
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
@@ -74,6 +84,40 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleFontSizeChange = (value: number) => {
     updateSetting('terminalFontSize', value)
+  }
+
+  const handleCustomFontUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setFontError(null)
+    setFontSuccess(null)
+
+    const result = await addCustomFont(file)
+    if (result.success) {
+      setFontSuccess(`"${result.font.name}" added successfully.`)
+      setTimeout(() => setFontSuccess(null), 3000)
+    } else {
+      setFontError(result.error)
+    }
+
+    // Reset input so the same file can be selected again
+    if (fontFileInputRef.current) {
+      fontFileInputRef.current.value = ''
+    }
+  }
+
+  const handleRemoveCustomFont = async (id: string) => {
+    setFontError(null)
+    setFontSuccess(null)
+
+    // If the removed font is currently selected, switch to default
+    const font = customFonts.find((f) => f.id === id)
+    if (font && fontFamily.includes(font.fontFamily)) {
+      handleFontFamilyChange('Menlo, Monaco, "Courier New", monospace')
+    }
+
+    await removeCustomFont(id)
   }
 
   const handleBufferSizeChange = (value: number) => {
@@ -173,11 +217,22 @@ export default function AppPreferences(): React.JSX.Element {
                     onChange={(e) => handleFontFamilyChange(e.target.value)}
                     className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
-                    {FONT_FAMILY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
+                    <optgroup label="Built-in Fonts">
+                      {FONT_FAMILY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {customFonts.length > 0 && (
+                      <optgroup label="Custom Fonts">
+                        {customFonts.map((font) => (
+                          <option key={font.id} value={`"${font.fontFamily}", monospace`}>
+                            {font.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Choose a monospace font for terminal text.
@@ -268,6 +323,100 @@ export default function AppPreferences(): React.JSX.Element {
                     <div>drwxr-xr-x  5 user staff 160 Jan 11 10:00 .</div>
                   </div>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Custom Fonts Section */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Custom Fonts</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Upload custom TTF font files for use in the terminal.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-6">
+                {/* Upload Button */}
+                <div>
+                  <input
+                    ref={fontFileInputRef}
+                    type="file"
+                    accept=".ttf"
+                    onChange={handleCustomFontUpload}
+                    className="hidden"
+                    id="custom-font-upload"
+                  />
+                  <button
+                    onClick={() => fontFileInputRef.current?.click()}
+                    disabled={customFonts.length >= MAX_CUSTOM_FONTS}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 border border-primary/30 rounded-md text-sm text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Add Custom Font (.ttf)
+                  </button>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Upload a TrueType font file. Maximum {MAX_CUSTOM_FONTS} custom fonts, 5MB each.
+                  </p>
+                </div>
+
+                {/* Status Messages */}
+                {fontError && (
+                  <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-md">
+                    <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+                    <span className="text-sm text-destructive">{fontError}</span>
+                  </div>
+                )}
+                {fontSuccess && (
+                  <div className="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/30 rounded-md">
+                    <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                    <span className="text-sm text-green-500">{fontSuccess}</span>
+                  </div>
+                )}
+
+                {/* Custom Font List */}
+                {customFonts.length > 0 ? (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-secondary-foreground">
+                      Installed Custom Fonts
+                    </label>
+                    {customFonts.map((font) => (
+                      <div
+                        key={font.id}
+                        className="flex items-center justify-between p-3 bg-secondary/30 border border-border rounded-md"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Type className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">
+                              {font.name}
+                            </p>
+                            <p
+                              className="text-xs text-muted-foreground truncate"
+                              style={{ fontFamily: `"${font.fontFamily}", monospace` }}
+                            >
+                              The quick brown fox jumps over the lazy dog
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveCustomFont(font.id)}
+                          className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors flex-shrink-0"
+                          title="Remove font"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-secondary/20 border border-border/50 rounded-md text-center">
+                    <Type className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">
+                      No custom fonts installed. Upload a .ttf file to get started.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </section>
