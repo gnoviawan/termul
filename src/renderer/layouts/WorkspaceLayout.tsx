@@ -842,33 +842,36 @@ export default function WorkspaceLayout(): React.JSX.Element {
           ) : (
             <>
               {isWorkspaceRoute ? (
-                <div className="flex-1 flex min-h-0">
-                  <PaneDndProvider>
-                    <ResizablePanelGroup direction="horizontal" className="flex-1">
-                      {/* Center Panel: Pane Tree - takes full width when explorer hidden */}
-                      <ResizablePanel defaultSize={100}>
-                        <PaneRenderer
-                          node={paneRoot}
-                          onNewTerminal={(paneId) => {
-                            handleCreateTerminalInPane(paneId)
-                          }}
-                          onNewTerminalWithShell={(paneId, shell) => {
-                            handleCreateTerminalInPane(paneId, shell.path)
-                          }}
-                          onCloseTerminal={handleCloseTerminal}
-                          onRenameTerminal={renameTerminal}
-                          onCloseEditorTab={handleCloseEditorTab}
-                          defaultShell={activeProject?.defaultShell || appDefaultShell}
-                        />
-                      </ResizablePanel>
-                    </ResizablePanelGroup>
-                  </PaneDndProvider>
+                <div className="flex-1 flex min-h-0 gap-0">
+                  <div className="flex-1 min-w-0">
+                    <PaneDndProvider>
+                      <ResizablePanelGroup direction="horizontal" className="h-full">
+                        <ResizablePanel defaultSize={100}>
+                          <PaneRenderer
+                            node={paneRoot}
+                            onNewTerminal={(paneId) => {
+                              handleCreateTerminalInPane(paneId)
+                            }}
+                            onNewTerminalWithShell={(paneId, shell) => {
+                              handleCreateTerminalInPane(paneId, shell.path)
+                            }}
+                            onCloseTerminal={handleCloseTerminal}
+                            onRenameTerminal={renameTerminal}
+                            onCloseEditorTab={handleCloseEditorTab}
+                            defaultShell={activeProject?.defaultShell || appDefaultShell}
+                          />
+                        </ResizablePanel>
+                      </ResizablePanelGroup>
+                    </PaneDndProvider>
+                  </div>
 
                   {/* File Explorer - separate floating panel with its own PaneDndProvider */}
                   {isExplorerVisible && (
-                    <PaneDndProvider>
-                      <FileExplorer />
-                    </PaneDndProvider>
+                    <div className="flex-shrink-0">
+                      <PaneDndProvider>
+                        <FileExplorer />
+                      </PaneDndProvider>
+                    </div>
                   )}
                 </div>
               ) : (
