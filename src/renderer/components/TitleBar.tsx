@@ -43,7 +43,7 @@ export function TitleBar(): React.JSX.Element {
 
   return (
     <header
-      className="h-8 flex items-center bg-card border-b border-border select-none shrink-0"
+      className="h-8 flex items-center bg-background select-none shrink-0"
     >
       <div
         className="flex items-center h-full px-3"
