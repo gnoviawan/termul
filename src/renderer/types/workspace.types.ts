@@ -19,7 +19,11 @@ export interface LeafNode {
 
 export type PaneNode = SplitNode | LeafNode
 
+// Pane-relative drop positions for creating splits
 export type DropPosition = 'left' | 'right' | 'top' | 'bottom' | 'center'
+
+// Tab-relative positions for intra-pane reordering
+export type TabReorderPosition = 'before' | 'after'
 
 export interface DragPayload {
   type: 'tab' | 'file'
