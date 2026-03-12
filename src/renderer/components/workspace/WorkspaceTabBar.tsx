@@ -466,7 +466,7 @@ export function WorkspaceTabBar({
   }
 
   return (
-    <div className="h-10 bg-card border-b border-border flex items-center">
+    <div className="h-10 bg-card border-b border-border flex items-center" onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}>
       <div className="relative flex items-center h-full min-w-0 shrink">
         <div
           ref={tabsContainerRef}
