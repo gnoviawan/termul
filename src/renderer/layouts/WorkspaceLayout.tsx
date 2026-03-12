@@ -844,7 +844,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             ) : (
               <>
                 {isWorkspaceRoute ? (
-                  <div className="flex-1 min-h-0">
+                  <div className="flex-1 min-h-0 h-full">
                     <PaneDndProvider>
                       <PaneRenderer
                         node={paneRoot}
