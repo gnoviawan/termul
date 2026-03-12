@@ -123,9 +123,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
     const nextRootPathCandidate = activeProject?.path
-    if (!activeProject || typeof nextRootPathCandidate !== 'string') {
-      // Project removed or has no path — clear explorer root
+    if (!activeProject || typeof nextRootPathCandidate !== 'string' || nextRootPathCandidate === '') {
+      // Project removed or has no path — clear explorer root and unwatch
       useFileExplorerStore.getState().setRootPath('')
+      if (watchedRootPathRef.current) {
+        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
+        watchedRootPathRef.current = null
+      }
       prevProjectIdRef.current = activeProjectId
       return
     }
