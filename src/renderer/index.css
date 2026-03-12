@@ -88,8 +88,8 @@
 
   /* Custom scrollbar - Codex style */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
   }
 
   ::-webkit-scrollbar-track {
@@ -98,7 +98,7 @@
 
   ::-webkit-scrollbar-thumb {
     background: hsl(0 0% 25%);
-    border-radius: 3px;
+    border-radius: 2px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
