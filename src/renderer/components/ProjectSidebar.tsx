@@ -310,7 +310,7 @@ export function ProjectSidebar({
   )
 
   return (
-    <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 m-2 mr-0 rounded-xl">
+    <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
       {/* Header with inline + button */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-sidebar-border rounded-t-xl">
         <span className="text-xs font-semibold tracking-wider text-sidebar-foreground uppercase">

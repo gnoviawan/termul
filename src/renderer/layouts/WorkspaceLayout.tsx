@@ -795,26 +795,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <TitleBar />
 
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
         {/* Sidebar */}
         {isSidebarVisible && (
-          <ProjectSidebar
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onSelectProject={selectProject}
-            onNewProject={() => setIsNewProjectModalOpen(true)}
-            onUpdateProject={updateProject}
-            onDeleteProject={deleteProject}
-            onArchiveProject={archiveProject}
-            onRestoreProject={restoreProject}
-            onReorderProjects={reorderProjects}
-          />
+          <div className="mr-2">
+            <ProjectSidebar
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onSelectProject={selectProject}
+              onNewProject={() => setIsNewProjectModalOpen(true)}
+              onUpdateProject={updateProject}
+              onDeleteProject={deleteProject}
+              onArchiveProject={archiveProject}
+              onRestoreProject={restoreProject}
+              onReorderProjects={reorderProjects}
+            />
+          </div>
         )}
 
         {/* Main Content and File Explorer Container */}
-        <div className="flex-1 flex min-h-0 gap-0">
+        <div className="flex-1 flex min-h-0 h-full gap-0">
           {/* Main Content Area */}
-          <main className="flex-1 flex flex-col min-w-0 m-2 mr-0 rounded-xl bg-card overflow-hidden">
+          <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
             {projects.length === 0 ? (
               /* No Projects Empty State */
               <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
@@ -844,7 +846,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             ) : (
               <>
                 {isWorkspaceRoute ? (
-                  <div className="flex-1 min-h-0 h-full">
+                  <div className="flex-1 min-h-0 h-full overflow-hidden">
                     <PaneDndProvider>
                       <PaneRenderer
                         node={paneRoot}
@@ -877,7 +879,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
           {/* File Explorer - separate floating panel */}
           {isExplorerVisible && (
-            <div className="flex-shrink-0">
+            <div className="flex-shrink-0 ml-2">
               <PaneDndProvider>
                 <FileExplorer />
               </PaneDndProvider>
