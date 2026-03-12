@@ -10,14 +10,43 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
-let terminalRestoreInProgress = false
+const terminalRestoreProjectsInProgress = new Map<string, string>()
 
-export function setTerminalRestoreInProgress(isRestoring: boolean): void {
-  terminalRestoreInProgress = isRestoring
+export function setTerminalRestoreInProgress(
+  projectId: string,
+  isRestoring: boolean,
+  ownerId: string
+): void {
+  if (!projectId || !ownerId) {
+    return
+  }
+
+  if (isRestoring) {
+    terminalRestoreProjectsInProgress.set(projectId, ownerId)
+    return
+  }
+
+  if (terminalRestoreProjectsInProgress.get(projectId) === ownerId) {
+    terminalRestoreProjectsInProgress.delete(projectId)
+  }
 }
 
 export function isTerminalRestoreInProgress(): boolean {
-  return terminalRestoreInProgress
+  return terminalRestoreProjectsInProgress.size > 0
+}
+
+/**
+ * Sync extracted scrollback to the terminal store
+ * Updates each terminal's pendingScrollback field in memory
+ * Skips terminals where scrollback extraction returns undefined
+ */
+export function syncScrollbackToStore(terminals: PersistedTerminal[]): void {
+  const store = useTerminalStore.getState()
+  for (const t of terminals) {
+    // Skip if scrollback is undefined (terminal not in registry)
+    if (t.scrollback === undefined) continue
+    store.updateTerminalScrollback(t.id, t.scrollback)
+  }
 }
 
 /**
@@ -111,6 +140,11 @@ export function useTerminalAutoSave(): void {
         state.activeTerminalId
       )
 
+      // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
+      // This ensures extractScrollback() values survive xterm disposal during project switches,
+      // preserving scrollback in memory so it can be restored when switching back.
+      syncScrollbackToStore(layout.terminals)
+
       // Use debounced write via API
       persistenceApi
         .writeDebounced(PersistenceKeys.terminals(projectId), layout)
@@ -156,6 +190,11 @@ export async function loadPersistedTerminals(
 export async function saveTerminalLayout(projectId: string): Promise<void> {
   const state = useTerminalStore.getState()
   const layout = serializeTerminalsForProject(state.terminals, projectId, state.activeTerminalId)
+
+  // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
+  // This preserves scrollback across project switches by updating the store before
+  // the xterm instance is disposed, avoiding state loss when switching projects.
+  syncScrollbackToStore(layout.terminals)
 
   const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
 

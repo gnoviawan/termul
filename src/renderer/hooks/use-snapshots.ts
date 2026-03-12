@@ -4,6 +4,7 @@ import { persistenceApi, terminalApi } from '@/lib/api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useProjectStore } from '@/stores/project-store'
 import { getTerminal } from '@/utils/terminal-registry'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 import type { PersistedTerminal, PersistedSnapshot } from '../../shared/types/persistence.types'
 import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
 import type { Snapshot } from '@/types/project'
@@ -109,6 +110,12 @@ export function useRestoreSnapshot(): (snapshotId: string) => Promise<void> {
  */
 async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapshot): Promise<void> {
   const terminalStore = useTerminalStore.getState()
+  const projectStore = useProjectStore.getState()
+  const project = projectStore.projects.find((p) => p.id === projectId)
+
+  // Resolve project env vars for spawn
+  // TODO: Pass actual system env from backend for variable expansion
+  const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
   // Close all existing terminals for this project
   // CRITICAL: Kill PTYs before removing from store to prevent orphaned processes
@@ -131,7 +138,8 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
   for (const persistedTerminal of snapshot.terminals) {
     const spawnResult = await terminalApi.spawn({
       shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
-      cwd: persistedTerminal.cwd
+      cwd: persistedTerminal.cwd,
+      ...(hasProjectEnv ? { env } : {})
     })
 
     if (!spawnResult.success) {

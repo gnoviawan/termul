@@ -88,7 +88,7 @@ export function EditorTab({
         <Icon size={14} className={cn('mr-2 flex-shrink-0', isActive ? 'text-primary' : '')} />
         <span
           className={cn(
-            'text-sm font-medium truncate',
+            'text-xs font-medium truncate',
             isActive && 'text-foreground'
           )}
         >

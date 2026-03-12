@@ -34,6 +34,7 @@ import {
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useEditorStore } from '@/stores/editor-store'
+import { useCommandHistoryStore } from '@/stores/command-history-store'
 import {
   useWorkspaceStore,
   useActiveTab,
@@ -48,22 +49,27 @@ import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import {
   useCommandHistoryLoader,
   useAddCommand,
-  useCommandHistory
+  useCommandHistory,
+  useAllCommandHistory
 } from '@/hooks/use-command-history'
-import type { KeyboardShortcutCallback } from '@shared/types/ipc.types'
-import { filesystemApi, windowApi, keyboardApi, terminalApi } from '@/lib/api'
+import { filesystemApi, windowApi, keyboardApi, terminalApi, persistenceApi } from '@/lib/api'
 import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import {
   useTerminalFontSize,
   useDefaultShell,
   useMaxTerminalsPerProject
 } from '@/stores/app-settings-store'
-import { useUpdateAppSetting } from '@/hooks/use-app-settings'
+import {
+  useUpdateAppSetting,
+  useUpdatePanelVisibility,
+  waitForPendingAppSettingsPersistence
+} from '@/hooks/use-app-settings'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { toast } from 'sonner'
 import { TitleBar } from '@/components/TitleBar'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
@@ -117,7 +123,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
     const nextRootPathCandidate = activeProject?.path
-    if (typeof nextRootPathCandidate !== 'string' || activeProjectId === prevProjectIdRef.current) {
+    if (!activeProject || typeof nextRootPathCandidate !== 'string' || nextRootPathCandidate === '') {
+      // Project removed or has no path — clear explorer root and unwatch
+      useFileExplorerStore.getState().setRootPath('')
+      if (watchedRootPathRef.current) {
+        filesystemApi.unwatchDirectory(watchedRootPathRef.current)
+        watchedRootPathRef.current = null
+      }
+      prevProjectIdRef.current = activeProjectId
+      return
+    }
+    if (activeProjectId === prevProjectIdRef.current) {
       return
     }
 
@@ -173,6 +189,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- activeProject?.path covers the only property used
   }, [activeProject?.path, activeProjectId])
 
   // Editor state persistence
@@ -186,32 +203,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [])
 
-  // Sync terminal tabs with workspace store
-  // CRITICAL: Track sync calls to prevent loops
-  const syncCallCountRef = useRef(0)
-  const lastSyncTerminalsRef = useRef<string[]>([])
+  // Ensure tabs exist for currently visible project terminals.
+  // Project workspace loading/removal is owned by persistence + restore flows.
+  const ensureCallCountRef = useRef(0)
+  const lastEnsuredTerminalIdsRef = useRef<string[]>([])
 
   useEffect(() => {
     const terminalIds = terminals.map((terminal) => terminal.id)
 
-    // Skip if terminals haven't actually changed (same IDs)
-    const prevIds = lastSyncTerminalsRef.current
-    if (terminalIds.length === prevIds.length &&
-        terminalIds.every((id, i) => id === prevIds[i])) {
+    const prevIds = lastEnsuredTerminalIdsRef.current
+    if (terminalIds.length === prevIds.length && terminalIds.every((id, i) => id === prevIds[i])) {
       return
     }
 
-    const syncId = `sync-${syncCallCountRef.current++}-${Date.now().toString().slice(-6)}`
+    const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`
 
-    console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${syncId}]`, {
+    console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
       terminalCount: terminalIds.length,
       terminalIds,
       prevCount: prevIds.length,
-      callCount: syncCallCountRef.current
+      callCount: ensureCallCountRef.current
     })
 
-    lastSyncTerminalsRef.current = terminalIds
-    useWorkspaceStore.getState().syncTerminalTabs(terminalIds)
+    lastEnsuredTerminalIdsRef.current = terminalIds
+    const workspaceStore = useWorkspaceStore.getState()
+    for (const terminalId of terminalIds) {
+      workspaceStore.ensureTerminalTab(terminalId)
+    }
   }, [terminals])
 
   // Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree
@@ -235,6 +253,39 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [])
 
+  const closeAppWithPersistenceFlush = useCallback(async () => {
+    try {
+      const [pendingAppSettingsResult, pendingPersistenceResult] = await Promise.allSettled([
+        waitForPendingAppSettingsPersistence(),
+        persistenceApi.flushPendingWrites()
+      ])
+
+      if (pendingAppSettingsResult.status === 'rejected') {
+        console.error(
+          'Failed to wait for app settings persistence before close:',
+          pendingAppSettingsResult.reason
+        )
+      }
+
+      if (pendingPersistenceResult.status === 'fulfilled') {
+        if (!pendingPersistenceResult.value.success) {
+          console.error(
+            'Failed to flush pending persistence writes before close:',
+            pendingPersistenceResult.value.error
+          )
+        }
+      } else {
+        console.error(
+          'Failed to flush pending persistence writes before close:',
+          pendingPersistenceResult.reason
+        )
+      }
+    } finally {
+      windowApi.respondToClose('close')
+      setIsAppCloseDialogOpen(false)
+    }
+  }, [])
+
   // Intercept app close to check for unsaved files
   useEffect(() => {
     return windowApi.onCloseRequested(() => {
@@ -243,10 +294,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
         setAppCloseDirtyCount(dirtyCount)
         setIsAppCloseDialogOpen(true)
       } else {
-        windowApi.respondToClose('close')
+        void closeAppWithPersistenceFlush()
       }
+
+      return Promise.resolve(false)
     })
-  }, [])
+  }, [closeAppWithPersistenceFlush])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -256,6 +309,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useCommandHistoryLoader(activeProjectId)
   const addCommand = useAddCommand()
   const commandHistory = useCommandHistory(activeProjectId)
+  const allCommandHistory = useAllCommandHistory()
   const createSnapshot = useCreateSnapshot()
 
   const handleCreateSnapshot = useCallback(
@@ -276,6 +330,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
+  const updatePanelVisibility = useUpdatePanelVisibility()
 
   // Helper to get active key for a shortcut
   const getActiveKey = useCallback(
@@ -302,11 +357,54 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [isWorkspaceRoute]
   )
 
+  // Terminal creation callbacks - defined before keyboard shortcut useEffect
+  const handleCreateTerminalInPane = useCallback(
+    async (paneId: string, shellName?: string) => {
+      if (terminals.length >= maxTerminals) {
+        toast.error(`Maximum ${maxTerminals} terminals per project`)
+        return
+      }
+
+      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
+      const cwd = activeProject?.path
+
+      // Resolve project env vars for spawn
+      // TODO: Pass actual system env from backend for variable expansion
+      const { env, hasProjectEnv } = resolveEnvForSpawn(activeProject?.envVars, {})
+
+      const spawnResult = await terminalApi.spawn({
+        shell,
+        cwd,
+        ...(hasProjectEnv ? { env } : {})
+      })
+      if (!spawnResult.success) {
+        toast.error(spawnResult.error || 'Failed to create terminal')
+        return
+      }
+
+      const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
+      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
+
+      useWorkspaceStore.getState().addTabToPane(paneId, {
+        type: 'terminal',
+        id: `term-${terminal.id}`,
+        terminalId: terminal.id
+      })
+    },
+    [activeProject?.defaultShell, activeProject?.path, activeProject?.envVars, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
+  )
+
+  const handleNewTerminal = useCallback(() => {
+    const paneId = useWorkspaceStore.getState().activePaneId
+    handleCreateTerminalInPane(paneId)
+  }, [handleCreateTerminalInPane])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input/textarea/editable element
-      const target = e.target as HTMLElement
+      const target = e.target instanceof HTMLElement ? e.target : document.body
       const isInEditor = target.closest('.cm-content') || target.closest('.bn-editor')
+      const isInTerminal = !!target.closest('.xterm')
       const isInInput =
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
@@ -339,11 +437,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Ctrl+B - toggle file explorer (skip when in editor/input so BlockNote bold works)
+      // Ctrl+B - toggle file explorer (skip when in editor/input/terminal)
       if (e.ctrlKey && e.key === 'b' && !e.shiftKey && !e.altKey) {
+        if (!isInEditor && !isInInput && !isInTerminal) {
+          e.preventDefault()
+          void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : 'Failed to update file explorer visibility'
+            )
+          })
+        }
+        return
+      }
+
+      if (matchesShortcut(e, getActiveKey('sidebarToggle'))) {
         if (!isInEditor && !isInInput) {
           e.preventDefault()
-          useFileExplorerStore.getState().toggleVisibility()
+          e.stopPropagation()
+          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
+            toast.error(
+              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
+            )
+          })
         }
         return
       }
@@ -487,7 +604,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
     maxTerminals,
     isWorkspaceRoute,
     cycleTab,
-    activeTab
+    activeTab,
+    handleCreateTerminalInPane,
+    updatePanelVisibility,
+    isExplorerVisible,
+    isSidebarVisible
   ])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
@@ -519,42 +640,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
             updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
           }
           break
+        case 'sidebarToggle':
+          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
+            toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+          })
+          break
       }
     })
-  }, [cycleTab, fontSize, updateAppSetting])
-
-  const handleCreateTerminalInPane = useCallback(
-    async (paneId: string, shellName?: string) => {
-      if (terminals.length >= maxTerminals) {
-        toast.error(`Maximum ${maxTerminals} terminals per project`)
-        return
-      }
-
-      const shell = shellName || activeProject?.defaultShell || appDefaultShell || undefined
-      const cwd = activeProject?.path
-
-      const spawnResult = await terminalApi.spawn({ shell, cwd })
-      if (!spawnResult.success) {
-        toast.error(spawnResult.error || 'Failed to create terminal')
-        return
-      }
-
-      const terminal = addTerminal(`Terminal ${terminals.length + 1}`, activeProjectId, shell, cwd)
-      useTerminalStore.getState().setTerminalPtyId(terminal.id, spawnResult.data.id)
-
-      useWorkspaceStore.getState().addTabToPane(paneId, {
-        type: 'terminal',
-        id: `term-${terminal.id}`,
-        terminalId: terminal.id
-      })
-    },
-    [activeProject?.defaultShell, activeProject?.path, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
-  )
-
-  const handleNewTerminal = useCallback(() => {
-    const paneId = useWorkspaceStore.getState().activePaneId
-    handleCreateTerminalInPane(paneId)
-  }, [handleCreateTerminalInPane])
+  }, [cycleTab, fontSize, updateAppSetting, updatePanelVisibility, isSidebarVisible])
 
   const handleCloseTerminal = useCallback((id: string, tabId: string) => {
     setCloseConfirmTerminal({ terminalId: id, tabId })
@@ -663,14 +756,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       toast.error('Some files failed to save. Please try again or discard changes.')
       return
     }
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+    await closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
   const handleDiscardAllAndClose = useCallback(() => {
-    windowApi.respondToClose('close')
-    setIsAppCloseDialogOpen(false)
-  }, [])
+    void closeAppWithPersistenceFlush()
+  }, [closeAppWithPersistenceFlush])
 
   const handleCancelAppClose = useCallback(() => {
     windowApi.respondToClose('cancel')
@@ -684,6 +775,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
       terminalApi.write(activeTerminal.ptyId, command)
     }
   }, [activeTerminal])
+
+  const handleClearCommandHistory = useCallback(async () => {
+    if (!activeProjectId) return
+    // Persist empty array first, then clear in-memory on success
+    const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
+    if (!result.success) {
+      toast.error(`Failed to clear history: ${result.error}`)
+      throw new Error(result.error)
+    }
+    // Only clear in-memory state after successful persistence
+    const { clearHistory } = useCommandHistoryStore.getState()
+    clearHistory(activeProjectId)
+  }, [activeProjectId])
 
   const terminalToClose = terminals.find((t) => t.id === closeConfirmTerminal?.terminalId)
 
@@ -703,98 +807,95 @@ export default function WorkspaceLayout(): React.JSX.Element {
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <TitleBar />
 
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
         {/* Sidebar */}
         {isSidebarVisible && (
-          <ProjectSidebar
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onSelectProject={selectProject}
-            onNewProject={() => setIsNewProjectModalOpen(true)}
-            onUpdateProject={updateProject}
-            onDeleteProject={deleteProject}
-            onArchiveProject={archiveProject}
-            onRestoreProject={restoreProject}
-            onReorderProjects={reorderProjects}
-          />
+          <div className="mr-2">
+            <ProjectSidebar
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onSelectProject={selectProject}
+              onNewProject={() => setIsNewProjectModalOpen(true)}
+              onUpdateProject={updateProject}
+              onDeleteProject={deleteProject}
+              onArchiveProject={archiveProject}
+              onRestoreProject={restoreProject}
+              onReorderProjects={reorderProjects}
+            />
+          </div>
         )}
 
-        {/* Main Content */}
-        <main className="flex-1 flex flex-col min-w-0">
-          {projects.length === 0 ? (
-            /* No Projects Empty State */
-            <div className="flex-1 flex flex-col items-center justify-center bg-terminal-bg px-6">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.4, ease: 'easeOut' }}
-                className="flex flex-col items-center text-center max-w-md"
-              >
-                <div className="mb-6">
-                  <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">
-                  No Projects Yet
-                </h2>
-                <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                  Create your first project to organize your terminals, snapshots, and commands
-                </p>
-                <button
-                  onClick={() => setIsNewProjectModalOpen(true)}
-                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                >
-                  Create Your First Project
-                </button>
-              </motion.div>
-            </div>
-          ) : (
-            <>
-              {isWorkspaceRoute ? (
-                <div className="flex-1 flex min-h-0">
-                  <PaneDndProvider>
-                    <ResizablePanelGroup direction="horizontal">
-                      {/* Center Panel: Pane Tree */}
-                      <ResizablePanel defaultSize={isExplorerVisible ? 80 : 100}>
-                        <PaneRenderer
-                          node={paneRoot}
-                          onNewTerminal={(paneId) => {
-                            handleCreateTerminalInPane(paneId)
-                          }}
-                          onNewTerminalWithShell={(paneId, shell) => {
-                            handleCreateTerminalInPane(paneId, shell.name)
-                          }}
-                          onCloseTerminal={handleCloseTerminal}
-                          onRenameTerminal={renameTerminal}
-                          onCloseEditorTab={handleCloseEditorTab}
-                          defaultShell={activeProject?.defaultShell || appDefaultShell}
-                        />
-                      </ResizablePanel>
-
-                      {/* File Explorer Panel (Right, full height) */}
-                      {isExplorerVisible && (
-                        <>
-                          <ResizableHandle />
-                          <ResizablePanel defaultSize={20} minSize={10} maxSize={40}>
-                            <FileExplorer />
-                          </ResizablePanel>
-                        </>
-                      )}
-                    </ResizablePanelGroup>
-                  </PaneDndProvider>
+        {/* Main Content and File Explorer Container */}
+        <PaneDndProvider>
+          <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+            {/* Main Content Area */}
+            <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+              {projects.length === 0 ? (
+                /* No Projects Empty State */
+                <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4, ease: 'easeOut' }}
+                    className="flex flex-col items-center text-center max-w-md"
+                  >
+                    <div className="mb-6">
+                      <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
+                    </div>
+                    <h2 className="text-xl font-semibold text-foreground mb-2">
+                      No Projects Yet
+                    </h2>
+                    <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                      Create your first project to organize your terminals, snapshots, and commands
+                    </p>
+                    <button
+                      onClick={() => setIsNewProjectModalOpen(true)}
+                      className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                    >
+                      Create Your First Project
+                    </button>
+                  </motion.div>
                 </div>
               ) : (
-                <div className="flex-1 overflow-hidden bg-terminal-bg relative">
-                  <div className="w-full h-full">
-                    <Outlet />
-                  </div>
-                </div>
-              )}
+                <>
+                  {isWorkspaceRoute ? (
+                    <div className="flex-1 min-h-0 h-full overflow-hidden">
+                      <PaneRenderer
+                        node={paneRoot}
+                        onNewTerminal={(paneId) => {
+                          handleCreateTerminalInPane(paneId)
+                        }}
+                        onNewTerminalWithShell={(paneId, shell) => {
+                          handleCreateTerminalInPane(paneId, shell.path)
+                        }}
+                        onCloseTerminal={handleCloseTerminal}
+                        onRenameTerminal={renameTerminal}
+                        onCloseEditorTab={handleCloseEditorTab}
+                        defaultShell={activeProject?.defaultShell || appDefaultShell}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
+                      <div className="w-full h-full">
+                        <Outlet />
+                      </div>
+                    </div>
+                  )}
 
-              {/* Status Bar */}
-              <StatusBar project={activeProject} />
-            </>
-          )}
-        </main>
+                  {/* Status Bar */}
+                  <StatusBar project={activeProject} />
+                </>
+              )}
+            </main>
+
+            {/* File Explorer - separate floating panel */}
+            {isExplorerVisible && activeProject?.path && (
+              <div className="flex-shrink-0 ml-2">
+                <FileExplorer />
+              </div>
+            )}
+          </div>
+        </PaneDndProvider>
       </div>
 
       {/* Modals */}
@@ -823,7 +924,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         isOpen={isCommandHistoryOpen}
         onClose={() => setIsCommandHistoryOpen(false)}
         entries={commandHistory}
+        allEntries={allCommandHistory}
         onSelectCommand={handleInsertCommand}
+        onClearHistory={handleClearCommandHistory}
       />
 
       {/* Close Terminal Confirmation */}

@@ -9,9 +9,11 @@ import {
 } from '@/stores/file-explorer-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
+import { useTerminalStore } from '@/stores/terminal-store'
+import { useProjectStore } from '@/stores/project-store'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { toast } from 'sonner'
-import { clipboardApi, filesystemApi } from '@/lib/api'
+import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 
 interface ContextMenuState {
   x: number
@@ -27,10 +29,18 @@ interface InlineInputState {
 }
 
 export function FileExplorer(): React.JSX.Element {
-  const { rootPath, directoryContents, isVisible, rootLoadError } = useFileExplorer()
+  const { rootPath, directoryContents, isVisible, rootLoadError, selectedPaths, clipboard } = useFileExplorer()
   const {
     toggleDirectory,
     selectPath,
+    togglePathSelection,
+    selectPathRange,
+    selectAll,
+    clearSelection,
+    copySelected,
+    cutSelected,
+    paste,
+    duplicateSelected,
     collapseAll,
     refreshDirectory,
     setRootLoadError
@@ -41,6 +51,7 @@ export function FileExplorer(): React.JSX.Element {
   const [inputValue, setInputValue] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState<DirectoryEntry | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined
 
@@ -89,11 +100,134 @@ export function FileExplorer(): React.JSX.Element {
     (e: React.MouseEvent, entry: DirectoryEntry) => {
       e.preventDefault()
       e.stopPropagation()
-      selectPath(entry.path)
+      // If right-clicking on an unselected item, select only that item
+      // If right-clicking on a selected item, keep the current selection
+      if (!selectedPaths.has(entry.path)) {
+        selectPath(entry.path)
+      }
       setContextMenu({ x: e.clientX, y: e.clientY, entry })
     },
-    [selectPath]
+    [selectPath, selectedPaths]
   )
+
+  // Handle multi-select clicks
+  const handleNodeClick = useCallback(
+    (e: React.MouseEvent, entry: DirectoryEntry) => {
+      const lastClickedPath = useFileExplorerStore.getState().lastClickedPath
+
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl+Click: Toggle selection
+        togglePathSelection(entry.path)
+      } else if (e.shiftKey && lastClickedPath) {
+        // Shift+Click: Range selection
+        selectPathRange(lastClickedPath, entry.path)
+      } else {
+        // Normal click: Single selection (and toggle directory if it's a directory)
+        if (entry.type === 'directory') {
+          toggleDirectory(entry.path)
+        } else {
+          selectPath(entry.path)
+          handleSelect(entry.path)
+        }
+      }
+    },
+    [togglePathSelection, selectPathRange, selectPath, toggleDirectory]
+  )
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle shortcuts when file explorer is focused
+      if (!containerRef.current?.contains(document.activeElement) && document.activeElement !== document.body) {
+        return
+      }
+
+      // Don't handle shortcuts when typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      // Ctrl+A: Select all
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault()
+        selectAll()
+        return
+      }
+
+      // Ctrl+C: Copy
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        e.preventDefault()
+        copySelected()
+        return
+      }
+
+      // Ctrl+X: Cut
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+        e.preventDefault()
+        cutSelected()
+        return
+      }
+
+      // Ctrl+V: Paste
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault()
+        if (contextMenu?.entry) {
+          void paste(contextMenu.entry.path)
+        }
+        return
+      }
+
+      // F2: Rename
+      if (e.key === 'F2' && selectedPaths.size === 1) {
+        e.preventDefault()
+        const [path] = selectedPaths
+        const normalizedPath = path.replace(/\\/g, '/')
+        const lastSlash = normalizedPath.lastIndexOf('/')
+        const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
+        // Find the entry for this path
+        for (const [, entries] of directoryContents) {
+          const entry = entries.find((e) => e.path === path)
+          if (entry) {
+            setInlineInput({
+              parentPath,
+              type: entry.type === 'directory' ? 'folder' : 'file',
+              mode: 'rename',
+              existingEntry: entry
+            })
+            setInputValue(entry.name)
+            break
+          }
+        }
+        return
+      }
+
+      // Delete: Move to trash (for now, permanent delete)
+      if (e.key === 'Delete' && selectedPaths.size > 0) {
+        e.preventDefault()
+        // For now, delete the first selected item with confirmation
+        // TODO: Implement batch delete with multi-select
+        const [path] = selectedPaths
+        for (const [, entries] of directoryContents) {
+          const entry = entries.find((e) => e.path === path)
+          if (entry) {
+            setDeleteConfirm(entry)
+            break
+          }
+        }
+        return
+      }
+
+      // Escape: Clear selection
+      if (e.key === 'Escape') {
+        clearSelection()
+        setContextMenu(null)
+        return
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [selectAll, copySelected, cutSelected, paste, selectedPaths, directoryContents, contextMenu, clearSelection])
 
   const handleNewFile = useCallback((dirPath: string) => {
     setContextMenu(null)
@@ -219,12 +353,76 @@ export function FileExplorer(): React.JSX.Element {
     void toggleDirectory(rootPath)
   }, [rootPath, setRootLoadError, toggleDirectory])
 
+  // Open terminal in directory
+  const handleOpenInTerminal = useCallback((dirPath: string) => {
+    setContextMenu(null)
+    const activeProjectId = useProjectStore.getState().activeProjectId
+    if (!activeProjectId) {
+      toast.error('No active project')
+      return
+    }
+
+    const terminalStore = useTerminalStore.getState()
+    try {
+      terminalStore.addTerminal('Terminal', activeProjectId, 'powershell', dirPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open terminal'
+      toast.error(message)
+    }
+  }, [])
+
+  // Open with external app
+  const handleOpenWithExternal = useCallback(async (filePath: string) => {
+    setContextMenu(null)
+    const result = await openerApi.openWithExternalApp(filePath)
+    if (!result.success) {
+      toast.error(`Failed to open file: ${result.error}`)
+    }
+  }, [])
+
+  // Show in file manager
+  const handleShowInFileManager = useCallback(async (path: string) => {
+    setContextMenu(null)
+    const result = await openerApi.revealInFileManager(path)
+    if (!result.success) {
+      toast.error(`Failed to reveal in file manager: ${result.error}`)
+    }
+  }, [])
+
+  // Copy handler
+  const handleCopy = useCallback(() => {
+    setContextMenu(null)
+    copySelected()
+  }, [copySelected])
+
+  // Cut handler
+  const handleCut = useCallback(() => {
+    setContextMenu(null)
+    cutSelected()
+  }, [cutSelected])
+
+  // Paste handler
+  const handlePaste = useCallback(async (destinationPath: string) => {
+    setContextMenu(null)
+    await paste(destinationPath)
+  }, [paste])
+
+  // Duplicate handler
+  const handleDuplicate = useCallback(async () => {
+    setContextMenu(null)
+    await duplicateSelected()
+  }, [duplicateSelected])
+
   if (!isVisible) return <></>
 
   return (
-    <div className="h-full flex flex-col bg-background text-foreground">
+    <div
+      ref={containerRef}
+      className="w-64 flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
+      tabIndex={0}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0">
+      <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Explorer
         </span>
@@ -272,6 +470,7 @@ export function FileExplorer(): React.JSX.Element {
                 onToggle={toggleDirectory}
                 onSelect={handleSelect}
                 onContextMenu={handleContextMenu}
+                onClick={handleNodeClick}
               />
             ))}
           </>
@@ -324,6 +523,15 @@ export function FileExplorer(): React.JSX.Element {
           onRename={handleRename}
           onDelete={handleDelete}
           onCopyPath={handleCopyPath}
+          onCopy={handleCopy}
+          onCut={handleCut}
+          onPaste={handlePaste}
+          onDuplicate={handleDuplicate}
+          onOpenInTerminal={handleOpenInTerminal}
+          onOpenWithExternal={handleOpenWithExternal}
+          onShowInFileManager={handleShowInFileManager}
+          selectedCount={selectedPaths.size}
+          hasClipboardContent={clipboard !== null}
         />
       )}
 

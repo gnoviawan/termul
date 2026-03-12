@@ -204,10 +204,17 @@ fn get_available_shells() -> Vec<ShellInfo> {
 
     #[cfg(target_os = "windows")]
     {
+        // CRITICAL: Check explicit paths FIRST, then PATH entries
+        // This ensures the correct shell is found when multiple versions exist
         let mut candidates = vec![
+            // PowerShell 7 explicit paths (checked first)
+            ("pwsh", r"C:\Program Files\PowerShell\7\pwsh.exe", None),
+            ("pwsh", r"C:\Program Files\PowerShell\6\pwsh.exe", None),
+            // Windows PowerShell 5 (explicit path)
+            ("powershell", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", None),
+            // PATH-based fallbacks (checked last)
+            ("pwsh", "pwsh.exe", None),
             ("powershell", "powershell.exe", None),
-            ("pwsh", "pwsh.exe", None), // PowerShell 7 via PATH
-            ("pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", None), // PowerShell 7 explicit path
             ("cmd", "cmd.exe", None),
             ("wsl", "wsl.exe", None),
         ];
@@ -269,14 +276,13 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
+    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
         "cmd"
             | "cmd.exe"
             | "powershell"
             | "powershell.exe"
-            | "pwsh"
-            | "pwsh.exe"
             | "wsl"
             | "wsl.exe"
     )
@@ -580,7 +586,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init());
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -691,9 +699,23 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
+        if let RunEvent::ExitRequested { api, .. } = event {
+            // Prevent the default exit behavior so we can cleanup first
+            api.prevent_exit();
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
-                pty_manager.kill_all();
+                let pty_manager_clone = pty_manager.inner().clone();
+                let app_handle_clone = app_handle.clone();
+
+                // Spawn async cleanup task
+                tokio::spawn(async move {
+                    pty_manager_clone.kill_all().await;
+                    // After cleanup completes, allow the app to exit with code 0
+                    app_handle_clone.exit(0);
+                });
+            } else {
+                // No PTY manager, just exit
+                app_handle.exit(0);
             }
         }
     });

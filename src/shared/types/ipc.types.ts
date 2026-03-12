@@ -101,6 +101,10 @@ export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
 // Dialog API for file/directory selection
 export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>
+  selectFile: (options?: {
+    filters?: Array<{ name: string; extensions: string[] }>
+    title?: string
+  }) => Promise<IpcResult<string>>
 }
 
 // Shell detection types
@@ -125,6 +129,7 @@ export interface PersistenceApi {
   read: <T>(key: string) => Promise<IpcResult<T>>
   write: <T>(key: string, data: T) => Promise<IpcResult<void>>
   writeDebounced: <T>(key: string, data: T) => Promise<IpcResult<void>>
+  flushPendingWrites: () => Promise<IpcResult<void>>
   delete: (key: string) => Promise<IpcResult<void>>
 }
 
@@ -135,7 +140,9 @@ export interface SystemApi {
 }
 
 // Keyboard shortcut callback for main -> renderer communication
-export type KeyboardShortcutCallback = (shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset') => void
+export type KeyboardShortcutCallback = (
+  shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'sidebarToggle'
+) => void
 
 // Keyboard API for renderer
 export interface KeyboardApi {
@@ -147,7 +154,7 @@ export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
 
 // App close coordination types
 export type AppCloseResponse = 'close' | 'cancel'
-export type AppCloseRequestedCallback = () => void
+export type AppCloseRequestedCallback = () => Promise<boolean>
 
 // Window API for renderer
 export interface WindowApi {

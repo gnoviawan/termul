@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { persistenceApi } from '@/lib/api'
 import { CONTEXT_BAR_SETTINGS_KEY, DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
@@ -38,4 +38,19 @@ export function useContextBarSettings(): void {
 
     loadSettings()
   }, [setSettings, setLoaded])
+}
+
+export function useUpdateContextBarSetting(): (
+  element: keyof ContextBarSettings
+) => Promise<void> {
+  const toggleElement = useContextBarSettingsStore((state) => state.toggleElement)
+
+  return useCallback(
+    async (element: keyof ContextBarSettings) => {
+      toggleElement(element)
+      const updatedSettings = useContextBarSettingsStore.getState().settings
+      await persistenceApi.writeDebounced(CONTEXT_BAR_SETTINGS_KEY, updatedSettings)
+    },
+    [toggleElement]
+  )
 }

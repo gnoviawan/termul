@@ -21,6 +21,12 @@ describe('keyboard-shortcuts-store', () => {
       expect(Object.keys(shortcuts).length).toBe(Object.keys(DEFAULT_KEYBOARD_SHORTCUTS).length)
     })
 
+    it('should include sidebar toggle shortcut defaults', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.sidebarToggle.defaultKey).toBe('ctrl+shift+b')
+      expect(shortcuts.sidebarToggle.customKey).toBeUndefined()
+    })
+
     it('should have commandPalette shortcut with default key', () => {
       const { shortcuts } = useKeyboardShortcutsStore.getState()
       expect(shortcuts.commandPalette.defaultKey).toBe('ctrl+k')

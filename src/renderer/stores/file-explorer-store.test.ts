@@ -31,7 +31,9 @@ beforeEach(() => {
     rootPath: null,
     expandedDirs: new Set<string>(),
     directoryContents: new Map<string, DirectoryEntry[]>(),
-    selectedPath: null,
+    selectedPaths: new Set<string>(),
+    lastClickedPath: null,
+    clipboard: null,
     isVisible: true,
     loadingDirs: new Set<string>(),
     rootLoadError: null
@@ -48,7 +50,7 @@ describe('file-explorer-store', () => {
       expect(state.rootPath).toBe('/project')
       expect(state.expandedDirs.size).toBe(0)
       expect(state.directoryContents.size).toBe(0)
-      expect(state.selectedPath).toBeNull()
+      expect(state.selectedPaths.size).toBe(0)
       expect(state.rootLoadError).toBeNull()
     })
 
@@ -346,13 +348,13 @@ describe('file-explorer-store', () => {
   describe('selectPath', () => {
     it('should set selected path', () => {
       useFileExplorerStore.getState().selectPath('/project/file.ts')
-      expect(useFileExplorerStore.getState().selectedPath).toBe('/project/file.ts')
+      expect(useFileExplorerStore.getState().selectedPaths.has('/project/file.ts')).toBe(true)
     })
 
     it('should clear selected path with null', () => {
       useFileExplorerStore.getState().selectPath('/project/file.ts')
       useFileExplorerStore.getState().selectPath(null)
-      expect(useFileExplorerStore.getState().selectedPath).toBeNull()
+      expect(useFileExplorerStore.getState().selectedPaths.size).toBe(0)
     })
   })
 

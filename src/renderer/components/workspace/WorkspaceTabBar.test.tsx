@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import type { DragPayload } from '@/types/workspace.types'
 
 const mockSetActiveTab = vi.fn()
 const mockSetActivePane = vi.fn()
@@ -31,32 +32,42 @@ vi.mock('@/stores/editor-store', () => ({
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: vi.fn((selector: (state: { terminals: Array<{ id: string; name: string; shell: string }> }) => unknown) =>
     selector({
-      terminals: [{ id: 'term-1', name: 'Terminal 1', shell: 'bash' }]
+      terminals: [
+        { id: 'term-1', name: 'Terminal 1', shell: 'bash' },
+        { id: 'term-2', name: 'Terminal 2', shell: 'zsh' },
+        { id: 'term-3', name: 'Terminal 3', shell: 'bash' }
+      ]
     })
   )
 }))
 
 const mockStartTabDrag = vi.hoisted(() => vi.fn())
+const mockSetReorderPreview = vi.hoisted(() => vi.fn())
+const mockClearReorderPreview = vi.hoisted(() => vi.fn())
+const mockHandleTabReorder = vi.hoisted(() => vi.fn())
+
+interface MockPaneDndValue {
+  startTabDrag: typeof mockStartTabDrag
+  dragPayload: DragPayload | null
+  reorderPreview: { paneId: string; targetTabId: string; position: 'before' | 'after' } | null
+  setReorderPreview: typeof mockSetReorderPreview
+  clearReorderPreview: typeof mockClearReorderPreview
+  handleTabReorder: typeof mockHandleTabReorder
+}
+
 const mockUsePaneDnd = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<() => MockPaneDndValue>(() => ({
     startTabDrag: mockStartTabDrag,
-    dragPayload: null
+    dragPayload: null,
+    reorderPreview: null,
+    setReorderPreview: mockSetReorderPreview,
+    clearReorderPreview: mockClearReorderPreview,
+    handleTabReorder: mockHandleTabReorder
   }))
 )
 
 vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: mockUsePaneDnd
-}))
-
-vi.mock('framer-motion', () => ({
-  Reorder: {
-    Group: ({ children, onReorder }: { children: React.ReactNode; onReorder: (tabs: WorkspaceTab[]) => void }) => (
-      <div data-testid="reorder-group" data-has-onreorder={Boolean(onReorder)}>
-        {children}
-      </div>
-    ),
-    Item: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
-  }
 }))
 
 beforeEach(() => {
@@ -65,10 +76,17 @@ beforeEach(() => {
   mockReorderTabsInPane.mockReset()
   mockCloseTab.mockReset()
   mockStartTabDrag.mockReset()
+  mockSetReorderPreview.mockReset()
+  mockClearReorderPreview.mockReset()
+  mockHandleTabReorder.mockReset()
   mockUsePaneDnd.mockReset()
   mockUsePaneDnd.mockReturnValue({
     startTabDrag: mockStartTabDrag,
-    dragPayload: null
+    dragPayload: null,
+    reorderPreview: null,
+    setReorderPreview: mockSetReorderPreview,
+    clearReorderPreview: mockClearReorderPreview,
+    handleTabReorder: mockHandleTabReorder
   })
 
   vi.stubGlobal('api', {
@@ -177,5 +195,260 @@ describe('WorkspaceTabBar', () => {
 
     expect(onCloseEditorTab).toHaveBeenCalledWith('/a.ts')
     expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('calls startTabDrag when dragging a terminal tab', async () => {
+    const tabs: WorkspaceTab[] = [{ type: 'terminal', id: 'tab-1', terminalId: 'term-1' }]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEl = container.querySelector('[draggable="true"]') as HTMLElement
+    expect(tabEl).toBeTruthy()
+
+    fireEvent.dragStart(tabEl, {
+      dataTransfer: {
+        setData: vi.fn(),
+        effectAllowed: null
+      }
+    })
+
+    expect(mockStartTabDrag).toHaveBeenCalledWith('tab-1', 'pane-a', expect.anything())
+  })
+
+  it('shows drop indicator on left side when dragging over left half of tab', async () => {
+    // Mock dragPayload to indicate we're dragging a tab from the same pane
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-3', sourcePaneId: 'pane-a' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEls = container.querySelectorAll('[draggable="true"]')
+    const targetTab = tabEls[1] as HTMLElement // Second tab
+
+    // Mock getBoundingClientRect to return a known width
+    targetTab.getBoundingClientRect = vi.fn(() => ({
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 40,
+      width: 200,
+      height: 40,
+      x: 0,
+      y: 0,
+      toJSON: vi.fn()
+    }))
+
+    // Create drag event and set clientX manually
+    const dragEvent = createEvent.dragOver(targetTab, {
+      dataTransfer: { dropEffect: null }
+    })
+    Object.defineProperty(dragEvent, 'clientX', { value: 50, writable: false })
+    Object.defineProperty(dragEvent, 'clientY', { value: 20, writable: false })
+    fireEvent(targetTab, dragEvent)
+
+    expect(mockSetReorderPreview).toHaveBeenCalledWith('pane-a', 'tab-2', 'before')
+  })
+
+  it('shows drop indicator on right side when dragging over right half of tab', async () => {
+    // Mock dragPayload to indicate we're dragging a tab from the same pane
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-3', sourcePaneId: 'pane-a' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEls = container.querySelectorAll('[draggable="true"]')
+    const targetTab = tabEls[1] as HTMLElement // Second tab
+
+    // Mock getBoundingClientRect to return a known width
+    targetTab.getBoundingClientRect = vi.fn(() => ({
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 40,
+      width: 200,
+      height: 40,
+      x: 0,
+      y: 0,
+      toJSON: vi.fn()
+    }))
+
+    // Drag over right half (x = 150, which is > 100)
+    fireEvent.dragOver(targetTab, {
+      clientX: 150,
+      clientY: 20,
+      dataTransfer: { dropEffect: null }
+    })
+
+    expect(mockSetReorderPreview).toHaveBeenCalledWith('pane-a', 'tab-2', 'after')
+  })
+
+  it('calls handleTabReorder when dropping on a tab', async () => {
+    // Mock dragPayload to indicate we're dragging a tab from the same pane
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-1', sourcePaneId: 'pane-a' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEls = container.querySelectorAll('[draggable="true"]')
+    const targetTab = tabEls[1] as HTMLElement // Second tab
+
+    // Mock getBoundingClientRect to return a known width
+    targetTab.getBoundingClientRect = vi.fn(() => ({
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 40,
+      width: 200,
+      height: 40,
+      x: 0,
+      y: 0,
+      toJSON: vi.fn()
+    }))
+
+    // Drop on right half
+    fireEvent.drop(targetTab, {
+      clientX: 150,
+      clientY: 20
+    })
+
+    expect(mockHandleTabReorder).toHaveBeenCalledWith('pane-a', 'tab-2', 'after')
+  })
+
+  it('does not show drop indicator when dragging from different pane', async () => {
+    // Mock dragPayload to indicate we're dragging a tab from a different pane
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-3', sourcePaneId: 'pane-b' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEls = container.querySelectorAll('[draggable="true"]')
+    const targetTab = tabEls[1] as HTMLElement
+
+    fireEvent.dragOver(targetTab, {
+      clientX: 50,
+      clientY: 20,
+      dataTransfer: { dropEffect: null }
+    })
+
+    // Should NOT call setReorderPreview when dragging from different pane
+    expect(mockSetReorderPreview).not.toHaveBeenCalled()
+  })
+
+  it('applies opacity and scale to dragged tab', async () => {
+    // Mock dragPayload to indicate tab-1 is being dragged
+    mockUsePaneDnd.mockReturnValue({
+      startTabDrag: mockStartTabDrag,
+      dragPayload: { type: 'tab', tabId: 'tab-1', sourcePaneId: 'pane-a' },
+      reorderPreview: null,
+      setReorderPreview: mockSetReorderPreview,
+      clearReorderPreview: mockClearReorderPreview,
+      handleTabReorder: mockHandleTabReorder
+    })
+
+    const tabs: WorkspaceTab[] = [
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },
+      { type: 'terminal', id: 'tab-2', terminalId: 'term-2' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEls = container.querySelectorAll('[draggable="true"]')
+    const draggedTab = tabEls[0] as HTMLElement // First tab (the one being dragged)
+
+    // The dragged tab should have opacity-50 and scale classes
+    expect(draggedTab.className).toContain('opacity-50')
+    expect(draggedTab.className).toContain('scale-[0.98]')
   })
 })

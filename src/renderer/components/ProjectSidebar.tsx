@@ -215,8 +215,18 @@ export function ProjectSidebar({
       const project = projects.find((p) => p.id === projectId)
       const shellSubmenu: ContextMenuSubItem[] = availableShells?.available.map((shell) => ({
         label: shell.displayName,
-        value: shell.name,
-        isSelected: project?.defaultShell === shell.name
+        value: shell.path,
+        isSelected: (() => {
+          const projectShell = project?.defaultShell
+          if (!projectShell) return false
+          // Match by full path
+          if (projectShell === shell.path) return true
+          // Match by name
+          if (projectShell === shell.name) return true
+          // Match by basename of path
+          const pathBasename = shell.path.split(/[\\/]/).pop()
+          return projectShell === pathBasename
+        })()
       })) || []
 
       const items: ContextMenuItem[] = [
@@ -237,8 +247,8 @@ export function ProjectSidebar({
           label: 'Set Default Shell',
           icon: <Terminal size={14} />,
           submenu: shellSubmenu,
-          onSubmenuSelect: (shellName: string) => {
-            onUpdateProject(projectId, { defaultShell: shellName })
+          onSubmenuSelect: (shellPath: string) => {
+            onUpdateProject(projectId, { defaultShell: shellPath })
           }
         })
       }
@@ -300,15 +310,15 @@ export function ProjectSidebar({
   )
 
   return (
-    <aside className="w-64 bg-card border-r border-border flex flex-col flex-shrink-0">
+    <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
       {/* Header with inline + button */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-border">
-        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+      <div className="h-10 flex items-center justify-between px-4 border-b border-sidebar-border rounded-t-xl">
+        <span className="text-xs font-semibold tracking-wider text-sidebar-foreground uppercase">
           Projects
         </span>
         <button
           onClick={onNewProject}
-          className="group h-6 w-6 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           title="New Project"
           aria-label="Create new project from header"
           data-testid="header-new-project"
@@ -366,7 +376,7 @@ export function ProjectSidebar({
               <div className="mt-2">
                 <button
                   onClick={() => setShowArchived(!showArchived)}
-                  className="w-full flex items-center px-4 py-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase hover:bg-secondary/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  className="w-full flex items-center px-4 py-2 text-xs font-semibold tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   aria-expanded={showArchived}
                   aria-label={`Archived projects (${archivedProjects.length})`}
                 >
@@ -392,17 +402,11 @@ export function ProjectSidebar({
         )}
       </div>
 
-      {/* Bottom toolbar - New Project only */}
-      <div className="border-t border-border p-2">
-        <button
-          onClick={onNewProject}
-          className="group w-full h-8 inline-flex items-center justify-center rounded hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          title="New Project"
-          aria-label="Create new project from toolbar"
-          data-testid="bottom-new-project"
-        >
-          <Plus size={16} className="text-muted-foreground group-hover:text-foreground" />
-        </button>
+      {/* Bottom toolbar - Version */}
+      <div className="p-2 rounded-b-xl">
+        <div className="w-full h-8 inline-flex items-center justify-center">
+          <span className="text-xs text-muted-foreground">Termul v0.3.0-4</span>
+        </div>
       </div>
 
       {/* Context Menu */}
@@ -495,7 +499,7 @@ function ProjectItem({
       onContextMenu={onContextMenu}
       className={cn(
         'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2',
-        isActive ? `${colors.border} bg-secondary` : `${colors.borderMuted} hover:bg-secondary/50`
+        isActive ? `${colors.border} bg-sidebar-accent` : `${colors.borderMuted} hover:bg-sidebar-accent/50`
       )}
       aria-current={isActive ? 'page' : undefined}
       aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -519,7 +523,7 @@ function ProjectItem({
           onChange={(e) => onEditNameChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={onSaveRename}
-          className="flex-1 bg-secondary border border-border rounded px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+          className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
           onClick={(e) => e.stopPropagation()}
         />
       ) : (

@@ -33,6 +33,7 @@ export interface TerminalState {
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
+  updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
@@ -205,6 +206,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  updateTerminalScrollback: (id: string, scrollback: string[] | undefined): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, pendingScrollback: scrollback } : t))
+    }))
+  },
+
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, healthStatus: status } : t))
@@ -327,6 +334,7 @@ export function useTerminalActions(): Pick<
   | 'renameTerminal'
   | 'reorderTerminals'
   | 'updateTerminalCwd'
+  | 'updateTerminalScrollback'
   | 'setTerminalPtyId'
   | 'clearTerminalPtyId'
 > {
@@ -338,6 +346,7 @@ export function useTerminalActions(): Pick<
       renameTerminal: state.renameTerminal,
       reorderTerminals: state.reorderTerminals,
       updateTerminalCwd: state.updateTerminalCwd,
+      updateTerminalScrollback: state.updateTerminalScrollback,
       setTerminalPtyId: state.setTerminalPtyId,
       clearTerminalPtyId: state.clearTerminalPtyId
     }))

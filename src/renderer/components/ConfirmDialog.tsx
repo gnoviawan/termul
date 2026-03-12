@@ -14,6 +14,7 @@ interface ConfirmDialogProps {
     onClick: () => void
   }
   variant?: 'default' | 'danger'
+  isLoading?: boolean
   onConfirm: () => void
   onCancel: () => void
 }
@@ -26,6 +27,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   secondaryAction,
   variant = 'default',
+  isLoading = false,
   onConfirm,
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
@@ -96,28 +98,31 @@ export function ConfirmDialog({
             <div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
               <button
                 onClick={onCancel}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                disabled={isLoading}
+                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {cancelLabel}
               </button>
               {secondaryAction && (
                 <button
                   onClick={secondaryAction.onClick}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  disabled={isLoading}
+                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {secondaryAction.label}
                 </button>
               )}
               <button
                 onClick={onConfirm}
+                disabled={isLoading}
                 className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded transition-all',
+                  'px-3 py-1.5 text-xs font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed',
                   variant === 'danger'
                     ? 'bg-red-500 text-white hover:bg-red-600'
                     : 'bg-primary text-primary-foreground hover:bg-primary/90'
                 )}
               >
-                {confirmLabel}
+                {isLoading ? 'Loading...' : confirmLabel}
               </button>
             </div>
           </motion.div>

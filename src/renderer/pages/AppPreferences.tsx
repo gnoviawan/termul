@@ -171,7 +171,7 @@ export default function AppPreferences(): React.JSX.Element {
                   <select
                     value={fontFamily}
                     onChange={(e) => handleFontFamilyChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
                     {FONT_FAMILY_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -215,7 +215,7 @@ export default function AppPreferences(): React.JSX.Element {
                   <select
                     value={bufferSize}
                     onChange={(e) => handleBufferSizeChange(parseInt(e.target.value))}
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
                     {BUFFER_SIZE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -236,7 +236,7 @@ export default function AppPreferences(): React.JSX.Element {
                   <select
                     value={maxTerminals}
                     onChange={(e) => handleMaxTerminalsChange(parseInt(e.target.value))}
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
                     {MAX_TERMINALS_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -287,14 +287,28 @@ export default function AppPreferences(): React.JSX.Element {
                     Shell
                   </label>
                   <select
-                    value={defaultShell}
+                    value={(() => {
+                      // Normalize the stored defaultShell for display
+                      // If it's a path, use it directly; if it's a name, find matching shell's path
+                      if (!defaultShell) return ''
+                      if (defaultShell.includes('\\') || defaultShell.includes('/')) {
+                        return defaultShell
+                      }
+                      // Find shell by name or by basename of path
+                      const match = availableShells?.available.find((s) => {
+                        if (s.name === defaultShell) return true
+                        const pathBasename = s.path.split(/[\\/]/).pop()
+                        return pathBasename === defaultShell
+                      })
+                      return match?.path ?? defaultShell
+                    })()}
                     onChange={(e) => handleDefaultShellChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
                   >
                     <option value="">System Default</option>
                     {availableShells?.available?.map((shell) => (
-                      <option key={shell.path} value={shell.name}>
-                        {shell.name} ({shell.path})
+                      <option key={shell.path} value={shell.path}>
+                        {shell.displayName}
                       </option>
                     ))}
                   </select>
@@ -354,7 +368,7 @@ export default function AppPreferences(): React.JSX.Element {
                     value={orphanDetectionTimeout ?? 600000}
                     onChange={(e) => handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value) : null)}
                     disabled={!orphanDetectionEnabled}
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -508,7 +522,7 @@ export default function AppPreferences(): React.JSX.Element {
                   <button
                     onClick={checkForUpdates}
                     disabled={isChecking}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-md text-sm text-primary-foreground transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
                   >
                     <Download size={16} />
                     {isChecking ? 'Checking for updates...' : 'Check for Updates'}
@@ -581,7 +595,7 @@ export default function AppPreferences(): React.JSX.Element {
               <div className="w-2/3">
                 <button
                   onClick={() => setIsResetDialogOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-card hover:bg-secondary border border-border rounded-lg text-sm text-foreground transition-colors"
                 >
                   <RotateCcw size={16} />
                   Reset to Defaults

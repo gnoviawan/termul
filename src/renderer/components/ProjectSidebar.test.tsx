@@ -251,15 +251,10 @@ describe('ProjectSidebar', () => {
     expect(onNewProject).toHaveBeenCalled()
   })
 
-  it('should call onNewProject when bottom + button is clicked', () => {
-    const onNewProject = vi.fn()
-    renderWithRouter({ onNewProject })
+  it('should show version label at the bottom', () => {
+    renderWithRouter({})
 
-    // Use data-testid for robust button selection
-    const bottomButton = screen.getByTestId('bottom-new-project')
-    fireEvent.click(bottomButton)
-
-    expect(onNewProject).toHaveBeenCalled()
+    expect(screen.getByText(/Termul v/)).toBeInTheDocument()
   })
 
   it('should show empty state when no projects', () => {
@@ -431,6 +426,6 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     })
     fireEvent.click(screen.getByText('Zsh'))
 
-    expect(onUpdateProject).toHaveBeenCalledWith('1', { defaultShell: 'zsh' })
+    expect(onUpdateProject).toHaveBeenCalledWith('1', { defaultShell: '/usr/bin/zsh' })
   })
 })

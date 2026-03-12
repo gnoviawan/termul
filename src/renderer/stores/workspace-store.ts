@@ -159,11 +159,13 @@ export interface WorkspaceState {
   syncTerminalTabs: (terminalIds: string[]) => void
   clearEditorTabs: () => void
   resetLayout: () => void
+  loadProjectWorkspace: (root: PaneNode, activePaneId?: string | null) => void
   syncEditorTabs: (filePaths: string[], activeTabId?: string | null) => void
   remapTerminalTabs: (idMap: Record<string, string>) => void
 
   // New tab helpers
   addTerminalTab: (terminalId: string, targetPaneId?: string) => void
+  ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive?: boolean) => void
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   removeTab: (tabId: string) => void
   getNextTabId: (direction: 1 | -1) => string | null
@@ -524,6 +526,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
+    ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive: boolean = false): void => {
+      const id = terminalTabId(terminalId)
+      const { root, activePaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+      const existing = findPaneContainingTab(root, id)
+
+      if (existing) {
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'terminal', id, terminalId }
+      if (makeActive) {
+        get().addTabToPane(paneId, tab)
+        return
+      }
+
+      const pane = findPaneById(root, paneId)
+      if (!pane || pane.type !== 'leaf') {
+        return
+      }
+
+      const newRoot = updateLeaf(root, paneId, (leaf) => ({
+        ...leaf,
+        tabs: [...leaf.tabs, tab]
+      }))
+      set({ root: newRoot })
+    },
+
     addEditorTab: (filePath: string, targetPaneId?: string): void => {
       const id = editorTabId(filePath)
       const { root, activePaneId } = get()
@@ -639,6 +669,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     resetLayout: (): void => {
       const leaf = createLeaf()
       set({ root: leaf, activePaneId: leaf.id })
+    },
+
+    loadProjectWorkspace: (root: PaneNode, activePaneId?: string | null): void => {
+      const normalizedRoot = normalizePaneTree(root)
+      const leaves = getAllLeafPanes(normalizedRoot)
+      const resolvedActivePaneId =
+        activePaneId && leaves.some((leaf) => leaf.id === activePaneId)
+          ? activePaneId
+          : leaves[0]?.id ?? normalizedRoot.id
+
+      set({ root: normalizedRoot, activePaneId: resolvedActivePaneId })
     },
 
     syncEditorTabs: (filePaths: string[], restoredActiveTabId?: string | null): void => {

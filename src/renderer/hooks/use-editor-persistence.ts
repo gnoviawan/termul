@@ -3,6 +3,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { persistenceApi } from '@/lib/api'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import {
   useWorkspaceStore,
   findPaneById,
@@ -10,9 +11,12 @@ import {
   editorTabId,
   terminalTabId
 } from '@/stores/workspace-store'
+import { loadPersistedTerminals } from './useTerminalAutoSave'
 import type { EditorFileState } from '@/stores/editor-store'
 import type { PaneNode, SplitNode, PaneDirection } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import type { Terminal } from '@/types/project'
+import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
 
 interface PersistedEditorFile {
   filePath: string
@@ -67,7 +71,6 @@ interface PersistedEditorState {
   openFiles: PersistedEditorFile[]
   activeFilePath: string | null
   expandedDirs: string[]
-  fileExplorerVisible: boolean
   activeTabId: string | null
   // v2: pane layout
   paneLayout?: PersistedPaneNodeInput
@@ -174,6 +177,138 @@ function normalizePaneTree(root: PaneNode): PaneNode {
   }
 }
 
+function createTerminalMatcher(
+  liveTerminals: Terminal[],
+  layout: PersistedTerminalLayout | null
+): {
+  hasLiveTerminals: boolean
+  matchTerminalId: (persistedTerminalId: string) => string | null
+} {
+  const liveTerminalsById = new Map(liveTerminals.map((terminal) => [terminal.id, terminal]))
+  const layoutTerminalsById = new Map(layout?.terminals.map((terminal) => [terminal.id, terminal]) ?? [])
+  const unusedLiveTerminals = [...liveTerminals]
+
+  const consumeLiveTerminal = (terminalId: string): string | null => {
+    const match = liveTerminalsById.get(terminalId)
+    if (!match) {
+      return null
+    }
+
+    const index = unusedLiveTerminals.findIndex((terminal) => terminal.id === terminalId)
+    if (index >= 0) {
+      unusedLiveTerminals.splice(index, 1)
+    }
+    return match.id
+  }
+
+  return {
+    hasLiveTerminals: liveTerminals.length > 0,
+    matchTerminalId: (persistedTerminalId: string): string | null => {
+      const directMatch = consumeLiveTerminal(persistedTerminalId)
+      if (directMatch) {
+        return directMatch
+      }
+
+      const persistedTerminal = layoutTerminalsById.get(persistedTerminalId)
+      if (!persistedTerminal) {
+        return null
+      }
+
+      const exactIndex = unusedLiveTerminals.findIndex((terminal) => {
+        return (
+          terminal.name === persistedTerminal.name &&
+          terminal.shell === persistedTerminal.shell &&
+          terminal.cwd === persistedTerminal.cwd
+        )
+      })
+      if (exactIndex >= 0) {
+        const [match] = unusedLiveTerminals.splice(exactIndex, 1)
+        return match.id
+      }
+
+      const nameAndShellIndex = unusedLiveTerminals.findIndex((terminal) => {
+        return terminal.name === persistedTerminal.name && terminal.shell === persistedTerminal.shell
+      })
+      if (nameAndShellIndex >= 0) {
+        const [match] = unusedLiveTerminals.splice(nameAndShellIndex, 1)
+        return match.id
+      }
+
+      const nameOnlyIndex = unusedLiveTerminals.findIndex(
+        (terminal) => terminal.name === persistedTerminal.name
+      )
+      if (nameOnlyIndex >= 0) {
+        const [match] = unusedLiveTerminals.splice(nameOnlyIndex, 1)
+        return match.id
+      }
+
+      return null
+    }
+  }
+}
+
+function reconcileTerminalTabs(
+  root: PaneNode,
+  openFilePaths: Set<string>,
+  liveTerminals: Terminal[],
+  layout: PersistedTerminalLayout | null
+): PaneNode {
+  const { hasLiveTerminals, matchTerminalId } = createTerminalMatcher(liveTerminals, layout)
+  const shouldKeepPersistedTerminalTabs = !hasLiveTerminals && !!layout?.terminals.length
+
+  const visit = (node: PaneNode): PaneNode => {
+    if (node.type === 'leaf') {
+      const terminalTabIdMap = new Map<string, string>()
+      const validTabs = node.tabs.flatMap((tab): WorkspaceTab[] => {
+        if (tab.type === 'editor') {
+          return openFilePaths.has(tab.filePath) ? [tab] : []
+        }
+
+        if (shouldKeepPersistedTerminalTabs) {
+          return [tab]
+        }
+
+        const mappedTerminalId = matchTerminalId(tab.terminalId)
+        if (!mappedTerminalId) {
+          return []
+        }
+
+        const mappedTabId = terminalTabId(mappedTerminalId)
+        terminalTabIdMap.set(tab.id, mappedTabId)
+
+        return [
+          {
+            type: 'terminal',
+            id: mappedTabId,
+            terminalId: mappedTerminalId
+          }
+        ]
+      })
+
+      let activeTabId = node.activeTabId
+      if (activeTabId && terminalTabIdMap.has(activeTabId)) {
+        activeTabId = terminalTabIdMap.get(activeTabId) ?? activeTabId
+      }
+      if (activeTabId && !validTabs.some((tab) => tab.id === activeTabId)) {
+        activeTabId = validTabs.length > 0 ? validTabs[0].id : null
+      }
+
+      return {
+        ...node,
+        tabs: validTabs,
+        activeTabId
+      }
+    }
+
+    return {
+      ...node,
+      children: node.children.map(visit)
+    } as SplitNode
+  }
+
+  return normalizePaneTree(visit(root))
+}
+
 // Deserialize pane tree with full tab mapping
 function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
   if (persisted.type === 'leaf') {
@@ -230,12 +365,19 @@ function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
 export function useEditorPersistence(projectId: string): void {
   const isRestoringRef = useRef(false)
   const prevProjectIdRef = useRef('')
+  const restoreRunIdRef = useRef(0)
 
   // Restore state when project changes
   useEffect(() => {
     if (!projectId || projectId === prevProjectIdRef.current) return
     const oldProjectId = prevProjectIdRef.current
     prevProjectIdRef.current = projectId
+
+    const restoreRunId = ++restoreRunIdRef.current
+    let cancelled = false
+    const isStale = (): boolean => {
+      return cancelled || restoreRunIdRef.current !== restoreRunId || prevProjectIdRef.current !== projectId
+    }
 
     async function restore(): Promise<void> {
       isRestoringRef.current = true
@@ -254,6 +396,10 @@ export function useEditorPersistence(projectId: string): void {
           editorStateKey(projectId)
         )
 
+        if (isStale()) {
+          return
+        }
+
         if (!result.success || !result.data) {
           // No persisted state — reset to single empty pane
           useWorkspaceStore.getState().resetLayout()
@@ -262,9 +408,8 @@ export function useEditorPersistence(projectId: string): void {
 
         const persisted = result.data
 
-        // Restore file explorer visibility and expanded dirs for this project root
+        // Restore expanded dirs for this project root
         const explorerStore = useFileExplorerStore.getState()
-        explorerStore.setVisible(persisted.fileExplorerVisible)
 
         const rootPath = useProjectStore
           .getState()
@@ -276,8 +421,16 @@ export function useEditorPersistence(projectId: string): void {
         // Restore open files
         const editorStore = useEditorStore.getState()
         for (const file of persisted.openFiles) {
+          if (isStale()) {
+            return
+          }
+
           try {
             await editorStore.openFile(file.filePath)
+            if (isStale()) {
+              return
+            }
+
             editorStore.updateCursorPosition(file.filePath, file.cursorPosition.line, file.cursorPosition.col)
             editorStore.updateScrollTop(file.filePath, file.scrollTop)
             if (file.viewMode !== 'code') {
@@ -297,6 +450,10 @@ export function useEditorPersistence(projectId: string): void {
           }
         }
 
+        if (isStale()) {
+          return
+        }
+
         // Restore active file
         if (persisted.activeFilePath) {
           editorStore.setActiveFilePath(persisted.activeFilePath)
@@ -306,43 +463,21 @@ export function useEditorPersistence(projectId: string): void {
         if (persisted.paneLayout) {
           const restoredTree = deserializePaneTree(persisted.paneLayout)
           const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
-          const filterUnavailableTabs = (node: PaneNode): PaneNode => {
-            if (node.type === 'leaf') {
-              const validTabs = node.tabs.filter((tab) => {
-                if (tab.type === 'editor') {
-                  return openFilePaths.has(tab.filePath)
-                }
-
-                return true
-              })
-
-              let activeTabId = node.activeTabId
-              if (activeTabId && !validTabs.some((tab) => tab.id === activeTabId)) {
-                activeTabId = validTabs.length > 0 ? validTabs[0].id : null
-              }
-
-              return {
-                ...node,
-                tabs: validTabs,
-                activeTabId
-              }
-            }
-
-            return {
-              ...node,
-              children: node.children.map(filterUnavailableTabs)
-            } as SplitNode
+          const liveProjectTerminals = useTerminalStore
+            .getState()
+            .terminals.filter((terminal) => terminal.projectId === projectId && !!terminal.ptyId)
+          const persistedTerminalLayout = await loadPersistedTerminals(projectId)
+          if (isStale()) {
+            return
           }
 
-          const cleanTree = normalizePaneTree(filterUnavailableTabs(restoredTree))
-          const leaves = getAllLeafPanes(cleanTree)
-          const persistedActivePaneId = persisted.activePaneId
-          const resolvedActivePaneId =
-            persistedActivePaneId && leaves.some((leaf) => leaf.id === persistedActivePaneId)
-              ? persistedActivePaneId
-              : leaves[0]?.id ?? cleanTree.id
-
-          useWorkspaceStore.setState({ root: cleanTree, activePaneId: resolvedActivePaneId })
+          const cleanTree = reconcileTerminalTabs(
+            restoredTree,
+            openFilePaths,
+            liveProjectTerminals,
+            persistedTerminalLayout
+          )
+          useWorkspaceStore.getState().loadProjectWorkspace(cleanTree, persisted.activePaneId)
         } else {
           // Legacy fallback: build a fresh layout with editor tabs
           useWorkspaceStore.getState().resetLayout()
@@ -352,12 +487,21 @@ export function useEditorPersistence(projectId: string): void {
 
         // Restore expanded directory tree after root initialization.
         await explorerStore.restoreExpandedDirs(filteredExpandedDirs)
+        if (isStale()) {
+          return
+        }
       } finally {
-        isRestoringRef.current = false
+        if (restoreRunIdRef.current === restoreRunId) {
+          isRestoringRef.current = false
+        }
       }
     }
 
-    restore()
+    void restore()
+
+    return () => {
+      cancelled = true
+    }
   }, [projectId])
 
   // Save state on changes (debounced) - coalesced across all store subscriptions
@@ -375,7 +519,11 @@ export function useEditorPersistence(projectId: string): void {
     }
 
     const unsubEditor = useEditorStore.subscribe(schedulePersist)
-    const unsubExplorer = useFileExplorerStore.subscribe(schedulePersist)
+    const unsubExplorer = useFileExplorerStore.subscribe((state, prevState) => {
+      if (state.expandedDirs !== prevState.expandedDirs) {
+        schedulePersist()
+      }
+    })
     const unsubWorkspace = useWorkspaceStore.subscribe(schedulePersist)
 
     return () => {
@@ -414,7 +562,6 @@ export function persistState(projectId: string): void {
     openFiles,
     activeFilePath: editorState.activeFilePath,
     expandedDirs,
-    fileExplorerVisible: explorerState.isVisible,
     activeTabId: (() => {
       const pane = findPaneById(workspaceState.root, workspaceState.activePaneId)
       return pane && pane.type === 'leaf' ? pane.activeTabId : null
