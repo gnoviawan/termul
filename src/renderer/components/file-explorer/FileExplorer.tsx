@@ -418,11 +418,11 @@ export function FileExplorer(): React.JSX.Element {
   return (
     <div
       ref={containerRef}
-      className="h-full flex flex-col bg-background text-foreground"
+      className="h-full flex flex-col bg-background text-foreground m-2 ml-0 rounded-xl"
       tabIndex={0}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0">
+      <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Explorer
         </span>

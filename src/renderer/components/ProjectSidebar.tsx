@@ -310,9 +310,9 @@ export function ProjectSidebar({
   )
 
   return (
-    <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col flex-shrink-0">
+    <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 m-2 mr-0 rounded-xl">
       {/* Header with inline + button */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-sidebar-border">
+      <div className="h-10 flex items-center justify-between px-4 border-b border-sidebar-border rounded-t-xl">
         <span className="text-xs font-semibold tracking-wider text-sidebar-foreground uppercase">
           Projects
         </span>
@@ -403,7 +403,7 @@ export function ProjectSidebar({
       </div>
 
       {/* Bottom toolbar - New Project only */}
-      <div className="border-t border-sidebar-border p-2">
+      <div className="border-t border-sidebar-border p-2 rounded-b-xl">
         <button
           onClick={onNewProject}
           className="group w-full h-8 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"

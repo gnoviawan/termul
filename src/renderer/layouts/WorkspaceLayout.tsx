@@ -812,10 +812,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
         )}
 
         {/* Main Content */}
-        <main className="flex-1 flex flex-col min-w-0">
+        <main className="flex-1 flex flex-col min-w-0 m-2 rounded-xl bg-card overflow-hidden">
           {projects.length === 0 ? (
             /* No Projects Empty State */
-            <div className="flex-1 flex flex-col items-center justify-center bg-background px-6">
+            <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -833,7 +833,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 </p>
                 <button
                   onClick={() => setIsNewProjectModalOpen(true)}
-                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                  className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
                 >
                   Create Your First Project
                 </button>
@@ -875,7 +875,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   </PaneDndProvider>
                 </div>
               ) : (
-                <div className="flex-1 overflow-hidden bg-background relative">
+                <div className="flex-1 overflow-hidden bg-background relative rounded-xl m-2">
                   <div className="w-full h-full">
                     <Outlet />
                   </div>
