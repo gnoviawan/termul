@@ -8,11 +8,13 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() => Promise.resolve({
-    id: 'terminal-123',
-    shell: 'bash',
-    cwd: '/home/user'
-  }))
+  invoke: vi.fn(() =>
+    Promise.resolve({
+      id: 'terminal-123',
+      shell: 'bash',
+      cwd: '/home/user'
+    })
+  )
 }))
 
 // Import the mocked modules
@@ -28,10 +30,12 @@ const mockTerminalInstance = {
     capturedDataCallback = cb
     return { dispose: vi.fn() }
   }),
-  onResize: vi.fn<(_cb: (dims: { cols: number; rows: number }) => void) => { dispose: () => void }>((cb) => {
-    capturedResizeCallback = cb
-    return { dispose: vi.fn() }
-  }),
+  onResize: vi.fn<(_cb: (dims: { cols: number; rows: number }) => void) => { dispose: () => void }>(
+    (cb) => {
+      capturedResizeCallback = cb
+      return { dispose: vi.fn() }
+    }
+  ),
   onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
   attachCustomKeyEventHandler: vi.fn(),
   hasSelection: vi.fn(() => false),
@@ -63,7 +67,10 @@ const mockWebglAddonInstance = {
 let webglAddonCreateCount = 0
 let capturedContextLossCallback: (() => void) | null = null
 // Track the last created WebGL addon instance for disposal order testing
-let lastCreatedWebglInstance: { dispose: ReturnType<typeof vi.fn>; onContextLoss: ReturnType<typeof vi.fn> } | null = null
+let lastCreatedWebglInstance: {
+  dispose: ReturnType<typeof vi.fn>
+  onContextLoss: ReturnType<typeof vi.fn>
+} | null = null
 
 const mockWebLinksAddonInstance = {
   dispose: vi.fn()
@@ -138,10 +145,12 @@ const mockTerminalApi = {
     capturedDataCallback = cb
     return vi.fn()
   }),
-  onExit: vi.fn<(cb: (id: string, exitCode: number, signal?: number) => void) => () => void>((cb) => {
-    capturedExitCallback = cb
-    return vi.fn()
-  })
+  onExit: vi.fn<(cb: (id: string, exitCode: number, signal?: number) => void) => () => void>(
+    (cb) => {
+      capturedExitCallback = cb
+      return vi.fn()
+    }
+  )
 }
 
 const mockClipboardApi = {
@@ -205,14 +214,18 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+const mockTerminalStoreState = {
+  findTerminalByPtyId: vi.fn(),
+  updateTerminalActivity: vi.fn(),
+  updateTerminalLastActivityTimestamp: vi.fn(),
+  updateTerminalActivityBatch: vi.fn(),
+  setRendererAttached: vi.fn(),
+  consumeDetachedOutput: vi.fn(() => '')
+}
+
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: {
-    getState: () => ({
-      findTerminalByPtyId: vi.fn(),
-      updateTerminalActivity: vi.fn(),
-      updateTerminalLastActivityTimestamp: vi.fn(),
-      updateTerminalActivityBatch: vi.fn()
-    })
+    getState: () => mockTerminalStoreState
   }
 }))
 
@@ -242,14 +255,24 @@ describe('ConnectedTerminal', () => {
       capturedDataCallback = cb
       return vi.fn()
     })
-    vi.mocked(terminalApi).onExit.mockImplementation((cb: (id: string, exitCode: number, signal?: number) => void) => {
-      capturedExitCallback = cb
-      return vi.fn()
-    })
+    vi.mocked(terminalApi).onExit.mockImplementation(
+      (cb: (id: string, exitCode: number, signal?: number) => void) => {
+        capturedExitCallback = cb
+        return vi.fn()
+      }
+    )
     vi.mocked(systemApi).onPowerResume.mockImplementation((cb: () => void) => {
       capturedPowerResumeCallback = cb
       return vi.fn()
     })
+
+    mockTerminalStoreState.findTerminalByPtyId.mockReset()
+    mockTerminalStoreState.updateTerminalActivity.mockReset()
+    mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
+    mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
+    mockTerminalStoreState.setRendererAttached.mockReset()
+    mockTerminalStoreState.consumeDetachedOutput.mockReset()
+    mockTerminalStoreState.consumeDetachedOutput.mockReturnValue('')
 
     vi.mocked(terminalApi).spawn.mockResolvedValue({
       success: true,
@@ -327,7 +350,10 @@ describe('ConnectedTerminal', () => {
     unmount()
 
     await vi.waitFor(() => {
-      expect(removeRendererRef).toHaveBeenCalledWith('external-123', expect.stringMatching(/^conn-/))
+      expect(removeRendererRef).toHaveBeenCalledWith(
+        'external-123',
+        expect.stringMatching(/^conn-/)
+      )
     })
   })
 
@@ -351,11 +377,17 @@ describe('ConnectedTerminal', () => {
   it('should set up data listener BEFORE spawn to avoid race condition', async () => {
     // Track the order of calls
     const callOrder: string[] = []
-    ;(vi.mocked(terminalApi).onData as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+    ;(
+      vi.mocked(terminalApi).onData as unknown as { mockImplementation: (fn: () => void) => void }
+    ).mockImplementation(() => {
       callOrder.push('onData')
       return vi.fn()
     })
-    ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+    ;(
+      vi.mocked(terminalApi).spawn as unknown as {
+        mockImplementation: (fn: () => Promise<unknown>) => void
+      }
+    ).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -377,11 +409,17 @@ describe('ConnectedTerminal', () => {
 
   it('should set up exit listener BEFORE spawn to avoid race condition', async () => {
     const callOrder: string[] = []
-    ;(vi.mocked(terminalApi).onExit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+    ;(
+      vi.mocked(terminalApi).onExit as unknown as { mockImplementation: (fn: () => void) => void }
+    ).mockImplementation(() => {
       callOrder.push('onExit')
       return vi.fn()
     })
-    ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+    ;(
+      vi.mocked(terminalApi).spawn as unknown as {
+        mockImplementation: (fn: () => Promise<unknown>) => void
+      }
+    ).mockImplementation(async () => {
       callOrder.push('spawn')
       return {
         success: true,
@@ -448,7 +486,9 @@ describe('ConnectedTerminal', () => {
       const disposalOrder: string[] = []
 
       // Track disposal on the actual WebGL instance created by the component
-      ;(mockTerminalInstance.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+      ;(
+        mockTerminalInstance.dispose as unknown as { mockImplementation: (fn: () => void) => void }
+      ).mockImplementation(() => {
         disposalOrder.push('terminal')
       })
 
@@ -456,7 +496,11 @@ describe('ConnectedTerminal', () => {
 
       // Now set up the spy on the actual WebGL instance that was created
       expect(lastCreatedWebglInstance).toBeTruthy()
-      ;(lastCreatedWebglInstance!.dispose as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+      ;(
+        lastCreatedWebglInstance!.dispose as unknown as {
+          mockImplementation: (fn: () => void) => void
+        }
+      ).mockImplementation(() => {
         disposalOrder.push('webgl')
       })
 
@@ -495,7 +539,7 @@ describe('ConnectedTerminal', () => {
     })
 
     // Small delay to ensure component is fully set up
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await new Promise((resolve) => setTimeout(resolve, 50))
 
     // Verify capturedDataCallback is set
     expect(capturedDataCallback).toBeTruthy()
@@ -529,7 +573,9 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup data listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    ;(vi.mocked(terminalApi).onData as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
+    ;(
+      vi.mocked(terminalApi).onData as unknown as { mockReturnValue: (v: unknown) => void }
+    ).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -544,7 +590,9 @@ describe('ConnectedTerminal', () => {
 
   it('should cleanup exit listener on unmount', async () => {
     const cleanupFn = vi.fn()
-    ;(vi.mocked(terminalApi).onExit as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue(cleanupFn)
+    ;(
+      vi.mocked(terminalApi).onExit as unknown as { mockReturnValue: (v: unknown) => void }
+    ).mockReturnValue(cleanupFn)
 
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -668,8 +716,13 @@ describe('ConnectedTerminal', () => {
   describe('Resize debouncing', () => {
     it('should debounce resize IPC calls', async () => {
       vi.useFakeTimers()
-
-      ;(mockTerminalInstance.onResize as unknown as { mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => { dispose: () => void } }).mockImplementation((cb) => {
+      ;(
+        mockTerminalInstance.onResize as unknown as {
+          mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => {
+            dispose: () => void
+          }
+        }
+      ).mockImplementation((cb) => {
         capturedResizeCallback = cb
         return { dispose: vi.fn() }
       })
@@ -706,8 +759,13 @@ describe('ConnectedTerminal', () => {
 
     it('should not call resize after unmount due to cleanup', async () => {
       vi.useFakeTimers()
-
-      ;(mockTerminalInstance.onResize as unknown as { mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => { dispose: () => void } }).mockImplementation((cb) => {
+      ;(
+        mockTerminalInstance.onResize as unknown as {
+          mockImplementation: (fn: (cb: typeof capturedResizeCallback) => void) => {
+            dispose: () => void
+          }
+        }
+      ).mockImplementation((cb) => {
         capturedResizeCallback = cb
         return { dispose: vi.fn() }
       })
@@ -760,11 +818,16 @@ describe('ConnectedTerminal', () => {
     it('should call fit before spawn to get real dimensions', async () => {
       const callOrder: string[] = []
 
-      ;(mockFitAddonInstance.fit as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+      ;(
+        mockFitAddonInstance.fit as unknown as { mockImplementation: (fn: () => void) => void }
+      ).mockImplementation(() => {
         callOrder.push('fit')
       })
-
-      ;(vi.mocked(terminalApi).spawn as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }).mockImplementation(async () => {
+      ;(
+        vi.mocked(terminalApi).spawn as unknown as {
+          mockImplementation: (fn: () => Promise<unknown>) => void
+        }
+      ).mockImplementation(async () => {
         callOrder.push('spawn')
         return {
           success: true,
@@ -1162,10 +1225,7 @@ describe('ConnectedTerminal', () => {
 
       unmount()
 
-      expect(removeEventListenerSpy).toHaveBeenCalledWith(
-        'visibilitychange',
-        expect.any(Function)
-      )
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
 
       removeEventListenerSpy.mockRestore()
     })
@@ -1797,6 +1857,30 @@ describe('ConnectedTerminal', () => {
 
       vi.useRealTimers()
     })
+  })
+
+  it('should replay detached output once for external terminal ids', async () => {
+    mockTerminalStoreState.consumeDetachedOutput.mockReturnValueOnce('detached output chunk')
+
+    render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
+
+    await vi.waitFor(() => {
+      expect(mockTerminalInstance.write).toHaveBeenCalledWith('detached output chunk')
+    })
+
+    expect(mockTerminalStoreState.consumeDetachedOutput).toHaveBeenCalledWith('external-123')
+  })
+
+  it('should mark renderer attachment lifecycle for external terminal ids', async () => {
+    const { unmount } = render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
+
+    await vi.waitFor(() => {
+      expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalledWith('external-123', true)
+    })
+
+    unmount()
+
+    expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalledWith('external-123', false)
   })
 
   describe('Regression: Proper Tauri terminal API mocking', () => {

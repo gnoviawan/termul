@@ -10,6 +10,39 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
+function detachedOutputToScrollback(detachedOutput?: string): string[] | undefined {
+  if (!detachedOutput) {
+    return undefined
+  }
+
+  const normalized = detachedOutput.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = normalized.split('\n')
+
+  while (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+
+  return lines.length > 0 ? lines : undefined
+}
+
+function mergeScrollback(snapshot?: string[], detachedOutput?: string): string[] | undefined {
+  const detachedLines = detachedOutputToScrollback(detachedOutput)
+
+  if (snapshot && snapshot.length > 0 && detachedLines && detachedLines.length > 0) {
+    return [...snapshot, ...detachedLines]
+  }
+
+  if (snapshot && snapshot.length > 0) {
+    return snapshot
+  }
+
+  if (detachedLines && detachedLines.length > 0) {
+    return detachedLines
+  }
+
+  return undefined
+}
+
 const terminalRestoreProjectsInProgress = new Map<string, string>()
 
 export function setTerminalRestoreInProgress(
@@ -68,7 +101,7 @@ export function serializeTerminalsForProject(
         name: t.name,
         shell: t.shell,
         cwd: t.cwd,
-        scrollback: extractScrollback(t.ptyId ?? t.id)
+        scrollback: mergeScrollback(extractScrollback(t.ptyId ?? t.id), t.detachedOutput)
       })
     ),
     updatedAt: new Date().toISOString()
@@ -107,17 +140,18 @@ export function useTerminalAutoSave(): void {
       // Skip activity-only changes (hasActivity/lastActivityTimestamp)
       // These create new array refs but don't affect persisted layout
       if (state.activeTerminalId === prevState.activeTerminalId) {
-        const hasStructuralChange = state.terminals.some((t, i) => {
-          const prev = prevState.terminals[i]
-          if (!prev) return true
-          return (
-            t.id !== prev.id ||
-            t.name !== prev.name ||
-            t.shell !== prev.shell ||
-            t.cwd !== prev.cwd ||
-            t.projectId !== prev.projectId
-          )
-        }) || state.terminals.length !== prevState.terminals.length
+        const hasStructuralChange =
+          state.terminals.some((t, i) => {
+            const prev = prevState.terminals[i]
+            if (!prev) return true
+            return (
+              t.id !== prev.id ||
+              t.name !== prev.name ||
+              t.shell !== prev.shell ||
+              t.cwd !== prev.cwd ||
+              t.projectId !== prev.projectId
+            )
+          }) || state.terminals.length !== prevState.terminals.length
 
         if (!hasStructuralChange) {
           return

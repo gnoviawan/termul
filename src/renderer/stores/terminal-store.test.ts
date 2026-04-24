@@ -353,7 +353,9 @@ describe('terminal-store', () => {
 
       // Then reset to null
       updateTerminalExitCode('t1', null)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastExitCode).toBeNull()
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastExitCode
+      ).toBeNull()
     })
 
     it('should not affect other terminals', () => {
@@ -367,6 +369,41 @@ describe('terminal-store', () => {
 
       expect(terminal1?.lastExitCode).toBe(42)
       expect(terminal2?.lastExitCode).toBeUndefined()
+    })
+  })
+
+  describe('detached output buffering', () => {
+    it('should append detached output for terminal by ptyId', () => {
+      const { setTerminalPtyId, appendDetachedOutput } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-detached-1')
+
+      appendDetachedOutput('pty-detached-1', 'hello')
+      appendDetachedOutput('pty-detached-1', ' world')
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.detachedOutput).toBe('hello world')
+    })
+
+    it('should consume detached output once and clear it', () => {
+      const { setTerminalPtyId, appendDetachedOutput, consumeDetachedOutput } =
+        useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-detached-1')
+      appendDetachedOutput('pty-detached-1', 'stream chunk')
+
+      expect(consumeDetachedOutput('pty-detached-1')).toBe('stream chunk')
+      expect(consumeDetachedOutput('pty-detached-1')).toBe('')
+    })
+
+    it('should track renderer attachment count per pty', () => {
+      const { setTerminalPtyId, setRendererAttached } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-renderer-1')
+
+      setRendererAttached('pty-renderer-1', true)
+      setRendererAttached('pty-renderer-1', true)
+      setRendererAttached('pty-renderer-1', false)
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.rendererAttachmentCount).toBe(1)
     })
   })
 
@@ -386,11 +423,15 @@ describe('terminal-store', () => {
 
       // First set a value
       updateTerminalScrollback('t1', ['existing line 1', 'existing line 2'])
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback).toHaveLength(2)
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback
+      ).toHaveLength(2)
 
       // Then clear it
       updateTerminalScrollback('t1', undefined)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback).toBeUndefined()
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.pendingScrollback
+      ).toBeUndefined()
     })
 
     it('should not affect other terminals', () => {
@@ -433,11 +474,15 @@ describe('terminal-store', () => {
 
       // First set to true
       updateTerminalActivity('t1', true)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(true)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(
+        true
+      )
 
       // Then set to false
       updateTerminalActivity('t1', false)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(false)
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.hasActivity).toBe(
+        false
+      )
     })
 
     it('should not affect other terminals', () => {
@@ -486,10 +531,14 @@ describe('terminal-store', () => {
       const secondTimestamp = 2000000
 
       updateTerminalLastActivityTimestamp('t1', firstTimestamp)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(firstTimestamp)
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp
+      ).toBe(firstTimestamp)
 
       updateTerminalLastActivityTimestamp('t1', secondTimestamp)
-      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp).toBe(secondTimestamp)
+      expect(
+        useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.lastActivityTimestamp
+      ).toBe(secondTimestamp)
     })
   })
 
