@@ -76,14 +76,14 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
-  toast.success(`Update ready to install!`, {
+  toast.success(`Update ready to restart`, {
     duration: 30000,
-    description: `Version ${version} has been downloaded and is ready to install.`,
+    description: `Version ${version} has been downloaded. Restart the app to finish applying the update.`,
     action: {
       label: (
         <div className="flex items-center gap-2">
           <Download size={14} />
-          <span>Install & Restart</span>
+          <span>Restart to Update</span>
         </div>
       ),
       onClick: () => {
