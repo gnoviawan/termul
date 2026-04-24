@@ -14,11 +14,6 @@ export function useTerminalDetachedOutput(): void {
       }
 
       const store = useTerminalStore.getState()
-      const terminal = store.findTerminalByPtyId(ptyId)
-      if (!terminal) {
-        return
-      }
-
       store.appendTranscript(ptyId, data)
     })
 

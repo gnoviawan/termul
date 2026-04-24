@@ -1872,6 +1872,7 @@ describe('ConnectedTerminal', () => {
     })
 
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith('external-123')
+    expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledTimes(1)
   })
 
   it('should prefer transcript over initial scrollback for external terminal restore', async () => {

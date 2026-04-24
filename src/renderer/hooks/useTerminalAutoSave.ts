@@ -15,7 +15,13 @@ function transcriptToScrollback(transcript?: string): string[] | undefined {
     return undefined
   }
 
-  const normalized = transcript.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  // Approximate reconstruction of rendered output from raw PTY transcript.
+  const withoutOsc = transcript.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+  const withoutAnsi = withoutOsc.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  const normalized = withoutAnsi
+    .replace(/\r\n/g, '\n')
+    .replace(/([^\n])\r(?!\n)/g, '$1')
+    .replace(/\r/g, '\n')
   const lines = normalized.split('\n')
 
   while (lines.length > 0 && lines[lines.length - 1] === '') {

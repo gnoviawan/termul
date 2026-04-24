@@ -150,7 +150,7 @@ function ConnectedTerminalComponent({
   }, [externalTerminalId])
 
   useEffect(() => {
-    if (!externalTerminalId) {
+    if (!externalTerminalId || isTerminalPendingPtyAssignment(externalTerminalId)) {
       return
     }
 

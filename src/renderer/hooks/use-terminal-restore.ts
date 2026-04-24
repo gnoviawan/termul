@@ -461,8 +461,8 @@ function reconcilePersistedHistoryIntoLiveTerminals(
 
     return {
       ...terminal,
-      pendingScrollback: persistedTerminal.scrollback ?? terminal.pendingScrollback,
-      transcript: persistedTerminal.transcript ?? terminal.transcript
+      pendingScrollback: terminal.pendingScrollback ?? persistedTerminal.scrollback,
+      transcript: terminal.transcript ?? persistedTerminal.transcript
     }
   })
 

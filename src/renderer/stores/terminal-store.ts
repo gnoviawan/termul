@@ -242,7 +242,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             return t
           }
 
-          const nextTranscript = ((t.transcript || '') + data).slice(-MAX_TRANSCRIPT_CHARS)
+          const combined = (t.transcript || '') + data
+          let nextTranscript = combined
+
+          if (combined.length > MAX_TRANSCRIPT_CHARS) {
+            const tail = combined.slice(-MAX_TRANSCRIPT_CHARS)
+            const nl = tail.indexOf('\n')
+            nextTranscript = nl !== -1 ? tail.slice(nl + 1) : tail
+          }
 
           return {
             ...t,
@@ -262,7 +269,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         return state
       }
 
-      consumed = target.transcript || ''
+      consumed = target.transcript ?? ''
 
       return {
         terminals: state.terminals.map((t) => {
@@ -272,7 +279,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           return {
             ...t,
-            transcript: ''
+            transcript: undefined
           }
         })
       }

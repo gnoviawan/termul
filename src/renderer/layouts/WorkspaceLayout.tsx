@@ -659,13 +659,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   const closeTerminalByRecordId = useCallback(
-    async (terminalRecordId: string) => {
+    async (terminalRecordId: string): Promise<boolean> => {
       const terminalToClose = useTerminalStore
         .getState()
         .terminals.find((t) => t.id === terminalRecordId)
 
       if (!terminalToClose) {
-        return
+        return false
       }
 
       if (terminalToClose.ptyId) {
@@ -676,11 +676,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
           ])
         } catch (error) {
           console.error('Failed to close terminal PTY:', error)
-          return
+          toast.error('Failed to close terminal process. Please try again.')
+          return false
         }
       }
 
       closeTerminal(terminalRecordId, activeProjectId)
+      return true
     },
     [activeProjectId, closeTerminal]
   )
@@ -698,7 +700,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      await closeTerminalByRecordId(tab.terminalId)
+      const didClose = await closeTerminalByRecordId(tab.terminalId)
+      if (!didClose) {
+        return
+      }
       useWorkspaceStore.getState().closeTab(containingPane.id, tabId)
     },
     [closeTerminalByRecordId]

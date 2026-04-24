@@ -5,7 +5,7 @@ export interface PersistedTerminal {
   shell: string
   cwd?: string
   scrollback?: string[] // Legacy text snapshot for restoration fallback
-  transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration
+  transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration; cap at renderer MAX_TRANSCRIPT_CHARS to avoid unbounded persistence
 }
 
 // Default scrollback limit to prevent excessive storage
