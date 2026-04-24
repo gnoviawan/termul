@@ -220,6 +220,7 @@ const mockTerminalStoreState = {
   updateTerminalLastActivityTimestamp: vi.fn(),
   updateTerminalActivityBatch: vi.fn(),
   setRendererAttached: vi.fn(),
+  consumeTranscript: vi.fn(() => ''),
   consumeDetachedOutput: vi.fn(() => '')
 }
 
@@ -271,6 +272,8 @@ describe('ConnectedTerminal', () => {
     mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
     mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
     mockTerminalStoreState.setRendererAttached.mockReset()
+    mockTerminalStoreState.consumeTranscript.mockReset()
+    mockTerminalStoreState.consumeTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeDetachedOutput.mockReset()
     mockTerminalStoreState.consumeDetachedOutput.mockReturnValue('')
 
@@ -1859,8 +1862,8 @@ describe('ConnectedTerminal', () => {
     })
   })
 
-  it('should replay detached output once for external terminal ids', async () => {
-    mockTerminalStoreState.consumeDetachedOutput.mockReturnValueOnce('detached output chunk')
+  it('should replay transcript once for external terminal ids', async () => {
+    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('detached output chunk')
 
     render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
 
@@ -1868,7 +1871,25 @@ describe('ConnectedTerminal', () => {
       expect(mockTerminalInstance.write).toHaveBeenCalledWith('detached output chunk')
     })
 
-    expect(mockTerminalStoreState.consumeDetachedOutput).toHaveBeenCalledWith('external-123')
+    expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith('external-123')
+  })
+
+  it('should prefer transcript over initial scrollback for external terminal restore', async () => {
+    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('\u001b[32mstyled output\u001b[0m')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        autoSpawn={false}
+        initialScrollback={['plain fallback line']}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockTerminalInstance.write).toHaveBeenCalledWith('\u001b[32mstyled output\u001b[0m')
+    })
+
+    expect(mockTerminalInstance.write).not.toHaveBeenCalledWith('plain fallback line\r\n')
   })
 
   it('should mark renderer attachment lifecycle for external terminal ids', async () => {

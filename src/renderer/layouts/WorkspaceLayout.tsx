@@ -12,11 +12,7 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle
-} from '@/components/ui/resizable'
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import {
   useProjects,
   useActiveProject,
@@ -102,11 +98,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const terminals = useTerminals()
   const activeTerminal = useActiveTerminal()
   const activeTerminalId = useActiveTerminalId()
-  const {
-    addTerminal,
-    closeTerminal,
-    renameTerminal
-  } = useTerminalActions()
+  const { addTerminal, closeTerminal, renameTerminal } = useTerminalActions()
 
   // File explorer & editor state
   const isExplorerVisible = useFileExplorerVisible()
@@ -123,7 +115,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Sync file explorer root path and register project root watcher when project changes
   useEffect(() => {
     const nextRootPathCandidate = activeProject?.path
-    if (!activeProject || typeof nextRootPathCandidate !== 'string' || nextRootPathCandidate === '') {
+    if (
+      !activeProject ||
+      typeof nextRootPathCandidate !== 'string' ||
+      nextRootPathCandidate === ''
+    ) {
       // Project removed or has no path — clear explorer root and unwatch
       useFileExplorerStore.getState().setRootPath('')
       if (watchedRootPathRef.current) {
@@ -391,7 +387,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
         terminalId: terminal.id
       })
     },
-    [activeProject?.defaultShell, activeProject?.path, activeProject?.envVars, activeProjectId, addTerminal, appDefaultShell, maxTerminals, terminals.length]
+    [
+      activeProject?.defaultShell,
+      activeProject?.path,
+      activeProject?.envVars,
+      activeProjectId,
+      addTerminal,
+      appDefaultShell,
+      maxTerminals,
+      terminals.length
+    ]
   )
 
   const handleNewTerminal = useCallback(() => {
@@ -443,9 +448,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           e.preventDefault()
           void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
             toast.error(
-              error instanceof Error
-                ? error.message
-                : 'Failed to update file explorer visibility'
+              error instanceof Error ? error.message : 'Failed to update file explorer visibility'
             )
           })
         }
@@ -642,7 +645,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
         case 'sidebarToggle':
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
-            toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+            toast.error(
+              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
+            )
           })
           break
       }
@@ -669,8 +674,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
             terminalApi.kill(terminalToClose.ptyId),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
           ])
-        } catch {
-          // Continue close flow even if PTY termination fails
+        } catch (error) {
+          console.error('Failed to close terminal PTY:', error)
+          return
         }
       }
 
@@ -769,12 +775,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
   }, [])
 
   // Command history handlers
-  const handleInsertCommand = useCallback((command: string) => {
-    // TODO: Route to active terminal pane via context
-    if (activeTerminal?.ptyId) {
-      terminalApi.write(activeTerminal.ptyId, command)
-    }
-  }, [activeTerminal])
+  const handleInsertCommand = useCallback(
+    (command: string) => {
+      // TODO: Route to active terminal pane via context
+      if (activeTerminal?.ptyId) {
+        terminalApi.write(activeTerminal.ptyId, command)
+      }
+    },
+    [activeTerminal]
+  )
 
   const handleClearCommandHistory = useCallback(async () => {
     if (!activeProjectId) return
@@ -842,9 +851,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <div className="mb-6">
                       <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
                     </div>
-                    <h2 className="text-xl font-semibold text-foreground mb-2">
-                      No Projects Yet
-                    </h2>
+                    <h2 className="text-xl font-semibold text-foreground mb-2">No Projects Yet</h2>
                     <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
                       Create your first project to organize your terminals, snapshots, and commands
                     </p>
@@ -933,8 +940,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <ConfirmDialog
         isOpen={closeConfirmTerminal !== null}
         title="Close Terminal"
-        message={`Are you sure you want to close "${terminalToClose?.name || 'this terminal'
-          }"? Any running processes will be terminated.`}
+        message={`Are you sure you want to close "${
+          terminalToClose?.name || 'this terminal'
+        }"? Any running processes will be terminated.`}
         confirmLabel="Close"
         cancelLabel="Cancel"
         variant="danger"

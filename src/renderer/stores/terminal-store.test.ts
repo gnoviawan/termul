@@ -405,6 +405,26 @@ describe('terminal-store', () => {
       const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
       expect(terminal?.rendererAttachmentCount).toBe(1)
     })
+
+    it('should append transcript for terminal by ptyId', () => {
+      const { setTerminalPtyId, appendTranscript } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-1')
+
+      appendTranscript('pty-transcript-1', '\u001b[32mhello\u001b[0m')
+      appendTranscript('pty-transcript-1', ' world')
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.transcript).toBe('\u001b[32mhello\u001b[0m world')
+    })
+
+    it('should consume transcript once and clear it', () => {
+      const { setTerminalPtyId, appendTranscript, consumeTranscript } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-1')
+      appendTranscript('pty-transcript-1', 'chunk')
+
+      expect(consumeTranscript('pty-transcript-1')).toBe('chunk')
+      expect(consumeTranscript('pty-transcript-1')).toBe('')
+    })
   })
 
   describe('updateTerminalScrollback', () => {

@@ -4,7 +4,8 @@ export interface PersistedTerminal {
   name: string
   shell: string
   cwd?: string
-  scrollback?: string[] // Lines of terminal output for restoration
+  scrollback?: string[] // Legacy text snapshot for restoration fallback
+  transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration
 }
 
 // Default scrollback limit to prevent excessive storage

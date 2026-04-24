@@ -10,12 +10,12 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
-function detachedOutputToScrollback(detachedOutput?: string): string[] | undefined {
-  if (!detachedOutput) {
+function transcriptToScrollback(transcript?: string): string[] | undefined {
+  if (!transcript) {
     return undefined
   }
 
-  const normalized = detachedOutput.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const normalized = transcript.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const lines = normalized.split('\n')
 
   while (lines.length > 0 && lines[lines.length - 1] === '') {
@@ -25,19 +25,15 @@ function detachedOutputToScrollback(detachedOutput?: string): string[] | undefin
   return lines.length > 0 ? lines : undefined
 }
 
-function mergeScrollback(snapshot?: string[], detachedOutput?: string): string[] | undefined {
-  const detachedLines = detachedOutputToScrollback(detachedOutput)
+function mergeScrollback(snapshot?: string[], transcript?: string): string[] | undefined {
+  const transcriptLines = transcriptToScrollback(transcript)
 
-  if (snapshot && snapshot.length > 0 && detachedLines && detachedLines.length > 0) {
-    return [...snapshot, ...detachedLines]
+  if (transcriptLines && transcriptLines.length > 0) {
+    return transcriptLines
   }
 
   if (snapshot && snapshot.length > 0) {
     return snapshot
-  }
-
-  if (detachedLines && detachedLines.length > 0) {
-    return detachedLines
   }
 
   return undefined
@@ -101,7 +97,8 @@ export function serializeTerminalsForProject(
         name: t.name,
         shell: t.shell,
         cwd: t.cwd,
-        scrollback: mergeScrollback(extractScrollback(t.ptyId ?? t.id), t.detachedOutput)
+        scrollback: mergeScrollback(extractScrollback(t.ptyId ?? t.id), t.transcript),
+        transcript: t.transcript
       })
     ),
     updatedAt: new Date().toISOString()

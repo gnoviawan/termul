@@ -151,7 +151,7 @@ describe('useTerminalAutoSave', () => {
       expect(extractScrollback).toHaveBeenCalledWith('pty-1')
     })
 
-    it('should merge detached output into serialized scrollback', () => {
+    it('should prefer transcript for serialized scrollback and persistence', () => {
       const terminals: Terminal[] = [
         {
           id: '1',
@@ -159,13 +159,14 @@ describe('useTerminalAutoSave', () => {
           name: 'Terminal 1',
           projectId: 'proj-1',
           shell: 'powershell',
-          detachedOutput: 'line 3\nline 4\n'
+          transcript: 'line 3\nline 4\n'
         }
       ]
 
       const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
 
-      expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2', 'line 3', 'line 4'])
+      expect(result.terminals[0].scrollback).toEqual(['line 3', 'line 4'])
+      expect(result.terminals[0].transcript).toBe('line 3\nline 4\n')
     })
   })
 

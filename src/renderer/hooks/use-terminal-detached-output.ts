@@ -19,11 +19,7 @@ export function useTerminalDetachedOutput(): void {
         return
       }
 
-      if ((terminal.rendererAttachmentCount ?? 0) > 0) {
-        return
-      }
-
-      store.appendDetachedOutput(ptyId, data)
+      store.appendTranscript(ptyId, data)
     })
 
     return () => {

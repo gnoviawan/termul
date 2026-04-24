@@ -628,13 +628,11 @@ function ConnectedTerminalComponent({
             }
             // Register terminal for scrollback persistence
             registerTerminal(result.data.id, terminal)
-            // Restore scrollback if provided
-            if (initialScrollback && initialScrollback.length > 0) {
+            const transcript = useTerminalStore.getState().consumeTranscript(result.data.id)
+            if (transcript) {
+              terminal.write(transcript)
+            } else if (initialScrollback && initialScrollback.length > 0) {
               restoreScrollback(terminal, initialScrollback)
-            }
-            const detachedOutput = useTerminalStore.getState().consumeDetachedOutput(result.data.id)
-            if (detachedOutput) {
-              terminal.write(detachedOutput)
             }
             // Write one-time info line if project env vars were applied
             if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
@@ -674,12 +672,11 @@ function ConnectedTerminalComponent({
         })
         void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
-        if (initialScrollback && initialScrollback.length > 0) {
+        const transcript = useTerminalStore.getState().consumeTranscript(externalTerminalId)
+        if (transcript) {
+          terminal.write(transcript)
+        } else if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
-        }
-        const detachedOutput = useTerminalStore.getState().consumeDetachedOutput(externalTerminalId)
-        if (detachedOutput) {
-          terminal.write(detachedOutput)
         }
         // Write one-time info line if project env vars were applied
         // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
@@ -710,7 +707,9 @@ function ConnectedTerminalComponent({
       const terminalId = ptyIdRef.current || externalTerminalId
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
-        useTerminalStore.getState().setRendererAttached(terminalId, false)
+        if (!externalTerminalId) {
+          useTerminalStore.getState().setRendererAttached(terminalId, false)
+        }
         void removeRendererRef(terminalId, instanceId)
       }
 

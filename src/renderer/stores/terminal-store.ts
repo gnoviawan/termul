@@ -6,6 +6,7 @@ import { useProjectStore } from './project-store'
 const GLOBAL_TERMINAL_LIMIT = 30
 const HIDDEN_BUFFER_TRUNCATION_DELAY = 5 * 60 * 1000 // 5 minutes
 const TRUNCATED_BUFFER_SIZE = 1000
+const MAX_TRANSCRIPT_CHARS = 500_000
 
 export interface TerminalState {
   // State
@@ -34,6 +35,8 @@ export interface TerminalState {
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
+  appendTranscript: (ptyId: string, data: string) => void
+  consumeTranscript: (ptyId: string) => string
   appendDetachedOutput: (ptyId: string, data: string) => void
   consumeDetachedOutput: (ptyId: string) => string
   setRendererAttached: (ptyId: string, attached: boolean) => void
@@ -222,6 +225,60 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         )
       }
     })
+  },
+
+  appendTranscript: (ptyId: string, data: string): void => {
+    if (!data) return
+
+    set((state) => {
+      const hasTarget = state.terminals.some((t) => t.ptyId === ptyId)
+      if (!hasTarget) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId) {
+            return t
+          }
+
+          const nextTranscript = ((t.transcript || '') + data).slice(-MAX_TRANSCRIPT_CHARS)
+
+          return {
+            ...t,
+            transcript: nextTranscript
+          }
+        })
+      }
+    })
+  },
+
+  consumeTranscript: (ptyId: string): string => {
+    let consumed = ''
+
+    set((state) => {
+      const target = state.terminals.find((t) => t.ptyId === ptyId && t.transcript)
+      if (!target) {
+        return state
+      }
+
+      consumed = target.transcript || ''
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId || !t.transcript) {
+            return t
+          }
+
+          return {
+            ...t,
+            transcript: ''
+          }
+        })
+      }
+    })
+
+    return consumed
   },
 
   appendDetachedOutput: (ptyId: string, data: string): void => {
@@ -430,6 +487,8 @@ export function useTerminalActions(): Pick<
   | 'reorderTerminals'
   | 'updateTerminalCwd'
   | 'updateTerminalScrollback'
+  | 'appendTranscript'
+  | 'consumeTranscript'
   | 'appendDetachedOutput'
   | 'consumeDetachedOutput'
   | 'setRendererAttached'
@@ -445,6 +504,8 @@ export function useTerminalActions(): Pick<
       reorderTerminals: state.reorderTerminals,
       updateTerminalCwd: state.updateTerminalCwd,
       updateTerminalScrollback: state.updateTerminalScrollback,
+      appendTranscript: state.appendTranscript,
+      consumeTranscript: state.consumeTranscript,
       appendDetachedOutput: state.appendDetachedOutput,
       consumeDetachedOutput: state.consumeDetachedOutput,
       setRendererAttached: state.setRendererAttached,
