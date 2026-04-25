@@ -16,8 +16,12 @@ function transcriptToScrollback(transcript?: string): string[] | undefined {
   }
 
   // Approximate reconstruction of rendered output from raw PTY transcript.
-  const withoutOsc = transcript.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-  const withoutAnsi = withoutOsc.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  const ESC = String.fromCharCode(27)
+  const BEL = String.fromCharCode(7)
+  const oscSequenceRegex = new RegExp(`${ESC}\\][^${BEL}]*(?:${BEL}|${ESC}\\\\)`, 'g')
+  const ansiSequenceRegex = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'g')
+  const withoutOsc = transcript.replace(oscSequenceRegex, '')
+  const withoutAnsi = withoutOsc.replace(ansiSequenceRegex, '')
   const normalized = withoutAnsi
     .replace(/\r\n/g, '\n')
     .replace(/([^\n])\r(?!\n)/g, '$1')
