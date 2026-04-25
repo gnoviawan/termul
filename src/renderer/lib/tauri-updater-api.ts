@@ -11,6 +11,15 @@ import {
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
+const STABLE_UPDATE_MANIFEST_URL =
+  'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
+
+/**
+ * Stable channel policy: the shipped app only checks the stable GitHub Releases
+ * manifest at /releases/latest/download/latest.json. Prerelease tags are
+ * intentionally excluded from automatic detection by stable clients.
+ */
+
 let pendingUpdate: Update | null = null
 let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
@@ -25,7 +34,29 @@ export interface TauriUpdaterEventHandlers {
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
+  if (error instanceof Error && error.message.trim()) {
+    return error.message
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+
+  try {
+    const serialized = JSON.stringify(error)
+    if (serialized && serialized !== '{}') {
+      return serialized
+    }
+  } catch {
+    // Ignore serialization failures and use the fallback below.
+  }
+
+  return fallback
+}
+
+function createUpdaterCheckError(error: unknown): Error {
+  const details = getErrorMessage(error, 'Unknown updater error')
+  return new Error(`Failed to check for updates from ${STABLE_UPDATE_MANIFEST_URL}: ${details}`)
 }
 
 async function syncRecoveryVersionMetadata(): Promise<string> {
@@ -136,12 +167,13 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
     const update = await check()
     pendingUpdate = update
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
-    preparedUpdateVersion = update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
+    preparedUpdateVersion =
+      update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
     lastCheckedAt = new Date().toISOString()
     return update ? mapTauriUpdateToInfo(update) : null
-  } catch {
+  } catch (error) {
     lastCheckedAt = new Date().toISOString()
-    throw new Error('Failed to check for updates')
+    throw createUpdaterCheckError(error)
   }
 }
 

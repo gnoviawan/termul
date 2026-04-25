@@ -7,7 +7,6 @@ interface UpdateReadyModalProps {
   version: string
   releaseNotes?: string
   hasActiveTerminals: boolean
-  onInstallWhenQuit: () => void
   onRestartNow: () => void
   onSkip: () => void
   onClose: () => void
@@ -18,7 +17,6 @@ export function UpdateReadyModal({
   version,
   releaseNotes,
   hasActiveTerminals,
-  onInstallWhenQuit,
   onRestartNow,
   onSkip,
   onClose
@@ -74,7 +72,7 @@ export function UpdateReadyModal({
                 <div className="w-5 h-5 rounded bg-green-500/10 flex items-center justify-center">
                   <Download className="w-3 h-3 text-green-500" />
                 </div>
-                <h3 className="text-sm font-semibold text-foreground">Update Ready to Install</h3>
+                <h3 className="text-sm font-semibold text-foreground">Update Ready to Apply</h3>
               </div>
               <button
                 onClick={onClose}
@@ -101,7 +99,9 @@ export function UpdateReadyModal({
                     Release Notes
                   </label>
                   <div className="bg-secondary border border-border rounded px-3 py-2 text-sm text-foreground max-h-[200px] overflow-y-auto">
-                    <div className="whitespace-pre-wrap text-xs leading-relaxed">{releaseNotes}</div>
+                    <div className="whitespace-pre-wrap text-xs leading-relaxed">
+                      {releaseNotes}
+                    </div>
                   </div>
                 </div>
               )}
@@ -112,8 +112,8 @@ export function UpdateReadyModal({
                   <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                      You have active terminal sessions. Restarting will close all terminals. Make sure
-                      you've saved any important work.
+                      Restarting now will close all active terminal sessions. Make sure you've saved
+                      any important work before applying the update.
                     </p>
                   </div>
                 </div>
@@ -130,16 +130,9 @@ export function UpdateReadyModal({
               </button>
               <button
                 onClick={onRestartNow}
-                disabled={hasActiveTerminals}
-                className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-secondary text-foreground hover:bg-secondary/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Restart Now
-              </button>
-              <button
-                onClick={onInstallWhenQuit}
                 className="px-3 py-1.5 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 shadow-md shadow-green-500/20 transition-all"
               >
-                Install When I Quit
+                Restart to Update
               </button>
             </div>
           </motion.div>

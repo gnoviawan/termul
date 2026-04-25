@@ -1,10 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type {
-  UpdateInfo,
-  UpdateState,
-  DownloadProgress
-} from '@shared/types/updater.types'
+import type { UpdateInfo, UpdateState, DownloadProgress } from '@shared/types/updater.types'
 import {
   checkForUpdates as tauriCheckForUpdates,
   downloadUpdate as tauriDownloadUpdate,
@@ -116,14 +112,6 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     try {
       const activeTerminals = hasActiveTerminalSessions()
       set({ hasActiveTerminals: activeTerminals })
-
-      if (activeTerminals) {
-        set({
-          isChecking: false,
-          error: 'Update checks paused because active terminal sessions are running.'
-        })
-        return
-      }
 
       const updateInfo = await tauriCheckForUpdates()
       const checkedAt = new Date()
@@ -443,10 +431,6 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
 
       const currentError = get().error
       if (!currentError) return
-
-      const isRetryablePauseError =
-        currentError === 'Update checks paused because active terminal sessions are running.'
-      if (isRetryablePauseError) return
 
       if (attempt === RETRY_DELAYS_MS.length) return
 

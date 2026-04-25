@@ -121,10 +121,20 @@ describe('tauri-updater-api', () => {
       })
     })
 
-    it('throws standardized error when check fails', async () => {
+    it('throws actionable error details when check fails', async () => {
       vi.mocked(check).mockRejectedValue(new Error('network down'))
 
-      await expect(checkForUpdates()).rejects.toThrow('Failed to check for updates')
+      await expect(checkForUpdates()).rejects.toThrow(
+        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: network down'
+      )
+    })
+
+    it('preserves non-Error check failure details', async () => {
+      vi.mocked(check).mockRejectedValue({ status: 404, url: 'latest.json' })
+
+      await expect(checkForUpdates()).rejects.toThrow(
+        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":404,"url":"latest.json"}'
+      )
     })
   })
 
@@ -291,7 +301,9 @@ describe('tauri-updater-api', () => {
     })
 
     it('mapTauriUpdateToInfo maps body/date correctly', () => {
-      const info = mapTauriUpdateToInfo(createMockUpdate('3.0.0', 'notes', '2026-03-01T12:00:00.000Z') as never)
+      const info = mapTauriUpdateToInfo(
+        createMockUpdate('3.0.0', 'notes', '2026-03-01T12:00:00.000Z') as never
+      )
 
       expect(info).toEqual({
         version: '3.0.0',

@@ -29,7 +29,8 @@ interface InlineInputState {
 }
 
 export function FileExplorer(): React.JSX.Element {
-  const { rootPath, directoryContents, isVisible, rootLoadError, selectedPaths, clipboard } = useFileExplorer()
+  const { rootPath, directoryContents, isVisible, rootLoadError, selectedPaths, clipboard } =
+    useFileExplorer()
   const {
     toggleDirectory,
     selectPath,
@@ -131,14 +132,17 @@ export function FileExplorer(): React.JSX.Element {
         }
       }
     },
-    [togglePathSelection, selectPathRange, selectPath, toggleDirectory]
+    [togglePathSelection, selectPathRange, selectPath, toggleDirectory, handleSelect]
   )
 
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle shortcuts when file explorer is focused
-      if (!containerRef.current?.contains(document.activeElement) && document.activeElement !== document.body) {
+      if (
+        !containerRef.current?.contains(document.activeElement) &&
+        document.activeElement !== document.body
+      ) {
         return
       }
 
@@ -183,7 +187,8 @@ export function FileExplorer(): React.JSX.Element {
         const [path] = selectedPaths
         const normalizedPath = path.replace(/\\/g, '/')
         const lastSlash = normalizedPath.lastIndexOf('/')
-        const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
+        const parentPath =
+          lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
         // Find the entry for this path
         for (const [, entries] of directoryContents) {
           const entry = entries.find((e) => e.path === path)
@@ -227,7 +232,16 @@ export function FileExplorer(): React.JSX.Element {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [selectAll, copySelected, cutSelected, paste, selectedPaths, directoryContents, contextMenu, clearSelection])
+  }, [
+    selectAll,
+    copySelected,
+    cutSelected,
+    paste,
+    selectedPaths,
+    directoryContents,
+    contextMenu,
+    clearSelection
+  ])
 
   const handleNewFile = useCallback((dirPath: string) => {
     setContextMenu(null)
@@ -245,7 +259,8 @@ export function FileExplorer(): React.JSX.Element {
     setContextMenu(null)
     const normalizedPath = entry.path.replace(/\\/g, '/')
     const lastSlash = normalizedPath.lastIndexOf('/')
-    const parentPath = lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
+    const parentPath =
+      lastSlash > 0 ? normalizedPath.slice(0, lastSlash) : lastSlash === 0 ? '/' : ''
     setInlineInput({
       parentPath,
       type: entry.type === 'directory' ? 'folder' : 'file',
@@ -296,9 +311,7 @@ export function FileExplorer(): React.JSX.Element {
         const editorState = useEditorStore.getState()
         if (editorState.openFiles.has(inlineInput.existingEntry.path)) {
           editorState.closeFile(inlineInput.existingEntry.path)
-          useWorkspaceStore.getState().removeTab(
-            editorTabId(inlineInput.existingEntry.path)
-          )
+          useWorkspaceStore.getState().removeTab(editorTabId(inlineInput.existingEntry.path))
         }
       }
       await refreshDirectory(inlineInput.parentPath)
@@ -335,10 +348,7 @@ export function FileExplorer(): React.JSX.Element {
       }
 
       const normalizedDeletePath = deleteConfirm.path.replace(/\\/g, '/')
-      const parentPath = normalizedDeletePath.substring(
-        0,
-        normalizedDeletePath.lastIndexOf('/')
-      )
+      const parentPath = normalizedDeletePath.substring(0, normalizedDeletePath.lastIndexOf('/'))
       await refreshDirectory(parentPath)
       setDeleteConfirm(null)
     } catch (error) {
@@ -402,10 +412,13 @@ export function FileExplorer(): React.JSX.Element {
   }, [cutSelected])
 
   // Paste handler
-  const handlePaste = useCallback(async (destinationPath: string) => {
-    setContextMenu(null)
-    await paste(destinationPath)
-  }, [paste])
+  const handlePaste = useCallback(
+    async (destinationPath: string) => {
+      setContextMenu(null)
+      await paste(destinationPath)
+    },
+    [paste]
+  )
 
   // Duplicate handler
   const handleDuplicate = useCallback(async () => {
@@ -438,9 +451,7 @@ export function FileExplorer(): React.JSX.Element {
       {/* Tree */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
         {!rootPath && (
-          <div className="px-3 py-4 text-sm text-muted-foreground">
-            No project selected
-          </div>
+          <div className="px-3 py-4 text-sm text-muted-foreground">No project selected</div>
         )}
 
         {rootPath && rootLoadError && (
@@ -478,10 +489,7 @@ export function FileExplorer(): React.JSX.Element {
 
         {/* Inline input for new file/folder/rename */}
         {inlineInput && (
-          <div
-            className="flex items-center px-2 py-0.5"
-            style={{ paddingLeft: 20 }}
-          >
+          <div className="flex items-center px-2 py-0.5" style={{ paddingLeft: 20 }}>
             <input
               ref={inputRef}
               type="text"

@@ -14,6 +14,7 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useCwd } from './hooks/use-cwd'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
@@ -33,6 +34,7 @@ const queryClient = new QueryClient()
 function AppEffects(): null {
   useTerminalAutoSave()
   useTerminalRestore()
+  useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
   useGitStatus()
@@ -78,7 +80,8 @@ export default function TauriApp(): React.JSX.Element {
 
     // Show window immediately after mount (only in Tauri context)
     const showWindow = async () => {
-      if (typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ === 'undefined') return
+      if (typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ === 'undefined')
+        return
       try {
         await getCurrentWindow().show()
       } catch (err) {

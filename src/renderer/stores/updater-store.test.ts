@@ -6,9 +6,8 @@ import * as tauriUpdaterApi from '@/lib/tauri-updater-api'
 import * as tauriVersionSkip from '@/lib/tauri-version-skip'
 
 vi.mock('@/lib/tauri-updater-api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/tauri-updater-api')>(
-    '@/lib/tauri-updater-api'
-  )
+  const actual =
+    await vi.importActual<typeof import('@/lib/tauri-updater-api')>('@/lib/tauri-updater-api')
   return {
     ...actual,
     checkForUpdates: vi.fn(),
@@ -36,9 +35,8 @@ vi.mock('@/lib/tauri-version-skip', async () => {
 })
 
 vi.mock('@/lib/tauri-safe-update', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/tauri-safe-update')>(
-    '@/lib/tauri-safe-update'
-  )
+  const actual =
+    await vi.importActual<typeof import('@/lib/tauri-safe-update')>('@/lib/tauri-safe-update')
   return {
     ...actual,
     hasActiveTerminalSessions: vi.fn(() => false)
@@ -180,15 +178,22 @@ describe('updater-store', () => {
       expect(state.version).toBe('2.0.0')
     })
 
-    it('should not call updater when active terminals exist', async () => {
+    it('should still check for updates when active terminals exist', async () => {
       vi.mocked(tauriSafeUpdate.hasActiveTerminalSessions).mockReturnValue(true)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '2.0.0',
+        releaseDate: '2026-01-01T00:00:00.000Z',
+        releaseNotes: 'Important fixes',
+        isSecurityUpdate: false
+      })
 
       await useUpdaterStore.getState().checkForUpdates()
 
-      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
-      expect(useUpdaterStore.getState().error).toBe(
-        'Update checks paused because active terminal sessions are running.'
-      )
+      const state = useUpdaterStore.getState()
+      expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalledTimes(1)
+      expect(state.hasActiveTerminals).toBe(true)
+      expect(state.updateAvailable).toBe(true)
+      expect(state.error).toBeNull()
     })
 
     it('should surface Tauri updater errors', async () => {
@@ -287,16 +292,19 @@ describe('updater-store', () => {
       expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalledTimes(1)
     })
 
-    it('should not retry when check pause is caused by active terminals', async () => {
+    it('should still run checks without retry loops when active terminals are present and the check succeeds', async () => {
       vi.useFakeTimers()
       vi.mocked(tauriSafeUpdate.hasActiveTerminalSessions).mockReturnValue(true)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '2.0.0',
+        releaseDate: '2026-01-01T00:00:00.000Z',
+        isSecurityUpdate: false
+      })
 
       await useUpdaterStore.getState().runCheckWithRetry()
 
-      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
-      expect(useUpdaterStore.getState().error).toBe(
-        'Update checks paused because active terminal sessions are running.'
-      )
+      expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalledTimes(1)
+      expect(useUpdaterStore.getState().error).toBeNull()
 
       vi.useRealTimers()
     })

@@ -6,6 +6,7 @@ import {
   createCodeBlockSpec
 } from '@blocknote/core'
 import { codeBlockOptions } from '@blocknote/code-block'
+import type { TocHeading } from '@/hooks/use-toc-headings'
 
 interface UseBlockNoteOptions {
   initialMarkdown: string
@@ -15,10 +16,13 @@ interface UseBlockNoteOptions {
 interface UseBlockNoteResult {
   editor: BlockNoteEditor
   replaceContent: (markdown: string) => void
+  getHeadings: () => TocHeading[]
+  scrollToBlock: (blockId: string) => void
 }
 
 export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   const onChangeRef = useRef(options.onChange)
+  const initialMarkdownRef = useRef(options.initialMarkdown)
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guard to suppress onChange during programmatic replaceBlocks calls
   const isReplacingRef = useRef(false)
@@ -40,7 +44,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     const loadContent = async (): Promise<void> => {
       try {
         isReplacingRef.current = true
-        const blocks = await editor.tryParseMarkdownToBlocks(options.initialMarkdown)
+        const blocks = await editor.tryParseMarkdownToBlocks(initialMarkdownRef.current)
         editor.replaceBlocks(editor.document, blocks)
       } catch {
         // Failed to parse markdown
@@ -51,8 +55,9 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         })
       }
     }
-    loadContent()
-  }, [])
+
+    void loadContent()
+  }, [editor])
 
   // Set up change listener
   useEffect(() => {
@@ -98,5 +103,66 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     }
   }, [editor])
 
-  return { editor, replaceContent }
+  const getHeadings = useCallback((): TocHeading[] => {
+    return editor.document.flatMap((block) => {
+      if (block.type !== 'heading') {
+        return []
+      }
+
+      const level = typeof block.props.level === 'number' ? block.props.level : 1
+      const text = block.content
+        .flatMap((inlineContent) => {
+          if (inlineContent.type === 'text') {
+            return [inlineContent.text]
+          }
+
+          return []
+        })
+        .join('')
+        .trim()
+
+      if (!text) {
+        return []
+      }
+
+      return [
+        {
+          id: block.id,
+          blockId: block.id,
+          level,
+          text
+        }
+      ]
+    })
+  }, [editor])
+
+  const scrollToBlock = useCallback(
+    (blockId: string): void => {
+      const targetElement = editor.domElement?.querySelector<HTMLElement>(
+        `[data-node-type="blockContainer"][data-id="${CSS.escape(blockId)}"]`
+      )
+
+      if (!targetElement) {
+        return
+      }
+
+      try {
+        editor.setTextCursorPosition(blockId, 'start')
+        editor.focus()
+
+        requestAnimationFrame(() => {
+          try {
+            targetElement.scrollIntoView({ block: 'center' })
+          } catch {
+            console.error('Failed to scroll TOC heading into view')
+          }
+        })
+      } catch {
+        console.error('Failed to focus TOC heading block')
+      }
+    },
+    [editor]
+  )
+
+  return { editor, replaceContent, getHeadings, scrollToBlock }
 }

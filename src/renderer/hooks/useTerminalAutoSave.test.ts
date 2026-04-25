@@ -132,7 +132,6 @@ describe('useTerminalAutoSave', () => {
       expect(result.terminals[0]).not.toHaveProperty('output')
       expect(result.terminals[0]).not.toHaveProperty('projectId')
       expect(result.terminals[0]).not.toHaveProperty('isActive')
-      // scrollback should be included from the registry
       expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2'])
     })
 
@@ -150,6 +149,24 @@ describe('useTerminalAutoSave', () => {
       serializeTerminalsForProject(terminals, 'proj-1', '1')
 
       expect(extractScrollback).toHaveBeenCalledWith('pty-1')
+    })
+
+    it('should prefer transcript for serialized scrollback and persistence', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell',
+          transcript: 'line 3\nline 4\n'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(result.terminals[0].scrollback).toEqual(['line 3', 'line 4'])
+      expect(result.terminals[0].transcript).toBe('line 3\nline 4\n')
     })
   })
 
@@ -203,7 +220,6 @@ describe('useTerminalAutoSave', () => {
 
       syncScrollbackToStore(persistedTerminals)
 
-      // Should not update - existing scrollback preserved
       const updatedTerminal = useTerminalStore
         .getState()
         .terminals.find((t) => t.id === terminal.id)
@@ -220,7 +236,6 @@ describe('useTerminalAutoSave', () => {
         }
       ]
 
-      // Should not throw
       expect(() => syncScrollbackToStore(persistedTerminals)).not.toThrow()
     })
   })

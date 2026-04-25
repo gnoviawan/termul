@@ -19,6 +19,7 @@ jobs:
     outputs:
       changelog: ${{ steps.cliff.outputs.content }}
       is_prerelease: ${{ steps.check.outputs.is_prerelease }}
+      normalized_version: ${{ steps.version.outputs.normalized_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +35,18 @@ jobs:
         env:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
+
+      - name: Normalize tag version
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "Tag must include a version" >&2
+            exit 1
+          fi
+          echo "normalized_version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check prerelease
         id: check
@@ -163,6 +176,43 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Align app versions with tag
+        shell: bash
+        env:
+          TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+
+          const tagVersion = process.env.TAG_VERSION
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          if (pkg.version !== tagVersion) {
+            throw new Error(
+              `package.json version ${pkg.version} does not match tag ${tagVersion}`
+            )
+          }
+
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8')
+          const cargoMatch = cargo.match(/^version\s*=\s*"([^"]+)"/m)
+          if (!cargoMatch || cargoMatch[1] !== tagVersion) {
+            const cargoVersion = cargoMatch?.[1] ?? 'missing'
+            throw new Error(
+              `src-tauri/Cargo.toml version ${cargoVersion} ` +
+                `does not match tag ${tagVersion}`
+            )
+          }
+
+          const tauri = JSON.parse(
+            fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')
+          )
+          if (tauri.version !== tagVersion) {
+            throw new Error(
+              `src-tauri/tauri.conf.json version ${tauri.version} ` +
+                `does not match tag ${tagVersion}`
+            )
+          }
+          NODE
+
       - name: Build and publish release artifacts
         uses: tauri-apps/tauri-action@v0
         env:
@@ -185,6 +235,54 @@ jobs:
     needs: [changelog, create_release, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Verify updater assets before publish
+        uses: actions/github-script@v7
+        env:
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
+          RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const releaseId = Number(process.env.RELEASE_ID)
+            const isPrerelease = process.env.IS_PRERELEASE === 'true'
+            const stableManifestPath =
+              '/releases/latest/download/latest.json'
+            const channelPolicy = isPrerelease
+              ? 'stable clients intentionally ignore prerelease tags'
+              : 'stable clients consume the stable latest.json manifest'
+
+            core.info(`Updater channel policy: ${channelPolicy}`)
+
+            const { data: assets } = await github.rest.repos.listReleaseAssets({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              per_page: 100,
+            })
+
+            const assetNames = assets.map((asset) => asset.name)
+            core.info(`Draft release assets: ${assetNames.join(', ')}`)
+
+            if (isPrerelease) {
+              core.notice(
+                [
+                  'This tag is marked as a prerelease.',
+                  'Stable clients intentionally ignore prerelease tags',
+                  `because they only check ${stableManifestPath}.`,
+                ].join(' ')
+              )
+              return
+            }
+
+            const hasLatestJson = assetNames.includes('latest.json')
+            if (!hasLatestJson) {
+              const publishedAssets = assetNames.join(', ')
+              core.setFailed(
+                `Stable release is missing latest.json. ` +
+                  `Draft assets: ${publishedAssets}`
+              )
+            }
+
       - name: Publish draft release
         uses: actions/github-script@v7
         env:

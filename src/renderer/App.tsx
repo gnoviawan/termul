@@ -12,6 +12,7 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useCwd } from './hooks/use-cwd'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
@@ -59,6 +60,7 @@ function AppEffects(): null {
   usePreventAltMenu()
   useTerminalAutoSave()
   useTerminalRestore()
+  useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
   useGitStatus()
