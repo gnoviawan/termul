@@ -26,7 +26,7 @@ function getFirstLetter(name: string): string {
   if (!name) return '?'
   const match = name.match(/[a-zA-Z]/)
   const first = Array.from(name)[0]
-  return match ? match[0].toUpperCase() : (first ? first.toUpperCase() : '?')
+  return match ? match[0].toUpperCase() : first ? first.toUpperCase() : '?'
 }
 
 interface ContextMenuState {
@@ -213,21 +213,22 @@ export function ProjectSidebar({
   const getContextMenuItems = useCallback(
     (projectId: string): ContextMenuItem[] => {
       const project = projects.find((p) => p.id === projectId)
-      const shellSubmenu: ContextMenuSubItem[] = availableShells?.available.map((shell) => ({
-        label: shell.displayName,
-        value: shell.path,
-        isSelected: (() => {
-          const projectShell = project?.defaultShell
-          if (!projectShell) return false
-          // Match by full path
-          if (projectShell === shell.path) return true
-          // Match by name
-          if (projectShell === shell.name) return true
-          // Match by basename of path
-          const pathBasename = shell.path.split(/[\\/]/).pop()
-          return projectShell === pathBasename
-        })()
-      })) || []
+      const shellSubmenu: ContextMenuSubItem[] =
+        availableShells?.available.map((shell) => ({
+          label: shell.displayName,
+          value: shell.path,
+          isSelected: (() => {
+            const projectShell = project?.defaultShell
+            if (!projectShell) return false
+            // Match by full path
+            if (projectShell === shell.path) return true
+            // Match by name
+            if (projectShell === shell.name) return true
+            // Match by basename of path
+            const pathBasename = shell.path.split(/[\\/]/).pop()
+            return projectShell === pathBasename
+          })()
+        })) || []
 
       const items: ContextMenuItem[] = [
         {
@@ -269,7 +270,17 @@ export function ProjectSidebar({
 
       return items
     },
-    [projects, availableShells, contextMenu.x, contextMenu.y, handleStartRename, handleOpenColorPicker, onUpdateProject, onArchiveProject, handleConfirmDelete]
+    [
+      projects,
+      availableShells,
+      contextMenu.x,
+      contextMenu.y,
+      handleStartRename,
+      handleOpenColorPicker,
+      onUpdateProject,
+      onArchiveProject,
+      handleConfirmDelete
+    ]
   )
 
   const getArchivedContextMenuItems = useCallback(
@@ -380,22 +391,25 @@ export function ProjectSidebar({
                   aria-expanded={showArchived}
                   aria-label={`Archived projects (${archivedProjects.length})`}
                 >
-                  {showArchived
-                    ? <ChevronDown size={14} className="mr-2" />
-                    : <ChevronRight size={14} className="mr-2" />}
+                  {showArchived ? (
+                    <ChevronDown size={14} className="mr-2" />
+                  ) : (
+                    <ChevronRight size={14} className="mr-2" />
+                  )}
                   Archived ({archivedProjects.length})
                 </button>
-                {showArchived && archivedProjects.map((project) => (
-                  <ArchivedProjectItem
-                    key={project.id}
-                    project={project}
-                    onClick={() => {
-                      onSelectProject(project.id)
-                      navigate('/')
-                    }}
-                    onContextMenu={(e) => handleContextMenu(e, project.id)}
-                  />
-                ))}
+                {showArchived &&
+                  archivedProjects.map((project) => (
+                    <ArchivedProjectItem
+                      key={project.id}
+                      project={project}
+                      onClick={() => {
+                        onSelectProject(project.id)
+                        navigate('/')
+                      }}
+                      onContextMenu={(e) => handleContextMenu(e, project.id)}
+                    />
+                  ))}
               </div>
             )}
           </>
@@ -405,7 +419,7 @@ export function ProjectSidebar({
       {/* Bottom toolbar - Version */}
       <div className="p-2 rounded-b-xl">
         <div className="w-full h-8 inline-flex items-center justify-center">
-          <span className="text-xs text-muted-foreground">Termul v0.3.0-4</span>
+          <span className="text-xs text-muted-foreground">Termul v0.3.2</span>
         </div>
       </div>
 
@@ -499,7 +513,9 @@ function ProjectItem({
       onContextMenu={onContextMenu}
       className={cn(
         'w-full flex items-center px-0 py-2 transition-colors group text-left border-l-2',
-        isActive ? `${colors.border} bg-sidebar-accent` : `${colors.borderMuted} hover:bg-sidebar-accent/50`
+        isActive
+          ? `${colors.border} bg-sidebar-accent`
+          : `${colors.borderMuted} hover:bg-sidebar-accent/50`
       )}
       aria-current={isActive ? 'page' : undefined}
       aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -513,7 +529,9 @@ function ProjectItem({
         )}
         aria-hidden="true"
       >
-        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">{firstLetter}</span>
+        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">
+          {firstLetter}
+        </span>
       </div>
       {isEditing ? (
         <input
@@ -583,7 +601,9 @@ function ArchivedProjectItem({
         )}
         aria-hidden="true"
       >
-        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">{firstLetter}</span>
+        <span className="text-xs font-medium text-white" data-testid="project-avatar-letter">
+          {firstLetter}
+        </span>
       </div>
       <span className="text-sm font-medium text-muted-foreground group-hover:text-foreground flex-1">
         {project.name}
