@@ -1,4 +1,5 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
+import { useShallow } from 'zustand/shallow'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useCodeMirror, type VisibleLineRange } from '@/hooks/use-codemirror'
 import { TocPanel } from './TocPanel'
@@ -41,12 +42,14 @@ export function CodeEditor({
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
   const [layoutWidth, setLayoutWidth] = useState(0)
-  const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore((state) => ({
-    isTocHydrated: state.isLoaded || state.loadFailed,
-    isTocVisible: state.settings.isVisible,
-    tocWidth: state.settings.width,
-    setTocWidth: state.setWidth
-  }))
+  const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
+    useShallow((state) => ({
+      isTocHydrated: state.isLoaded || state.loadFailed,
+      isTocVisible: state.settings.isVisible,
+      tocWidth: state.settings.width,
+      setTocWidth: state.setWidth
+    }))
+  )
 
   const { view, setContent, scrollToLine } = useCodeMirror(containerRef, {
     content,
@@ -149,10 +152,7 @@ export function CodeEditor({
     <div className="h-full w-full" style={{ display: isVisible ? 'block' : 'none' }}>
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
-          <ResizablePanel
-            defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100}
-            minSize={60}
-          >
+          <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
             <div ref={containerRef} className="w-full h-full overflow-hidden" />
           </ResizablePanel>
 

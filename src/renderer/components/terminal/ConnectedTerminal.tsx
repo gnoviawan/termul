@@ -14,11 +14,12 @@ import {
   captureScrollPosition,
   restoreScrollPosition
 } from '../../utils/terminal-registry'
-import { useTerminalFontFamily, useTerminalFontSize, useTerminalBufferSize } from '@/stores/app-settings-store'
 import {
-  useKeyboardShortcutsStore,
-  normalizeKeyEvent
-} from '@/stores/keyboard-shortcuts-store'
+  useTerminalFontFamily,
+  useTerminalFontSize,
+  useTerminalBufferSize
+} from '@/stores/app-settings-store'
+import { useKeyboardShortcutsStore, normalizeKeyEvent } from '@/stores/keyboard-shortcuts-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import {
   ContextMenu,
@@ -145,6 +146,19 @@ function ConnectedTerminalComponent({
   useEffect(() => {
     if (externalTerminalId) {
       ptyIdRef.current = externalTerminalId
+    }
+  }, [externalTerminalId])
+
+  useEffect(() => {
+    if (!externalTerminalId || isTerminalPendingPtyAssignment(externalTerminalId)) {
+      return
+    }
+
+    const store = useTerminalStore.getState()
+    store.setRendererAttached(externalTerminalId, true)
+
+    return () => {
+      useTerminalStore.getState().setRendererAttached(externalTerminalId, false)
     }
   }, [externalTerminalId])
 
@@ -515,11 +529,9 @@ function ConnectedTerminalComponent({
           activityTimeoutRef.current = setTimeout(() => {
             // Flush any pending activity update
             if (pendingActivityUpdateRef.current) {
-              useTerminalStore.getState().updateTerminalActivityBatch(
-                pendingActivityUpdateRef.current.id,
-                false,
-                Date.now()
-              )
+              useTerminalStore
+                .getState()
+                .updateTerminalActivityBatch(pendingActivityUpdateRef.current.id, false, Date.now())
               pendingActivityUpdateRef.current = null
             } else {
               // Clear activity after 2 seconds of inactivity
@@ -566,7 +578,9 @@ function ConnectedTerminalComponent({
           return
         }
         if (spawnInFlightRef.current || ptyIdRef.current) {
-          devLog(`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: already spawning or has PTY`)
+          devLog(
+            `[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: already spawning or has PTY`
+          )
           return
         }
       } else if (isTerminalPendingPtyAssignment(externalTerminalId)) {
@@ -575,7 +589,6 @@ function ConnectedTerminalComponent({
       }
 
       if (!externalTerminalId) {
-
         spawnInFlightRef.current = true
         devLog(`[ConnectedTerminal.initTerminal] SPAWNING [${spawnDebugId}]`, {
           cols: spawnCols,
@@ -601,23 +614,32 @@ function ConnectedTerminalComponent({
           if (result.success) {
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
+            useTerminalStore.getState().setRendererAttached(result.data.id, true)
             void addRendererRef(result.data.id, instanceIdRef.current)
             // If tab was visible before PTY was ready, flush deferred fit+resize now
             if (needsResizeOnReadyRef.current) {
               needsResizeOnReadyRef.current = false
-              try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-              terminalApi.resize(result.data.id, terminal.cols, terminal.rows).catch(() => { })
+              try {
+                fitAddonRef.current?.fit()
+              } catch {
+                /* ignore */
+              }
+              terminalApi.resize(result.data.id, terminal.cols, terminal.rows).catch(() => {})
             }
             // Register terminal for scrollback persistence
             registerTerminal(result.data.id, terminal)
-            // Restore scrollback if provided
-            if (initialScrollback && initialScrollback.length > 0) {
+            const transcript = useTerminalStore.getState().consumeTranscript(result.data.id)
+            if (transcript) {
+              terminal.write(transcript)
+            } else if (initialScrollback && initialScrollback.length > 0) {
               restoreScrollback(terminal, initialScrollback)
             }
             // Write one-time info line if project env vars were applied
             if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
               const envCount = Object.keys(memoizedSpawnOptions.env).length
-              terminal.write(`\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`)
+              terminal.write(
+                `\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`
+              )
             }
             // Restore scroll position if cached from previous pane
             restoreScrollPosition(result.data.id, terminal)
@@ -630,7 +652,9 @@ function ConnectedTerminalComponent({
           } else {
             const errorMsg = result.error || 'Unknown spawn error'
             console.error('[Terminal Spawn Failed]', errorMsg)
-            terminal.write(`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`)
+            terminal.write(
+              `\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`
+            )
             if (onError) onError(errorMsg)
           }
         } catch (err) {
@@ -648,14 +672,19 @@ function ConnectedTerminalComponent({
         })
         void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
-        if (initialScrollback && initialScrollback.length > 0) {
+        const transcript = useTerminalStore.getState().consumeTranscript(externalTerminalId)
+        if (transcript) {
+          terminal.write(transcript)
+        } else if (initialScrollback && initialScrollback.length > 0) {
           restoreScrollback(terminal, initialScrollback)
         }
         // Write one-time info line if project env vars were applied
         // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
         if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
           const envCount = Object.keys(memoizedSpawnOptions.env).length
-          terminal.write(`\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`)
+          terminal.write(
+            `\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`
+          )
         }
         // Restore scroll position if cached from previous pane
         restoreScrollPosition(externalTerminalId, terminal)
@@ -678,6 +707,9 @@ function ConnectedTerminalComponent({
       const terminalId = ptyIdRef.current || externalTerminalId
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
+        if (!externalTerminalId) {
+          useTerminalStore.getState().setRendererAttached(terminalId, false)
+        }
         void removeRendererRef(terminalId, instanceId)
       }
 
@@ -710,11 +742,9 @@ function ConnectedTerminalComponent({
       }
       // Flush pending activity update on unmount
       if (pendingActivityUpdateRef.current) {
-        useTerminalStore.getState().updateTerminalActivityBatch(
-          pendingActivityUpdateRef.current.id,
-          true,
-          Date.now()
-        )
+        useTerminalStore
+          .getState()
+          .updateTerminalActivityBatch(pendingActivityUpdateRef.current.id, true, Date.now())
         pendingActivityUpdateRef.current = null
       }
       // Clean up WebGL recovery timeout to prevent race condition
@@ -922,11 +952,14 @@ function ConnectedTerminalComponent({
   }, [])
 
   // Memoized context menu handlers to prevent unnecessary re-renders
-  const contextMenuHandlers = useMemo(() => ({
-    copy: copySelection,
-    paste: pasteFromClipboard,
-    selectAll: handleSelectAll
-  }), [copySelection, pasteFromClipboard, handleSelectAll])
+  const contextMenuHandlers = useMemo(
+    () => ({
+      copy: copySelection,
+      paste: pasteFromClipboard,
+      selectAll: handleSelectAll
+    }),
+    [copySelection, pasteFromClipboard, handleSelectAll]
+  )
 
   return (
     <ContextMenu>

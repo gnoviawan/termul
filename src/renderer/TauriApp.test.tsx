@@ -10,6 +10,9 @@ const { mockPersistenceRead } = vi.hoisted(() => ({
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: mockPersistenceRead
+  },
+  terminalApi: {
+    onData: vi.fn(() => vi.fn())
   }
 }))
 
@@ -47,6 +50,10 @@ vi.mock('./hooks/useTerminalAutoSave', () => ({
 
 vi.mock('./hooks/use-terminal-restore', () => ({
   useTerminalRestore: () => undefined
+}))
+
+vi.mock('./hooks/use-terminal-detached-output', () => ({
+  useTerminalDetachedOutput: () => undefined
 }))
 
 vi.mock('./hooks/use-cwd', () => ({

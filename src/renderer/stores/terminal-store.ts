@@ -6,6 +6,7 @@ import { useProjectStore } from './project-store'
 const GLOBAL_TERMINAL_LIMIT = 30
 const HIDDEN_BUFFER_TRUNCATION_DELAY = 5 * 60 * 1000 // 5 minutes
 const TRUNCATED_BUFFER_SIZE = 1000
+const MAX_TRANSCRIPT_CHARS = 500_000
 
 export interface TerminalState {
   // State
@@ -34,6 +35,11 @@ export interface TerminalState {
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
+  appendTranscript: (ptyId: string, data: string) => void
+  consumeTranscript: (ptyId: string) => string
+  appendDetachedOutput: (ptyId: string, data: string) => void
+  consumeDetachedOutput: (ptyId: string) => string
+  setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
@@ -207,9 +213,160 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined): void => {
-    set((state) => ({
-      terminals: state.terminals.map((t) => (t.id === id ? { ...t, pendingScrollback: scrollback } : t))
-    }))
+    set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      if (!target || target.pendingScrollback === scrollback) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === id ? { ...t, pendingScrollback: scrollback } : t
+        )
+      }
+    })
+  },
+
+  appendTranscript: (ptyId: string, data: string): void => {
+    if (!data) return
+
+    set((state) => {
+      const hasTarget = state.terminals.some((t) => t.ptyId === ptyId)
+      if (!hasTarget) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId) {
+            return t
+          }
+
+          const combined = (t.transcript || '') + data
+          let nextTranscript = combined
+
+          if (combined.length > MAX_TRANSCRIPT_CHARS) {
+            const tail = combined.slice(-MAX_TRANSCRIPT_CHARS)
+            const nl = tail.indexOf('\n')
+            nextTranscript = nl !== -1 ? tail.slice(nl + 1) : tail
+          }
+
+          return {
+            ...t,
+            transcript: nextTranscript
+          }
+        })
+      }
+    })
+  },
+
+  consumeTranscript: (ptyId: string): string => {
+    let consumed = ''
+
+    set((state) => {
+      const target = state.terminals.find((t) => t.ptyId === ptyId && t.transcript)
+      if (!target) {
+        return state
+      }
+
+      consumed = target.transcript ?? ''
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId || !t.transcript) {
+            return t
+          }
+
+          return {
+            ...t,
+            transcript: undefined
+          }
+        })
+      }
+    })
+
+    return consumed
+  },
+
+  appendDetachedOutput: (ptyId: string, data: string): void => {
+    if (!data) return
+
+    set((state) => {
+      const hasTarget = state.terminals.some((t) => t.ptyId === ptyId)
+      if (!hasTarget) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId) {
+            return t
+          }
+
+          return {
+            ...t,
+            detachedOutput: (t.detachedOutput || '') + data
+          }
+        })
+      }
+    })
+  },
+
+  consumeDetachedOutput: (ptyId: string): string => {
+    let consumed = ''
+
+    set((state) => {
+      const target = state.terminals.find((t) => t.ptyId === ptyId && t.detachedOutput)
+      if (!target) {
+        return state
+      }
+
+      consumed = target.detachedOutput || ''
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId || !t.detachedOutput) {
+            return t
+          }
+
+          return {
+            ...t,
+            detachedOutput: ''
+          }
+        })
+      }
+    })
+
+    return consumed
+  },
+
+  setRendererAttached: (ptyId: string, attached: boolean): void => {
+    set((state) => {
+      const target = state.terminals.find((t) => t.ptyId === ptyId)
+      if (!target) {
+        return state
+      }
+
+      const currentCount = target.rendererAttachmentCount ?? 0
+      const nextCount = attached ? currentCount + 1 : Math.max(0, currentCount - 1)
+
+      if (nextCount === currentCount) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.ptyId !== ptyId) {
+            return t
+          }
+
+          return {
+            ...t,
+            rendererAttachmentCount: nextCount
+          }
+        })
+      }
+    })
   },
 
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus): void => {
@@ -243,7 +400,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number): void => {
     set((state) => ({
-      terminals: state.terminals.map((t) => (t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t))
+      terminals: state.terminals.map((t) =>
+        t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t
+      )
     }))
   },
 
@@ -274,7 +433,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         if (
           t.isHidden &&
           t.hiddenSince &&
-          (now - t.hiddenSince) > HIDDEN_BUFFER_TRUNCATION_DELAY &&
+          now - t.hiddenSince > HIDDEN_BUFFER_TRUNCATION_DELAY &&
           t.pendingScrollback &&
           t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
         ) {
@@ -335,6 +494,11 @@ export function useTerminalActions(): Pick<
   | 'reorderTerminals'
   | 'updateTerminalCwd'
   | 'updateTerminalScrollback'
+  | 'appendTranscript'
+  | 'consumeTranscript'
+  | 'appendDetachedOutput'
+  | 'consumeDetachedOutput'
+  | 'setRendererAttached'
   | 'setTerminalPtyId'
   | 'clearTerminalPtyId'
 > {
@@ -347,6 +511,11 @@ export function useTerminalActions(): Pick<
       reorderTerminals: state.reorderTerminals,
       updateTerminalCwd: state.updateTerminalCwd,
       updateTerminalScrollback: state.updateTerminalScrollback,
+      appendTranscript: state.appendTranscript,
+      consumeTranscript: state.consumeTranscript,
+      appendDetachedOutput: state.appendDetachedOutput,
+      consumeDetachedOutput: state.consumeDetachedOutput,
+      setRendererAttached: state.setRendererAttached,
       setTerminalPtyId: state.setTerminalPtyId,
       clearTerminalPtyId: state.clearTerminalPtyId
     }))

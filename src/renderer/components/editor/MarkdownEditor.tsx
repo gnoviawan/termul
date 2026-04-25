@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useShallow } from 'zustand/shallow'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import { BlockNoteViewRaw } from '@blocknote/react'
@@ -26,9 +27,7 @@ function getTocPercentBounds(panelWidth: number): { minPercent: number; maxPerce
 }
 
 function useIsDark(): boolean {
-  const [isDark, setIsDark] = useState(
-    document.documentElement.classList.contains('dark')
-  )
+  const [isDark, setIsDark] = useState(document.documentElement.classList.contains('dark'))
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -76,12 +75,14 @@ export function MarkdownEditor({
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [blockNoteContainer, setBlockNoteContainer] = useState<HTMLDivElement | null>(null)
   const [layoutWidth, setLayoutWidth] = useState(0)
-  const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore((state) => ({
-    isTocHydrated: state.isLoaded || state.loadFailed,
-    isTocVisible: state.settings.isVisible,
-    tocWidth: state.settings.width,
-    setTocWidth: state.setWidth
-  }))
+  const { isTocHydrated, isTocVisible, tocWidth, setTocWidth } = useTocSettingsStore(
+    useShallow((state) => ({
+      isTocHydrated: state.isLoaded || state.loadFailed,
+      isTocVisible: state.settings.isVisible,
+      tocWidth: state.settings.width,
+      setTocWidth: state.setWidth
+    }))
+  )
 
   const getPanelWidth = useCallback((): number => {
     return layoutWidth || layoutRef.current?.clientWidth || 1000

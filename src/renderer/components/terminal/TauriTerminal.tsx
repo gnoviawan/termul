@@ -125,13 +125,17 @@ export function TauriTerminal(): React.JSX.Element {
       const pty = spawn(shellInfo.path, shellInfo.args ?? [], {
         cols,
         rows,
-        cwd,
+        cwd
       })
       ptyRef.current = pty
 
       // If disposed immediately after spawn, clean up the PTY
       if (disposedRef.current) {
-        try { pty.kill() } catch { /* ignore */ }
+        try {
+          pty.kill()
+        } catch {
+          /* ignore */
+        }
         ptyRef.current = null
         return
       }
@@ -158,12 +162,20 @@ export function TauriTerminal(): React.JSX.Element {
       })
       cleanupFnsRef.current.push(unlistenExit)
 
+      const container = containerRef.current as
+        | (HTMLDivElement & { _resizeObserver?: ResizeObserver })
+        | null
+      if (!container) {
+        return
+      }
+
       // ResizeObserver for auto-fit
       const resizeObserver = new ResizeObserver(() => {
         if (disposedRef.current) return
         if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
         resizeTimerRef.current = setTimeout(() => {
-          if (disposedRef.current || !fitAddonRef.current || !ptyRef.current || !termRef.current) return
+          if (disposedRef.current || !fitAddonRef.current || !ptyRef.current || !termRef.current)
+            return
           try {
             fitAddonRef.current.fit()
             const dims = fitAddonRef.current.proposeDimensions()
@@ -175,12 +187,12 @@ export function TauriTerminal(): React.JSX.Element {
           }
         }, RESIZE_DEBOUNCE_MS)
       })
-      resizeObserver.observe(containerRef.current)
+      resizeObserver.observe(container)
 
       if (!disposedRef.current) setStatus('ready')
 
       // Store observer for cleanup
-      ;(containerRef.current as HTMLDivElement & { _resizeObserver?: ResizeObserver })._resizeObserver = resizeObserver
+      container._resizeObserver = resizeObserver
     } catch (err) {
       if (!disposedRef.current) {
         const msg = `Terminal initialization gagal: ${err}`
@@ -193,13 +205,15 @@ export function TauriTerminal(): React.JSX.Element {
 
   useEffect(() => {
     initTerminal()
+    const container = containerRef.current as
+      | (HTMLDivElement & { _resizeObserver?: ResizeObserver })
+      | null
 
     return () => {
       // Mark as disposed first to prevent callbacks from firing
       disposedRef.current = true
 
       // Disconnect observer first to prevent new resize events
-      const container = containerRef.current as (HTMLDivElement & { _resizeObserver?: ResizeObserver }) | null
       if (container?._resizeObserver) {
         container._resizeObserver.disconnect()
       }
@@ -211,12 +225,18 @@ export function TauriTerminal(): React.JSX.Element {
         try {
           if (typeof fn === 'function') fn()
           else if (fn && typeof fn.dispose === 'function') fn.dispose()
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       cleanupFnsRef.current = []
 
       // Dispose WebGL addon explicitly
-      try { webglAddonRef.current?.dispose() } catch { /* ignore */ }
+      try {
+        webglAddonRef.current?.dispose()
+      } catch {
+        /* ignore */
+      }
       webglAddonRef.current = null
 
       try {
@@ -250,10 +270,7 @@ export function TauriTerminal(): React.JSX.Element {
           Loading terminal...
         </div>
       )}
-      <div
-        ref={containerRef}
-        className="absolute inset-0 p-1"
-      />
+      <div ref={containerRef} className="absolute inset-0 p-1" />
     </div>
   )
 }

@@ -43,7 +43,10 @@ export interface Terminal {
   lastExitCode?: number | null
   isActive?: boolean
   output?: TerminalLine[]
-  pendingScrollback?: string[] // Scrollback to restore on terminal mount
+  pendingScrollback?: string[] // Legacy text snapshot to restore on terminal mount
+  transcript?: string // Raw PTY transcript used for ANSI/styling-preserving restoration
+  detachedOutput?: string // Raw PTY output captured while no renderer is mounted
+  rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status
   isHidden?: boolean // Whether terminal is currently hidden (on another route)
   hiddenSince?: number // Timestamp when terminal was hidden (for buffer truncation)

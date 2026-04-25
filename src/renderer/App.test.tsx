@@ -14,6 +14,10 @@ vi.mock('./hooks/use-context-bar-settings', () => ({
   }
 }))
 
+vi.mock('./hooks/use-terminal-detached-output', () => ({
+  useTerminalDetachedOutput: () => undefined
+}))
+
 const mockCheckForUpdates = vi.fn(async () => {})
 const mockInitializeUpdater = vi.fn(async () => {})
 const mockStopPeriodicChecks = vi.fn(() => {})
@@ -51,19 +55,21 @@ const mockApi = {
     downloadUpdate: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
     installAndRestart: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
     skipVersion: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
-    getState: vi.fn(() => Promise.resolve({
-      success: true,
-      data: {
-        updateAvailable: false,
-        downloaded: false,
-        version: null,
-        isChecking: false,
-        isDownloading: false,
-        downloadProgress: null,
-        error: null,
-        lastChecked: null
-      }
-    })),
+    getState: vi.fn(() =>
+      Promise.resolve({
+        success: true,
+        data: {
+          updateAvailable: false,
+          downloaded: false,
+          version: null,
+          isChecking: false,
+          isDownloading: false,
+          downloadProgress: null,
+          error: null,
+          lastChecked: null
+        }
+      })
+    ),
     setAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
     getAutoUpdateEnabled: vi.fn(() => Promise.resolve({ success: true, data: true })),
     onUpdateAvailable: vi.fn(() => () => {}),

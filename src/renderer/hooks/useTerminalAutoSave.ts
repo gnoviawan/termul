@@ -10,6 +10,45 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
 
+function transcriptToScrollback(transcript?: string): string[] | undefined {
+  if (!transcript) {
+    return undefined
+  }
+
+  // Approximate reconstruction of rendered output from raw PTY transcript.
+  const ESC = String.fromCharCode(27)
+  const BEL = String.fromCharCode(7)
+  const oscSequenceRegex = new RegExp(`${ESC}\\][^${BEL}]*(?:${BEL}|${ESC}\\\\)`, 'g')
+  const ansiSequenceRegex = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'g')
+  const withoutOsc = transcript.replace(oscSequenceRegex, '')
+  const withoutAnsi = withoutOsc.replace(ansiSequenceRegex, '')
+  const normalized = withoutAnsi
+    .replace(/\r\n/g, '\n')
+    .replace(/([^\n])\r(?!\n)/g, '$1')
+    .replace(/\r/g, '\n')
+  const lines = normalized.split('\n')
+
+  while (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+
+  return lines.length > 0 ? lines : undefined
+}
+
+function mergeScrollback(snapshot?: string[], transcript?: string): string[] | undefined {
+  const transcriptLines = transcriptToScrollback(transcript)
+
+  if (transcriptLines && transcriptLines.length > 0) {
+    return transcriptLines
+  }
+
+  if (snapshot && snapshot.length > 0) {
+    return snapshot
+  }
+
+  return undefined
+}
+
 const terminalRestoreProjectsInProgress = new Map<string, string>()
 
 export function setTerminalRestoreInProgress(
@@ -68,7 +107,8 @@ export function serializeTerminalsForProject(
         name: t.name,
         shell: t.shell,
         cwd: t.cwd,
-        scrollback: extractScrollback(t.ptyId ?? t.id)
+        scrollback: mergeScrollback(extractScrollback(t.ptyId ?? t.id), t.transcript),
+        transcript: t.transcript
       })
     ),
     updatedAt: new Date().toISOString()
@@ -107,17 +147,18 @@ export function useTerminalAutoSave(): void {
       // Skip activity-only changes (hasActivity/lastActivityTimestamp)
       // These create new array refs but don't affect persisted layout
       if (state.activeTerminalId === prevState.activeTerminalId) {
-        const hasStructuralChange = state.terminals.some((t, i) => {
-          const prev = prevState.terminals[i]
-          if (!prev) return true
-          return (
-            t.id !== prev.id ||
-            t.name !== prev.name ||
-            t.shell !== prev.shell ||
-            t.cwd !== prev.cwd ||
-            t.projectId !== prev.projectId
-          )
-        }) || state.terminals.length !== prevState.terminals.length
+        const hasStructuralChange =
+          state.terminals.some((t, i) => {
+            const prev = prevState.terminals[i]
+            if (!prev) return true
+            return (
+              t.id !== prev.id ||
+              t.name !== prev.name ||
+              t.shell !== prev.shell ||
+              t.cwd !== prev.cwd ||
+              t.projectId !== prev.projectId
+            )
+          }) || state.terminals.length !== prevState.terminals.length
 
         if (!hasStructuralChange) {
           return
