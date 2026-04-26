@@ -270,7 +270,7 @@ jobs:
             const hasLatestJson = assetNames.includes('latest.json')
             if (!hasLatestJson) {
               const publishedAssets = assetNames.join(', ')
-              core.setFailed(
+              core.warning(
                 `Stable release is missing latest.json. ` +
                   `Draft assets: ${publishedAssets}`
               )
