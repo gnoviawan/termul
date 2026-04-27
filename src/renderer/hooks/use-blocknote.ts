@@ -155,7 +155,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
         requestAnimationFrame(() => {
           try {
-            targetElement.scrollIntoView({ block: 'start' })
+            targetElement.scrollIntoView({ block: 'start', behavior: 'smooth' })
           } catch {
             console.error('Failed to scroll TOC heading into view')
           }
