@@ -89,19 +89,22 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     }
   }, [editor])
 
-  const replaceContent = useCallback(async (markdown: string) => {
-    try {
-      isReplacingRef.current = true
-      const blocks = await editor.tryParseMarkdownToBlocks(markdown)
-      editor.replaceBlocks(editor.document, blocks)
-    } catch {
-      // Failed to parse markdown
-    } finally {
-      requestAnimationFrame(() => {
-        isReplacingRef.current = false
-      })
-    }
-  }, [editor])
+  const replaceContent = useCallback(
+    async (markdown: string) => {
+      try {
+        isReplacingRef.current = true
+        const blocks = await editor.tryParseMarkdownToBlocks(markdown)
+        editor.replaceBlocks(editor.document, blocks)
+      } catch {
+        // Failed to parse markdown
+      } finally {
+        requestAnimationFrame(() => {
+          isReplacingRef.current = false
+        })
+      }
+    },
+    [editor]
+  )
 
   const getHeadings = useCallback((): TocHeading[] => {
     return editor.document.flatMap((block) => {
@@ -152,7 +155,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
         requestAnimationFrame(() => {
           try {
-            targetElement.scrollIntoView({ block: 'center' })
+            targetElement.scrollIntoView({ block: 'start' })
           } catch {
             console.error('Failed to scroll TOC heading into view')
           }
