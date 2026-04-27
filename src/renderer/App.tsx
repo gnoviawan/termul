@@ -25,6 +25,7 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { useCustomFontsLoader } from './hooks/use-custom-fonts'
 
 // Hook to prevent Alt key from showing the default browser menu bar
 function usePreventAltMenu(): void {
@@ -67,6 +68,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useCustomFontsLoader()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
