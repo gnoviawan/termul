@@ -669,14 +669,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
 
       if (terminalToClose.ptyId) {
-        try {
-          await Promise.race([
-            terminalApi.kill(terminalToClose.ptyId),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Kill timeout')), 300))
-          ])
-        } catch (error) {
-          console.error('Failed to close terminal PTY:', error)
-          toast.error('Failed to close terminal process. Please try again.')
+        const result = await terminalApi.kill(terminalToClose.ptyId)
+        if (!result.success) {
+          console.error('Failed to close terminal PTY:', result.error)
+          toast.error(result.error || 'Failed to close terminal process. Please try again.')
           return false
         }
       }
