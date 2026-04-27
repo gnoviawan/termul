@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { TableOfContents } from './TableOfContents'
 import { useTocHeadings, filterTocHeadings, type TocHeading } from '@/hooks/use-toc-headings'
 import { useBlockNoteActiveHeading, useCodeMirrorActiveHeading } from '@/hooks/use-active-heading'
@@ -30,6 +30,7 @@ type TocPanelProps =
 export function TocPanel(props: TocPanelProps): React.JSX.Element {
   const maxHeadingLevel = useTocSettingsStore((state) => state.settings.maxHeadingLevel)
   const setMaxHeadingLevel = useTocSettingsStore((state) => state.setMaxHeadingLevel)
+  const [selectedHeadingId, setSelectedHeadingId] = useState<string | undefined>()
 
   const blockNoteHeadings = useMemo(() => {
     if (props.editorMode !== 'blocknote') {
@@ -44,7 +45,8 @@ export function TocPanel(props: TocPanelProps): React.JSX.Element {
     maxLevel: maxHeadingLevel
   })
 
-  const headings = props.editorMode === 'blocknote' ? blockNoteHeadings : codeMirrorHeadingsResult.headings
+  const headings =
+    props.editorMode === 'blocknote' ? blockNoteHeadings : codeMirrorHeadingsResult.headings
 
   const blockNoteActiveHeadingId = useBlockNoteActiveHeading({
     headings: props.editorMode === 'blocknote' ? blockNoteHeadings : [],
@@ -57,17 +59,37 @@ export function TocPanel(props: TocPanelProps): React.JSX.Element {
     visibleRange: props.editorMode === 'codemirror' ? props.codemirror.visibleRange : undefined
   })
 
-  const activeHeadingId = props.editorMode === 'blocknote' ? blockNoteActiveHeadingId : codeMirrorActiveHeadingId
+  const scrollActiveHeadingId =
+    props.editorMode === 'blocknote' ? blockNoteActiveHeadingId : codeMirrorActiveHeadingId
+
+  const prevScrollRef = useRef(scrollActiveHeadingId)
+
+  // When the scroll-based active heading changes after a click, clear the optimistic selection
+  useEffect(() => {
+    if (!selectedHeadingId) {
+      prevScrollRef.current = scrollActiveHeadingId
+      return
+    }
+
+    if (scrollActiveHeadingId !== prevScrollRef.current) {
+      prevScrollRef.current = scrollActiveHeadingId
+      setSelectedHeadingId(undefined)
+    }
+  }, [scrollActiveHeadingId, selectedHeadingId])
+
+  const activeHeadingId = selectedHeadingId ?? scrollActiveHeadingId
 
   const handleHeadingClick = (heading: TocHeading): void => {
     if (props.editorMode === 'blocknote') {
       if (heading.blockId) {
+        setSelectedHeadingId(heading.id)
         props.blocknote.scrollToBlock(heading.blockId)
       }
       return
     }
 
     if (heading.line) {
+      setSelectedHeadingId(heading.id)
       props.codemirror.scrollToLine(heading.line)
     }
   }
