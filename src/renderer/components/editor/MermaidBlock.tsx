@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import mermaid from "mermaid";
-import DOMPurify from "dompurify";
 import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 
 function useIsDark(): boolean {
@@ -67,10 +66,8 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 			.render(id, source)
 			.then(({ svg: svgStr }) => {
 				if (id !== latestRenderIdRef.current) return;
-				const clean = DOMPurify.sanitize(svgStr, {
-					USE_PROFILES: { svg: true },
-				});
-				setSvg(clean);
+				// mermaid already sanitizes with securityLevel: 'strict'
+				setSvg(svgStr);
 				setError(null);
 			})
 			.catch((err: unknown) => {
