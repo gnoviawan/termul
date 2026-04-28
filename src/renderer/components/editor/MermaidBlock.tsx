@@ -56,7 +56,6 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 		mermaid.initialize({
 			startOnLoad: false,
 			theme: isDark ? "dark" : "default",
-			securityLevel: "strict",
 		});
 
 		const id = `mb-${Math.random().toString(36).slice(2, 11)}`;
@@ -202,7 +201,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
 					transformOrigin: "0 0",
 				}}
-				// eslint-disable-next-line react/no-danger
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: SVG output from mermaid is trusted
 				dangerouslySetInnerHTML={{ __html: svg }}
 			/>
 
