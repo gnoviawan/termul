@@ -77,41 +77,49 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 		setTranslateY(0);
 	}, [source]);
 
-	const handleWheel = useCallback((e: React.WheelEvent) => {
-		e.preventDefault();
-		if (!containerRef.current || !chartRef.current) return;
+	// Native wheel listener to capture events before React's passive handler
+	// and prevent scroll propagation to parent containers.
+	useEffect(() => {
+		const el = containerRef.current;
+		if (!el) return;
 
-		const containerRect = containerRef.current.getBoundingClientRect();
-		const mouseX = e.clientX - containerRect.left;
-		const mouseY = e.clientY - containerRect.top;
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
 
-		const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-		const minScale = 0.2;
-		const maxScale = 5;
+			const containerRect = el.getBoundingClientRect();
+			const mouseX = e.clientX - containerRect.left;
+			const mouseY = e.clientY - containerRect.top;
 
-		setScale((prev) => {
-			const newScale = Math.min(
-				Math.max(prev * zoomFactor, minScale),
-				maxScale,
-			);
-			// Zoom toward mouse position
-			const scaleRatio = newScale / prev;
-			setTranslateX((tx) => tx * scaleRatio + mouseX * (1 - scaleRatio));
-			setTranslateY((ty) => ty * scaleRatio + mouseY * (1 - scaleRatio));
-			return newScale;
-		});
+			const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+			const minScale = 0.2;
+			const maxScale = 5;
+
+			setScale((prev) => {
+				const newScale = Math.min(
+					Math.max(prev * zoomFactor, minScale),
+					maxScale,
+				);
+				const scaleRatio = newScale / prev;
+				setTranslateX((tx) => tx * scaleRatio + mouseX * (1 - scaleRatio));
+				setTranslateY((ty) => ty * scaleRatio + mouseY * (1 - scaleRatio));
+				return newScale;
+			});
+		};
+
+		el.addEventListener("wheel", onWheel, { passive: false });
+		return () => el.removeEventListener("wheel", onWheel);
 	}, []);
 
 	const handleMouseDown = useCallback(
 		(e: React.MouseEvent) => {
-			if (e.button !== 0) return; // Only left click
+			if (e.button !== 0) return;
 			_isDragging.current = true;
 			dragStart.current = { x: e.clientX, y: e.clientY };
 			translateStart.current = {
 				x: translateX,
 				y: translateY,
 			};
-			// Prevent text selection
 			e.preventDefault();
 		},
 		[translateX, translateY],
@@ -167,25 +175,27 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 	return (
 		<div
 			ref={containerRef}
-			className="relative w-full overflow-hidden rounded border bg-muted/30"
+			className="relative w-full overflow-hidden rounded border bg-muted/30 select-none"
 			style={{
 				height: "400px",
 				cursor: _isDragging.current ? "grabbing" : "grab",
+				touchAction: "none",
+				overscrollBehavior: "contain",
 			}}
-			onWheel={handleWheel}
 			onMouseDown={handleMouseDown}
 			onMouseMove={handleMouseMove}
 			onMouseUp={handleMouseUp}
 			onMouseLeave={handleMouseUp}
 		>
-			{/* Chart layer */}
+			{/* Chart layer — willChange removed to prevent rasterization blur */}
 			<div
 				ref={chartRef}
-				className="inline-block origin-top-left"
+				className="inline-block"
 				style={{
 					transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
-					willChange: "transform",
+					transformOrigin: "0 0",
 				}}
+				// eslint-disable-next-line
 				dangerouslySetInnerHTML={{ __html: svg }}
 			/>
 
@@ -195,7 +205,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					type="button"
 					className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
 					onClick={handleZoomIn}
-					title="Zoom In (Scroll up)"
+					title="Zoom In"
 				>
 					<ZoomIn className="h-3.5 w-3.5" />
 				</button>
@@ -203,7 +213,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					type="button"
 					className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
 					onClick={handleZoomOut}
-					title="Zoom Out (Scroll down)"
+					title="Zoom Out"
 				>
 					<ZoomOut className="h-3.5 w-3.5" />
 				</button>
