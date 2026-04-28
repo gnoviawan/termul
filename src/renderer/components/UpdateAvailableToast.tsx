@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import { Download, X, Clock } from 'lucide-react'
+import { Download, Terminal, Clock } from 'lucide-react'
 import {
   updaterStore,
   useUpdaterState,
@@ -10,6 +10,7 @@ import {
   useIsDownloading,
   useDownloadProgress
 } from '@/stores/updater-store'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 
 // Local storage keys
 const UPDATE_REMINDER_KEY = 'update-reminder-timestamp'
@@ -40,20 +41,30 @@ function setReminderForTomorrow(): void {
  * Show a toast notification for available update
  */
 export function showUpdateToast(version: string, releaseNotes?: string): void {
+  const isAur = isAurUpdateMode()
+
   toast.success(`Update available: version ${version}`, {
     duration: 30000,
     description: releaseNotes
       ? `What's new:\n${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
-      : 'A new version is available for download.',
+      : isAur
+        ? 'A new version is available. Update with yay.'
+        : 'A new version is available for download.',
     action: {
       label: (
         <div className="flex items-center gap-2">
-          <Download size={14} />
-          <span>Download</span>
+          {isAur ? <Terminal size={14} /> : <Download size={14} />}
+          <span>{isAur ? 'Use yay' : 'Download'}</span>
         </div>
       ),
       onClick: () => {
-        // Trigger download via global store
+        if (isAur) {
+          toast.info('Run in terminal', {
+            description: 'yay -S termul-manager'
+          })
+          return
+        }
+
         const { downloadUpdate } = updaterStore.getState()
         downloadUpdate()
       }
