@@ -1,0 +1,101 @@
+name: Publish AUR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, without leading v
+        required: true
+        type: string
+
+concurrency:
+  group: publish-aur-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Update termul-manager on AUR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    container:
+      image: archlinux:base-devel
+    env:
+      AUR_PACKAGE: termul-manager
+      AUR_REPO: ssh://aur@aur.archlinux.org/termul-manager.git
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib
+          useradd -m builder
+
+      - name: Configure Git
+        run: |
+          runuser -u builder -- git config --global user.name "github-actions[bot]"
+          runuser -u builder -- git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure AUR SSH
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          install -d -m 700 -o builder -g builder /home/builder/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          chown builder:builder /home/builder/.ssh/aur
+          chmod 600 /home/builder/.ssh/aur
+          ssh-keyscan aur.archlinux.org > /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
+          chown builder:builder /home/builder/.ssh/config
+          chmod 600 /home/builder/.ssh/config
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([._+-][0-9A-Za-z]+)?$ ]]; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Clone AUR package
+        run: |
+          runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
+
+      - name: Update PKGBUILD
+        working-directory: /home/builder/termul-manager
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          runuser -u builder -- sed -i \
+            -e "s/^pkgver=.*/pkgver=$VERSION/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            PKGBUILD
+          runuser -u builder -- updpkgsums
+          runuser -u builder -- bash -c 'makepkg --printsrcinfo > .SRCINFO'
+
+      - name: Commit and push
+        working-directory: /home/builder/termul-manager
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if runuser -u builder -- git diff --quiet; then
+            echo "AUR package already up to date."
+            exit 0
+          fi
+          runuser -u builder -- git add PKGBUILD .SRCINFO
+          runuser -u builder -- git commit -m "Update to $VERSION"
+          runuser -u builder -- git push origin HEAD:master
