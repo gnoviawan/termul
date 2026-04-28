@@ -7,13 +7,11 @@ import { platform } from "@tauri-apps/plugin-os";
 import { spawn } from "tauri-pty";
 import type { ShellInfo } from "@/lib/tauri-types";
 import {
-	TERMINAL_THEME,
-	DEFAULT_TERMINAL_OPTIONS,
+	getTerminalOptions,
 	RESIZE_DEBOUNCE_MS,
 } from "@/components/terminal/terminal-config";
 import "@xterm/xterm/css/xterm.css";
 
-const CONPTY_MIN_BUILD_NUMBER = 21376;
 const MAX_WEBGL_RETRIES = 3;
 
 type TerminalStatus = "loading" | "ready" | "exited" | "error";
@@ -41,16 +39,7 @@ export function TauriTerminal(): React.JSX.Element {
 			const isWindows = os === "windows";
 
 			// Create terminal with platform-aware options
-			const termOptions = {
-				...DEFAULT_TERMINAL_OPTIONS,
-				theme: TERMINAL_THEME,
-				...(isWindows && {
-					windowsPty: {
-						backend: "conpty" as const,
-						buildNumber: CONPTY_MIN_BUILD_NUMBER,
-					},
-				}),
-			};
+			const termOptions = getTerminalOptions(os === "windows" ? "Win32" : os);
 
 			const term = new Terminal(termOptions);
 			termRef.current = term;

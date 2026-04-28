@@ -65,6 +65,8 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Guard to suppress onChange during programmatic replaceBlocks calls
 	const isReplacingRef = useRef(false);
+	// Incrementing token to discard stale replace results
+	const replaceTokenRef = useRef(0);
 
 	onChangeRef.current = options.onChange;
 
@@ -79,30 +81,35 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 		return BlockNoteEditor.create({ schema });
 	}, []);
 
-	// Load initial markdown content
-	useEffect(() => {
-		const loadContent = async (): Promise<void> => {
+	const runReplace = useCallback(
+		async (markdown: string, token: number): Promise<void> => {
 			try {
 				isReplacingRef.current = true;
-				const blocks = await editor.tryParseMarkdownToBlocks(
-					initialMarkdownRef.current,
-				);
+				const blocks = await editor.tryParseMarkdownToBlocks(markdown);
+				if (token !== replaceTokenRef.current) return;
 				const processedBlocks = convertMermaidBlocks(
 					blocks as Array<Record<string, unknown>>,
 				);
+				if (token !== replaceTokenRef.current) return;
 				editor.replaceBlocks(editor.document, processedBlocks);
 			} catch {
 				// Failed to parse markdown
 			} finally {
-				// Delay clearing the flag so the onChange triggered by replaceBlocks is suppressed
-				requestAnimationFrame(() => {
-					isReplacingRef.current = false;
-				});
+				if (token === replaceTokenRef.current) {
+					requestAnimationFrame(() => {
+						isReplacingRef.current = false;
+					});
+				}
 			}
-		};
+		},
+		[editor],
+	);
 
-		void loadContent();
-	}, [editor]);
+	// Load initial markdown content
+	useEffect(() => {
+		const token = ++replaceTokenRef.current;
+		void runReplace(initialMarkdownRef.current, token);
+	}, [editor, runReplace]);
 
 	// Set up change listener
 	useEffect(() => {
@@ -136,22 +143,13 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
 	const replaceContent = useCallback(
 		async (markdown: string) => {
-			try {
-				isReplacingRef.current = true;
-				const blocks = await editor.tryParseMarkdownToBlocks(markdown);
-				const processedBlocks = convertMermaidBlocks(
-					blocks as Array<Record<string, unknown>>,
-				);
-				editor.replaceBlocks(editor.document, processedBlocks);
-			} catch {
-				// Failed to parse markdown
-			} finally {
-				requestAnimationFrame(() => {
-					isReplacingRef.current = false;
-				});
+			const token = ++replaceTokenRef.current;
+			if (debounceTimerRef.current) {
+				clearTimeout(debounceTimerRef.current);
 			}
+			await runReplace(markdown, token);
 		},
-		[editor],
+		[runReplace],
 	);
 
 	const getHeadings = useCallback((): TocHeading[] => {

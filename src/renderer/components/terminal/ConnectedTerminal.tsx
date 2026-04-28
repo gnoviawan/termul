@@ -1058,8 +1058,7 @@ function ConnectedTerminalComponent({
 			<ContextMenuTrigger asChild>
 				<div
 					ref={containerRef}
-					className={`w-full h-full bg-[#1e1e1e] ${className}`}
-					style={{ padding: "2px 16px 4px 16px" }}
+					className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
 					onClick={handleContainerClick}
 					onMouseDown={(e) => {
 						// Prevent event from bubbling to window/parent handlers

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import mermaid from "mermaid";
+import DOMPurify from "dompurify";
 import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 
 function useIsDark(): boolean {
@@ -42,7 +43,10 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 	const dragStart = useRef({ x: 0, y: 0 });
 	const translateStart = useRef({ x: 0, y: 0 });
 
-	// Render mermaid
+	// Race-guard for mermaid renders
+	const latestRenderIdRef = useRef<string>("");
+
+	// Render mermaid with stale-render guard and SVG sanitization
 	useEffect(() => {
 		if (!source.trim()) {
 			setSvg("");
@@ -57,14 +61,20 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 		});
 
 		const id = `mb-${Math.random().toString(36).slice(2, 11)}`;
+		latestRenderIdRef.current = id;
 
 		mermaid
 			.render(id, source)
 			.then(({ svg: svgStr }) => {
-				setSvg(svgStr);
+				if (id !== latestRenderIdRef.current) return;
+				const clean = DOMPurify.sanitize(svgStr, {
+					USE_PROFILES: { svg: true },
+				});
+				setSvg(clean);
 				setError(null);
 			})
 			.catch((err: unknown) => {
+				if (id !== latestRenderIdRef.current) return;
 				setError(err instanceof Error ? err.message : String(err));
 				setSvg("");
 			});
@@ -195,7 +205,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
 					transformOrigin: "0 0",
 				}}
-				// eslint-disable-next-line
+				// eslint-disable-next-line react/no-danger
 				dangerouslySetInnerHTML={{ __html: svg }}
 			/>
 
@@ -206,6 +216,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
 					onClick={handleZoomIn}
 					title="Zoom In"
+					aria-label="Zoom in"
 				>
 					<ZoomIn className="h-3.5 w-3.5" />
 				</button>
@@ -214,6 +225,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
 					onClick={handleZoomOut}
 					title="Zoom Out"
+					aria-label="Zoom out"
 				>
 					<ZoomOut className="h-3.5 w-3.5" />
 				</button>
@@ -222,6 +234,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
 					onClick={handleReset}
 					title="Reset View"
+					aria-label="Reset view"
 				>
 					<RotateCcw className="h-3.5 w-3.5" />
 				</button>

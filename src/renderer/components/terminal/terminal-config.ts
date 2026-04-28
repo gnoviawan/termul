@@ -6,7 +6,7 @@ export const RESIZE_DEBOUNCE_MS = 50;
 // Windows build number for ConPTY. Build 21376 (Windows 10 20H2) introduced stable ConPTY
 // support. Using this value enables xterm.js to apply appropriate workarounds for ConPTY
 // behavior (e.g., correct line wrapping calculations).
-const CONPTY_MIN_BUILD_NUMBER = 21376;
+export const CONPTY_MIN_BUILD_NUMBER = 21376;
 
 export const TERMINAL_THEME: ITheme = {
 	background: "#1e1e1e",

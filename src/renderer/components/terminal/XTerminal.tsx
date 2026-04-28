@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { DEFAULT_TERMINAL_OPTIONS } from "@/components/terminal/terminal-config";
 import "@xterm/xterm/css/xterm.css";
 
 export interface XTerminalProps {
@@ -12,41 +13,9 @@ export interface XTerminalProps {
 	className?: string;
 }
 
-const TERMINAL_THEME = {
-	background: "#1e1e1e",
-	foreground: "#d4d4d4",
-	cursor: "#ffffff",
-	cursorAccent: "#000000",
-	selectionBackground: "#264f78",
-	selectionForeground: "#ffffff",
-	black: "#000000",
-	red: "#cd3131",
-	green: "#0dbc79",
-	yellow: "#e5e510",
-	blue: "#2472c8",
-	magenta: "#bc3fbc",
-	cyan: "#11a8cd",
-	white: "#e5e5e5",
-	brightBlack: "#666666",
-	brightRed: "#f14c4c",
-	brightGreen: "#23d18b",
-	brightYellow: "#f5f543",
-	brightBlue: "#3b8eea",
-	brightMagenta: "#d670d6",
-	brightCyan: "#29b8db",
-	brightWhite: "#ffffff",
-};
-
 const TERMINAL_OPTIONS = {
-	fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-	fontSize: 14,
-	lineHeight: 1.2,
-	theme: TERMINAL_THEME,
-	cursorBlink: true,
-	cursorStyle: "block" as const,
-	allowTransparency: false,
-	scrollback: 10000,
-	tabStopWidth: 4,
+	...DEFAULT_TERMINAL_OPTIONS,
+	// Deliberate overrides: XTerminal always converts EOL to LF for compatibility
 	convertEol: true,
 };
 
@@ -130,8 +99,7 @@ function XTerminalComponent({
 	return (
 		<div
 			ref={containerRef}
-			className={`w-full h-full bg-[#1e1e1e] ${className}`}
-			style={{ padding: "2px 16px 4px 16px" }}
+			className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
 		/>
 	);
 }
