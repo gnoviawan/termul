@@ -14,6 +14,7 @@ import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 const STABLE_UPDATE_MANIFEST_URL =
   'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
 const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
+const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
 
 export type UpdateMode = 'tauri' | 'aur'
 
@@ -185,6 +186,7 @@ interface GitHubRelease {
 }
 
 function normalizeVersion(version: string): string {
+  // Ignore AUR pkgrel/build metadata; app updates only track upstream release versions.
   return version.trim().replace(/^v/i, '').split(/[+-]/)[0] ?? version
 }
 
@@ -213,14 +215,22 @@ function mapGitHubReleaseToInfo(release: GitHubRelease): UpdateInfo {
 }
 
 async function checkAurUpdate(): Promise<UpdateInfo | null> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => {
+    controller.abort()
+  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
+
   const [currentVersion, response] = await Promise.all([
     getVersion(),
     fetch(UPSTREAM_LATEST_RELEASE_URL, {
       headers: {
         Accept: 'application/vnd.github+json'
-      }
+      },
+      signal: controller.signal
     })
-  ])
+  ]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
 
   if (!response.ok) {
     throw new Error(`GitHub returned HTTP ${response.status}`)
