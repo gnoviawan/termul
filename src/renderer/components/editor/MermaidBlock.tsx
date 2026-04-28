@@ -28,8 +28,50 @@ interface MermaidBlockProps {
 }
 
 export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
-	const containerRef = useRef<HTMLDivElement>(null);
+	const containerRef = useRef<HTMLDivElement | null>(null);
 	const chartRef = useRef<HTMLDivElement>(null);
+
+	// Attach native wheel listener via ref callback so it works even when
+	// BlockNote re-mounts the DOM node after initial render.
+	const wheelCleanupRef = useRef<(() => void) | null>(null);
+	const containerCallbackRef = useCallback((node: HTMLDivElement | null) => {
+		// Cleanup previous listener
+		if (wheelCleanupRef.current) {
+			wheelCleanupRef.current();
+			wheelCleanupRef.current = null;
+		}
+
+		// Store the node in the regular ref too (for mouse handlers)
+		containerRef.current = node;
+		if (!node) return;
+
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+
+			const rect = node.getBoundingClientRect();
+			const mouseX = e.clientX - rect.left;
+			const mouseY = e.clientY - rect.top;
+
+			const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+			const minScale = 0.2;
+			const maxScale = 5;
+
+			setScale((prev) => {
+				const newScale = Math.min(
+					Math.max(prev * zoomFactor, minScale),
+					maxScale,
+				);
+				const scaleRatio = newScale / prev;
+				setTranslateX((tx) => tx * scaleRatio + mouseX * (1 - scaleRatio));
+				setTranslateY((ty) => ty * scaleRatio + mouseY * (1 - scaleRatio));
+				return newScale;
+			});
+		};
+
+		node.addEventListener("wheel", onWheel, { passive: false });
+		wheelCleanupRef.current = () => node.removeEventListener("wheel", onWheel);
+	}, []);
 	const [svg, setSvg] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const isDark = useIsDark();
@@ -82,40 +124,6 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 		setTranslateX(0);
 		setTranslateY(0);
 	}, [source]);
-
-	// Native wheel listener to capture events before React's passive handler
-	// and prevent scroll propagation to parent containers.
-	useEffect(() => {
-		const el = containerRef.current;
-		if (!el) return;
-
-		const onWheel = (e: WheelEvent) => {
-			e.preventDefault();
-			e.stopPropagation();
-
-			const containerRect = el.getBoundingClientRect();
-			const mouseX = e.clientX - containerRect.left;
-			const mouseY = e.clientY - containerRect.top;
-
-			const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-			const minScale = 0.2;
-			const maxScale = 5;
-
-			setScale((prev) => {
-				const newScale = Math.min(
-					Math.max(prev * zoomFactor, minScale),
-					maxScale,
-				);
-				const scaleRatio = newScale / prev;
-				setTranslateX((tx) => tx * scaleRatio + mouseX * (1 - scaleRatio));
-				setTranslateY((ty) => ty * scaleRatio + mouseY * (1 - scaleRatio));
-				return newScale;
-			});
-		};
-
-		el.addEventListener("wheel", onWheel, { passive: false });
-		return () => el.removeEventListener("wheel", onWheel);
-	}, []);
 
 	const handleMouseDown = useCallback(
 		(e: React.MouseEvent) => {
@@ -180,7 +188,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 
 	return (
 		<div
-			ref={containerRef}
+			ref={containerCallbackRef}
 			className="relative w-full overflow-hidden rounded border bg-muted/30 select-none"
 			style={{
 				height: "400px",
