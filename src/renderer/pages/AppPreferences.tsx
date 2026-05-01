@@ -7,6 +7,7 @@ import {
   useDefaultShell,
   useDefaultProjectColor,
   useMaxTerminalsPerProject,
+  useConfirmTerminalClose,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout
 } from '@/stores/app-settings-store'
@@ -38,6 +39,7 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
+  const confirmTerminalClose = useConfirmTerminalClose()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -92,6 +94,10 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleMaxTerminalsChange = (value: number) => {
     updateSetting('maxTerminalsPerProject', value)
+  }
+
+  const handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
+    await updateSetting("confirmTerminalClose", enabled)
   }
 
   const handleOrphanDetectionToggle = async (enabled: boolean) => {

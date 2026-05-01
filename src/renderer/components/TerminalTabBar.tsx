@@ -118,7 +118,7 @@ export function TerminalTabBar({
   })
 
   return (
-    <div className="h-10 bg-card border-b border-border flex items-center">
+    <div className="h-9 bg-card border-b border-border flex items-center">
       <div className="relative flex items-center h-full min-w-0 shrink">
         <div
           ref={tabsContainerRef}
@@ -160,16 +160,16 @@ export function TerminalTabBar({
       <div ref={dropdownRef} className="relative flex items-center ml-1 shrink-0">
         <button
           onClick={onNewTerminal}
-          className="h-8 w-8 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
+          className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
           title="New terminal (default shell)"
         >
-          <Plus size={14} />
+          <Plus size={12} />
         </button>
         {onNewTerminalWithShell && (
           <>
             <button
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="h-8 w-6 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+              className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
               title="Select shell"
             >
               <ChevronDown size={12} />
@@ -194,7 +194,7 @@ export function TerminalTabBar({
                           shell.name === defaultShell && 'text-primary'
                         )}
                       >
-                        <TerminalIcon size={14} />
+                        <TerminalIcon size={12} />
                         <span>{shell.displayName}</span>
                         {shell.name === defaultShell && (
                           <span className="ml-auto text-xs text-muted-foreground">(default)</span>
@@ -294,17 +294,17 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
   const contextMenuItems: ContextMenuItem[] = [
     {
       label: 'Rename',
-      icon: <Edit2 size={14} />,
+      icon: <Edit2 size={12} />,
       onClick: handleRenameFromMenu
     },
     {
       label: 'Close',
-      icon: <X size={14} />,
+      icon: <X size={12} />,
       onClick: onClose
     },
     {
       label: 'Kill Process',
-      icon: <Skull size={14} />,
+      icon: <Skull size={12} />,
       onClick: onClose,
       variant: 'danger'
     }
@@ -316,13 +316,13 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
         onClick={onSelect}
         onContextMenu={handleContextMenu}
         className={cn(
-          'h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-colors',
+          'h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-colors',
           isActive
             ? 'bg-background border-t-2 border-t-primary'
             : 'hover:bg-secondary/50 text-muted-foreground'
         )}
       >
-        <TerminalIcon size={14} className={cn('mr-2', isActive ? 'text-primary' : '')} />
+        <TerminalIcon size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
         {isEditing ? (
           <input
             ref={inputRef}
@@ -332,12 +332,12 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             onClick={(e) => e.stopPropagation()}
-            className="text-sm font-medium bg-transparent border-b border-primary outline-none w-full"
+            className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
           <span
             onDoubleClick={handleDoubleClick}
-            className={cn('text-sm font-medium', isActive && 'text-foreground')}
+            className={cn('text-[11px] font-medium', isActive && 'text-foreground')}
           >
             {terminal.name}
           </span>
@@ -349,7 +349,7 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
           }}
           className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <X size={12} />
+          <X size={11} />
         </button>
       </div>
 

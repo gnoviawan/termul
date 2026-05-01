@@ -73,3 +73,5 @@ VERIFICATION_CHECKLIST.md
 .agent/workflows/
 .github/prompts/
 .github/copilot-instructions.md
+/.pi
+/.pi-lens

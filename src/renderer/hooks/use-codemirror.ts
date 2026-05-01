@@ -1,6 +1,12 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { EditorState, Compartment } from '@codemirror/state'
-import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, keymap } from '@codemirror/view'
+import {
+  EditorView,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap
+} from '@codemirror/view'
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { highlightSelectionMatches } from '@codemirror/search'
@@ -296,10 +302,7 @@ export function useCodeMirror(
     const safeLineNumber = Math.min(Math.max(1, lineNumber), view.state.doc.lines)
     const line = view.state.doc.line(safeLineNumber)
     const lineBlock = view.lineBlockAt(line.from)
-    const targetScrollTop = Math.max(
-      0,
-      lineBlock.top - view.scrollDOM.clientHeight / 2 + lineBlock.height / 2
-    )
+    const targetScrollTop = lineBlock.top
 
     view.dispatch({
       selection: { anchor: line.from }
