@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useShallow } from "zustand/shallow";
 import {
 	Plus,
 	Terminal as TerminalIcon,
@@ -114,7 +115,7 @@ function TerminalTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"relative h-full px-4 flex items-center border-r border-border min-w-[150px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
 					isActive
 						? "bg-background border-b-primary"
 						: "hover:bg-secondary/50 text-muted-foreground",
@@ -130,7 +131,7 @@ function TerminalTabInline({
 				)}
 
 				<TerminalIcon
-					size={14}
+					size={12}
 					className={cn("mr-2", isActive ? "text-primary" : "")}
 				/>
 				{isEditing ? (
@@ -150,12 +151,12 @@ function TerminalTabInline({
 						}}
 						onBlur={handleSave}
 						onClick={(e) => e.stopPropagation()}
-						className="text-xs font-medium bg-transparent border-b border-primary outline-none w-full"
+						className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
 					/>
 				) : (
 					<span
 						onDoubleClick={handleDoubleClick}
-						className={cn("text-xs font-medium", isActive && "text-foreground")}
+						className={cn("text-[11px] font-medium", isActive && "text-foreground")}
 					>
 						{terminal.name}
 					</span>
@@ -171,9 +172,9 @@ function TerminalTabInline({
 					className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100 disabled:cursor-wait"
 				>
 					{isClosing ? (
-						<Loader2 size={12} className="animate-spin" />
+						<Loader2 size={11} className="animate-spin" />
 					) : (
-						<XIcon size={12} />
+						<XIcon size={11} />
 					)}
 				</button>
 			</div>
@@ -183,16 +184,16 @@ function TerminalTabInline({
 					items={[
 						{
 							label: "Rename",
-							icon: <Edit2 size={14} />,
+							icon: <Edit2 size={12} />,
 							onClick: () => {
 								setEditName(terminal.name);
 								setIsEditing(true);
 							},
 						},
-						{ label: "Close", icon: <XIcon size={14} />, onClick: onClose },
+						{ label: "Close", icon: <XIcon size={12} />, onClick: onClose },
 						{
 							label: "Kill Process",
-							icon: <Skull size={14} />,
+							icon: <Skull size={12} />,
 							onClick: onClose,
 							variant: "danger",
 						},
@@ -239,8 +240,14 @@ function EditorTabWrapper({
 	onDragLeave,
 	onDrop,
 }: EditorTabWrapperProps): React.JSX.Element {
-	const isDirty = useEditorStore(
-		(state) => state.openFiles.get(tab.filePath)?.isDirty ?? false,
+	const { isDirty, operationStatus } = useEditorStore(
+		useShallow((state) => {
+			const file = state.openFiles.get(tab.filePath);
+			return {
+				isDirty: file?.isDirty ?? false,
+				operationStatus: file?.operationStatus ?? "idle",
+			};
+		}),
 	);
 	return (
 		<div
@@ -265,6 +272,7 @@ function EditorTabWrapper({
 				filePath={tab.filePath}
 				isActive={isActive}
 				isDirty={isDirty}
+				operationStatus={operationStatus}
 				onSelect={onSelect}
 				onClose={onClose}
 				onCloseOthers={onCloseOthers}
@@ -382,6 +390,13 @@ export function WorkspaceTabBar({
 
 	const handleCloseEditorTab = useCallback(
 		(filePath: string) => {
+			const operationStatus =
+				useEditorStore.getState().openFiles.get(filePath)?.operationStatus ??
+				"idle";
+			if (operationStatus === "saving" || operationStatus === "reloading") {
+				return;
+			}
+
 			if (onCloseEditorTab) {
 				onCloseEditorTab(filePath);
 			} else {
@@ -509,7 +524,7 @@ export function WorkspaceTabBar({
 
 	return (
 		<div
-			className="h-10 bg-card border-b border-border flex items-center"
+			className="h-9 bg-card border-b border-border flex items-center"
 			onDragOver={(e) => {
 				e.preventDefault();
 				e.dataTransfer.dropEffect = "move";
@@ -610,16 +625,16 @@ export function WorkspaceTabBar({
 				>
 					<button
 						onClick={onNewTerminal}
-						className="h-8 w-8 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
+						className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
 						title="New terminal (default shell)"
 					>
-						<Plus size={14} />
+						<Plus size={12} />
 					</button>
 					{onNewTerminalWithShell && (
 						<>
 							<button
 								onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-								className="h-8 w-6 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+								className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
 								title="Select shell"
 							>
 								<ChevronDown size={12} />
@@ -644,7 +659,7 @@ export function WorkspaceTabBar({
 														shell.name === defaultShell && "text-primary",
 													)}
 												>
-													<TerminalIcon size={14} />
+													<TerminalIcon size={12} />
 													<span>{shell.displayName}</span>
 													{shell.name === defaultShell && (
 														<span className="ml-auto text-xs text-muted-foreground">
