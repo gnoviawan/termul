@@ -60,6 +60,7 @@ export interface UpdaterStoreState {
   autoUpdateEnabled: boolean
   releaseNotes: string | null
   hasActiveTerminals: boolean
+  isManualUpdateMode: boolean
 
   // Actions
   checkForUpdates: () => Promise<void>
@@ -99,6 +100,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   autoUpdateEnabled: true,
   releaseNotes: null,
   hasActiveTerminals: false,
+  isManualUpdateMode: false,
 
   /**
    * Check for available updates via the Tauri updater plugin
@@ -159,7 +161,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         releaseNotes: updateInfo.releaseNotes ?? null,
         downloadProgress: 0,
         error: null,
-        lastChecked: checkedAt
+        lastChecked: checkedAt,
+        isManualUpdateMode: false
       })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to check for updates'
@@ -504,7 +507,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       lastChecked: state.lastChecked ? new Date(state.lastChecked) : null,
       autoUpdateEnabled: current.autoUpdateEnabled,
       releaseNotes: null,
-      hasActiveTerminals: hasActiveTerminalSessions()
+      hasActiveTerminals: hasActiveTerminalSessions(),
+      isManualUpdateMode: state.isManualUpdateMode ?? false
     }))
   }
 }))
@@ -600,7 +604,8 @@ export function useUpdaterState() {
       lastChecked: state.lastChecked,
       autoUpdateEnabled: state.autoUpdateEnabled,
       releaseNotes: state.releaseNotes,
-      hasActiveTerminals: state.hasActiveTerminals
+      hasActiveTerminals: state.hasActiveTerminals,
+      isManualUpdateMode: state.isManualUpdateMode
     }))
   )
 }
