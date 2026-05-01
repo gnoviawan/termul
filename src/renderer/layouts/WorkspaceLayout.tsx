@@ -477,7 +477,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			if (e.ctrlKey && e.key === "s" && !e.shiftKey && !e.altKey) {
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
-					useEditorStore.getState().saveFile(activeTab.filePath);
+					void useEditorStore.getState().saveFile(activeTab.filePath);
 				}
 				return;
 			}
@@ -861,6 +861,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Dirty file close handlers
 	const handleCloseEditorTab = useCallback((filePath: string) => {
 		const fileState = useEditorStore.getState().openFiles.get(filePath);
+		if (
+			fileState?.operationStatus === "saving" ||
+			fileState?.operationStatus === "reloading"
+		) {
+			return;
+		}
+
 		if (fileState?.isDirty) {
 			setDirtyCloseFilePath(filePath);
 		} else {

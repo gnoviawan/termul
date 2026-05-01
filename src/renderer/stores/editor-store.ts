@@ -1,371 +1,488 @@
-import { create } from 'zustand'
-import { useShallow } from 'zustand/shallow'
-import { toast } from 'sonner'
-import { filesystemApi } from '@/lib/api'
+import { create } from "zustand";
+import { useShallow } from "zustand/shallow";
+import { toast } from "sonner";
+import { filesystemApi } from "@/lib/api";
 
-const EDITOR_TAB_LIMIT = 15
+const EDITOR_TAB_LIMIT = 15;
 
 function getExtname(filePath: string): string {
-  const name = filePath.split(/[\\/]/).pop() || filePath
-  const dotIndex = name.lastIndexOf('.')
-  if (dotIndex <= 0) return ''
-  return name.slice(dotIndex)
+	const name = filePath.split(/[\\/]/).pop() || filePath;
+	const dotIndex = name.lastIndexOf(".");
+	if (dotIndex <= 0) return "";
+	return name.slice(dotIndex);
 }
 
 function detectLanguage(filePath: string): string {
-  const ext = getExtname(filePath).slice(1).toLowerCase()
-  const map: Record<string, string> = {
-    ts: 'typescript',
-    tsx: 'typescript',
-    js: 'javascript',
-    jsx: 'javascript',
-    json: 'json',
-    css: 'css',
-    scss: 'css',
-    html: 'html',
-    htm: 'html',
-    md: 'markdown',
-    yaml: 'yaml',
-    yml: 'yaml',
-    xml: 'xml',
-    svg: 'xml',
-    sh: 'shell',
-    bash: 'shell',
-    py: 'python',
-    rs: 'rust',
-    go: 'go',
-    toml: 'toml'
-  }
-  return map[ext] || ''
+	const ext = getExtname(filePath).slice(1).toLowerCase();
+	const map: Record<string, string> = {
+		ts: "typescript",
+		tsx: "typescript",
+		js: "javascript",
+		jsx: "javascript",
+		json: "json",
+		css: "css",
+		scss: "css",
+		html: "html",
+		htm: "html",
+		md: "markdown",
+		yaml: "yaml",
+		yml: "yaml",
+		xml: "xml",
+		svg: "xml",
+		sh: "shell",
+		bash: "shell",
+		py: "python",
+		rs: "rust",
+		go: "go",
+		toml: "toml",
+	};
+	return map[ext] || "";
 }
 
-function getDefaultViewMode(filePath: string): 'code' | 'markdown' {
-  const ext = getExtname(filePath).slice(1).toLowerCase()
-  return ext === 'md' ? 'markdown' : 'code'
+function getDefaultViewMode(filePath: string): "code" | "markdown" {
+	const ext = getExtname(filePath).slice(1).toLowerCase();
+	return ext === "md" ? "markdown" : "code";
 }
+
+export type EditorFileOperationStatus =
+	| "idle"
+	| "saving"
+	| "reloading"
+	| "saved";
 
 export interface EditorFileState {
-  filePath: string
-  content: string
-  originalContent: string
-  isDirty: boolean
-  language: string
-  lastModified: number
-  viewMode: 'code' | 'markdown'
-  cursorPosition: { line: number; col: number }
-  scrollTop: number
+	filePath: string;
+	content: string;
+	originalContent: string;
+	isDirty: boolean;
+	language: string;
+	lastModified: number;
+	viewMode: "code" | "markdown";
+	cursorPosition: { line: number; col: number };
+	scrollTop: number;
+	operationStatus: EditorFileOperationStatus;
+	watcherIgnoreUntil: number;
 }
 
 export interface EditorState {
-  openFiles: Map<string, EditorFileState>
-  activeFilePath: string | null
+	openFiles: Map<string, EditorFileState>;
+	activeFilePath: string | null;
 
-  openFile: (path: string) => Promise<void>
-  closeFile: (path: string) => void
-  updateContent: (path: string, content: string) => void
-  saveFile: (path: string) => Promise<boolean>
-  saveAllDirty: () => Promise<void>
-  setViewMode: (path: string, mode: 'code' | 'markdown') => void
-  updateCursorPosition: (path: string, line: number, col: number) => void
-  updateScrollTop: (path: string, scrollTop: number) => void
-  reloadFile: (path: string) => Promise<void>
-  setActiveFilePath: (path: string | null) => void
-  clearAllFiles: () => void
-  hasDirtyFiles: () => boolean
-  getDirtyFileCount: () => number
-  getOpenFilePaths: () => string[]
+	openFile: (path: string) => Promise<void>;
+	closeFile: (path: string) => void;
+	updateContent: (path: string, content: string) => void;
+	saveFile: (path: string) => Promise<boolean>;
+	saveAllDirty: () => Promise<void>;
+	setViewMode: (path: string, mode: "code" | "markdown") => void;
+	updateCursorPosition: (path: string, line: number, col: number) => void;
+	updateScrollTop: (path: string, scrollTop: number) => void;
+	reloadFile: (path: string) => Promise<void>;
+	setActiveFilePath: (path: string | null) => void;
+	clearAllFiles: () => void;
+	hasDirtyFiles: () => boolean;
+	getDirtyFileCount: () => number;
+	getOpenFilePaths: () => string[];
+}
+
+const statusResetTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearStatusResetTimer(path: string): void {
+	const timer = statusResetTimers.get(path);
+	if (timer) {
+		clearTimeout(timer);
+		statusResetTimers.delete(path);
+	}
+}
+
+function setFileOperationStatus(
+	set: (partial: Partial<EditorState>) => void,
+	get: () => EditorState,
+	path: string,
+	status: EditorFileOperationStatus,
+	resetAfterMs?: number,
+): void {
+	clearStatusResetTimer(path);
+
+	const newFiles = new Map(get().openFiles);
+	const current = newFiles.get(path);
+	if (!current) return;
+
+	newFiles.set(path, {
+		...current,
+		operationStatus: status,
+	});
+	set({ openFiles: newFiles });
+
+	if (resetAfterMs !== undefined) {
+		const timer = setTimeout(() => {
+			const latestFiles = new Map(get().openFiles);
+			const latest = latestFiles.get(path);
+			if (!latest) {
+				statusResetTimers.delete(path);
+				return;
+			}
+
+			latestFiles.set(path, {
+				...latest,
+				operationStatus: "idle",
+				watcherIgnoreUntil:
+					latest.operationStatus === "saved" ? 0 : latest.watcherIgnoreUntil,
+			});
+			set({ openFiles: latestFiles });
+			statusResetTimers.delete(path);
+		}, resetAfterMs);
+
+		statusResetTimers.set(path, timer);
+	}
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
-  openFiles: new Map<string, EditorFileState>(),
-  activeFilePath: null,
+	openFiles: new Map<string, EditorFileState>(),
+	activeFilePath: null,
 
-  openFile: async (path: string): Promise<void> => {
-    const { openFiles } = get()
+	openFile: async (path: string): Promise<void> => {
+		const { openFiles } = get();
 
-    // Already open, just activate
-    if (openFiles.has(path)) {
-      set({ activeFilePath: path })
-      return
-    }
+		// Already open, just activate
+		if (openFiles.has(path)) {
+			set({ activeFilePath: path });
+			return;
+		}
 
-    // Check file info first
-    const infoResult = await filesystemApi.getFileInfo(path)
-    if (!infoResult.success) {
-      throw new Error(infoResult.error)
-    }
+		// Check file info first
+		const infoResult = await filesystemApi.getFileInfo(path);
+		if (!infoResult.success) {
+			throw new Error(infoResult.error);
+		}
 
-    if (infoResult.data.isBinary) {
-      throw new Error('Binary file cannot be displayed')
-    }
+		if (infoResult.data.isBinary) {
+			throw new Error("Binary file cannot be displayed");
+		}
 
-    if (infoResult.data.size > 1024 * 1024) {
-      throw new Error('File too large (>1MB)')
-    }
+		if (infoResult.data.size > 1024 * 1024) {
+			throw new Error("File too large (>1MB)");
+		}
 
-    // Read file content
-    const result = await filesystemApi.readFile(path)
-    if (!result.success) {
-      throw new Error(result.error)
-    }
+		// Read file content
+		const result = await filesystemApi.readFile(path);
+		if (!result.success) {
+			throw new Error(result.error);
+		}
 
-    const newFiles = new Map(get().openFiles)
+		const newFiles = new Map(get().openFiles);
 
-    // Check tab limit - close oldest inactive non-dirty tab
-    if (newFiles.size >= EDITOR_TAB_LIMIT) {
-      const { activeFilePath } = get()
-      let oldestPath: string | null = null
-      let oldestTime = Infinity
+		// Check tab limit - close oldest inactive non-dirty tab
+		if (newFiles.size >= EDITOR_TAB_LIMIT) {
+			const { activeFilePath } = get();
+			let oldestPath: string | null = null;
+			let oldestTime = Infinity;
 
-      newFiles.forEach((file, filePath) => {
-        if (filePath !== activeFilePath && !file.isDirty && file.lastModified < oldestTime) {
-          oldestTime = file.lastModified
-          oldestPath = filePath
-        }
-      })
+			newFiles.forEach((file, filePath) => {
+				if (
+					filePath !== activeFilePath &&
+					!file.isDirty &&
+					file.lastModified < oldestTime
+				) {
+					oldestTime = file.lastModified;
+					oldestPath = filePath;
+				}
+			});
 
-      if (oldestPath) {
-        newFiles.delete(oldestPath)
-      } else {
-        toast.warning('Too many open tabs', {
-          description: 'Close a tab or save your changes to open more files.'
-        })
-        return
-      }
-    }
+			if (oldestPath) {
+				newFiles.delete(oldestPath);
+			} else {
+				toast.warning("Too many open tabs", {
+					description: "Close a tab or save your changes to open more files.",
+				});
+				return;
+			}
+		}
 
-    const fileState: EditorFileState = {
-      filePath: path,
-      content: result.data.content,
-      originalContent: result.data.content,
-      isDirty: false,
-      language: detectLanguage(path),
-      lastModified: result.data.modifiedAt,
-      viewMode: getDefaultViewMode(path),
-      cursorPosition: { line: 1, col: 1 },
-      scrollTop: 0
-    }
+		const fileState: EditorFileState = {
+			filePath: path,
+			content: result.data.content,
+			originalContent: result.data.content,
+			isDirty: false,
+			language: detectLanguage(path),
+			lastModified: result.data.modifiedAt,
+			viewMode: getDefaultViewMode(path),
+			cursorPosition: { line: 1, col: 1 },
+			scrollTop: 0,
+			operationStatus: "idle",
+			watcherIgnoreUntil: 0,
+		};
 
-    newFiles.set(path, fileState)
-    set({ openFiles: newFiles, activeFilePath: path })
-  },
+		newFiles.set(path, fileState);
+		set({ openFiles: newFiles, activeFilePath: path });
+	},
 
-  closeFile: (path: string): void => {
-    const { openFiles, activeFilePath } = get()
-    const newFiles = new Map(openFiles)
-    newFiles.delete(path)
+	closeFile: (path: string): void => {
+		const { openFiles, activeFilePath } = get();
+		clearStatusResetTimer(path);
 
-    let newActive = activeFilePath
-    if (activeFilePath === path) {
-      const paths = Array.from(newFiles.keys())
-      newActive = paths.length > 0 ? paths[paths.length - 1] : null
-    }
+		const newFiles = new Map(openFiles);
+		newFiles.delete(path);
 
-    set({ openFiles: newFiles, activeFilePath: newActive })
-  },
+		let newActive = activeFilePath;
+		if (activeFilePath === path) {
+			const paths = Array.from(newFiles.keys());
+			newActive = paths.length > 0 ? paths[paths.length - 1] : null;
+		}
 
-  updateContent: (path: string, content: string): void => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return
+		set({ openFiles: newFiles, activeFilePath: newActive });
+	},
 
-    const newFiles = new Map(openFiles)
-    newFiles.set(path, {
-      ...file,
-      content,
-      isDirty: content !== file.originalContent
-    })
-    set({ openFiles: newFiles })
-  },
+	updateContent: (path: string, content: string): void => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return;
 
-  saveFile: async (path: string): Promise<boolean> => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return false
+		const newFiles = new Map(openFiles);
+		newFiles.set(path, {
+			...file,
+			content,
+			isDirty: content !== file.originalContent,
+		});
+		set({ openFiles: newFiles });
+	},
 
-    const result = await filesystemApi.writeFile(path, file.content)
-    if (!result.success) return false
+	saveFile: async (path: string): Promise<boolean> => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return false;
 
-    const newFiles = new Map(get().openFiles)
-    const current = newFiles.get(path)
-    if (current) {
-      newFiles.set(path, {
-        ...current,
-        originalContent: current.content,
-        isDirty: false,
-        lastModified: Date.now()
-      })
-      set({ openFiles: newFiles })
-    }
+		if (
+			file.operationStatus === "saving" ||
+			file.operationStatus === "reloading"
+		) {
+			return false;
+		}
 
-    return true
-  },
+		const watcherIgnoreUntil = Date.now() + 2000;
+		const savingFiles = new Map(get().openFiles);
+		const savingFile = savingFiles.get(path);
+		if (savingFile) {
+			savingFiles.set(path, {
+				...savingFile,
+				operationStatus: "saving",
+				watcherIgnoreUntil,
+			});
+			set({ openFiles: savingFiles });
+		}
 
-  saveAllDirty: async (): Promise<void> => {
-    const { openFiles } = get()
-    const dirtyPaths: string[] = []
-    openFiles.forEach((file, path) => {
-      if (file.isDirty) dirtyPaths.push(path)
-    })
+		const result = await filesystemApi.writeFile(path, file.content);
+		if (!result.success) {
+			const failedFiles = new Map(get().openFiles);
+			const failedFile = failedFiles.get(path);
+			if (failedFile) {
+				failedFiles.set(path, {
+					...failedFile,
+					operationStatus: "idle",
+					watcherIgnoreUntil: 0,
+				});
+				set({ openFiles: failedFiles });
+			}
+			return false;
+		}
 
-    for (const path of dirtyPaths) {
-      await get().saveFile(path)
-    }
-  },
+		const newFiles = new Map(get().openFiles);
+		const current = newFiles.get(path);
+		if (current) {
+			newFiles.set(path, {
+				...current,
+				originalContent: current.content,
+				isDirty: false,
+				lastModified: Date.now(),
+				operationStatus: "saved",
+				watcherIgnoreUntil,
+			});
+			set({ openFiles: newFiles });
+			setFileOperationStatus(set, get, path, "saved", 1200);
+		}
 
-  setViewMode: (path: string, mode: 'code' | 'markdown'): void => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return
+		return true;
+	},
 
-    const newFiles = new Map(openFiles)
-    newFiles.set(path, { ...file, viewMode: mode })
-    set({ openFiles: newFiles })
-  },
+	saveAllDirty: async (): Promise<void> => {
+		const { openFiles } = get();
+		const dirtyPaths: string[] = [];
+		openFiles.forEach((file, path) => {
+			if (file.isDirty) dirtyPaths.push(path);
+		});
 
-  updateCursorPosition: (path: string, line: number, col: number): void => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return
+		for (const path of dirtyPaths) {
+			await get().saveFile(path);
+		}
+	},
 
-    const newFiles = new Map(openFiles)
-    newFiles.set(path, { ...file, cursorPosition: { line, col } })
-    set({ openFiles: newFiles })
-  },
+	setViewMode: (path: string, mode: "code" | "markdown"): void => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return;
 
-  updateScrollTop: (path: string, scrollTop: number): void => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return
+		const newFiles = new Map(openFiles);
+		newFiles.set(path, { ...file, viewMode: mode });
+		set({ openFiles: newFiles });
+	},
 
-    const newFiles = new Map(openFiles)
-    newFiles.set(path, { ...file, scrollTop })
-    set({ openFiles: newFiles })
-  },
+	updateCursorPosition: (path: string, line: number, col: number): void => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return;
 
-  reloadFile: async (path: string): Promise<void> => {
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return
+		const newFiles = new Map(openFiles);
+		newFiles.set(path, { ...file, cursorPosition: { line, col } });
+		set({ openFiles: newFiles });
+	},
 
-    // Don't reload dirty files silently
-    if (file.isDirty) return
+	updateScrollTop: (path: string, scrollTop: number): void => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return;
 
-    const result = await filesystemApi.readFile(path)
-    if (!result.success) return
+		const newFiles = new Map(openFiles);
+		newFiles.set(path, { ...file, scrollTop });
+		set({ openFiles: newFiles });
+	},
 
-    const newFiles = new Map(get().openFiles)
-    const current = newFiles.get(path)
-    if (current) {
-      newFiles.set(path, {
-        ...current,
-        content: result.data.content,
-        originalContent: result.data.content,
-        isDirty: false,
-        lastModified: result.data.modifiedAt
-      })
-      set({ openFiles: newFiles })
-    }
-  },
+	reloadFile: async (path: string): Promise<void> => {
+		const { openFiles } = get();
+		const file = openFiles.get(path);
+		if (!file) return;
 
-  setActiveFilePath: (path: string | null): void => {
-    set({ activeFilePath: path })
-  },
+		// Don't reload dirty files silently
+		if (file.isDirty) return;
+		if (
+			file.operationStatus === "saving" ||
+			file.operationStatus === "reloading"
+		)
+			return;
 
-  clearAllFiles: (): void => {
-    set({ openFiles: new Map(), activeFilePath: null })
-  },
+		setFileOperationStatus(set, get, path, "reloading");
 
-  hasDirtyFiles: (): boolean => {
-    const { openFiles } = get()
-    let hasDirty = false
-    openFiles.forEach((file) => {
-      if (file.isDirty) hasDirty = true
-    })
-    return hasDirty
-  },
+		const result = await filesystemApi.readFile(path);
+		if (!result.success) {
+			setFileOperationStatus(set, get, path, "idle");
+			return;
+		}
 
-  getDirtyFileCount: (): number => {
-    const { openFiles } = get()
-    let count = 0
-    openFiles.forEach((file) => {
-      if (file.isDirty) count++
-    })
-    return count
-  },
+		const newFiles = new Map(get().openFiles);
+		const current = newFiles.get(path);
+		if (current) {
+			newFiles.set(path, {
+				...current,
+				content: result.data.content,
+				originalContent: result.data.content,
+				isDirty: false,
+				lastModified: result.data.modifiedAt,
+				operationStatus: "saved",
+				watcherIgnoreUntil: 0,
+			});
+			set({ openFiles: newFiles });
+			setFileOperationStatus(set, get, path, "saved", 1200);
+		}
+	},
 
-  getOpenFilePaths: (): string[] => {
-    return Array.from(get().openFiles.keys())
-  }
-}))
+	setActiveFilePath: (path: string | null): void => {
+		set({ activeFilePath: path });
+	},
+
+	clearAllFiles: (): void => {
+		statusResetTimers.forEach((timer) => clearTimeout(timer));
+		statusResetTimers.clear();
+		set({ openFiles: new Map(), activeFilePath: null });
+	},
+
+	hasDirtyFiles: (): boolean => {
+		const { openFiles } = get();
+		let hasDirty = false;
+		openFiles.forEach((file) => {
+			if (file.isDirty) hasDirty = true;
+		});
+		return hasDirty;
+	},
+
+	getDirtyFileCount: (): number => {
+		const { openFiles } = get();
+		let count = 0;
+		openFiles.forEach((file) => {
+			if (file.isDirty) count++;
+		});
+		return count;
+	},
+
+	getOpenFilePaths: (): string[] => {
+		return Array.from(get().openFiles.keys());
+	},
+}));
 
 // Selector hooks
 export function useOpenFiles(): Map<string, EditorFileState> {
-  return useEditorStore((state) => state.openFiles)
+	return useEditorStore((state) => state.openFiles);
 }
 
 export function useOpenFilePaths(): string[] {
-  return useEditorStore(
-    useShallow((state) => Array.from(state.openFiles.keys()))
-  )
+	return useEditorStore(
+		useShallow((state) => Array.from(state.openFiles.keys())),
+	);
 }
 
 export function useOpenFile(filePath: string): EditorFileState | undefined {
-  return useEditorStore((state) => state.openFiles.get(filePath))
+	return useEditorStore((state) => state.openFiles.get(filePath));
 }
 
 export function useActiveFile(): EditorFileState | undefined {
-  return useEditorStore((state) => {
-    if (!state.activeFilePath) return undefined
-    return state.openFiles.get(state.activeFilePath)
-  })
+	return useEditorStore((state) => {
+		if (!state.activeFilePath) return undefined;
+		return state.openFiles.get(state.activeFilePath);
+	});
 }
 
 export function useActiveFilePath(): string | null {
-  return useEditorStore((state) => state.activeFilePath)
+	return useEditorStore((state) => state.activeFilePath);
 }
 
 export function useEditorActions(): Pick<
-  EditorState,
-  | 'openFile'
-  | 'closeFile'
-  | 'updateContent'
-  | 'saveFile'
-  | 'saveAllDirty'
-  | 'setViewMode'
-  | 'updateCursorPosition'
-  | 'updateScrollTop'
-  | 'reloadFile'
-  | 'setActiveFilePath'
-  | 'clearAllFiles'
+	EditorState,
+	| "openFile"
+	| "closeFile"
+	| "updateContent"
+	| "saveFile"
+	| "saveAllDirty"
+	| "setViewMode"
+	| "updateCursorPosition"
+	| "updateScrollTop"
+	| "reloadFile"
+	| "setActiveFilePath"
+	| "clearAllFiles"
 > {
-  return useEditorStore(
-    useShallow((state) => ({
-      openFile: state.openFile,
-      closeFile: state.closeFile,
-      updateContent: state.updateContent,
-      saveFile: state.saveFile,
-      saveAllDirty: state.saveAllDirty,
-      setViewMode: state.setViewMode,
-      updateCursorPosition: state.updateCursorPosition,
-      updateScrollTop: state.updateScrollTop,
-      reloadFile: state.reloadFile,
-      setActiveFilePath: state.setActiveFilePath,
-      clearAllFiles: state.clearAllFiles
-    }))
-  )
+	return useEditorStore(
+		useShallow((state) => ({
+			openFile: state.openFile,
+			closeFile: state.closeFile,
+			updateContent: state.updateContent,
+			saveFile: state.saveFile,
+			saveAllDirty: state.saveAllDirty,
+			setViewMode: state.setViewMode,
+			updateCursorPosition: state.updateCursorPosition,
+			updateScrollTop: state.updateScrollTop,
+			reloadFile: state.reloadFile,
+			setActiveFilePath: state.setActiveFilePath,
+			clearAllFiles: state.clearAllFiles,
+		})),
+	);
 }
 
 export function useDirtyFiles(): string[] {
-  return useEditorStore(
-    useShallow((state) => {
-      const dirty: string[] = []
-      state.openFiles.forEach((file, path) => {
-        if (file.isDirty) dirty.push(path)
-      })
-      return dirty
-    })
-  )
+	return useEditorStore(
+		useShallow((state) => {
+			const dirty: string[] = [];
+			state.openFiles.forEach((file, path) => {
+				if (file.isDirty) dirty.push(path);
+			});
+			return dirty;
+		}),
+	);
 }
 
-export { detectLanguage, getDefaultViewMode }
+export { detectLanguage, getDefaultViewMode };
