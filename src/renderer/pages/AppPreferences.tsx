@@ -7,6 +7,7 @@ import {
   useDefaultShell,
   useDefaultProjectColor,
   useMaxTerminalsPerProject,
+  useConfirmTerminalClose,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout
 } from '@/stores/app-settings-store'
@@ -26,8 +27,10 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
 import { shellApi, terminalApi } from '@/lib/api'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 
 export default function AppPreferences(): React.JSX.Element {
+  const isAurUpdater = isAurUpdateMode()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
@@ -36,6 +39,7 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
+  const confirmTerminalClose = useConfirmTerminalClose()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -90,6 +94,10 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleMaxTerminalsChange = (value: number) => {
     updateSetting('maxTerminalsPerProject', value)
+  }
+
+  const handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
+    await updateSetting("confirmTerminalClose", enabled)
   }
 
   const handleOrphanDetectionToggle = async (enabled: boolean) => {
@@ -492,7 +500,9 @@ export default function AppPreferences(): React.JSX.Element {
                       <div className="flex-1">
                         <div className="text-sm font-medium text-foreground">Version {version} is available!</div>
                         <div className="text-xs text-muted-foreground mt-0.5">
-                          A new version is ready to download.
+                          {isAurUpdater
+                            ? 'Update through AUR with: yay -S termul-manager'
+                            : 'A new version is ready to download.'}
                         </div>
                       </div>
                     </div>

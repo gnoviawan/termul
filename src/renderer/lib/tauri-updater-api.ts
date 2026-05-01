@@ -13,14 +13,21 @@ import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
 const STABLE_UPDATE_MANIFEST_URL =
   'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
+const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
+const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
+
+export type UpdateMode = 'tauri' | 'aur'
+
+const UPDATE_MODE: UpdateMode =
+  import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
 
 /**
- * Stable channel policy: the shipped app only checks the stable GitHub Releases
- * manifest at /releases/latest/download/latest.json. Prerelease tags are
- * intentionally excluded from automatic detection by stable clients.
+ * Default mode uses Tauri's signed updater manifest and self-update flow.
+ * AUR mode only checks upstream GitHub Releases and asks users to update with yay.
  */
 
-let pendingUpdate: Update | null = null
+let pendingTauriUpdate: Update | null = null
+let pendingAurUpdate: UpdateInfo | null = null
 let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
 let downloadedVersion: string | null = null
@@ -31,6 +38,14 @@ export interface TauriUpdaterEventHandlers {
   onDownloadProgress?: (progress: DownloadProgress) => void
   onUpdateDownloaded?: (update: Update) => void
   onError?: (error: string) => void
+}
+
+export function getUpdateMode(): UpdateMode {
+  return UPDATE_MODE
+}
+
+export function isAurUpdateMode(): boolean {
+  return UPDATE_MODE === 'aur'
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -54,9 +69,9 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
-function createUpdaterCheckError(error: unknown): Error {
+function createUpdaterCheckError(error: unknown, sourceUrl: string): Error {
   const details = getErrorMessage(error, 'Unknown updater error')
-  return new Error(`Failed to check for updates from ${STABLE_UPDATE_MANIFEST_URL}: ${details}`)
+  return new Error(`Failed to check for updates from ${sourceUrl}: ${details}`)
 }
 
 async function syncRecoveryVersionMetadata(): Promise<string> {
@@ -162,10 +177,88 @@ function mapDownloadEventToProgress(
   }
 }
 
+interface GitHubRelease {
+  tag_name?: string
+  name?: string
+  body?: string
+  html_url?: string
+  published_at?: string
+}
+
+function normalizeVersion(version: string): string {
+  // Ignore AUR pkgrel/build metadata; app updates only track upstream release versions.
+  return version.trim().replace(/^v/i, '').split(/[+-]/)[0] ?? version
+}
+
+function compareVersions(a: string, b: string): number {
+  const partsA = normalizeVersion(a).split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const partsB = normalizeVersion(b).split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const length = Math.max(partsA.length, partsB.length, 3)
+
+  for (let index = 0; index < length; index += 1) {
+    const diff = (partsA[index] ?? 0) - (partsB[index] ?? 0)
+    if (diff !== 0) return diff
+  }
+
+  return 0
+}
+
+function mapGitHubReleaseToInfo(release: GitHubRelease): UpdateInfo {
+  const version = normalizeVersion(release.tag_name ?? release.name ?? '')
+  return {
+    version,
+    releaseDate: release.published_at ?? new Date().toISOString(),
+    releaseNotes: release.body ?? undefined,
+    isSecurityUpdate: false,
+    downloadUrl: release.html_url
+  }
+}
+
+async function checkAurUpdate(): Promise<UpdateInfo | null> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => {
+    controller.abort()
+  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
+
+  const [currentVersion, response] = await Promise.all([
+    getVersion(),
+    fetch(UPSTREAM_LATEST_RELEASE_URL, {
+      headers: {
+        Accept: 'application/vnd.github+json'
+      },
+      signal: controller.signal
+    })
+  ]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
+
+  if (!response.ok) {
+    throw new Error(`GitHub returned HTTP ${response.status}`)
+  }
+
+  const release = (await response.json()) as GitHubRelease
+  const latestVersion = normalizeVersion(release.tag_name ?? release.name ?? '')
+
+  if (!latestVersion) {
+    throw new Error('Latest release has no version tag')
+  }
+
+  return compareVersions(latestVersion, currentVersion) > 0
+    ? mapGitHubReleaseToInfo(release)
+    : null
+}
+
 export async function checkForUpdates(): Promise<UpdateInfo | null> {
   try {
+    if (isAurUpdateMode()) {
+      const update = await checkAurUpdate()
+      pendingAurUpdate = update
+      lastCheckedAt = new Date().toISOString()
+      return update
+    }
+
     const update = await check()
-    pendingUpdate = update
+    pendingTauriUpdate = update
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
     preparedUpdateVersion =
       update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
@@ -173,23 +266,42 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
     return update ? mapTauriUpdateToInfo(update) : null
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
-    throw createUpdaterCheckError(error)
+    throw createUpdaterCheckError(
+      error,
+      isAurUpdateMode() ? UPSTREAM_LATEST_RELEASE_URL : STABLE_UPDATE_MANIFEST_URL
+    )
   }
 }
 
 export async function downloadUpdate(
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<IpcResult<void>> {
-  if (!pendingUpdate) {
+  if (isAurUpdateMode()) {
+    if (!pendingAurUpdate) {
+      return {
+        success: false,
+        error: 'No update available to download',
+        code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
+      }
+    }
+
+    return {
+      success: false,
+      error: 'AUR build cannot self-update. Update with: yay -S termul-manager',
+      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
+    }
+  }
+
+  if (!pendingTauriUpdate) {
     return {
       success: false,
       error: 'No update available to download',
-      code: 'UPDATE_NOT_AVAILABLE'
+      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
 
   try {
-    const updateVersion = pendingUpdate.version
+    const updateVersion = pendingTauriUpdate.version
 
     if (preparedUpdateVersion !== updateVersion) {
       const preparationResult = await prepareUpdateRecovery()
@@ -211,7 +323,7 @@ export async function downloadUpdate(
       })
     }
 
-    await pendingUpdate.downloadAndInstall((event) => {
+    await pendingTauriUpdate.downloadAndInstall((event) => {
       if (!onProgress) return
 
       const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
@@ -233,7 +345,15 @@ export async function downloadUpdate(
 }
 
 export async function installAndRestart(): Promise<IpcResult<void>> {
-  if (!pendingUpdate || downloadedVersion !== pendingUpdate.version) {
+  if (isAurUpdateMode()) {
+    return {
+      success: false,
+      error: 'AUR build cannot self-install updates. Update with: yay -S termul-manager',
+      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
+    }
+  }
+
+  if (!pendingTauriUpdate || downloadedVersion !== pendingTauriUpdate.version) {
     return {
       success: false,
       error: 'No downloaded update ready to install',
@@ -254,12 +374,20 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
 }
 
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
+  const updateAvailable = isAurUpdateMode() ? pendingAurUpdate !== null : pendingTauriUpdate !== null
+  const version = isAurUpdateMode()
+    ? pendingAurUpdate?.version ?? null
+    : pendingTauriUpdate?.version ?? null
+  const downloaded = isAurUpdateMode()
+    ? false
+    : pendingTauriUpdate !== null && downloadedVersion === pendingTauriUpdate.version
+
   return {
     success: true,
     data: {
-      updateAvailable: pendingUpdate !== null,
-      downloaded: pendingUpdate !== null && downloadedVersion === pendingUpdate.version,
-      version: pendingUpdate?.version ?? null,
+      updateAvailable,
+      downloaded,
+      version,
       isChecking: false,
       isDownloading: false,
       downloadProgress: null,
@@ -291,13 +419,15 @@ export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers)
 }
 
 export async function clearPendingUpdate(): Promise<void> {
-  pendingUpdate = null
+  pendingTauriUpdate = null
+  pendingAurUpdate = null
   downloadedVersion = null
   preparedUpdateVersion = null
 }
 
 export function _resetUpdaterStateForTesting(): void {
-  pendingUpdate = null
+  pendingTauriUpdate = null
+  pendingAurUpdate = null
   downloadedVersion = null
   preparedUpdateVersion = null
   lastCheckedAt = null
