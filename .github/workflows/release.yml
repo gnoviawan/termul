@@ -268,12 +268,24 @@ jobs:
             }
 
             const hasLatestJson = assetNames.includes('latest.json')
-            if (!hasLatestJson) {
+            const hasSigFiles = assetNames.some((name) => name.endsWith('.sig'))
+
+            if (!hasLatestJson || !hasSigFiles) {
               const publishedAssets = assetNames.join(', ')
-              core.warning(
-                `Stable release is missing latest.json. ` +
-                  `Draft assets: ${publishedAssets}`
+              core.setFailed(
+                [
+                  `Stable release is missing required updater assets.`,
+                  `  - latest.json present: ${hasLatestJson}`,
+                  `  - .sig files present: ${hasSigFiles}`,
+                  `Draft assets: ${publishedAssets}`,
+                  ``,
+                  `To fix this, ensure:`,
+                  `  1. 'bundle.createUpdaterArtifacts' is true in tauri.conf.json`,
+                  `  2. TAURI_SIGNING_PRIVATE_KEY is configured in GitHub secrets`,
+                  `  3. The tauri-action build step receives the signing env vars.`,
+                ].join('\n')
               )
+              return
             }
 
       - name: Publish draft release

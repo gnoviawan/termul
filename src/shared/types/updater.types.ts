@@ -19,6 +19,7 @@ export interface UpdateState {
   downloadProgress: DownloadProgress | null
   error: string | null
   lastChecked: string | null // ISO timestamp
+  isManualUpdateMode?: boolean
 }
 
 // Data stored when user skips a version
