@@ -438,7 +438,7 @@ export function ProjectSidebar({
 			{/* Bottom toolbar - Version */}
 			<div className="p-2 rounded-b-xl">
 				<div className="w-full h-6 inline-flex items-center justify-center">
-					<span className="text-xs text-muted-foreground">Termul v0.3.2</span>
+					<span className="text-xs text-muted-foreground">Termul v0.3.3</span>
 				</div>
 			</div>
 
