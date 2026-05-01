@@ -1,6 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import type { IpcResult } from '@shared/types/ipc.types'
 import {
   UpdaterErrorCodes,
@@ -28,10 +29,12 @@ const UPDATE_MODE: UpdateMode =
 
 let pendingTauriUpdate: Update | null = null
 let pendingAurUpdate: UpdateInfo | null = null
+let manualUpdateInfo: UpdateInfo | null = null
 let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
 let downloadedVersion: string | null = null
 let preparedUpdateVersion: string | null = null
+let isManualUpdateMode = false
 
 export interface TauriUpdaterEventHandlers {
   onUpdateAvailable?: (update: Update) => void
@@ -259,6 +262,8 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
 
     const update = await check()
     pendingTauriUpdate = update
+    isManualUpdateMode = false
+    manualUpdateInfo = null
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
     preparedUpdateVersion =
       update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
@@ -266,11 +271,68 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
     return update ? mapTauriUpdateToInfo(update) : null
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
+
+    if (!isAurUpdateMode()) {
+      const errorMsg = getErrorMessage(error, '')
+      const isManifestMissing =
+        errorMsg.includes('valid release JSON') ||
+        errorMsg.includes('Could not fetch') ||
+        errorMsg.includes('404')
+      if (isManifestMissing) {
+        try {
+          const fallback = await checkGitHubFallback()
+          if (fallback) {
+            isManualUpdateMode = true
+            manualUpdateInfo = fallback
+            pendingTauriUpdate = null
+            return fallback
+          }
+          return null
+        } catch (fallbackError) {
+          throw createUpdaterCheckError(fallbackError, UPSTREAM_LATEST_RELEASE_URL)
+        }
+      }
+    }
+
     throw createUpdaterCheckError(
       error,
       isAurUpdateMode() ? UPSTREAM_LATEST_RELEASE_URL : STABLE_UPDATE_MANIFEST_URL
     )
   }
+}
+
+async function checkGitHubFallback(): Promise<UpdateInfo | null> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => {
+    controller.abort()
+  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
+
+  const [currentVersion, response] = await Promise.all([
+    getVersion(),
+    fetch(UPSTREAM_LATEST_RELEASE_URL, {
+      headers: {
+        Accept: 'application/vnd.github+json'
+      },
+      signal: controller.signal
+    })
+  ]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
+
+  if (!response.ok) {
+    throw new Error(`GitHub returned HTTP ${response.status}`)
+  }
+
+  const release = (await response.json()) as GitHubRelease
+  const latestVersion = normalizeVersion(release.tag_name ?? release.name ?? '')
+
+  if (!latestVersion) {
+    throw new Error('Latest release has no version tag')
+  }
+
+  return compareVersions(latestVersion, currentVersion) > 0
+    ? mapGitHubReleaseToInfo(release)
+    : null
 }
 
 export async function downloadUpdate(
@@ -290,6 +352,11 @@ export async function downloadUpdate(
       error: 'AUR build cannot self-update. Update with: yay -S termul-manager',
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
+  }
+
+  if (isManualUpdateMode && manualUpdateInfo) {
+    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
+    return { success: true, data: undefined }
   }
 
   if (!pendingTauriUpdate) {
@@ -353,6 +420,11 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     }
   }
 
+  if (isManualUpdateMode && manualUpdateInfo) {
+    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
+    return { success: true, data: undefined }
+  }
+
   if (!pendingTauriUpdate || downloadedVersion !== pendingTauriUpdate.version) {
     return {
       success: false,
@@ -374,13 +446,15 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
 }
 
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
-  const updateAvailable = isAurUpdateMode() ? pendingAurUpdate !== null : pendingTauriUpdate !== null
+  const updateAvailable = isAurUpdateMode()
+    ? pendingAurUpdate !== null
+    : pendingTauriUpdate !== null || isManualUpdateMode
   const version = isAurUpdateMode()
     ? pendingAurUpdate?.version ?? null
-    : pendingTauriUpdate?.version ?? null
+    : (pendingTauriUpdate?.version ?? manualUpdateInfo?.version ?? null)
   const downloaded = isAurUpdateMode()
     ? false
-    : pendingTauriUpdate !== null && downloadedVersion === pendingTauriUpdate.version
+    : !isManualUpdateMode && pendingTauriUpdate !== null && downloadedVersion === pendingTauriUpdate.version
 
   return {
     success: true,
@@ -392,7 +466,8 @@ export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
       isDownloading: false,
       downloadProgress: null,
       error: null,
-      lastChecked: lastCheckedAt
+      lastChecked: lastCheckedAt,
+      isManualUpdateMode: !isAurUpdateMode() && isManualUpdateMode
     }
   }
 }
@@ -421,15 +496,23 @@ export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers)
 export async function clearPendingUpdate(): Promise<void> {
   pendingTauriUpdate = null
   pendingAurUpdate = null
+  manualUpdateInfo = null
   downloadedVersion = null
   preparedUpdateVersion = null
+  isManualUpdateMode = false
 }
 
 export function _resetUpdaterStateForTesting(): void {
   pendingTauriUpdate = null
   pendingAurUpdate = null
+  manualUpdateInfo = null
   downloadedVersion = null
   preparedUpdateVersion = null
   lastCheckedAt = null
   autoUpdateEnabled = true
+  isManualUpdateMode = false
+}
+
+export function isInManualUpdateMode(): boolean {
+  return !isAurUpdateMode() && isManualUpdateMode
 }
