@@ -1,4 +1,4 @@
-# Contributing to Termul Manager AS
+# Contributing to Termul Manager
 
 Thank you for your interest in contributing to Termul Manager! This document provides guidelines and instructions for contributing.
 
@@ -13,31 +13,23 @@ By participating in this project, you agree to maintain a respectful and inclusi
 Before submitting a bug report:
 
 1. Check the [existing issues](https://github.com/gnoviawan/termul/issues) to avoid duplicates
-
 2. Use the latest version to see if the bug still exists
 
 When submitting a bug report, include:
 
-* A clear, descriptive title
-
-* Steps to reproduce the issue
-
-* Expected behavior vs actual behavior
-
-* Your environment (OS, Node.js version, etc.)
-
-* Screenshots if applicable
-
-* Error messages or logs
+- A clear, descriptive title
+- Steps to reproduce the issue
+- Expected behavior vs actual behavior
+- Your environment (OS, Node.js version, etc.)
+- Screenshots if applicable
+- Error messages or logs
 
 ### Suggesting Features
 
 Feature requests are welcome! Please:
 
 1. Check existing issues for similar suggestions
-
 2. Provide a clear use case
-
 3. Explain why this feature would benefit users
 
 ### Pull Requests
@@ -45,75 +37,54 @@ Feature requests are welcome! Please:
 #### Getting Started
 
 1. Fork the repository
-
 2. Clone your fork:
-
-```bash
-git clone https://github.com/YOUR_USERNAME/termul.git
-cd termul
-```
-
-1. Install dependencies:
-
-```bash
-npm install
-```
-
-1. Create a feature branch:
-
-```bash
-git checkout -b feature/your-feature-name
-```
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/termul.git
+   cd termul
+   ```
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
+4. Create a feature branch:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
 
 #### Development Workflow
 
 1. Make your changes
-
 2. Run tests:
-
-```bash
-npm test
-```
-
-1. Run type checking:
-
-```bash
-npm run typecheck
-```
-
-1. Run linting:
-
-```bash
-npm run lint
-```
-
-1. Test the app manually:
-
-```bash
-npm run dev
-```
+   ```bash
+   npm test
+   ```
+3. Run type checking:
+   ```bash
+   npm run typecheck
+   ```
+4. Run linting:
+   ```bash
+   npm run lint
+   ```
+5. Test the app manually:
+   ```bash
+   npm run dev
+   ```
 
 #### Commit Guidelines
 
 We follow conventional commit messages:
 
-* `feat:` - New feature
-
-* `fix:` - Bug fix
-
-* `docs:` - Documentation changes
-
-* `style:` - Code style changes (formatting, etc.)
-
-* `refactor:` - Code refactoring
-
-* `test:` - Adding or updating tests
-
-* `chore:` - Maintenance tasks
+- `feat:` - New feature
+- `fix:` - Bug fix
+- `docs:` - Documentation changes
+- `style:` - Code style changes (formatting, etc.)
+- `refactor:` - Code refactoring
+- `test:` - Adding or updating tests
+- `chore:` - Maintenance tasks
 
 Examples:
-
-```javascript
+```
 feat: add workspace export functionality
 fix: terminal not resizing correctly on window resize
 docs: update installation instructions
@@ -122,38 +93,27 @@ docs: update installation instructions
 #### Submitting Your PR
 
 1. Push your branch:
-
-```bash
-git push origin feature/your-feature-name
-```
-
-1. Open a Pull Request on GitHub
-
-2. Fill in the PR template with:
-
-   * Description of changes
-
-   * Related issue (if any)
-
-   * Screenshots (for UI changes)
-
-   * Testing steps
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+2. Open a Pull Request on GitHub
+3. Fill in the PR template with:
+   - Description of changes
+   - Related issue (if any)
+   - Screenshots (for UI changes)
+   - Testing steps
 
 ### Code Style
 
-* Use TypeScript for all new code
-
-* Follow the existing code patterns
-
-* Keep components focused and single-purpose
-
-* Use meaningful variable and function names
-
-* Add comments only when the logic isn't self-evident
+- Use TypeScript for all new code
+- Follow the existing code patterns
+- Keep components focused and single-purpose
+- Use meaningful variable and function names
+- Add comments only when the logic isn't self-evident
 
 ### Project Structure
 
-```javascript
+```
 src/
 ├── renderer/       # React frontend
 │   ├── components/ # UI components
@@ -167,29 +127,23 @@ docs/electron-old/  # Archived Electron docs and migration history
 
 ### Testing
 
-* Write tests for new functionality
-
-* Ensure existing tests pass before submitting
-
-* Place test files next to the code they test (e.g., `component.tsx` and `component.test.tsx`)
+- Write tests for new functionality
+- Ensure existing tests pass before submitting
+- Place test files next to the code they test (e.g., `component.tsx` and `component.test.tsx`)
 
 ### Documentation
 
-* Update README.md if you add new features
-
-* Add JSDoc comments for public APIs
-
-* Update type definitions as needed
+- Update README.md if you add new features
+- Add JSDoc comments for public APIs
+- Update type definitions as needed
 
 ## Development Setup
 
 ### Prerequisites
 
-* Node.js 18+
-
-* npm or bun
-
-* Git
+- Node.js 18+
+- npm or bun
+- Git
 
 ### Running Locally
 

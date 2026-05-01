@@ -132,7 +132,7 @@ export function PaneContent({
 				defaultShell={defaultShell}
 			/>
 
-			<div className="flex-1 overflow-hidden bg-background relative h-full">
+			<div className="flex-1 overflow-hidden bg-terminal-bg relative h-full">
 				<div
 					className={cn(
 						"w-full h-full relative transition-all duration-150 ease-out",
