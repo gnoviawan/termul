@@ -54,6 +54,7 @@ export interface EditorFileState {
   viewMode: 'code' | 'markdown'
   cursorPosition: { line: number; col: number }
   scrollTop: number
+  operationStatus: 'idle' | 'saving' | 'reloading'
 }
 
 export interface EditorState {
@@ -143,7 +144,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       lastModified: result.data.modifiedAt,
       viewMode: getDefaultViewMode(path),
       cursorPosition: { line: 1, col: 1 },
-      scrollTop: 0
+      scrollTop: 0,
+      operationStatus: 'idle'
     }
 
     newFiles.set(path, fileState)
@@ -183,22 +185,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const file = openFiles.get(path)
     if (!file) return false
 
-    const result = await filesystemApi.writeFile(path, file.content)
-    if (!result.success) return false
-
     const newFiles = new Map(get().openFiles)
-    const current = newFiles.get(path)
-    if (current) {
-      newFiles.set(path, {
-        ...current,
-        originalContent: current.content,
-        isDirty: false,
-        lastModified: Date.now()
-      })
-      set({ openFiles: newFiles })
-    }
+    newFiles.set(path, { ...file, operationStatus: 'saving' })
+    set({ openFiles: newFiles })
 
-    return true
+    try {
+      const result = await filesystemApi.writeFile(path, file.content)
+      if (!result.success) {
+        set({ openFiles: newFiles }) // Reset status
+        return false
+      }
+
+      const updatedFiles = new Map(get().openFiles)
+      const current = updatedFiles.get(path)
+      if (current) {
+        updatedFiles.set(path, {
+          ...current,
+          originalContent: current.content,
+          isDirty: false,
+          lastModified: Date.now(),
+          operationStatus: 'idle'
+        })
+        set({ openFiles: updatedFiles })
+      }
+      return true
+    } catch {
+      set({ openFiles: newFiles }) // Reset status
+      return false
+    }
   },
 
   saveAllDirty: async (): Promise<void> => {
@@ -251,20 +265,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Don't reload dirty files silently
     if (file.isDirty) return
 
-    const result = await filesystemApi.readFile(path)
-    if (!result.success) return
-
     const newFiles = new Map(get().openFiles)
-    const current = newFiles.get(path)
-    if (current) {
-      newFiles.set(path, {
-        ...current,
-        content: result.data.content,
-        originalContent: result.data.content,
-        isDirty: false,
-        lastModified: result.data.modifiedAt
-      })
-      set({ openFiles: newFiles })
+    newFiles.set(path, { ...file, operationStatus: 'reloading' })
+    set({ openFiles: newFiles })
+
+    try {
+      const result = await filesystemApi.readFile(path)
+      if (!result.success) {
+        set({ openFiles: newFiles }) // Reset status
+        return
+      }
+
+      const updatedFiles = new Map(get().openFiles)
+      const current = updatedFiles.get(path)
+      if (current) {
+        updatedFiles.set(path, {
+          ...current,
+          content: result.data.content,
+          originalContent: result.data.content,
+          isDirty: false,
+          lastModified: result.data.modifiedAt,
+          operationStatus: 'idle'
+        })
+        set({ openFiles: updatedFiles })
+      }
+    } catch {
+      set({ openFiles: newFiles }) // Reset status
     }
   },
 

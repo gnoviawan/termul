@@ -192,8 +192,33 @@ export function FileExplorer(): React.JSX.Element {
 			// Ctrl+V: Paste
 			if ((e.ctrlKey || e.metaKey) && e.key === "v") {
 				e.preventDefault();
+				let targetPath: string | undefined;
 				if (contextMenu?.entry) {
-					void paste(contextMenu.entry.path);
+					targetPath = contextMenu.entry.path;
+				} else if (selectedPaths.size === 1) {
+					const [selectedPath] = [...selectedPaths];
+					let isDirectory = false;
+					outer: for (const [, entries] of directoryContents) {
+						for (const entry of entries) {
+							if (entry.path === selectedPath && entry.type === "directory") {
+								isDirectory = true;
+								break outer;
+							}
+						}
+					}
+					if (isDirectory) {
+						targetPath = selectedPath;
+					} else {
+						const normalized = selectedPath.replace(/\\/g, "/");
+						const lastSlash = normalized.lastIndexOf("/");
+						targetPath = lastSlash > 0 ? normalized.slice(0, lastSlash) : rootPath ?? "";
+					}
+				}
+				if (!targetPath && rootPath) {
+					targetPath = rootPath;
+				}
+				if (targetPath) {
+					void paste(targetPath);
 				}
 				return;
 			}
@@ -323,18 +348,28 @@ export function FileExplorer(): React.JSX.Element {
 		const fullPath = inlineInput.parentPath + "/" + name;
 
 		try {
+			let result: { success: boolean; error?: string } | undefined;
 			if (inlineInput.mode === "create") {
 				if (inlineInput.type === "file") {
-					await filesystemApi.createFile(fullPath);
+					result = await filesystemApi.createFile(fullPath);
 				} else {
-					await filesystemApi.createDirectory(fullPath);
+					result = await filesystemApi.createDirectory(fullPath);
 				}
 			} else if (inlineInput.mode === "rename" && inlineInput.existingEntry) {
-				await filesystemApi.renameFile(
+				result = await filesystemApi.renameFile(
 					inlineInput.existingEntry.path,
 					fullPath,
 				);
+			}
 
+			if (!result || !result.success) {
+				toast.error(result?.error || "Operation failed");
+				submitFailedRef.current = true;
+				return;
+			}
+
+			// Success side-effects
+			if (inlineInput.mode === "rename" && inlineInput.existingEntry) {
 				// If the renamed file was open in editor, close old tab
 				const editorState = useEditorStore.getState();
 				if (editorState.openFiles.has(inlineInput.existingEntry.path)) {
@@ -347,11 +382,12 @@ export function FileExplorer(): React.JSX.Element {
 			await refreshDirectory(inlineInput.parentPath);
 			setInlineInput(null);
 			setInputValue("");
-		} catch {
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Unknown error");
 			submitFailedRef.current = true;
+		} finally {
+			isSubmittingRef.current = false;
 		}
-
-		isSubmittingRef.current = false;
 	}, [inlineInput, inputValue, refreshDirectory]);
 
 	const handleInlineInputCancel = useCallback(() => {
@@ -377,37 +413,52 @@ export function FileExplorer(): React.JSX.Element {
 			return;
 		}
 
-		// Close editor tab if file was open
-		const editorState = useEditorStore.getState();
-		if (editorState.openFiles.has(deleteConfirm.path)) {
-			editorState.closeFile(deleteConfirm.path);
-			useWorkspaceStore.getState().removeTab(editorTabId(deleteConfirm.path));
-		}
-
 		const normalizedDeletePath = deleteConfirm.path.replace(/\\/g, "/");
 
-		// If deleting a directory, clean up expanded dirs and cached contents
+		// If deleting a directory, clean up expanded dirs, cached contents,
+		// and any open editor tabs for files inside the deleted directory
 		if (isDir) {
 			const store = useFileExplorerStore.getState();
 			const newExpanded = new Set(store.expandedDirs);
 			const newContents = new Map(store.directoryContents);
-			// Remove all expanded dirs and cached contents that are children of the deleted dir
-			for (const key of newExpanded) {
+
+			// Close editor tabs for files inside the deleted directory
+			const editorState = useEditorStore.getState();
+			const workspaceState = useWorkspaceStore.getState();
+			for (const [openFilePath] of editorState.openFiles) {
+				const normalizedOpenPath = openFilePath.replace(/\\/g, "/");
+				if (
+					normalizedOpenPath === normalizedDeletePath ||
+					normalizedOpenPath.startsWith(normalizedDeletePath + "/")
+				) {
+					editorState.closeFile(openFilePath);
+					workspaceState.removeTab(editorTabId(openFilePath));
+				}
+			}
+
+			// Remove all cached directories and expanded dirs that are children of the deleted dir
+			for (const key of newContents.keys()) {
 				if (
 					key.startsWith(normalizedDeletePath + "/") ||
 					key === normalizedDeletePath
 				) {
 					newExpanded.delete(key);
 					newContents.delete(key);
-					// Unwatch the directory
 					void filesystemApi.unwatchDirectory(key);
 				}
 			}
-			newContents.delete(normalizedDeletePath);
+
 			useFileExplorerStore.setState({
 				expandedDirs: newExpanded,
 				directoryContents: newContents,
 			});
+		} else {
+			// Close editor tab if file was open
+			const editorState = useEditorStore.getState();
+			if (editorState.openFiles.has(deleteConfirm.path)) {
+				editorState.closeFile(deleteConfirm.path);
+				useWorkspaceStore.getState().removeTab(editorTabId(deleteConfirm.path));
+			}
 		}
 
 		const parentPath = normalizedDeletePath.substring(

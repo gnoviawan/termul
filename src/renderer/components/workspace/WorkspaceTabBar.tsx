@@ -190,11 +190,23 @@ function TerminalTabInline({
 								setIsEditing(true);
 							},
 						},
-						{ label: "Close", icon: <XIcon size={12} />, onClick: onClose },
+						{
+							label: "Close",
+							icon: <XIcon size={12} />,
+							onClick: () => {
+								if (!isClosing) {
+									onClose();
+								}
+							},
+						},
 						{
 							label: "Kill Process",
 							icon: <Skull size={12} />,
-							onClick: onClose,
+							onClick: () => {
+								if (!isClosing) {
+									onClose();
+								}
+							},
 							variant: "danger",
 						},
 					]}

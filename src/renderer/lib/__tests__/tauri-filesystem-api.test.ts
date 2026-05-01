@@ -470,10 +470,11 @@ describe("tauriFilesystemApi", () => {
 
 			const callback = vi.fn();
 			await tauriFilesystemApi.watchDirectory("/test");
-			tauriFilesystemApi.onFileChanged(callback);
+			const cleanupFirst = tauriFilesystemApi.onFileChanged(callback);
 
 			// Cleanup should remove callback
 			const cleanup = tauriFilesystemApi.onFileChanged(callback);
+			cleanupFirst();
 			cleanup();
 		});
 	});
