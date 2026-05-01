@@ -413,8 +413,10 @@ export function WorkspaceTabBar({
 				onCloseEditorTab(filePath);
 			} else {
 				// Fallback: close from store directly
-				useEditorStore.getState().closeFile(filePath);
-				useWorkspaceStore.getState().closeTab(paneId, editorTabId(filePath));
+				const didClose = useEditorStore.getState().closeFileIfIdle(filePath);
+				if (didClose) {
+					useWorkspaceStore.getState().closeTab(paneId, editorTabId(filePath));
+				}
 			}
 		},
 		[onCloseEditorTab, paneId],

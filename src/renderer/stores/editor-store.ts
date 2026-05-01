@@ -63,6 +63,7 @@ export interface EditorState {
 
   openFile: (path: string) => Promise<void>
   closeFile: (path: string) => void
+  closeFileIfIdle: (path: string) => boolean
   updateContent: (path: string, content: string) => void
   saveFile: (path: string) => Promise<boolean>
   saveAllDirty: () => Promise<void>
@@ -166,6 +167,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ openFiles: newFiles, activeFilePath: newActive })
   },
 
+  closeFileIfIdle: (path: string): boolean => {
+    const { openFiles } = get()
+    const file = openFiles.get(path)
+    if (!file) return false
+
+    if (file.operationStatus === 'saving' || file.operationStatus === 'reloading') {
+      return false
+    }
+
+    const { openFiles: openFiles2, activeFilePath } = get()
+    const newFiles = new Map(openFiles2)
+    newFiles.delete(path)
+
+    let newActive = activeFilePath
+    if (activeFilePath === path) {
+      const paths = Array.from(newFiles.keys())
+      newActive = paths.length > 0 ? paths[paths.length - 1] : null
+    }
+
+    set({ openFiles: newFiles, activeFilePath: newActive })
+    return true
+  },
+
   updateContent: (path: string, content: string): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
@@ -185,32 +209,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const file = openFiles.get(path)
     if (!file) return false
 
+    const snapshotContent = file.content
     const newFiles = new Map(get().openFiles)
     newFiles.set(path, { ...file, operationStatus: 'saving' })
     set({ openFiles: newFiles })
 
     try {
-      const result = await filesystemApi.writeFile(path, file.content)
+      const result = await filesystemApi.writeFile(path, snapshotContent)
       if (!result.success) {
-        set({ openFiles: newFiles }) // Reset status
+        const resetFiles = new Map(get().openFiles)
+        const current = resetFiles.get(path)
+        if (current) {
+          resetFiles.set(path, { ...current, operationStatus: 'idle' })
+          set({ openFiles: resetFiles })
+        }
         return false
       }
 
       const updatedFiles = new Map(get().openFiles)
       const current = updatedFiles.get(path)
-      if (current) {
-        updatedFiles.set(path, {
-          ...current,
-          originalContent: current.content,
-          isDirty: false,
-          lastModified: Date.now(),
-          operationStatus: 'idle'
-        })
-        set({ openFiles: updatedFiles })
-      }
+      if (!current) return false
+
+      // Only mark clean if buffer hasn't changed since the snapshot
+      const bufferUnchanged = current.content === snapshotContent
+      updatedFiles.set(path, {
+        ...current,
+        originalContent: current.content,
+        isDirty: !bufferUnchanged,
+        lastModified: Date.now(),
+        operationStatus: 'idle'
+      })
+      set({ openFiles: updatedFiles })
       return true
     } catch {
-      set({ openFiles: newFiles }) // Reset status
+      const resetFiles = new Map(get().openFiles)
+      const current = resetFiles.get(path)
+      if (current) {
+        resetFiles.set(path, { ...current, operationStatus: 'idle' })
+        set({ openFiles: resetFiles })
+      }
       return false
     }
   },
@@ -265,6 +302,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Don't reload dirty files silently
     if (file.isDirty) return
 
+    const snapshotContent = file.content
     const newFiles = new Map(get().openFiles)
     newFiles.set(path, { ...file, operationStatus: 'reloading' })
     set({ openFiles: newFiles })
@@ -272,13 +310,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     try {
       const result = await filesystemApi.readFile(path)
       if (!result.success) {
-        set({ openFiles: newFiles }) // Reset status
+        const resetFiles = new Map(get().openFiles)
+        const current = resetFiles.get(path)
+        if (current) {
+          resetFiles.set(path, { ...current, operationStatus: 'idle' })
+          set({ openFiles: resetFiles })
+        }
         return
       }
 
       const updatedFiles = new Map(get().openFiles)
       const current = updatedFiles.get(path)
-      if (current) {
+      if (!current) return
+
+      // Only replace buffer if it hasn't changed since the snapshot
+      const bufferUnchanged = current.content === snapshotContent
+      if (bufferUnchanged) {
         updatedFiles.set(path, {
           ...current,
           content: result.data.content,
@@ -287,10 +334,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           lastModified: result.data.modifiedAt,
           operationStatus: 'idle'
         })
-        set({ openFiles: updatedFiles })
+      } else {
+        updatedFiles.set(path, {
+          ...current,
+          operationStatus: 'idle'
+        })
       }
+      set({ openFiles: updatedFiles })
     } catch {
-      set({ openFiles: newFiles }) // Reset status
+      const resetFiles = new Map(get().openFiles)
+      const current = resetFiles.get(path)
+      if (current) {
+        resetFiles.set(path, { ...current, operationStatus: 'idle' })
+        set({ openFiles: resetFiles })
+      }
     }
   },
 
@@ -369,6 +426,7 @@ export function useEditorActions(): Pick<
     useShallow((state) => ({
       openFile: state.openFile,
       closeFile: state.closeFile,
+      closeFileIfIdle: state.closeFileIfIdle,
       updateContent: state.updateContent,
       saveFile: state.saveFile,
       saveAllDirty: state.saveAllDirty,

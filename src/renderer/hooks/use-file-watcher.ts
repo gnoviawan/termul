@@ -82,8 +82,10 @@ export function useFileWatcher(): void {
       // Close editor tab immediately if the deleted file is open
       const editorState = useEditorStore.getState()
       if (editorState.openFiles.has(event.path)) {
-        editorState.closeFile(event.path)
-        useWorkspaceStore.getState().removeTab(editorTabId(event.path))
+        const didClose = editorState.closeFileIfIdle(event.path)
+        if (didClose) {
+          useWorkspaceStore.getState().removeTab(editorTabId(event.path))
+        }
       }
     }
 

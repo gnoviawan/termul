@@ -492,14 +492,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					if (fileState?.isDirty) {
 						setDirtyCloseFilePath(activeTab.filePath);
 					} else {
-						useEditorStore.getState().closeFile(activeTab.filePath);
-						useWorkspaceStore.getState().removeTab(activeTab.id);
+						const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath);
+						if (didClose) {
+							useWorkspaceStore.getState().removeTab(activeTab.id);
+						}
 					}
 				} else if (activeTab?.type === "terminal") {
-					setCloseConfirmTerminal({
-						terminalId: activeTab.terminalId,
-						tabId: activeTab.id,
-					});
+					handleCloseTerminal(activeTab.terminalId, activeTab.id);
 				}
 				return;
 			}
@@ -861,10 +860,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Dirty file close handlers
 	const handleCloseEditorTab = useCallback((filePath: string) => {
 		const fileState = useEditorStore.getState().openFiles.get(filePath);
+		if (fileState?.operationStatus === "saving" || fileState?.operationStatus === "reloading") {
+			return;
+		}
 		if (fileState?.isDirty) {
 			setDirtyCloseFilePath(filePath);
 		} else {
-			useEditorStore.getState().closeFile(filePath);
+			useEditorStore.getState().closeFileIfIdle(filePath);
 			useWorkspaceStore.getState().removeTab(editorTabId(filePath));
 		}
 	}, []);
@@ -879,7 +881,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				setDirtyCloseFilePath(null);
 				return;
 			}
-			useEditorStore.getState().closeFile(dirtyCloseFilePath);
+			useEditorStore.getState().closeFileIfIdle(dirtyCloseFilePath);
 			useWorkspaceStore.getState().removeTab(editorTabId(dirtyCloseFilePath));
 			setDirtyCloseFilePath(null);
 		}
@@ -887,7 +889,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	const handleDiscardAndClose = useCallback(() => {
 		if (dirtyCloseFilePath) {
-			useEditorStore.getState().closeFile(dirtyCloseFilePath);
+			useEditorStore.getState().closeFileIfIdle(dirtyCloseFilePath);
 			useWorkspaceStore.getState().removeTab(editorTabId(dirtyCloseFilePath));
 			setDirtyCloseFilePath(null);
 		}

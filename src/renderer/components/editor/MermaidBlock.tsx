@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import mermaid from "mermaid";
+import DOMPurify from "dompurify";
 import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 
 function useIsDark(): boolean {
@@ -107,8 +108,11 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 			.render(id, source)
 			.then(({ svg: svgStr }) => {
 				if (id !== latestRenderIdRef.current) return;
-				// mermaid already sanitizes with securityLevel: 'strict'
-				setSvg(svgStr);
+				const sanitizedSvg =
+					typeof window !== "undefined"
+						? DOMPurify.sanitize(svgStr, { USE_PROFILES: { svg: true, svgFilters: true } })
+						: svgStr;
+				setSvg(sanitizedSvg);
 				setError(null);
 			})
 			.catch((err: unknown) => {
@@ -209,7 +213,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 					transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
 					transformOrigin: "0 0",
 				}}
-				// biome-ignore lint/security/noDangerouslySetInnerHtml: SVG output from mermaid is trusted
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: SVG is sanitized by DOMPurify
 				dangerouslySetInnerHTML={{ __html: svg }}
 			/>
 
