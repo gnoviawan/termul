@@ -425,6 +425,17 @@ describe('terminal-store', () => {
       expect(consumeTranscript('pty-transcript-1')).toBe('chunk')
       expect(consumeTranscript('pty-transcript-1')).toBe('')
     })
+
+    it('should allow replay code to peek transcript before consuming it', () => {
+      const { setTerminalPtyId, appendTranscript, peekTranscript, consumeTranscript } =
+        useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-1')
+      appendTranscript('pty-transcript-1', 'chunk')
+
+      expect(peekTranscript('pty-transcript-1')).toBe('chunk')
+      expect(consumeTranscript('pty-transcript-1')).toBe('chunk')
+      expect(peekTranscript('pty-transcript-1')).toBe('')
+    })
   })
 
   describe('updateTerminalScrollback', () => {

@@ -36,6 +36,7 @@ export interface TerminalState {
   updateTerminalExitCode: (id: string, exitCode: number | null) => void
   updateTerminalScrollback: (id: string, scrollback: string[] | undefined) => void
   appendTranscript: (ptyId: string, data: string) => void
+  peekTranscript: (ptyId: string) => string
   consumeTranscript: (ptyId: string) => string
   appendDetachedOutput: (ptyId: string, data: string) => void
   consumeDetachedOutput: (ptyId: string) => string
@@ -258,6 +259,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         })
       }
     })
+  },
+
+  peekTranscript: (ptyId: string): string => {
+    const target = get().terminals.find((t) => t.ptyId === ptyId)
+    return target?.transcript ?? ''
   },
 
   consumeTranscript: (ptyId: string): string => {
@@ -495,6 +501,7 @@ export function useTerminalActions(): Pick<
   | 'updateTerminalCwd'
   | 'updateTerminalScrollback'
   | 'appendTranscript'
+  | 'peekTranscript'
   | 'consumeTranscript'
   | 'appendDetachedOutput'
   | 'consumeDetachedOutput'
@@ -512,6 +519,7 @@ export function useTerminalActions(): Pick<
       updateTerminalCwd: state.updateTerminalCwd,
       updateTerminalScrollback: state.updateTerminalScrollback,
       appendTranscript: state.appendTranscript,
+      peekTranscript: state.peekTranscript,
       consumeTranscript: state.consumeTranscript,
       appendDetachedOutput: state.appendDetachedOutput,
       consumeDetachedOutput: state.consumeDetachedOutput,

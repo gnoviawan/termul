@@ -233,6 +233,7 @@ const mockTerminalStoreState = {
   updateTerminalLastActivityTimestamp: vi.fn(),
   updateTerminalActivityBatch: vi.fn(),
   setRendererAttached: vi.fn(),
+  peekTranscript: vi.fn(() => ''),
   consumeTranscript: vi.fn(() => ''),
   consumeDetachedOutput: vi.fn(() => '')
 }
@@ -288,6 +289,8 @@ describe('ConnectedTerminal', () => {
     mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
     mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
     mockTerminalStoreState.setRendererAttached.mockReset()
+    mockTerminalStoreState.peekTranscript.mockReset()
+    mockTerminalStoreState.peekTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeTranscript.mockReset()
     mockTerminalStoreState.consumeTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeDetachedOutput.mockReset()
@@ -1880,7 +1883,7 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should replay transcript once for external terminal ids', async () => {
-    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('detached output chunk')
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('detached output chunk')
 
     render(
       <ConnectedTerminal
@@ -1895,6 +1898,7 @@ describe('ConnectedTerminal', () => {
       expect(mockTerminalInstance.write).toHaveBeenCalledWith('detached output chunk')
     })
 
+    expect(mockTerminalStoreState.peekTranscript).toHaveBeenCalledWith('external-123')
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith('external-123')
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledTimes(1)
     expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
@@ -1907,7 +1911,8 @@ describe('ConnectedTerminal', () => {
         mode: 'transcript',
         transcriptLength: 'detached output chunk'.length,
         initialScrollbackLineCount: 0,
-        source: 'external-terminal'
+        source: 'external-terminal',
+        alternateScreenDetected: false
       }
     })
     expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
@@ -1919,13 +1924,15 @@ describe('ConnectedTerminal', () => {
       details: {
         mode: 'transcript',
         transcriptLength: 'detached output chunk'.length,
-        source: 'external-terminal'
+        source: 'external-terminal',
+        fullFidelity: true,
+        restoreLimitation: undefined
       }
     })
   })
 
   it('should prefer transcript over initial scrollback for external terminal restore', async () => {
-    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('\u001b[32mstyled output\u001b[0m')
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('\u001b[32mstyled output\u001b[0m')
 
     render(
       <ConnectedTerminal
@@ -1944,7 +1951,7 @@ describe('ConnectedTerminal', () => {
   })
 
   it('records replay skipped when no transcript or scrollback exists', async () => {
-    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('')
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('')
 
     render(
       <ConnectedTerminal
@@ -1968,6 +1975,78 @@ describe('ConnectedTerminal', () => {
         }
       })
     })
+  })
+
+  it('records alternate-screen replay as limited fidelity', async () => {
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('before\u001b[?1049hinside')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockTerminalInstance.write).toHaveBeenCalledWith(
+        '\u001b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\u001b[0m\r\n'
+      )
+    })
+
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-succeeded',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'before\u001b[?1049hinside'.length,
+        source: 'external-terminal',
+        fullFidelity: false,
+        restoreLimitation: 'alternate-screen-or-in-place-redraw'
+      }
+    })
+  })
+
+  it('keeps transcript available when replay write fails', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const onError = vi.fn()
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('detached output chunk')
+    mockTerminalInstance.write.mockImplementationOnce(() => {
+      throw new Error('write failed')
+    })
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+        onError={onError}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-failed',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          mode: 'transcript',
+          error: 'write failed',
+          source: 'external-terminal'
+        }
+      })
+    })
+
+    expect(mockTerminalStoreState.consumeTranscript).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('write failed')
+    consoleErrorSpy.mockRestore()
   })
 
   it('should mark renderer attachment lifecycle for external terminal ids', async () => {

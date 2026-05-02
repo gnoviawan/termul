@@ -80,6 +80,9 @@ export interface ConnectedTerminalProps {
 	isVisible?: boolean; // Whether this terminal is currently visible (for fit triggering)
 }
 
+const PARTIAL_RESTORE_NOTE =
+	"\x1b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\x1b[0m\r\n";
+
 function getInstrumentationProjectId(
 	spawnOptions?: TerminalSpawnOptions,
 ): string | undefined {
@@ -739,9 +742,10 @@ function ConnectedTerminalComponent({
 						}
 						// Register terminal for scrollback persistence
 						registerTerminal(result.data.id, terminal);
-						const transcript = useTerminalStore
-							.getState()
-							.consumeTranscript(result.data.id);
+						const terminalStoreState = useTerminalStore.getState();
+						const transcript = terminalStoreState.peekTranscript(result.data.id);
+						const transcriptLooksPartial =
+							transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
 						recordReplayEvent(
 							"restore-replay-attempted",
 							{
@@ -749,6 +753,7 @@ function ConnectedTerminalComponent({
 								transcriptLength: transcript.length,
 								initialScrollbackLineCount: initialScrollback?.length ?? 0,
 								source: "spawned-terminal",
+								alternateScreenDetected: transcriptLooksPartial,
 							},
 							storeTerminalId,
 							result.data.id,
@@ -756,12 +761,20 @@ function ConnectedTerminalComponent({
 						try {
 							if (transcript) {
 								terminal.write(transcript);
+								if (transcriptLooksPartial) {
+									terminal.write(PARTIAL_RESTORE_NOTE);
+								}
+								terminalStoreState.consumeTranscript(result.data.id);
 								recordReplayEvent(
 									"restore-replay-succeeded",
 									{
 										mode: "transcript",
 										transcriptLength: transcript.length,
 										source: "spawned-terminal",
+										fullFidelity: !transcriptLooksPartial,
+										restoreLimitation: transcriptLooksPartial
+											? "alternate-screen-or-in-place-redraw"
+											: undefined,
 									},
 									storeTerminalId,
 									result.data.id,
@@ -790,17 +803,19 @@ function ConnectedTerminalComponent({
 								);
 							}
 						} catch (error) {
+							const replayError = error instanceof Error ? error.message : String(error);
 							recordReplayEvent(
 								"restore-replay-failed",
 								{
 									mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
-									error: error instanceof Error ? error.message : String(error),
+									error: replayError,
 									source: "spawned-terminal",
 								},
 								storeTerminalId,
 								result.data.id,
 							);
-							throw error;
+							console.error("[Terminal Replay Failed]", replayError);
+							if (onError) onError(replayError);
 						}
 						// Write one-time info line if project env vars were applied
 						if (
@@ -848,9 +863,10 @@ function ConnectedTerminalComponent({
 				);
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
-				const transcript = useTerminalStore
-					.getState()
-					.consumeTranscript(externalTerminalId);
+				const terminalStoreState = useTerminalStore.getState();
+				const transcript = terminalStoreState.peekTranscript(externalTerminalId);
+				const transcriptLooksPartial =
+					transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
 				recordReplayEvent(
 					"restore-replay-attempted",
 					{
@@ -858,6 +874,7 @@ function ConnectedTerminalComponent({
 						transcriptLength: transcript.length,
 						initialScrollbackLineCount: initialScrollback?.length ?? 0,
 						source: "external-terminal",
+						alternateScreenDetected: transcriptLooksPartial,
 					},
 					storeTerminalId,
 					externalTerminalId,
@@ -865,12 +882,20 @@ function ConnectedTerminalComponent({
 				try {
 					if (transcript) {
 						terminal.write(transcript);
+						if (transcriptLooksPartial) {
+							terminal.write(PARTIAL_RESTORE_NOTE);
+						}
+						terminalStoreState.consumeTranscript(externalTerminalId);
 						recordReplayEvent(
 							"restore-replay-succeeded",
 							{
 								mode: "transcript",
 								transcriptLength: transcript.length,
 								source: "external-terminal",
+								fullFidelity: !transcriptLooksPartial,
+								restoreLimitation: transcriptLooksPartial
+									? "alternate-screen-or-in-place-redraw"
+									: undefined,
 							},
 							storeTerminalId,
 							externalTerminalId,
@@ -899,17 +924,19 @@ function ConnectedTerminalComponent({
 						);
 					}
 				} catch (error) {
+					const replayError = error instanceof Error ? error.message : String(error);
 					recordReplayEvent(
 						"restore-replay-failed",
 						{
 							mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
-							error: error instanceof Error ? error.message : String(error),
+							error: replayError,
 							source: "external-terminal",
 						},
 						storeTerminalId,
 						externalTerminalId,
 					);
-					throw error;
+					console.error("[Terminal Replay Failed]", replayError);
+					if (onError) onError(replayError);
 				}
 				// Write one-time info line if project env vars were applied
 				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
