@@ -2049,6 +2049,36 @@ describe('ConnectedTerminal', () => {
     consoleErrorSpy.mockRestore()
   })
 
+  it('documents alternate-screen continuity as limited rather than full-fidelity restore', async () => {
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('prelude\u001b[?47htui-screen')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-succeeded',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          mode: 'transcript',
+          transcriptLength: 'prelude\u001b[?47htui-screen'.length,
+          source: 'external-terminal',
+          fullFidelity: false,
+          restoreLimitation: 'alternate-screen-or-in-place-redraw'
+        }
+      })
+    })
+  })
+
   it('should mark renderer attachment lifecycle for external terminal ids', async () => {
     const { unmount } = render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
 
