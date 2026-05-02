@@ -2155,4 +2155,78 @@ describe('ConnectedTerminal', () => {
       })
     })
   })
+
+  describe('Fit churn reduction', () => {
+    /**
+     * REGRESSION TEST: Ensure performFit skips redundant fit() calls
+     * when container dimensions have not changed.
+     */
+    it('should skip redundant fit() when container dimensions are unchanged', async () => {
+      vi.useFakeTimers()
+      const { container, rerender } = render(<ConnectedTerminal isVisible={false} />)
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Mock container dimensions so performFit sees non-zero size
+      const div = container.querySelector('div')
+      expect(div).toBeTruthy()
+      ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
+        width: 800,
+        height: 600,
+        top: 0,
+        left: 0,
+        right: 800,
+        bottom: 600,
+        x: 0,
+        y: 0,
+        toJSON: () => {}
+      })
+
+      // Clear fit calls from initialization
+      mockFitAddonInstance.fit.mockClear()
+
+      // First visibility change to true — dimensions changed from 0 → 800x600
+      rerender(<ConnectedTerminal isVisible={true} />)
+      // Double RAF in the visibility effect
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      // Second visibility toggle off then on with same dimensions — fit should be skipped
+      mockFitAddonInstance.fit.mockClear()
+      rerender(<ConnectedTerminal isVisible={false} />)
+      await vi.advanceTimersByTimeAsync(20)
+      rerender(<ConnectedTerminal isVisible={true} />)
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(0)
+
+      // Change dimensions
+      ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
+        width: 900,
+        height: 700,
+        top: 0,
+        left: 0,
+        right: 900,
+        bottom: 700,
+        x: 0,
+        y: 0,
+        toJSON: () => {}
+      })
+
+      rerender(<ConnectedTerminal isVisible={false} />)
+      await vi.advanceTimersByTimeAsync(20)
+      rerender(<ConnectedTerminal isVisible={true} />)
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      // Dimensions changed, fit should run again
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      vi.useRealTimers()
+    })
+  })
 })

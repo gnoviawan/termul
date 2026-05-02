@@ -161,6 +161,9 @@ function ConnectedTerminalComponent({
 	const needsResizeOnReadyRef = useRef<boolean>(false);
 	// Resize debounce timer ref
 	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Track last fitted container dimensions to avoid redundant fit() calls
+	const lastContainerWidthRef = useRef<number>(0);
+	const lastContainerHeightRef = useRef<number>(0);
 	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Debounced activity tracking refs
@@ -174,6 +177,32 @@ function ConnectedTerminalComponent({
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
 		null,
 	);
+
+	const performFit = (force = false): boolean => {
+		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
+
+		const rect = containerRef.current.getBoundingClientRect();
+		const width = Math.round(rect.width);
+		const height = Math.round(rect.height);
+
+		// Only skip fit when dimensions are non-zero and unchanged.
+		// Zero dimensions are common during mount/transitions; allow fit()
+		// in those cases so downstream logic (tests, recovery) sees the attempt.
+		if (!force && width > 0 && height > 0 && width === lastContainerWidthRef.current && height === lastContainerHeightRef.current) {
+			return false; // No change — skip fit to reduce churn
+		}
+
+		try {
+			fitAddonRef.current.fit();
+			if (width > 0 && height > 0) {
+				lastContainerWidthRef.current = width;
+				lastContainerHeightRef.current = height;
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	};
 
 	// Clipboard functionality
 	const { copySelection, pasteFromClipboard, hasSelection } =
@@ -534,12 +563,7 @@ function ConnectedTerminalComponent({
 		// Calling fit() synchronously after loadWebglAddon() causes an uncaught
 		// "Cannot read properties of undefined (reading 'dimensions')" from xterm.
 		requestAnimationFrame(() => {
-			if (!fitAddonRef.current) return;
-			try {
-				fitAddonRef.current.fit();
-			} catch {
-				// Ignore fit errors on initial mount if container is 0x0
-			}
+			performFit(true);
 		});
 
 		if (autoFocus) {
@@ -549,13 +573,7 @@ function ConnectedTerminalComponent({
 		// Set up resize observer
 		const resizeObserver = new ResizeObserver(() => {
 			requestAnimationFrame(() => {
-				if (fitAddonRef.current && terminalRef.current) {
-					try {
-						fitAddonRef.current.fit();
-					} catch {
-						// Ignore fit errors during rapid resize
-					}
-				}
+				performFit();
 			});
 		});
 		resizeObserver.observe(containerRef.current);
@@ -666,12 +684,7 @@ function ConnectedTerminalComponent({
 				hasPtyId: !!ptyIdRef.current,
 			});
 
-			// Fit to get real dimensions BEFORE spawning
-			try {
-				fitAddon.fit();
-			} catch {
-				// Ignore fit errors if container not properly laid out yet
-			}
+			performFit(true);
 			const spawnCols = terminal.cols || 80;
 			const spawnRows = terminal.rows || 24;
 
@@ -731,11 +744,7 @@ function ConnectedTerminalComponent({
 						// If tab was visible before PTY was ready, flush deferred fit+resize now
 						if (needsResizeOnReadyRef.current) {
 							needsResizeOnReadyRef.current = false;
-							try {
-								fitAddonRef.current?.fit();
-							} catch {
-								/* ignore */
-							}
+							performFit(true);
 							terminalApi
 								.resize(result.data.id, terminal.cols, terminal.rows)
 								.catch(() => {});
@@ -1054,14 +1063,7 @@ function ConnectedTerminalComponent({
 		if (terminalRef.current) {
 			terminalRef.current.options.fontFamily = fontFamily;
 			terminalRef.current.options.fontSize = fontSize;
-			// Re-fit terminal after font change
-			if (fitAddonRef.current) {
-				try {
-					fitAddonRef.current.fit();
-				} catch {
-					// Ignore fit errors
-				}
-			}
+			performFit(true);
 		}
 	}, [fontFamily, fontSize]);
 
@@ -1072,48 +1074,45 @@ function ConnectedTerminalComponent({
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					try {
-						fitAddonRef.current?.fit();
-					} catch {
-						// Ignore fit errors
-					}
+					const didFit = performFit();
 
 					const terminal = terminalRef.current;
+					if (!terminal) return;
+
+					// Only focus if no interactive element (button, input, etc.) currently has focus.
+					// This prevents stealing focus from TitleBar window controls when tab switch happens.
+					const active = document.activeElement;
+					const isInteractiveElementFocused =
+						active &&
+						active !== document.body &&
+						(active.tagName === "BUTTON" ||
+							active.tagName === "INPUT" ||
+							active.tagName === "TEXTAREA" ||
+							active.tagName === "SELECT" ||
+							active.tagName === "A");
+					if (!isInteractiveElementFocused) {
+						terminal.focus();
+					}
+
 					const ptyId = ptyIdRef.current;
-					if (terminal) {
-						// Only focus if no interactive element (button, input, etc.) currently has focus.
-						// This prevents stealing focus from TitleBar window controls when tab switch happens.
-						const active = document.activeElement;
-						const isInteractiveElementFocused =
-							active &&
-							active !== document.body &&
-							(active.tagName === "BUTTON" ||
-								active.tagName === "INPUT" ||
-								active.tagName === "TEXTAREA" ||
-								active.tagName === "SELECT" ||
-								active.tagName === "A");
-						if (!isInteractiveElementFocused) {
-							terminal.focus();
+					if (ptyId) {
+						// Always sync PTY dimensions on visibility change for safety,
+						// but only trigger fit when container dimensions actually changed.
+						const resizePromise = terminalApi.resize(
+							ptyId,
+							terminal.cols,
+							terminal.rows,
+						);
+						if (resizePromise && typeof resizePromise.catch === "function") {
+							resizePromise.catch(() => {
+								// Ignore resize errors when toggling visibility
+							});
 						}
-
-						if (ptyId) {
-							// Restore scroll position after fit (in case of pane transition)
-							restoreScrollPosition(ptyId, terminal);
-
-							const resizePromise = terminalApi.resize(
-								ptyId,
-								terminal.cols,
-								terminal.rows,
-							);
-							if (resizePromise && typeof resizePromise.catch === "function") {
-								resizePromise.catch(() => {
-									// Ignore resize errors when toggling visibility
-								});
-							}
-						} else {
-							// PTY not ready yet — defer resize until spawn completes
-							needsResizeOnReadyRef.current = true;
-						}
+						// Restore scroll position after fit (in case of pane transition)
+						restoreScrollPosition(ptyId, terminal);
+					} else {
+						// PTY not ready yet — defer resize until spawn completes
+						needsResizeOnReadyRef.current = true;
 					}
 				});
 			});
@@ -1146,11 +1145,7 @@ function ConnectedTerminalComponent({
 		}
 
 		// Re-fit terminal to current dimensions
-		try {
-			fitAddonRef.current?.fit();
-		} catch (error) {
-			console.warn("Terminal fit failed during recovery:", error);
-		}
+		performFit(true);
 
 		// Sync PTY dimensions
 		const terminal = terminalRef.current;
