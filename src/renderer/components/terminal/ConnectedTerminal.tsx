@@ -26,6 +26,7 @@ import {
 	useTerminalFontFamily,
 	useTerminalFontSize,
 	useTerminalBufferSize,
+	useTerminalRenderer,
 } from "@/stores/app-settings-store";
 import {
 	useKeyboardShortcutsStore,
@@ -43,6 +44,10 @@ import { useTerminalClipboard } from "@/hooks/use-terminal-clipboard";
 import { terminalApi, systemApi } from "@/lib/api";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
+import {
+	getOrCreateProjectContinuityCorrelation,
+	recordTerminalContinuityEvent,
+} from "@/lib/terminal-continuity-instrumentation";
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
@@ -61,6 +66,7 @@ export interface TerminalSearchHandle {
 
 export interface ConnectedTerminalProps {
 	terminalId?: string;
+	storeTerminalId?: string;
 	spawnOptions?: TerminalSpawnOptions;
 	onSpawned?: (terminalId: string) => void;
 	autoSpawn?: boolean;
@@ -75,8 +81,19 @@ export interface ConnectedTerminalProps {
 	isVisible?: boolean; // Whether this terminal is currently visible (for fit triggering)
 }
 
+const PARTIAL_RESTORE_NOTE =
+	"\x1b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\x1b[0m\r\n";
+
+function getInstrumentationProjectId(
+	spawnOptions?: TerminalSpawnOptions,
+): string | undefined {
+	const candidate = spawnOptions?.projectId;
+	return typeof candidate === "string" ? candidate : undefined;
+}
+
 function ConnectedTerminalComponent({
 	terminalId: externalTerminalId,
+	storeTerminalId,
 	spawnOptions,
 	onSpawned,
 	autoSpawn = true,
@@ -115,6 +132,7 @@ function ConnectedTerminalComponent({
 	const fontFamily = useTerminalFontFamily();
 	const fontSize = useTerminalFontSize();
 	const bufferSize = useTerminalBufferSize();
+	const rendererPreference = useTerminalRenderer();
 
 	// Get keyboard shortcuts to intercept app shortcuts before xterm handles them
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -137,11 +155,17 @@ function ConnectedTerminalComponent({
 	onBoundToStoreTerminalRef.current = onBoundToStoreTerminal;
 	// Track current input line for command history
 	const currentLineRef = useRef<string>("");
+	const continuityProjectIdRef = useRef<string | undefined>(
+		getInstrumentationProjectId(spawnOptions),
+	);
 	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
 	const terminalInitializedForRef = useRef<string | undefined>(undefined);
 	const needsResizeOnReadyRef = useRef<boolean>(false);
 	// Resize debounce timer ref
 	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Track last fitted container dimensions to avoid redundant fit() calls
+	const lastContainerWidthRef = useRef<number>(0);
+	const lastContainerHeightRef = useRef<number>(0);
 	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Debounced activity tracking refs
@@ -156,6 +180,32 @@ function ConnectedTerminalComponent({
 		null,
 	);
 
+	const performFit = (force = false): boolean => {
+		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
+
+		const rect = containerRef.current.getBoundingClientRect();
+		const width = Math.round(rect.width);
+		const height = Math.round(rect.height);
+
+		// Only skip fit when dimensions are non-zero and unchanged.
+		// Zero dimensions are common during mount/transitions; allow fit()
+		// in those cases so downstream logic (tests, recovery) sees the attempt.
+		if (!force && width > 0 && height > 0 && width === lastContainerWidthRef.current && height === lastContainerHeightRef.current) {
+			return false; // No change — skip fit to reduce churn
+		}
+
+		try {
+			fitAddonRef.current.fit();
+			if (width > 0 && height > 0) {
+				lastContainerWidthRef.current = width;
+				lastContainerHeightRef.current = height;
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
 	// Clipboard functionality
 	const { copySelection, pasteFromClipboard, hasSelection } =
 		useTerminalClipboard({
@@ -168,6 +218,14 @@ function ConnectedTerminalComponent({
 			ptyIdRef.current = externalTerminalId;
 		}
 	}, [externalTerminalId]);
+
+	const instrumentationProjectId = getInstrumentationProjectId(spawnOptions);
+
+	useEffect(() => {
+		if (instrumentationProjectId) {
+			continuityProjectIdRef.current = instrumentationProjectId;
+		}
+	}, [instrumentationProjectId]);
 
 	useEffect(() => {
 		if (
@@ -457,13 +515,38 @@ function ConnectedTerminalComponent({
 			term: Terminal,
 			isRecovery: boolean = false,
 		): void => {
+			// Respect explicit canvas preference — skip WebGL entirely
+			if (rendererPreference === "canvas") {
+				webglAddonRef.current = null;
+				return;
+			}
+
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
 					"WebGL recovery attempts exhausted, falling back to canvas renderer",
 				);
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-exhausted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempts: webglRecoveryAttemptsRef.current,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+					},
+				});
 				return;
 			}
 			try {
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-attempted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 				const webglAddon = new WebglAddon();
 				webglAddon.onContextLoss(() => {
 					webglAddon.dispose();
@@ -486,15 +569,33 @@ function ConnectedTerminalComponent({
 				webglAddonRef.current = webglAddon;
 				// Clear context lost flag on successful load
 				webglContextLostRef.current = false;
-				// Note: Counter NOT reset here - only increments on context loss or failure
-				// This prevents infinite recovery loops on persistent GPU issues
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-succeeded",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
 					"WebGL addon failed to load, falling back to canvas renderer:",
 					error,
 				);
 				webglAddonRef.current = null;
 				webglRecoveryAttemptsRef.current++;
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-failed",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						error: message,
+						attempt: webglRecoveryAttemptsRef.current,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 			}
 		};
 
@@ -507,12 +608,7 @@ function ConnectedTerminalComponent({
 		// Calling fit() synchronously after loadWebglAddon() causes an uncaught
 		// "Cannot read properties of undefined (reading 'dimensions')" from xterm.
 		requestAnimationFrame(() => {
-			if (!fitAddonRef.current) return;
-			try {
-				fitAddonRef.current.fit();
-			} catch {
-				// Ignore fit errors on initial mount if container is 0x0
-			}
+			performFit(true);
 		});
 
 		if (autoFocus) {
@@ -522,13 +618,7 @@ function ConnectedTerminalComponent({
 		// Set up resize observer
 		const resizeObserver = new ResizeObserver(() => {
 			requestAnimationFrame(() => {
-				if (fitAddonRef.current && terminalRef.current) {
-					try {
-						fitAddonRef.current.fit();
-					} catch {
-						// Ignore fit errors during rapid resize
-					}
-				}
+				performFit();
 			});
 		});
 		resizeObserver.observe(containerRef.current);
@@ -611,6 +701,26 @@ function ConnectedTerminalComponent({
 		// Spawn terminal if no external ID provided and auto-spawn enabled
 		const initTerminal = async (): Promise<void> => {
 			const spawnDebugId = `${instanceId}-spawn-${Date.now().toString().slice(-6)}`;
+			const recordReplayEvent = (
+				name:
+					| "restore-replay-attempted"
+					| "restore-replay-succeeded"
+					| "restore-replay-failed"
+					| "restore-replay-skipped",
+				details?: Record<string, unknown>,
+				terminalEventId?: string,
+				ptyId?: string,
+			): void => {
+				const projectId = continuityProjectIdRef.current;
+				recordTerminalContinuityEvent({
+					name,
+					correlationId: getOrCreateProjectContinuityCorrelation(projectId),
+					projectId,
+					terminalId: terminalEventId,
+					ptyId,
+					details,
+				});
+			};
 
 			devLog(`[ConnectedTerminal.initTerminal] START [${spawnDebugId}]`, {
 				externalTerminalId,
@@ -619,12 +729,7 @@ function ConnectedTerminalComponent({
 				hasPtyId: !!ptyIdRef.current,
 			});
 
-			// Fit to get real dimensions BEFORE spawning
-			try {
-				fitAddon.fit();
-			} catch {
-				// Ignore fit errors if container not properly laid out yet
-			}
+			performFit(true);
 			const spawnCols = terminal.cols || 80;
 			const spawnRows = terminal.rows || 24;
 
@@ -684,24 +789,87 @@ function ConnectedTerminalComponent({
 						// If tab was visible before PTY was ready, flush deferred fit+resize now
 						if (needsResizeOnReadyRef.current) {
 							needsResizeOnReadyRef.current = false;
-							try {
-								fitAddonRef.current?.fit();
-							} catch {
-								/* ignore */
-							}
+							performFit(true);
 							terminalApi
 								.resize(result.data.id, terminal.cols, terminal.rows)
 								.catch(() => {});
 						}
 						// Register terminal for scrollback persistence
 						registerTerminal(result.data.id, terminal);
-						const transcript = useTerminalStore
-							.getState()
-							.consumeTranscript(result.data.id);
-						if (transcript) {
-							terminal.write(transcript);
-						} else if (initialScrollback && initialScrollback.length > 0) {
-							restoreScrollback(terminal, initialScrollback);
+						const terminalStoreState = useTerminalStore.getState();
+						const transcript = terminalStoreState.peekTranscript(result.data.id);
+						const transcriptLooksPartial =
+							transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
+						recordReplayEvent(
+							"restore-replay-attempted",
+							{
+								mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+								transcriptLength: transcript.length,
+								initialScrollbackLineCount: initialScrollback?.length ?? 0,
+								source: "spawned-terminal",
+								alternateScreenDetected: transcriptLooksPartial,
+							},
+							storeTerminalId,
+							result.data.id,
+						);
+						try {
+							if (transcript) {
+								terminal.write(transcript);
+								if (transcriptLooksPartial) {
+									terminal.write(PARTIAL_RESTORE_NOTE);
+								}
+								terminalStoreState.consumeTranscript(result.data.id);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "transcript",
+										transcriptLength: transcript.length,
+										source: "spawned-terminal",
+										fullFidelity: !transcriptLooksPartial,
+										restoreLimitation: transcriptLooksPartial
+											? "alternate-screen-or-in-place-redraw"
+											: undefined,
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else if (initialScrollback && initialScrollback.length > 0) {
+								restoreScrollback(terminal, initialScrollback);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "scrollback",
+										initialScrollbackLineCount: initialScrollback.length,
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else {
+								recordReplayEvent(
+									"restore-replay-skipped",
+									{
+										reason: "no-persisted-history",
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							}
+						} catch (error) {
+							const replayError = error instanceof Error ? error.message : String(error);
+							recordReplayEvent(
+								"restore-replay-failed",
+								{
+									mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+									error: replayError,
+									source: "spawned-terminal",
+								},
+								storeTerminalId,
+								result.data.id,
+							);
+							console.error("[Terminal Replay Failed]", replayError);
+							if (onError) onError(replayError);
 						}
 						// Write one-time info line if project env vars were applied
 						if (
@@ -749,13 +917,80 @@ function ConnectedTerminalComponent({
 				);
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
-				const transcript = useTerminalStore
-					.getState()
-					.consumeTranscript(externalTerminalId);
-				if (transcript) {
-					terminal.write(transcript);
-				} else if (initialScrollback && initialScrollback.length > 0) {
-					restoreScrollback(terminal, initialScrollback);
+				const terminalStoreState = useTerminalStore.getState();
+				const transcript = terminalStoreState.peekTranscript(externalTerminalId);
+				const transcriptLooksPartial =
+					transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
+				recordReplayEvent(
+					"restore-replay-attempted",
+					{
+						mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+						transcriptLength: transcript.length,
+						initialScrollbackLineCount: initialScrollback?.length ?? 0,
+						source: "external-terminal",
+						alternateScreenDetected: transcriptLooksPartial,
+					},
+					storeTerminalId,
+					externalTerminalId,
+				);
+				try {
+					if (transcript) {
+						terminal.write(transcript);
+						if (transcriptLooksPartial) {
+							terminal.write(PARTIAL_RESTORE_NOTE);
+						}
+						terminalStoreState.consumeTranscript(externalTerminalId);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "transcript",
+								transcriptLength: transcript.length,
+								source: "external-terminal",
+								fullFidelity: !transcriptLooksPartial,
+								restoreLimitation: transcriptLooksPartial
+									? "alternate-screen-or-in-place-redraw"
+									: undefined,
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (initialScrollback && initialScrollback.length > 0) {
+						restoreScrollback(terminal, initialScrollback);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "scrollback",
+								initialScrollbackLineCount: initialScrollback.length,
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else {
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "no-persisted-history",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					}
+				} catch (error) {
+					const replayError = error instanceof Error ? error.message : String(error);
+					recordReplayEvent(
+						"restore-replay-failed",
+						{
+							mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+							error: replayError,
+							source: "external-terminal",
+						},
+						storeTerminalId,
+						externalTerminalId,
+					);
+					console.error("[Terminal Replay Failed]", replayError);
+					if (onError) onError(replayError);
 				}
 				// Write one-time info line if project env vars were applied
 				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
@@ -873,14 +1108,7 @@ function ConnectedTerminalComponent({
 		if (terminalRef.current) {
 			terminalRef.current.options.fontFamily = fontFamily;
 			terminalRef.current.options.fontSize = fontSize;
-			// Re-fit terminal after font change
-			if (fitAddonRef.current) {
-				try {
-					fitAddonRef.current.fit();
-				} catch {
-					// Ignore fit errors
-				}
-			}
+			performFit(true);
 		}
 	}, [fontFamily, fontSize]);
 
@@ -891,48 +1119,45 @@ function ConnectedTerminalComponent({
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					try {
-						fitAddonRef.current?.fit();
-					} catch {
-						// Ignore fit errors
-					}
+					const didFit = performFit();
 
 					const terminal = terminalRef.current;
+					if (!terminal) return;
+
+					// Only focus if no interactive element (button, input, etc.) currently has focus.
+					// This prevents stealing focus from TitleBar window controls when tab switch happens.
+					const active = document.activeElement;
+					const isInteractiveElementFocused =
+						active &&
+						active !== document.body &&
+						(active.tagName === "BUTTON" ||
+							active.tagName === "INPUT" ||
+							active.tagName === "TEXTAREA" ||
+							active.tagName === "SELECT" ||
+							active.tagName === "A");
+					if (!isInteractiveElementFocused) {
+						terminal.focus();
+					}
+
 					const ptyId = ptyIdRef.current;
-					if (terminal) {
-						// Only focus if no interactive element (button, input, etc.) currently has focus.
-						// This prevents stealing focus from TitleBar window controls when tab switch happens.
-						const active = document.activeElement;
-						const isInteractiveElementFocused =
-							active &&
-							active !== document.body &&
-							(active.tagName === "BUTTON" ||
-								active.tagName === "INPUT" ||
-								active.tagName === "TEXTAREA" ||
-								active.tagName === "SELECT" ||
-								active.tagName === "A");
-						if (!isInteractiveElementFocused) {
-							terminal.focus();
+					if (ptyId) {
+						// Always sync PTY dimensions on visibility change for safety,
+						// but only trigger fit when container dimensions actually changed.
+						const resizePromise = terminalApi.resize(
+							ptyId,
+							terminal.cols,
+							terminal.rows,
+						);
+						if (resizePromise && typeof resizePromise.catch === "function") {
+							resizePromise.catch(() => {
+								// Ignore resize errors when toggling visibility
+							});
 						}
-
-						if (ptyId) {
-							// Restore scroll position after fit (in case of pane transition)
-							restoreScrollPosition(ptyId, terminal);
-
-							const resizePromise = terminalApi.resize(
-								ptyId,
-								terminal.cols,
-								terminal.rows,
-							);
-							if (resizePromise && typeof resizePromise.catch === "function") {
-								resizePromise.catch(() => {
-									// Ignore resize errors when toggling visibility
-								});
-							}
-						} else {
-							// PTY not ready yet — defer resize until spawn completes
-							needsResizeOnReadyRef.current = true;
-						}
+						// Restore scroll position after fit (in case of pane transition)
+						restoreScrollPosition(ptyId, terminal);
+					} else {
+						// PTY not ready yet — defer resize until spawn completes
+						needsResizeOnReadyRef.current = true;
 					}
 				});
 			});
@@ -965,11 +1190,7 @@ function ConnectedTerminalComponent({
 		}
 
 		// Re-fit terminal to current dimensions
-		try {
-			fitAddonRef.current?.fit();
-		} catch (error) {
-			console.warn("Terminal fit failed during recovery:", error);
-		}
+		performFit(true);
 
 		// Sync PTY dimensions
 		const terminal = terminalRef.current;

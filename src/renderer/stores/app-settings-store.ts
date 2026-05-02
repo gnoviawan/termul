@@ -54,3 +54,5 @@ export const useSidebarVisibilitySetting = () =>
 	useAppSettingsStore((state) => state.settings.sidebarVisible);
 export const useFileExplorerVisibilitySetting = () =>
 	useAppSettingsStore((state) => state.settings.fileExplorerVisible);
+export const useTerminalRenderer = () =>
+	useAppSettingsStore((state) => state.settings.terminalRenderer);

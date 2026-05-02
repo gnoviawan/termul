@@ -19,6 +19,13 @@ import { useGitStatus } from './hooks/use-git-status'
 import { useExitCode } from './hooks/use-exit-code'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+
+// PRODUCTION GUARDRAIL: The current xterm 6.0 migration branch is explicitly
+// excluded from production rollout. Phase 1 stabilization targets xterm 5.5.
+// Any future renderer upgrade must start from a fresh xterm 6.1 validation track
+// and meet ADR-defined benchmark and adoption criteria before replacing the 5.5
+// baseline. See _bmad-output/planning-artifacts/epics.md for the roadmap.
+
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'

@@ -188,8 +188,21 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 
+const {
+  mockRecordTerminalContinuityEvent,
+  mockGetOrCreateProjectContinuityCorrelation
+} = vi.hoisted(() => ({
+  mockRecordTerminalContinuityEvent: vi.fn(),
+  mockGetOrCreateProjectContinuityCorrelation: vi.fn(() => 'corr-project-a')
+}))
+
 vi.mock('@/hooks/use-terminal-restore', () => ({
   isTerminalPendingPtyAssignment: vi.fn(() => false)
+}))
+
+vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
+  recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent,
+  getOrCreateProjectContinuityCorrelation: mockGetOrCreateProjectContinuityCorrelation
 }))
 
 // Mock the API modules
@@ -214,12 +227,22 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/stores/app-settings-store', () => ({
+  useTerminalFontFamily: vi.fn(() => 'Menlo, Monaco, "Courier New", monospace'),
+  useTerminalFontSize: vi.fn(() => 14),
+  useTerminalBufferSize: vi.fn(() => 10000),
+  useTerminalRenderer: vi.fn(() => 'auto')
+}))
+
+import { useTerminalRenderer } from '@/stores/app-settings-store'
+
 const mockTerminalStoreState = {
   findTerminalByPtyId: vi.fn(),
   updateTerminalActivity: vi.fn(),
   updateTerminalLastActivityTimestamp: vi.fn(),
   updateTerminalActivityBatch: vi.fn(),
   setRendererAttached: vi.fn(),
+  peekTranscript: vi.fn(() => ''),
   consumeTranscript: vi.fn(() => ''),
   consumeDetachedOutput: vi.fn(() => '')
 }
@@ -238,6 +261,9 @@ vi.mock('@/lib/tauri-terminal-api', () => ({
 describe('ConnectedTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRecordTerminalContinuityEvent.mockReset()
+    mockGetOrCreateProjectContinuityCorrelation.mockReset()
+    mockGetOrCreateProjectContinuityCorrelation.mockReturnValue('corr-project-a')
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
@@ -272,6 +298,8 @@ describe('ConnectedTerminal', () => {
     mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
     mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
     mockTerminalStoreState.setRendererAttached.mockReset()
+    mockTerminalStoreState.peekTranscript.mockReset()
+    mockTerminalStoreState.peekTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeTranscript.mockReset()
     mockTerminalStoreState.consumeTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeDetachedOutput.mockReset()
@@ -334,6 +362,7 @@ describe('ConnectedTerminal', () => {
     render(
       <ConnectedTerminal
         terminalId="external-123"
+        storeTerminalId="store-123"
         onBoundToStoreTerminal={onBoundToStoreTerminal}
       />
     )
@@ -1139,6 +1168,101 @@ describe('ConnectedTerminal', () => {
 
       warnSpy.mockRestore()
     })
+
+    it('should record instrumentation events during WebGL recovery lifecycle', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(capturedContextLossCallback).toBeTruthy()
+      vi.useFakeTimers()
+
+      // Simulate context loss
+      capturedContextLossCallback!()
+      await vi.advanceTimersByTimeAsync(150)
+
+      // Verify recovery instrumentation events were recorded
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-attempted',
+          details: expect.objectContaining({
+            renderer: 'webgl',
+            isRecovery: true,
+          }),
+        })
+      )
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-succeeded',
+          details: expect.objectContaining({
+            renderer: 'webgl',
+            isRecovery: true,
+          }),
+        })
+      )
+
+      vi.useRealTimers()
+    })
+
+    it('should record exhausted event when max recovery attempts reached', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(capturedContextLossCallback).toBeTruthy()
+      vi.useFakeTimers()
+
+      // Exhaust all recovery attempts
+      for (let i = 0; i < 3; i++) {
+        capturedContextLossCallback!()
+        await vi.advanceTimersByTimeAsync(150)
+      }
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-exhausted',
+          details: expect.objectContaining({
+            attempts: expect.any(Number),
+            maxAttempts: expect.any(Number),
+          }),
+        })
+      )
+
+      vi.useRealTimers()
+    })
+
+    it('should skip WebGL when renderer preference is canvas', async () => {
+      // Override the mock to return canvas
+      vi.mocked(useTerminalRenderer).mockReturnValue('canvas')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // WebGL addon should NOT have been created
+      expect(webglAddonCreateCount).toBe(0)
+      expect(capturedContextLossCallback).toBeFalsy()
+    })
+
+    it('should still load WebGL when renderer preference is webgl', async () => {
+      vi.mocked(useTerminalRenderer).mockReturnValue('webgl')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(webglAddonCreateCount).toBe(1)
+      expect(capturedContextLossCallback).toBeTruthy()
+    })
   })
 
   describe('Visibility change recovery', () => {
@@ -1863,26 +1987,63 @@ describe('ConnectedTerminal', () => {
   })
 
   it('should replay transcript once for external terminal ids', async () => {
-    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('detached output chunk')
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('detached output chunk')
 
-    render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
 
     await vi.waitFor(() => {
       expect(mockTerminalInstance.write).toHaveBeenCalledWith('detached output chunk')
     })
 
+    expect(mockTerminalStoreState.peekTranscript).toHaveBeenCalledWith('external-123')
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith('external-123')
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledTimes(1)
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-attempted',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'detached output chunk'.length,
+        initialScrollbackLineCount: 0,
+        source: 'external-terminal',
+        alternateScreenDetected: false
+      }
+    })
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-succeeded',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'detached output chunk'.length,
+        source: 'external-terminal',
+        fullFidelity: true,
+        restoreLimitation: undefined
+      }
+    })
   })
 
   it('should prefer transcript over initial scrollback for external terminal restore', async () => {
-    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('\u001b[32mstyled output\u001b[0m')
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('\u001b[32mstyled output\u001b[0m')
 
     render(
       <ConnectedTerminal
         terminalId="external-123"
         autoSpawn={false}
         initialScrollback={['plain fallback line']}
+        spawnOptions={{ projectId: 'project-a' }}
       />
     )
 
@@ -1891,6 +2052,135 @@ describe('ConnectedTerminal', () => {
     })
 
     expect(mockTerminalInstance.write).not.toHaveBeenCalledWith('plain fallback line\r\n')
+  })
+
+  it('records replay skipped when no transcript or scrollback exists', async () => {
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-skipped',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          reason: 'no-persisted-history',
+          source: 'external-terminal'
+        }
+      })
+    })
+  })
+
+  it('records alternate-screen replay as limited fidelity', async () => {
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('before\u001b[?1049hinside')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockTerminalInstance.write).toHaveBeenCalledWith(
+        '\u001b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\u001b[0m\r\n'
+      )
+    })
+
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-succeeded',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'before\u001b[?1049hinside'.length,
+        source: 'external-terminal',
+        fullFidelity: false,
+        restoreLimitation: 'alternate-screen-or-in-place-redraw'
+      }
+    })
+  })
+
+  it('keeps transcript available when replay write fails', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const onError = vi.fn()
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('detached output chunk')
+    mockTerminalInstance.write.mockImplementationOnce(() => {
+      throw new Error('write failed')
+    })
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+        onError={onError}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-failed',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          mode: 'transcript',
+          error: 'write failed',
+          source: 'external-terminal'
+        }
+      })
+    })
+
+    expect(mockTerminalStoreState.consumeTranscript).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('write failed')
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('documents alternate-screen continuity as limited rather than full-fidelity restore', async () => {
+    mockTerminalStoreState.peekTranscript.mockReturnValueOnce('prelude\u001b[?47htui-screen')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-succeeded',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          mode: 'transcript',
+          transcriptLength: 'prelude\u001b[?47htui-screen'.length,
+          source: 'external-terminal',
+          fullFidelity: false,
+          restoreLimitation: 'alternate-screen-or-in-place-redraw'
+        }
+      })
+    })
   })
 
   it('should mark renderer attachment lifecycle for external terminal ids', async () => {
@@ -1967,6 +2257,80 @@ describe('ConnectedTerminal', () => {
         success: true,
         data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
       })
+    })
+  })
+
+  describe('Fit churn reduction', () => {
+    /**
+     * REGRESSION TEST: Ensure performFit skips redundant fit() calls
+     * when container dimensions have not changed.
+     */
+    it('should skip redundant fit() when container dimensions are unchanged', async () => {
+      vi.useFakeTimers()
+      const { container, rerender } = render(<ConnectedTerminal isVisible={false} />)
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // Mock container dimensions so performFit sees non-zero size
+      const div = container.querySelector('div')
+      expect(div).toBeTruthy()
+      ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
+        width: 800,
+        height: 600,
+        top: 0,
+        left: 0,
+        right: 800,
+        bottom: 600,
+        x: 0,
+        y: 0,
+        toJSON: () => {}
+      })
+
+      // Clear fit calls from initialization
+      mockFitAddonInstance.fit.mockClear()
+
+      // First visibility change to true — dimensions changed from 0 → 800x600
+      rerender(<ConnectedTerminal isVisible={true} />)
+      // Double RAF in the visibility effect
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      // Second visibility toggle off then on with same dimensions — fit should be skipped
+      mockFitAddonInstance.fit.mockClear()
+      rerender(<ConnectedTerminal isVisible={false} />)
+      await vi.advanceTimersByTimeAsync(20)
+      rerender(<ConnectedTerminal isVisible={true} />)
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(0)
+
+      // Change dimensions
+      ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
+        width: 900,
+        height: 700,
+        top: 0,
+        left: 0,
+        right: 900,
+        bottom: 700,
+        x: 0,
+        y: 0,
+        toJSON: () => {}
+      })
+
+      rerender(<ConnectedTerminal isVisible={false} />)
+      await vi.advanceTimersByTimeAsync(20)
+      rerender(<ConnectedTerminal isVisible={true} />)
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(20)
+
+      // Dimensions changed, fit should run again
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      vi.useRealTimers()
     })
   })
 })

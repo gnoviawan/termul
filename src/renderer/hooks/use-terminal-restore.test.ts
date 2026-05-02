@@ -4,6 +4,14 @@ import type { PaneNode } from '@/types/workspace.types'
 import { normalizeShellForStartup, useTerminalRestore } from './use-terminal-restore'
 
 const {
+  mockRecordTerminalContinuityEvent,
+  mockBeginProjectContinuityCorrelation
+} = vi.hoisted(() => ({
+  mockRecordTerminalContinuityEvent: vi.fn(),
+  mockBeginProjectContinuityCorrelation: vi.fn((projectId: string) => `corr-${projectId}`)
+}))
+
+const {
   mockLoadPersistedTerminals,
   mockSaveTerminalLayout,
   mockSetTerminalRestoreInProgress,
@@ -34,6 +42,11 @@ vi.mock('@/lib/shell-api', () => ({
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { available: [] } })
   }
+}))
+
+vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
+  beginProjectContinuityCorrelation: mockBeginProjectContinuityCorrelation,
+  recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
 }))
 
 const mockProjectState = {
@@ -73,6 +86,7 @@ const mockWorkspaceStore = {
   ensureTerminalTab: vi.fn(),
   getActivePaneLeaf: vi.fn(() => ({ id: 'pane-active', type: 'leaf', tabs: [], activeTabId: null })),
   setActiveTab: vi.fn(),
+  remapTerminalTabs: vi.fn(),
   root: {
     type: 'leaf',
     id: 'pane-active',
@@ -99,6 +113,9 @@ vi.mock('../stores/app-settings-store', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockRecordTerminalContinuityEvent.mockReset()
+  mockBeginProjectContinuityCorrelation.mockReset()
+  mockBeginProjectContinuityCorrelation.mockImplementation((projectId: string) => `corr-${projectId}`)
   mockProjectState.activeProjectId = ''
   mockTerminalStoreState.terminals = []
   mockTerminalStoreState.activeTerminalId = ''
@@ -108,6 +125,7 @@ beforeEach(() => {
     tabs: [],
     activeTabId: null
   } as PaneNode
+  mockWorkspaceStore.remapTerminalTabs.mockReset()
   mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
     id: 'pane-active',
     type: 'leaf',
@@ -159,6 +177,54 @@ describe('normalizeShellForStartup', () => {
 })
 
 describe('useTerminalRestore', () => {
+  it('records project-switch start and live-pty restore path selection', async () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+    ]
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'a-live',
+      terminals: [
+        {
+          id: 'a-live',
+          name: 'A',
+          shell: 'bash',
+          cwd: '/projects/a',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'project-switch-start',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        details: {
+          previousProjectId: undefined,
+          trigger: 'active-project-changed',
+          callId: expect.any(String),
+          restoreOwnerId: expect.stringContaining('project-a:')
+        }
+      })
+    })
+
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-path-selected',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      details: {
+        path: 'live-pty',
+        liveTerminalCount: 1
+      }
+    })
+  })
+
   it('uses the pane containing the restored terminal tab when selecting a live terminal', async () => {
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
@@ -371,6 +437,116 @@ describe('useTerminalRestore', () => {
     expect(mockTerminalStoreState.selectTerminal).not.toHaveBeenCalledWith('new-terminal')
   })
 
+  it('records persisted replay restore path when loading from disk', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        {
+          id: 'persisted-a',
+          name: 'A',
+          shell: 'bash',
+          cwd: '/projects/a',
+          scrollback: ['line 1']
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-path-selected',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        details: {
+          path: 'persisted-replay',
+          persistedTerminalCount: 1
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-complete',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: expect.any(String),
+        details: {
+          path: 'persisted-replay',
+          persistedTerminalCount: 1,
+          restoredTerminalCount: 1
+        }
+      })
+    })
+  })
+
+  it('does not emit restore-complete after a cancelled persisted replay', async () => {
+    const spawnGate = {
+      resolve: undefined as ((value: { success: true; data: { id: string } }) => void) | undefined
+    }
+
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals
+      .mockResolvedValueOnce({
+        activeTerminalId: 'persisted-a',
+        terminals: [
+          {
+            id: 'persisted-a',
+            name: 'A',
+            shell: 'bash',
+            cwd: '/projects/a',
+            scrollback: ['line 1']
+          }
+        ],
+        updatedAt: '2026-03-09T00:00:00.000Z'
+      })
+      .mockResolvedValueOnce(null)
+    mockTerminalSpawn.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          spawnGate.resolve = resolve as (value: { success: true; data: { id: string } }) => void
+        })
+    )
+
+    const { rerender } = renderHook(({ projectId }) => {
+      mockProjectState.activeProjectId = projectId
+      useTerminalRestore()
+    }, {
+      initialProps: { projectId: 'project-a' }
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledTimes(1)
+    })
+
+    rerender({ projectId: 'project-b' })
+    mockTerminalStoreState.terminals = [
+      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+    ]
+
+    await waitFor(() => {
+      expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-active', 'term-b-live')
+    })
+
+    spawnGate.resolve?.({ success: true, data: { id: 'pty-orphan' } })
+
+    await waitFor(() => {
+      expect(mockTerminalKill).toHaveBeenCalledWith('pty-orphan')
+    })
+
+    expect(mockRecordTerminalContinuityEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'restore-complete',
+        correlationId: 'corr-project-a'
+      })
+    )
+  })
+
   it('passes a stable owner token when marking restore progress', async () => {
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
@@ -468,7 +644,14 @@ describe('useTerminalRestore', () => {
     rerender({ projectId: 'project-b' })
 
     await waitFor(() => {
-      expect(mockSaveTerminalLayout).toHaveBeenCalledWith('project-a')
+      expect(mockSaveTerminalLayout).toHaveBeenCalledWith(
+        'project-a',
+        expect.objectContaining({
+          correlationId: 'corr-project-b',
+          reason: 'project-switch',
+          targetProjectId: 'project-b'
+        })
+      )
     })
 
     // The key assertion: terminalApi.kill should NOT be called during project switch
