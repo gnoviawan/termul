@@ -43,6 +43,10 @@ import { useTerminalClipboard } from "@/hooks/use-terminal-clipboard";
 import { terminalApi, systemApi } from "@/lib/api";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
+import {
+	getOrCreateProjectContinuityCorrelation,
+	recordTerminalContinuityEvent,
+} from "@/lib/terminal-continuity-instrumentation";
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
@@ -61,6 +65,7 @@ export interface TerminalSearchHandle {
 
 export interface ConnectedTerminalProps {
 	terminalId?: string;
+	storeTerminalId?: string;
 	spawnOptions?: TerminalSpawnOptions;
 	onSpawned?: (terminalId: string) => void;
 	autoSpawn?: boolean;
@@ -75,8 +80,16 @@ export interface ConnectedTerminalProps {
 	isVisible?: boolean; // Whether this terminal is currently visible (for fit triggering)
 }
 
+function getInstrumentationProjectId(
+	spawnOptions?: TerminalSpawnOptions,
+): string | undefined {
+	const candidate = spawnOptions?.projectId;
+	return typeof candidate === "string" ? candidate : undefined;
+}
+
 function ConnectedTerminalComponent({
 	terminalId: externalTerminalId,
+	storeTerminalId,
 	spawnOptions,
 	onSpawned,
 	autoSpawn = true,
@@ -137,6 +150,9 @@ function ConnectedTerminalComponent({
 	onBoundToStoreTerminalRef.current = onBoundToStoreTerminal;
 	// Track current input line for command history
 	const currentLineRef = useRef<string>("");
+	const continuityProjectIdRef = useRef<string | undefined>(
+		getInstrumentationProjectId(spawnOptions),
+	);
 	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
 	const terminalInitializedForRef = useRef<string | undefined>(undefined);
 	const needsResizeOnReadyRef = useRef<boolean>(false);
@@ -168,6 +184,14 @@ function ConnectedTerminalComponent({
 			ptyIdRef.current = externalTerminalId;
 		}
 	}, [externalTerminalId]);
+
+	const instrumentationProjectId = getInstrumentationProjectId(spawnOptions);
+
+	useEffect(() => {
+		if (instrumentationProjectId) {
+			continuityProjectIdRef.current = instrumentationProjectId;
+		}
+	}, [instrumentationProjectId]);
 
 	useEffect(() => {
 		if (
@@ -611,6 +635,26 @@ function ConnectedTerminalComponent({
 		// Spawn terminal if no external ID provided and auto-spawn enabled
 		const initTerminal = async (): Promise<void> => {
 			const spawnDebugId = `${instanceId}-spawn-${Date.now().toString().slice(-6)}`;
+			const recordReplayEvent = (
+				name:
+					| "restore-replay-attempted"
+					| "restore-replay-succeeded"
+					| "restore-replay-failed"
+					| "restore-replay-skipped",
+				details?: Record<string, unknown>,
+				terminalEventId?: string,
+				ptyId?: string,
+			): void => {
+				const projectId = continuityProjectIdRef.current;
+				recordTerminalContinuityEvent({
+					name,
+					correlationId: getOrCreateProjectContinuityCorrelation(projectId),
+					projectId,
+					terminalId: terminalEventId,
+					ptyId,
+					details,
+				});
+			};
 
 			devLog(`[ConnectedTerminal.initTerminal] START [${spawnDebugId}]`, {
 				externalTerminalId,
@@ -698,10 +742,65 @@ function ConnectedTerminalComponent({
 						const transcript = useTerminalStore
 							.getState()
 							.consumeTranscript(result.data.id);
-						if (transcript) {
-							terminal.write(transcript);
-						} else if (initialScrollback && initialScrollback.length > 0) {
-							restoreScrollback(terminal, initialScrollback);
+						recordReplayEvent(
+							"restore-replay-attempted",
+							{
+								mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+								transcriptLength: transcript.length,
+								initialScrollbackLineCount: initialScrollback?.length ?? 0,
+								source: "spawned-terminal",
+							},
+							storeTerminalId,
+							result.data.id,
+						);
+						try {
+							if (transcript) {
+								terminal.write(transcript);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "transcript",
+										transcriptLength: transcript.length,
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else if (initialScrollback && initialScrollback.length > 0) {
+								restoreScrollback(terminal, initialScrollback);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "scrollback",
+										initialScrollbackLineCount: initialScrollback.length,
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else {
+								recordReplayEvent(
+									"restore-replay-skipped",
+									{
+										reason: "no-persisted-history",
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							}
+						} catch (error) {
+							recordReplayEvent(
+								"restore-replay-failed",
+								{
+									mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+									error: error instanceof Error ? error.message : String(error),
+									source: "spawned-terminal",
+								},
+								storeTerminalId,
+								result.data.id,
+							);
+							throw error;
 						}
 						// Write one-time info line if project env vars were applied
 						if (
@@ -752,10 +851,65 @@ function ConnectedTerminalComponent({
 				const transcript = useTerminalStore
 					.getState()
 					.consumeTranscript(externalTerminalId);
-				if (transcript) {
-					terminal.write(transcript);
-				} else if (initialScrollback && initialScrollback.length > 0) {
-					restoreScrollback(terminal, initialScrollback);
+				recordReplayEvent(
+					"restore-replay-attempted",
+					{
+						mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+						transcriptLength: transcript.length,
+						initialScrollbackLineCount: initialScrollback?.length ?? 0,
+						source: "external-terminal",
+					},
+					storeTerminalId,
+					externalTerminalId,
+				);
+				try {
+					if (transcript) {
+						terminal.write(transcript);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "transcript",
+								transcriptLength: transcript.length,
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (initialScrollback && initialScrollback.length > 0) {
+						restoreScrollback(terminal, initialScrollback);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "scrollback",
+								initialScrollbackLineCount: initialScrollback.length,
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else {
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "no-persisted-history",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					}
+				} catch (error) {
+					recordReplayEvent(
+						"restore-replay-failed",
+						{
+							mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+							error: error instanceof Error ? error.message : String(error),
+							source: "external-terminal",
+						},
+						storeTerminalId,
+						externalTerminalId,
+					);
+					throw error;
 				}
 				// Write one-time info line if project env vars were applied
 				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)

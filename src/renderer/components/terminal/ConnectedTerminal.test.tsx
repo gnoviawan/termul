@@ -188,8 +188,21 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 
+const {
+  mockRecordTerminalContinuityEvent,
+  mockGetOrCreateProjectContinuityCorrelation
+} = vi.hoisted(() => ({
+  mockRecordTerminalContinuityEvent: vi.fn(),
+  mockGetOrCreateProjectContinuityCorrelation: vi.fn(() => 'corr-project-a')
+}))
+
 vi.mock('@/hooks/use-terminal-restore', () => ({
   isTerminalPendingPtyAssignment: vi.fn(() => false)
+}))
+
+vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
+  recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent,
+  getOrCreateProjectContinuityCorrelation: mockGetOrCreateProjectContinuityCorrelation
 }))
 
 // Mock the API modules
@@ -238,6 +251,9 @@ vi.mock('@/lib/tauri-terminal-api', () => ({
 describe('ConnectedTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRecordTerminalContinuityEvent.mockReset()
+    mockGetOrCreateProjectContinuityCorrelation.mockReset()
+    mockGetOrCreateProjectContinuityCorrelation.mockReturnValue('corr-project-a')
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
@@ -334,6 +350,7 @@ describe('ConnectedTerminal', () => {
     render(
       <ConnectedTerminal
         terminalId="external-123"
+        storeTerminalId="store-123"
         onBoundToStoreTerminal={onBoundToStoreTerminal}
       />
     )
@@ -1865,7 +1882,14 @@ describe('ConnectedTerminal', () => {
   it('should replay transcript once for external terminal ids', async () => {
     mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('detached output chunk')
 
-    render(<ConnectedTerminal terminalId="external-123" autoSpawn={false} />)
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
 
     await vi.waitFor(() => {
       expect(mockTerminalInstance.write).toHaveBeenCalledWith('detached output chunk')
@@ -1873,6 +1897,31 @@ describe('ConnectedTerminal', () => {
 
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith('external-123')
     expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledTimes(1)
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-attempted',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'detached output chunk'.length,
+        initialScrollbackLineCount: 0,
+        source: 'external-terminal'
+      }
+    })
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+      name: 'restore-replay-succeeded',
+      correlationId: 'corr-project-a',
+      projectId: 'project-a',
+      terminalId: 'store-123',
+      ptyId: 'external-123',
+      details: {
+        mode: 'transcript',
+        transcriptLength: 'detached output chunk'.length,
+        source: 'external-terminal'
+      }
+    })
   })
 
   it('should prefer transcript over initial scrollback for external terminal restore', async () => {
@@ -1883,6 +1932,7 @@ describe('ConnectedTerminal', () => {
         terminalId="external-123"
         autoSpawn={false}
         initialScrollback={['plain fallback line']}
+        spawnOptions={{ projectId: 'project-a' }}
       />
     )
 
@@ -1891,6 +1941,33 @@ describe('ConnectedTerminal', () => {
     })
 
     expect(mockTerminalInstance.write).not.toHaveBeenCalledWith('plain fallback line\r\n')
+  })
+
+  it('records replay skipped when no transcript or scrollback exists', async () => {
+    mockTerminalStoreState.consumeTranscript.mockReturnValueOnce('')
+
+    render(
+      <ConnectedTerminal
+        terminalId="external-123"
+        storeTerminalId="store-123"
+        autoSpawn={false}
+        spawnOptions={{ projectId: 'project-a' }}
+      />
+    )
+
+    await vi.waitFor(() => {
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'restore-replay-skipped',
+        correlationId: 'corr-project-a',
+        projectId: 'project-a',
+        terminalId: 'store-123',
+        ptyId: 'external-123',
+        details: {
+          reason: 'no-persisted-history',
+          source: 'external-terminal'
+        }
+      })
+    })
   })
 
   it('should mark renderer attachment lifecycle for external terminal ids', async () => {
