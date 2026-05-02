@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useTerminalStore } from './terminal-store'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import {
+  HIDDEN_BUFFER_TRUNCATION_DELAY,
+  MAX_TRANSCRIPT_CHARS,
+  TRUNCATED_BUFFER_SIZE,
+  useTerminalStore
+} from './terminal-store'
 import { useProjectStore } from './project-store'
 
 describe('terminal-store', () => {
@@ -527,6 +532,55 @@ describe('terminal-store', () => {
 
       expect(terminal1?.hasActivity).toBe(true)
       expect(terminal2?.hasActivity).toBeUndefined()
+    })
+  })
+
+  describe('retention policies', () => {
+    it('truncates transcripts to the configured max chars while preserving the newest content', () => {
+      const { setTerminalPtyId, appendTranscript } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-retention')
+
+      const prefix = 'stale-header\n'
+      const retainedBody = 'x'.repeat(MAX_TRANSCRIPT_CHARS)
+      appendTranscript('pty-transcript-retention', prefix + retainedBody)
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.transcript?.length).toBe(MAX_TRANSCRIPT_CHARS)
+      expect(terminal?.transcript?.startsWith('x')).toBe(true)
+      expect(terminal?.transcript?.endsWith('x')).toBe(true)
+      expect(terminal?.transcript?.includes('stale-header')).toBe(false)
+    })
+
+    it('truncates hidden buffers after the configured delay and keeps transcript aligned', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
+
+      const { updateTerminalScrollback, setTerminalHidden, truncateHiddenTerminalBuffers } =
+        useTerminalStore.getState()
+
+      const largeScrollback = Array.from({ length: TRUNCATED_BUFFER_SIZE + 25 }, (_, index) =>
+        `line-${index + 1}`
+      )
+      updateTerminalScrollback('t1', largeScrollback)
+      useTerminalStore.setState((state) => ({
+        terminals: state.terminals.map((terminal) =>
+          terminal.id === 't1'
+            ? { ...terminal, transcript: largeScrollback.join('\n') }
+            : terminal
+        )
+      }))
+
+      setTerminalHidden('t1', true)
+      vi.advanceTimersByTime(HIDDEN_BUFFER_TRUNCATION_DELAY + 1)
+      truncateHiddenTerminalBuffers()
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.pendingScrollback).toHaveLength(TRUNCATED_BUFFER_SIZE)
+      expect(terminal?.pendingScrollback?.[0]).toBe(`line-26`)
+      expect(terminal?.pendingScrollback?.at(-1)).toBe(`line-${TRUNCATED_BUFFER_SIZE + 25}`)
+      expect(terminal?.transcript).toBe(terminal?.pendingScrollback?.join('\n'))
+
+      vi.useRealTimers()
     })
   })
 

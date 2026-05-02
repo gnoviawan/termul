@@ -4,9 +4,9 @@ import type { Terminal, GitStatus, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
 const GLOBAL_TERMINAL_LIMIT = 30
-const HIDDEN_BUFFER_TRUNCATION_DELAY = 5 * 60 * 1000 // 5 minutes
-const TRUNCATED_BUFFER_SIZE = 1000
-const MAX_TRANSCRIPT_CHARS = 500_000
+export const HIDDEN_BUFFER_TRUNCATION_DELAY = 15 * 60 * 1000 // 15 minutes
+export const TRUNCATED_BUFFER_SIZE = 5000
+export const MAX_TRANSCRIPT_CHARS = 1_500_000
 
 export interface TerminalState {
   // State
@@ -248,8 +248,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           if (combined.length > MAX_TRANSCRIPT_CHARS) {
             const tail = combined.slice(-MAX_TRANSCRIPT_CHARS)
-            const nl = tail.indexOf('\n')
-            nextTranscript = nl !== -1 ? tail.slice(nl + 1) : tail
+            const firstNewline = tail.indexOf('\n')
+            const firstCarriageReturn = tail.indexOf('\r')
+            const firstBreakIndexes = [firstNewline, firstCarriageReturn].filter((index) => index !== -1)
+            const firstBreak = firstBreakIndexes.length > 0 ? Math.min(...firstBreakIndexes) : -1
+            nextTranscript = firstBreak !== -1 ? tail.slice(firstBreak + 1) : tail
           }
 
           return {
@@ -443,10 +446,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           t.pendingScrollback &&
           t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
         ) {
-          // Keep the last TRUNCATED_BUFFER_SIZE lines
+          // Keep the last TRUNCATED_BUFFER_SIZE lines and align transcript retention to the same window.
+          const nextScrollback = t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
+          const nextTranscript = t.transcript
+            ? nextScrollback.join('\n')
+            : t.transcript
+
           return {
             ...t,
-            pendingScrollback: t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
+            pendingScrollback: nextScrollback,
+            transcript: nextTranscript
           }
         }
         return t
