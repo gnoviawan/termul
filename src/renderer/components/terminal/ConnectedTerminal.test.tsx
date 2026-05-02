@@ -227,6 +227,15 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/stores/app-settings-store', () => ({
+  useTerminalFontFamily: vi.fn(() => 'Menlo, Monaco, "Courier New", monospace'),
+  useTerminalFontSize: vi.fn(() => 14),
+  useTerminalBufferSize: vi.fn(() => 10000),
+  useTerminalRenderer: vi.fn(() => 'auto')
+}))
+
+import { useTerminalRenderer } from '@/stores/app-settings-store'
+
 const mockTerminalStoreState = {
   findTerminalByPtyId: vi.fn(),
   updateTerminalActivity: vi.fn(),
@@ -1225,6 +1234,34 @@ describe('ConnectedTerminal', () => {
       )
 
       vi.useRealTimers()
+    })
+
+    it('should skip WebGL when renderer preference is canvas', async () => {
+      // Override the mock to return canvas
+      vi.mocked(useTerminalRenderer).mockReturnValue('canvas')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      // WebGL addon should NOT have been created
+      expect(webglAddonCreateCount).toBe(0)
+      expect(capturedContextLossCallback).toBeFalsy()
+    })
+
+    it('should still load WebGL when renderer preference is webgl', async () => {
+      vi.mocked(useTerminalRenderer).mockReturnValue('webgl')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(webglAddonCreateCount).toBe(1)
+      expect(capturedContextLossCallback).toBeTruthy()
     })
   })
 

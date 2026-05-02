@@ -26,6 +26,7 @@ import {
 	useTerminalFontFamily,
 	useTerminalFontSize,
 	useTerminalBufferSize,
+	useTerminalRenderer,
 } from "@/stores/app-settings-store";
 import {
 	useKeyboardShortcutsStore,
@@ -131,6 +132,7 @@ function ConnectedTerminalComponent({
 	const fontFamily = useTerminalFontFamily();
 	const fontSize = useTerminalFontSize();
 	const bufferSize = useTerminalBufferSize();
+	const rendererPreference = useTerminalRenderer();
 
 	// Get keyboard shortcuts to intercept app shortcuts before xterm handles them
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -513,6 +515,12 @@ function ConnectedTerminalComponent({
 			term: Terminal,
 			isRecovery: boolean = false,
 		): void => {
+			// Respect explicit canvas preference — skip WebGL entirely
+			if (rendererPreference === "canvas") {
+				webglAddonRef.current = null;
+				return;
+			}
+
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
 					"WebGL recovery attempts exhausted, falling back to canvas renderer",
