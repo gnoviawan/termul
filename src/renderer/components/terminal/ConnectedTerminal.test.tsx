@@ -1159,6 +1159,73 @@ describe('ConnectedTerminal', () => {
 
       warnSpy.mockRestore()
     })
+
+    it('should record instrumentation events during WebGL recovery lifecycle', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(capturedContextLossCallback).toBeTruthy()
+      vi.useFakeTimers()
+
+      // Simulate context loss
+      capturedContextLossCallback!()
+      await vi.advanceTimersByTimeAsync(150)
+
+      // Verify recovery instrumentation events were recorded
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-attempted',
+          details: expect.objectContaining({
+            renderer: 'webgl',
+            isRecovery: true,
+          }),
+        })
+      )
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-succeeded',
+          details: expect.objectContaining({
+            renderer: 'webgl',
+            isRecovery: true,
+          }),
+        })
+      )
+
+      vi.useRealTimers()
+    })
+
+    it('should record exhausted event when max recovery attempts reached', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(capturedContextLossCallback).toBeTruthy()
+      vi.useFakeTimers()
+
+      // Exhaust all recovery attempts
+      for (let i = 0; i < 3; i++) {
+        capturedContextLossCallback!()
+        await vi.advanceTimersByTimeAsync(150)
+      }
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'renderer-recovery-exhausted',
+          details: expect.objectContaining({
+            attempts: expect.any(Number),
+            maxAttempts: expect.any(Number),
+          }),
+        })
+      )
+
+      vi.useRealTimers()
+    })
   })
 
   describe('Visibility change recovery', () => {

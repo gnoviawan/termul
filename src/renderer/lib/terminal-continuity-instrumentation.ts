@@ -8,6 +8,10 @@ export type TerminalContinuityEventName =
   | 'restore-replay-skipped'
   | 'restore-complete'
   | 'restore-failed'
+  | 'renderer-recovery-attempted'
+  | 'renderer-recovery-succeeded'
+  | 'renderer-recovery-exhausted'
+  | 'renderer-recovery-failed'
 
 export interface TerminalContinuityEvent {
   name: TerminalContinuityEventName

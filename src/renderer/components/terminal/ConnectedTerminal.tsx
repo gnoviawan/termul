@@ -517,9 +517,28 @@ function ConnectedTerminalComponent({
 				console.warn(
 					"WebGL recovery attempts exhausted, falling back to canvas renderer",
 				);
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-exhausted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempts: webglRecoveryAttemptsRef.current,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+					},
+				});
 				return;
 			}
 			try {
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-attempted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 				const webglAddon = new WebglAddon();
 				webglAddon.onContextLoss(() => {
 					webglAddon.dispose();
@@ -542,15 +561,33 @@ function ConnectedTerminalComponent({
 				webglAddonRef.current = webglAddon;
 				// Clear context lost flag on successful load
 				webglContextLostRef.current = false;
-				// Note: Counter NOT reset here - only increments on context loss or failure
-				// This prevents infinite recovery loops on persistent GPU issues
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-succeeded",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
 					"WebGL addon failed to load, falling back to canvas renderer:",
 					error,
 				);
 				webglAddonRef.current = null;
 				webglRecoveryAttemptsRef.current++;
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-failed",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						error: message,
+						attempt: webglRecoveryAttemptsRef.current,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
 			}
 		};
 
