@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import * as appSettingsStore from '@/stores/app-settings-store'
 import { render, cleanup } from '@testing-library/react'
 
 // Mock Tauri APIs BEFORE importing the component
@@ -259,16 +260,23 @@ vi.mock('@/lib/tauri-terminal-api', () => ({
 }))
 
 describe('ConnectedTerminal', () => {
+  let rendererPreferenceSpy: ReturnType<typeof vi.spyOn>
+  let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockRecordTerminalContinuityEvent.mockReset()
     mockGetOrCreateProjectContinuityCorrelation.mockReset()
     mockGetOrCreateProjectContinuityCorrelation.mockReturnValue('corr-project-a')
+    rendererPreferenceSpy = vi
+      .spyOn(appSettingsStore, 'useTerminalRenderer')
+      .mockReturnValue('auto')
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
     capturedDataCallback = null
     capturedExitCallback = null
+    capturedResizeCallback = null
     lastCreatedWebglInstance = null
 
     global.ResizeObserver = class MockResizeObserver {
@@ -276,6 +284,20 @@ describe('ConnectedTerminal', () => {
       unobserve = vi.fn()
       disconnect = vi.fn()
     } as unknown as typeof ResizeObserver
+
+    getBoundingClientRectSpy = vi
+      .spyOn(HTMLDivElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({
+        width: 800,
+        height: 600,
+        top: 0,
+        left: 0,
+        bottom: 600,
+        right: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => {}
+      } as DOMRect)
 
     // Re-setup onData and onExit mocks with fresh callback captures
     vi.mocked(terminalApi).onData.mockImplementation((cb: (id: string, data: string) => void) => {
@@ -322,6 +344,8 @@ describe('ConnectedTerminal', () => {
   })
 
   afterEach(() => {
+    getBoundingClientRectSpy.mockRestore()
+    rendererPreferenceSpy.mockRestore()
     cleanup()
   })
 
@@ -1134,39 +1158,65 @@ describe('ConnectedTerminal', () => {
     it('should stop recovery after max attempts exhausted', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-      render(<ConnectedTerminal />)
+      try {
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        // Initial load
+        expect(webglAddonCreateCount).toBe(1)
+
+        vi.useFakeTimers()
+
+        // Simulate 2 context loss events - should recover each time
+        for (let i = 0; i < 2; i++) {
+          capturedContextLossCallback!()
+          await vi.advanceTimersByTimeAsync(150)
+        }
+
+        // Should have 3 total: 1 init + 2 recoveries
+        expect(webglAddonCreateCount).toBe(3)
+
+        // 3rd context loss - counter reaches MAX, should NOT recover
+        capturedContextLossCallback!()
+        await vi.advanceTimersByTimeAsync(150)
+
+        // Should still be 3 - no more recovery attempts
+        expect(webglAddonCreateCount).toBe(3)
+
+        // Should have logged warning about exhausted attempts
+        expect(warnSpy).toHaveBeenCalledWith(
+          'WebGL recovery attempts exhausted, falling back to canvas renderer'
+        )
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    it('should dispose WebGL and skip recovery after switching renderer preference to canvas', async () => {
+      vi.useFakeTimers()
+      const { rerender } = render(<ConnectedTerminal className="renderer-auto" />)
 
       await vi.waitFor(() => {
         expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
-      // Initial load
       expect(webglAddonCreateCount).toBe(1)
+      expect(lastCreatedWebglInstance?.dispose).not.toHaveBeenCalled()
 
-      vi.useFakeTimers()
+      rendererPreferenceSpy.mockReturnValue('canvas')
+      rerender(<ConnectedTerminal className="renderer-canvas" />)
 
-      // Simulate 2 context loss events - should recover each time
-      for (let i = 0; i < 2; i++) {
-        capturedContextLossCallback!()
-        await vi.advanceTimersByTimeAsync(150)
-      }
+      await vi.waitFor(() => {
+        expect(lastCreatedWebglInstance?.dispose).toHaveBeenCalled()
+      })
 
-      // Should have 3 total: 1 init + 2 recoveries
-      expect(webglAddonCreateCount).toBe(3)
-
-      // 3rd context loss - counter reaches MAX, should NOT recover
-      capturedContextLossCallback!()
+      capturedContextLossCallback?.()
       await vi.advanceTimersByTimeAsync(150)
 
-      // Should still be 3 - no more recovery attempts
-      expect(webglAddonCreateCount).toBe(3)
-
-      // Should have logged warning about exhausted attempts
-      expect(warnSpy).toHaveBeenCalledWith(
-        'WebGL recovery attempts exhausted, falling back to canvas renderer'
-      )
-
-      warnSpy.mockRestore()
+      expect(webglAddonCreateCount).toBe(1)
     })
 
     it('should record instrumentation events during WebGL recovery lifecycle', async () => {
@@ -2276,12 +2326,12 @@ describe('ConnectedTerminal', () => {
       const div = container.querySelector('div')
       expect(div).toBeTruthy()
       ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
-        width: 800,
-        height: 600,
+        width: 900,
+        height: 700,
         top: 0,
         left: 0,
-        right: 800,
-        bottom: 600,
+        right: 900,
+        bottom: 700,
         x: 0,
         y: 0,
         toJSON: () => {}
@@ -2310,12 +2360,12 @@ describe('ConnectedTerminal', () => {
 
       // Change dimensions
       ;(div as HTMLDivElement).getBoundingClientRect = vi.fn().mockReturnValue({
-        width: 900,
-        height: 700,
+        width: 1000,
+        height: 800,
         top: 0,
         left: 0,
-        right: 900,
-        bottom: 700,
+        right: 1000,
+        bottom: 800,
         x: 0,
         y: 0,
         toJSON: () => {}

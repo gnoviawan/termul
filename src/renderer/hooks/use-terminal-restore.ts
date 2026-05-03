@@ -15,8 +15,13 @@ import {
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
 import {
   beginProjectContinuityCorrelation,
-  recordTerminalContinuityEvent
+  recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+
+const RESTORE_RETRY_DELAY_MS = 100
+const MAX_RESTORE_RETRIES = 10
+
+type RestoreAttemptStatus = 'completed' | 'blocked' | 'failed'
 
 const PROJECT_RESTORE_LOCKS = new Set<string>()
 const TERMINALS_PENDING_PTY_ASSIGNMENT = new Set<string>()
@@ -105,6 +110,10 @@ function debugLog(category: string, message: string, data?: unknown) {
   } else {
     console.log(prefix, message)
   }
+}
+
+function debugTerminalContinuityEvent(event: string, details: Record<string, unknown>): void {
+  debugLog('TERMINAL_CONTINUITY', event, details)
 }
 
 // Summary interval tracker
@@ -279,7 +288,7 @@ export function useTerminalRestore(): void {
     const actualPreviousProjectId = previousProjectIdRef.current
     const continuityCorrelationId = beginProjectContinuityCorrelation(projectIdToRestore)
 
-    recordTerminalContinuityEvent({
+    emitTerminalContinuityEvent({
       name: 'project-switch-start',
       correlationId: continuityCorrelationId,
       projectId: projectIdToRestore,
@@ -332,7 +341,7 @@ export function useTerminalRestore(): void {
         const liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
 
         if (liveProjectTerminals.length > 0) {
-          recordTerminalContinuityEvent({
+          emitTerminalContinuityEvent({
             name: 'restore-path-selected',
             correlationId: continuityCorrelationId,
             projectId: projectIdToRestore,
@@ -383,7 +392,7 @@ export function useTerminalRestore(): void {
             useTerminalStore.getState().selectTerminal(terminalIdToSelect)
           }
 
-          recordTerminalContinuityEvent({
+          emitTerminalContinuityEvent({
             name: 'restore-complete',
             correlationId: continuityCorrelationId,
             projectId: projectIdToRestore,
@@ -404,59 +413,74 @@ export function useTerminalRestore(): void {
           return
         }
 
-        if (layout && layout.terminals.length > 0) {
-          recordTerminalContinuityEvent({
-            name: 'restore-path-selected',
+        const restoreMode = layout && layout.terminals.length > 0 ? 'layout' : 'default'
+        emitTerminalContinuityEvent({
+          name: 'restore-path-selected',
+          correlationId: continuityCorrelationId,
+          projectId: projectIdToRestore,
+          details: {
+            path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+            persistedTerminalCount: layout?.terminals.length ?? 0
+          }
+        })
+
+        let attempt = 0
+
+        while (!isCancelled()) {
+          const restoreResult =
+            restoreMode === 'layout'
+              ? await restoreFromLayout(projectIdToRestore, layout!, isCancelled)
+              : await createDefaultTerminal(projectIdToRestore, isCancelled)
+
+          if (restoreResult.status === 'completed') {
+            if (!isCancelled()) {
+              emitTerminalContinuityEvent({
+                name: 'restore-complete',
+                correlationId: continuityCorrelationId,
+                projectId: projectIdToRestore,
+                terminalId: restoreResult.selectedTerminalId,
+                details: {
+                  path: restoreResult.path,
+                  persistedTerminalCount: layout?.terminals.length ?? 0,
+                  restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
+                  attempt
+                }
+              })
+            }
+            break
+          }
+
+          if (restoreResult.status === 'cancelled') {
+            break
+          }
+
+          attempt += 1
+          const retryDelayMs = RESTORE_RETRY_DELAY_MS * attempt
+          emitTerminalContinuityEvent({
+            name: 'restore-failed',
             correlationId: continuityCorrelationId,
             projectId: projectIdToRestore,
             details: {
-              path: 'persisted-replay',
-              persistedTerminalCount: layout.terminals.length
+              callId,
+              attempt,
+              reason: attempt >= MAX_RESTORE_RETRIES ? 'retry-limit-reached' : 'spawn-blocked',
+              owner: GLOBAL_SPAWN_LOCK_OWNER,
+              path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+              nextDelayMs: attempt >= MAX_RESTORE_RETRIES ? undefined : retryDelayMs
             }
           })
-          const restoreResult = await restoreFromLayout(projectIdToRestore, layout, isCancelled)
-          if (restoreResult.status === 'completed' && !isCancelled()) {
-            recordTerminalContinuityEvent({
-              name: 'restore-complete',
-              correlationId: continuityCorrelationId,
-              projectId: projectIdToRestore,
-              terminalId: restoreResult.selectedTerminalId,
-              details: {
-                path: restoreResult.path,
-                persistedTerminalCount: layout.terminals.length,
-                restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0
-              }
-            })
+
+          if (attempt >= MAX_RESTORE_RETRIES) {
+            break
           }
-        } else {
-          recordTerminalContinuityEvent({
-            name: 'restore-path-selected',
-            correlationId: continuityCorrelationId,
-            projectId: projectIdToRestore,
-            details: {
-              path: 'default-terminal',
-              persistedTerminalCount: 0
-            }
-          })
-          const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
-          if (restoreResult.status === 'completed' && !isCancelled()) {
-            recordTerminalContinuityEvent({
-              name: 'restore-complete',
-              correlationId: continuityCorrelationId,
-              projectId: projectIdToRestore,
-              terminalId: restoreResult.selectedTerminalId,
-              details: {
-                path: restoreResult.path,
-                restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0
-              }
-            })
-          }
+
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
         }
       } catch (err: unknown) {
         debugLog('useTerminalRestore', `RESTORE ERROR [${callId}]`, {
           error: err instanceof Error ? err.message : String(err)
         })
-        recordTerminalContinuityEvent({
+        emitTerminalContinuityEvent({
           name: 'restore-failed',
           correlationId: continuityCorrelationId,
           projectId: projectIdToRestore,

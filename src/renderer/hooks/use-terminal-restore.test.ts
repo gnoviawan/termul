@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { PaneNode } from '@/types/workspace.types'
 import { normalizeShellForStartup, useTerminalRestore } from './use-terminal-restore'
@@ -113,6 +113,7 @@ vi.mock('../stores/app-settings-store', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useRealTimers()
   mockRecordTerminalContinuityEvent.mockReset()
   mockBeginProjectContinuityCorrelation.mockReset()
   mockBeginProjectContinuityCorrelation.mockImplementation((projectId: string) => `corr-${projectId}`)
@@ -137,6 +138,10 @@ beforeEach(() => {
   mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-1' } })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
   mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('normalizeShellForStartup', () => {
@@ -479,7 +484,8 @@ describe('useTerminalRestore', () => {
         details: {
           path: 'persisted-replay',
           persistedTerminalCount: 1,
-          restoredTerminalCount: 1
+          restoredTerminalCount: 1,
+          attempt: 0
         }
       })
     })

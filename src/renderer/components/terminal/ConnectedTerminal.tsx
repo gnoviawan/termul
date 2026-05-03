@@ -57,6 +57,10 @@ const POWER_RESUME_RECOVERY_DELAY_MS = 300; // System stabilize after wake
 const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per second
 const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
 
+const shouldUseWebglRenderer = (
+	rendererPreference: "auto" | "webgl" | "canvas",
+): boolean => rendererPreference !== "canvas";
+
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
 	findPrevious: (term: string) => boolean;
@@ -133,6 +137,8 @@ function ConnectedTerminalComponent({
 	const fontSize = useTerminalFontSize();
 	const bufferSize = useTerminalBufferSize();
 	const rendererPreference = useTerminalRenderer();
+	const rendererPreferenceRef = useRef(rendererPreference);
+	rendererPreferenceRef.current = rendererPreference;
 
 	// Get keyboard shortcuts to intercept app shortcuts before xterm handles them
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -179,6 +185,20 @@ function ConnectedTerminalComponent({
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
 		null,
 	);
+
+	const disposeWebglAddon = useCallback((): void => {
+		if (webglRecoveryTimeoutRef.current) {
+			clearTimeout(webglRecoveryTimeoutRef.current);
+			webglRecoveryTimeoutRef.current = null;
+		}
+
+		if (webglAddonRef.current) {
+			webglAddonRef.current.dispose();
+			webglAddonRef.current = null;
+		}
+
+		webglContextLostRef.current = false;
+	}, []);
 
 	const performFit = (force = false): boolean => {
 		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
@@ -515,12 +535,13 @@ function ConnectedTerminalComponent({
 			term: Terminal,
 			isRecovery: boolean = false,
 		): void => {
-			// Respect explicit canvas preference — skip WebGL entirely
-			if (rendererPreference === "canvas") {
+			if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
 				webglAddonRef.current = null;
 				return;
 			}
-
+			if (webglAddonRef.current) {
+				return;
+			}
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
 					"WebGL recovery attempts exhausted, falling back to canvas renderer",
@@ -553,6 +574,10 @@ function ConnectedTerminalComponent({
 					webglAddonRef.current = null;
 					// Mark context as lost for recovery decisions
 					webglContextLostRef.current = true;
+					if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+						webglContextLostRef.current = false;
+						return;
+					}
 					// Increment recovery counter BEFORE scheduling recovery
 					webglRecoveryAttemptsRef.current++;
 					// Clear any pending recovery timeout
@@ -569,6 +594,9 @@ function ConnectedTerminalComponent({
 				webglAddonRef.current = webglAddon;
 				// Clear context lost flag on successful load
 				webglContextLostRef.current = false;
+				if (!isRecovery) {
+					webglRecoveryAttemptsRef.current = 0;
+				}
 				recordTerminalContinuityEvent({
 					name: "renderer-recovery-succeeded",
 					ptyId: ptyIdRef.current ?? undefined,
@@ -599,7 +627,9 @@ function ConnectedTerminalComponent({
 			}
 		};
 
-		loadWebglAddon(terminal);
+		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+			loadWebglAddon(terminal);
+		}
 		// Store reference for recovery handlers to use
 		loadWebglAddonRef.current = loadWebglAddon;
 
@@ -729,6 +759,7 @@ function ConnectedTerminalComponent({
 				hasPtyId: !!ptyIdRef.current,
 			});
 
+			// Fit to get real dimensions BEFORE spawning
 			performFit(true);
 			const spawnCols = terminal.cols || 80;
 			const spawnRows = terminal.rows || 24;
@@ -1068,22 +1099,13 @@ function ConnectedTerminalComponent({
 					);
 				pendingActivityUpdateRef.current = null;
 			}
-			// Clean up WebGL recovery timeout to prevent race condition
-			if (webglRecoveryTimeoutRef.current) {
-				clearTimeout(webglRecoveryTimeoutRef.current);
-				webglRecoveryTimeoutRef.current = null;
-			}
-
 			// Cursor cleanup: Disable cursor blink before WebGL disposal to prevent ghost cursors
 			if (terminalRef.current) {
 				terminalRef.current.options.cursorBlink = false;
 			}
 
 			// Dispose WebGL addon BEFORE terminal disposal for proper cursor layer cleanup
-			if (webglAddonRef.current) {
-				webglAddonRef.current.dispose();
-				webglAddonRef.current = null;
-			}
+			disposeWebglAddon();
 
 			terminal.dispose();
 			terminalRef.current = null;
@@ -1111,6 +1133,23 @@ function ConnectedTerminalComponent({
 			performFit(true);
 		}
 	}, [fontFamily, fontSize]);
+
+	useEffect(() => {
+		if (!shouldUseWebglRenderer(rendererPreference)) {
+			disposeWebglAddon();
+			webglRecoveryAttemptsRef.current = 0;
+			return;
+		}
+
+		if (
+			terminalRef.current &&
+			loadWebglAddonRef.current &&
+			!webglAddonRef.current
+		) {
+			webglRecoveryAttemptsRef.current = 0;
+			loadWebglAddonRef.current(terminalRef.current);
+		}
+	}, [disposeWebglAddon, rendererPreference]);
 
 	// Trigger fit + PTY resize when terminal becomes visible
 	// Uses double requestAnimationFrame for proper timing after pane transitions
@@ -1168,9 +1207,13 @@ function ConnectedTerminalComponent({
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Only recreate WebGL addon if context was actually lost and not already recovering
-		// webglAddonRef is null after onContextLoss, so check !webglAddonRef.current
-		if (webglContextLostRef.current && !webglAddonRef.current) {
+		// Only recreate WebGL addon if context was actually lost, the current preference still
+		// allows WebGL, and we're not already recovering.
+		if (
+			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
+			webglContextLostRef.current &&
+			!webglAddonRef.current
+		) {
 			try {
 				// Cancel any pending auto-recovery timeout to avoid double-creation race
 				if (webglRecoveryTimeoutRef.current) {

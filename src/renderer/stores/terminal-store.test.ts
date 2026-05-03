@@ -422,6 +422,18 @@ describe('terminal-store', () => {
       expect(terminal?.transcript).toBe('\u001b[32mhello\u001b[0m world')
     })
 
+    it('should trim transcript on a full CRLF boundary', () => {
+      const { setTerminalPtyId, appendTranscript } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-transcript-crlf')
+
+      const prefix = `header\r\n${'x'.repeat(499995)}`
+      appendTranscript('pty-transcript-crlf', prefix)
+      appendTranscript('pty-transcript-crlf', 'tail')
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.transcript?.startsWith('\n')).toBe(false)
+    })
+
     it('should consume transcript once and clear it', () => {
       const { setTerminalPtyId, appendTranscript, consumeTranscript } = useTerminalStore.getState()
       setTerminalPtyId('t1', 'pty-transcript-1')

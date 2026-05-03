@@ -7,6 +7,7 @@ const GLOBAL_TERMINAL_LIMIT = 30
 export const HIDDEN_BUFFER_TRUNCATION_DELAY = 15 * 60 * 1000 // 15 minutes
 export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000
+const LINE_BREAK_PATTERN = /\r\n|\r|\n/
 
 export interface TerminalState {
   // State
@@ -248,11 +249,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           if (combined.length > MAX_TRANSCRIPT_CHARS) {
             const tail = combined.slice(-MAX_TRANSCRIPT_CHARS)
-            const firstNewline = tail.indexOf('\n')
-            const firstCarriageReturn = tail.indexOf('\r')
-            const firstBreakIndexes = [firstNewline, firstCarriageReturn].filter((index) => index !== -1)
-            const firstBreak = firstBreakIndexes.length > 0 ? Math.min(...firstBreakIndexes) : -1
-            nextTranscript = firstBreak !== -1 ? tail.slice(firstBreak + 1) : tail
+            const firstBreak = LINE_BREAK_PATTERN.exec(tail)
+            nextTranscript = firstBreak
+              ? tail.slice(firstBreak.index + firstBreak[0].length)
+              : tail
           }
 
           return {

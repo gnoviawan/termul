@@ -62,6 +62,11 @@ function usePreventAltMenu(): void {
 
 const queryClient = new QueryClient()
 
+// TODO(renderer-upgrade-adrs / ADR-xterm-renderer-upgrade): enforce the xterm 5.5
+// production baseline and require explicit validation for xterm 6.1 via a durable
+// build/CI/runtime gate (for example a checkRendererVersion helper wired during app
+// initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
+
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
   usePreventAltMenu()
