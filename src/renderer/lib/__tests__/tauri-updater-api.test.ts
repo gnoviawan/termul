@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 
 vi.mock('@tauri-apps/api/app', () => ({
@@ -65,6 +65,10 @@ async function flushPromises(): Promise<void> {
 }
 
 describe('tauri-updater-api', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     _resetUpdaterStateForTesting()
@@ -129,14 +133,26 @@ describe('tauri-updater-api', () => {
       )
     })
 
-    it('preserves non-Error check failure details', async () => {
+    it('falls back to GitHub release info when check rejects with a non-Error 404 object', async () => {
       vi.mocked(check).mockRejectedValue({ status: 404, url: 'latest.json' })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            tag_name: 'v9.9.9',
+            published_at: '2026-06-01T12:00:00.000Z',
+            html_url: 'https://github.com/gnoviawan/termul/releases/tag/v9.9.9',
+            body: 'stubbed fallback release notes'
+          })
+        })
+      )
 
       await expect(checkForUpdates()).resolves.toEqual({
-        version: '0.3.4',
-        releaseDate: '2026-05-01T15:13:12Z',
-        releaseNotes: expect.any(String),
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+        version: '9.9.9',
+        releaseDate: '2026-06-01T12:00:00.000Z',
+        releaseNotes: 'stubbed fallback release notes',
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v9.9.9',
         isSecurityUpdate: false
       })
     })
