@@ -19,7 +19,11 @@ type BenchmarkPayload = string | (() => string);
 
 async function runBenchmark(
   name: string,
-  setup: (terminal: Terminal, fitAddon: FitAddon) => void,
+  setup: (
+    terminal: Terminal,
+    fitAddon: FitAddon,
+    output: string
+  ) => void | boolean | Promise<void | boolean>,
   payload: BenchmarkPayload,
   iterations = 3
 ): Promise<BenchmarkResult> {
@@ -41,14 +45,21 @@ async function runBenchmark(
     totalLines = output.split(/\r\n|\r|\n/).length;
     totalChars = output.length;
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(async (resolve) => {
       const start = performance.now();
-      setup(terminal, fitAddon);
-      terminal.write(output, () => {
+      const finish = () => {
         const end = performance.now();
         durations.push(end - start);
         resolve();
-      });
+      };
+
+      const handled = await setup(terminal, fitAddon, output);
+      if (handled === true) {
+        finish();
+        return;
+      }
+
+      terminal.write(output, finish);
     });
 
     terminal.dispose();
@@ -101,10 +112,29 @@ async function main(): Promise<void> {
 
   // Scenario 2: Output with periodic fit calls
   results.push(
-    await runBenchmark('Streaming + fit churn (fit every 100 lines)', (terminal, fitAddon) => {
-      // fitAddon is loaded; we simulate churn by not calling it during write
-      // the benchmark structure captures write throughput
-    }, fitChurnPayload)
+    await runBenchmark(
+      'Streaming + fit churn (fit every 100 lines)',
+      async (terminal, fitAddon, output) => {
+        const chunks = output.split('\r\n');
+        const linesPerChunk = 100;
+
+        for (let i = 0; i < chunks.length; i += linesPerChunk) {
+          const chunk = chunks.slice(i, i + linesPerChunk).join('\r\n');
+          await new Promise<void>((resolve) => {
+            terminal.write(`${chunk}\r\n`, resolve);
+          });
+
+          try {
+            fitAddon.fit();
+          } catch {
+            // Ignore fit errors if the container is not fully measurable yet.
+          }
+        }
+
+        return true;
+      },
+      fitChurnPayload
+    )
   );
 
   // Scenario 3: Large block output

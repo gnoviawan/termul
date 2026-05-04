@@ -4,7 +4,10 @@ import * as ResizablePrimitive from 'react-resizable-panels'
 
 import { cn } from '@/lib/utils'
 
-const ResizablePanelGroup = forwardRef<
+const ResizablePanelGroup: React.ForwardRefExoticComponent<
+  React.ComponentProps<typeof ResizablePrimitive.PanelGroup> &
+    React.RefAttributes<React.ElementRef<typeof ResizablePrimitive.PanelGroup>>
+> = forwardRef<
   React.ElementRef<typeof ResizablePrimitive.PanelGroup>,
   React.ComponentProps<typeof ResizablePrimitive.PanelGroup>
 >(({ className, ...props }, ref) => (
