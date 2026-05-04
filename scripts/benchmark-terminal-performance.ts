@@ -15,11 +15,14 @@ interface BenchmarkResult {
   throughputCharsPerSecond: number;
 }
 
-function runBenchmark(
+type BenchmarkPayload = string | (() => string);
+
+async function runBenchmark(
   name: string,
   setup: (terminal: Terminal, fitAddon: FitAddon) => void,
+  payload: BenchmarkPayload,
   iterations = 3
-): BenchmarkResult {
+): Promise<BenchmarkResult> {
   const container = document.getElementById('terminal') as HTMLDivElement;
   container.style.width = '800px';
   container.style.height = '600px';
@@ -34,16 +37,19 @@ function runBenchmark(
     terminal.loadAddon(fitAddon);
     terminal.open(container);
 
-    // Pre-generate output to avoid generation overhead in the timing
-    const output = generateHeavyOutput(1000); // 1000 lines of mixed content
-    totalLines = output.split('\n').length;
+    const output = typeof payload === 'function' ? payload() : payload;
+    totalLines = output.split(/\r\n|\r|\n/).length;
     totalChars = output.length;
 
-    const start = performance.now();
-    setup(terminal, fitAddon);
-    terminal.write(output);
-    const end = performance.now();
-    durations.push(end - start);
+    await new Promise<void>((resolve) => {
+      const start = performance.now();
+      setup(terminal, fitAddon);
+      terminal.write(output, () => {
+        const end = performance.now();
+        durations.push(end - start);
+        resolve();
+      });
+    });
 
     terminal.dispose();
   }
@@ -69,46 +75,50 @@ function generateHeavyOutput(lineCount: number): string {
   return lines.join('\r\n');
 }
 
-function generateResizeChurnOutput(lineCount: number): string {
+function generateWideLines(lineCount: number, width: number): string {
   const lines: string[] = [];
   for (let i = 0; i < lineCount; i++) {
-    lines.push(`Resize-churn line ${i}: ${'x'.repeat(100)}`);
+    lines.push(`Resize-churn line ${i}: ${'x'.repeat(width)}`);
   }
   return lines.join('\r\n');
 }
 
-function main(): void {
+async function main(): Promise<void> {
   console.log('=== Termul xterm 5.5 Baseline Benchmark ===\n');
 
   const results: BenchmarkResult[] = [];
+  const baselinePayload = () => generateHeavyOutput(1000);
+  const fitChurnPayload = () => generateHeavyOutput(1000);
+  const tenKLinesPayload = () => generateHeavyOutput(10000);
+  const wideLinesPayload = () => generateWideLines(1000, 100);
 
   // Scenario 1: Heavy streaming output
   results.push(
-    runBenchmark('Heavy streaming output (1k lines ANSI)', (terminal) => {
+    await runBenchmark('Heavy streaming output (1k lines ANSI)', (terminal) => {
       // baseline — just write
-    })
+    }, baselinePayload)
   );
 
   // Scenario 2: Output with periodic fit calls
   results.push(
-    runBenchmark('Streaming + fit churn (fit every 100 lines)', (terminal, fitAddon) => {
+    await runBenchmark('Streaming + fit churn (fit every 100 lines)', (terminal, fitAddon) => {
       // fitAddon is loaded; we simulate churn by not calling it during write
       // the benchmark structure captures write throughput
-    })
+    }, fitChurnPayload)
   );
 
   // Scenario 3: Large block output
   results.push(
-    runBenchmark('Large block output (10k lines)', () => {
-      // uses the default 1k line generation in runBenchmark
-    })
+    await runBenchmark('Large block output (10k lines)', () => {
+      // large block payload is generated per run to match the benchmark label
+    }, tenKLinesPayload)
   );
 
   // Scenario 4: Resize-sensitive output
   results.push(
-    runBenchmark('Resize-sensitive wide lines (1k lines x100 chars)', () => {
-      // uses wide line generation
-    })
+    await runBenchmark('Resize-sensitive wide lines (1k lines x100 chars)', () => {
+      // wide line payload is generated per run to match the benchmark label
+    }, wideLinesPayload)
   );
 
   // Print results table
@@ -123,4 +133,4 @@ function main(): void {
   console.log('\n=== Benchmark complete ===');
 }
 
-main();
+void main();

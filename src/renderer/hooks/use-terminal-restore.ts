@@ -454,6 +454,21 @@ export function useTerminalRestore(): void {
             break
           }
 
+          if (restoreResult.status === 'failed') {
+            emitTerminalContinuityEvent({
+              name: 'restore-failed',
+              correlationId: continuityCorrelationId,
+              projectId: projectIdToRestore,
+              details: {
+                callId,
+                attempt,
+                reason: 'permanent-restore-failure',
+                path: restoreResult.path
+              }
+            })
+            break
+          }
+
           attempt += 1
           const retryDelayMs = RESTORE_RETRY_DELAY_MS * attempt
           emitTerminalContinuityEvent({
@@ -627,7 +642,7 @@ function selectTerminalForProject(
  * Restore terminals from persisted layout (only when no terminals exist in memory)
  */
 interface RestoreExecutionResult {
-  status: 'completed' | 'cancelled' | 'blocked'
+  status: 'completed' | 'cancelled' | 'blocked' | 'failed'
   selectedTerminalId?: string
   restoredTerminalCount?: number
   path: 'live-pty' | 'persisted-replay' | 'default-terminal'
@@ -654,7 +669,7 @@ async function restoreFromLayout(
       limit: MAX_SPAWN_LIMIT
     })
     releaseGlobalSpawnLock(restoreId)
-    return { status: 'blocked', path: 'persisted-replay' }
+    return { status: 'failed', path: 'persisted-replay' }
   }
 
   try {
@@ -954,7 +969,7 @@ async function createDefaultTerminal(
 
     if (!spawnResult.success) {
       debugLog('createDefaultTerminal', `Spawn FAILED [${defaultId}]`)
-      return { status: 'blocked', path: 'default-terminal' }
+      return { status: 'failed', path: 'default-terminal' }
     }
 
     SPAWN_CALL_COUNT++

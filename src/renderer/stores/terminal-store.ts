@@ -446,10 +446,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           t.pendingScrollback &&
           t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
         ) {
-          // Keep the last TRUNCATED_BUFFER_SIZE lines and align transcript retention to the same window.
+          // Keep the last TRUNCATED_BUFFER_SIZE lines while preserving replay-grade transcript data.
           const nextScrollback = t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
           const nextTranscript = t.transcript
-            ? nextScrollback.join('\n')
+            ? t.transcript
+                .split(/\r\n|\r|\n/)
+                .slice(-TRUNCATED_BUFFER_SIZE)
+                .join('\n')
             : t.transcript
 
           return {

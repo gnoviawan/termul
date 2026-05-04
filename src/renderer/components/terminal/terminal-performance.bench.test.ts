@@ -16,11 +16,16 @@ import { FitAddon } from '@xterm/addon-fit'
  * - Keep scenarios Termul-specific rather than generic
  */
 
+function deterministicToken(index: number): string {
+  const value = (index * 1664525 + 1013904223) >>> 0
+  return value.toString(36).padStart(8, '0').slice(0, 8)
+}
+
 function generateHeavyOutput(lineCount: number): string {
   const lines: string[] = []
   for (let i = 0; i < lineCount; i++) {
     const prefix = `\u001b[32m[${String(i).padStart(4, '0')}]\u001b[0m `
-    const content = `Build step ${i}: ${'='.repeat(60)} ${Math.random().toString(36).slice(2, 10)}`
+    const content = `Build step ${i}: ${'='.repeat(60)} ${deterministicToken(i)}`
     lines.push(prefix + content)
   }
   return lines.join('\r\n')
@@ -57,10 +62,36 @@ interface BenchmarkResult {
   charsPerSecond: number
 }
 
-function runBenchmark(name: string, lineCount: number, content: string): BenchmarkResult {
+async function waitForTerminalRender(terminal: Terminal): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let rafId = 0
+    const disposable = terminal.onRender(() => {
+      disposable.dispose()
+      rafId = requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve())
+      })
+    })
+
+    terminal.write('', () => {
+      if (rafId === 0) {
+        disposable.dispose()
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve())
+        })
+      }
+    })
+  })
+}
+
+async function runBenchmark(name: string, lineCount: number, content: string): Promise<BenchmarkResult> {
   const { terminal, container } = createTerminal()
   const start = performance.now()
-  terminal.write(content)
+
+  await new Promise<void>((resolve) => {
+    terminal.write(content, resolve)
+  })
+  await waitForTerminalRender(terminal)
+
   const end = performance.now()
   const durationMs = end - start
   terminal.dispose()
@@ -92,29 +123,29 @@ describe('Terminal performance baseline (xterm 5.5)', () => {
     console.log('\n=== Benchmark complete ===')
   })
 
-  it('benchmark: heavy streaming output (1k ANSI lines)', () => {
+  it('benchmark: heavy streaming output (1k ANSI lines)', async () => {
     const content = generateHeavyOutput(1000)
-    const result = runBenchmark('Heavy streaming (1k ANSI)', 1000, content)
+    const result = await runBenchmark('Heavy streaming (1k ANSI)', 1000, content)
     results.push(result)
     // Sanity: should complete in under 2 seconds for baseline health
     expect(result.durationMs).toBeLessThan(2000)
   })
 
-  it('benchmark: large block output (5k lines)', () => {
+  it('benchmark: large block output (5k lines)', async () => {
     const content = generateHeavyOutput(5000)
-    const result = runBenchmark('Large block (5k lines)', 5000, content)
+    const result = await runBenchmark('Large block (5k lines)', 5000, content)
     results.push(result)
     expect(result.durationMs).toBeLessThan(10000)
   })
 
-  it('benchmark: resize-sensitive wide lines (1k x 120 chars)', () => {
+  it('benchmark: resize-sensitive wide lines (1k x 120 chars)', async () => {
     const content = generateWideLines(1000, 120)
-    const result = runBenchmark('Wide lines (1k x 120)', 1000, content)
+    const result = await runBenchmark('Wide lines (1k x 120)', 1000, content)
     results.push(result)
     expect(result.durationMs).toBeLessThan(3000)
   })
 
-  it('benchmark: streaming with periodic fit churn', () => {
+  it('benchmark: streaming with periodic fit churn', async () => {
     const { terminal, fitAddon, container } = createTerminal()
     const chunks: string[] = []
     for (let i = 0; i < 10; i++) {
@@ -123,7 +154,9 @@ describe('Terminal performance baseline (xterm 5.5)', () => {
 
     const start = performance.now()
     for (let i = 0; i < chunks.length; i++) {
-      terminal.write(chunks[i])
+      await new Promise<void>((resolve) => {
+        terminal.write(chunks[i], resolve)
+      })
       if (i % 3 === 0) {
         // Simulate fit churn every 3 chunks
         try {
@@ -132,6 +165,7 @@ describe('Terminal performance baseline (xterm 5.5)', () => {
           /* ignore */
         }
       }
+      await waitForTerminalRender(terminal)
     }
     const end = performance.now()
     const durationMs = end - start
