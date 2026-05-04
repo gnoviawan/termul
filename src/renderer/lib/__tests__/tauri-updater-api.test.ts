@@ -132,9 +132,13 @@ describe('tauri-updater-api', () => {
     it('preserves non-Error check failure details', async () => {
       vi.mocked(check).mockRejectedValue({ status: 404, url: 'latest.json' })
 
-      await expect(checkForUpdates()).rejects.toThrow(
-        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":404,"url":"latest.json"}'
-      )
+      await expect(checkForUpdates()).resolves.toEqual({
+        version: '0.3.4',
+        releaseDate: '2026-05-01T15:13:12Z',
+        releaseNotes: expect.any(String),
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+        isSecurityUpdate: false
+      })
     })
   })
 

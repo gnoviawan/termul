@@ -45,7 +45,7 @@ async function runBenchmark(
     totalLines = output.split(/\r\n|\r|\n/).length;
     totalChars = output.length;
 
-    await new Promise<void>(async (resolve) => {
+    await new Promise<void>((resolve, reject) => {
       const start = performance.now();
       const finish = () => {
         const end = performance.now();
@@ -53,13 +53,16 @@ async function runBenchmark(
         resolve();
       };
 
-      const handled = await setup(terminal, fitAddon, output);
-      if (handled === true) {
-        finish();
-        return;
-      }
+      Promise.resolve(setup(terminal, fitAddon, output))
+        .then((handled) => {
+          if (handled === true) {
+            finish();
+            return;
+          }
 
-      terminal.write(output, finish);
+          terminal.write(output, finish);
+        })
+        .catch(reject);
     });
 
     terminal.dispose();

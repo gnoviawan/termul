@@ -21,11 +21,16 @@ vi.mock('@/stores/workspace-store', () => ({
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
 
+const mockEditorStoreState = {
+  openFiles: new Map<string, { isDirty: boolean; operationStatus?: string }>()
+}
+
 vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: vi.fn((selector: (state: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
-    selector({
-      openFiles: new Map<string, { isDirty: boolean }>()
-    })
+  useEditorStore: Object.assign(
+    vi.fn((selector: (state: typeof mockEditorStoreState) => unknown) => selector(mockEditorStoreState)),
+    {
+      getState: () => mockEditorStoreState
+    }
   )
 }))
 
