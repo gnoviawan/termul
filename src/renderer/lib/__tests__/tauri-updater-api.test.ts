@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 
 vi.mock('@tauri-apps/api/app', () => ({
@@ -67,6 +67,10 @@ async function flushPromises(): Promise<void> {
 const mockFetch = vi.fn()
 
 describe('tauri-updater-api', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     _resetUpdaterStateForTesting()

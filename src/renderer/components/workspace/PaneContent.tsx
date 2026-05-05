@@ -205,8 +205,10 @@ export function PaneContent({
 									>
 										<ConnectedTerminal
 											terminalId={terminal.ptyId}
+											storeTerminalId={terminal.id}
 											autoSpawn={false}
 											spawnOptions={{
+												projectId: terminal.projectId,
 												shell: terminal.shell,
 												cwd: terminal.cwd,
 											}}

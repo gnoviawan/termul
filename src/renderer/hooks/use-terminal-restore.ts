@@ -13,6 +13,15 @@ import {
   setTerminalRestoreInProgress
 } from './useTerminalAutoSave'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import {
+  beginProjectContinuityCorrelation,
+  recordTerminalContinuityEvent as emitTerminalContinuityEvent
+} from '@/lib/terminal-continuity-instrumentation'
+
+const RESTORE_RETRY_DELAY_MS = 100
+const MAX_RESTORE_RETRIES = 10
+
+type RestoreAttemptStatus = 'completed' | 'blocked' | 'failed'
 
 const PROJECT_RESTORE_LOCKS = new Set<string>()
 const TERMINALS_PENDING_PTY_ASSIGNMENT = new Set<string>()
@@ -101,6 +110,10 @@ function debugLog(category: string, message: string, data?: unknown) {
   } else {
     console.log(prefix, message)
   }
+}
+
+function debugTerminalContinuityEvent(event: string, details: Record<string, unknown>): void {
+  debugLog('TERMINAL_CONTINUITY', event, details)
 }
 
 // Summary interval tracker
@@ -273,6 +286,19 @@ export function useTerminalRestore(): void {
     // FIX #3: Capture ACTUAL previous project ID BEFORE overwriting the ref
     // This is critical for the PTY cleanup logic below
     const actualPreviousProjectId = previousProjectIdRef.current
+    const continuityCorrelationId = beginProjectContinuityCorrelation(projectIdToRestore)
+
+    emitTerminalContinuityEvent({
+      name: 'project-switch-start',
+      correlationId: continuityCorrelationId,
+      projectId: projectIdToRestore,
+      details: {
+        previousProjectId: actualPreviousProjectId || undefined,
+        trigger: 'active-project-changed',
+        callId,
+        restoreOwnerId
+      }
+    })
 
     // FIX #3: Move previousProjectIdRef update BEFORE async to prevent rapid switch bugs
     previousProjectIdRef.current = projectIdToRestore
@@ -296,7 +322,11 @@ export function useTerminalRestore(): void {
         // Save layout for crash recovery purposes, but preserve live PTYs
         // PTYs are kept alive across project switches to preserve TUI sessions
         if (actualPreviousProjectId && actualPreviousProjectId !== projectIdToRestore) {
-          await saveTerminalLayout(actualPreviousProjectId)
+          await saveTerminalLayout(actualPreviousProjectId, {
+            correlationId: continuityCorrelationId,
+            reason: 'project-switch',
+            targetProjectId: projectIdToRestore
+          })
         }
 
         if (isCancelled()) {
@@ -311,6 +341,16 @@ export function useTerminalRestore(): void {
         const liveProjectTerminals = existingTerminals.filter((terminal) => !!terminal.ptyId)
 
         if (liveProjectTerminals.length > 0) {
+          emitTerminalContinuityEvent({
+            name: 'restore-path-selected',
+            correlationId: continuityCorrelationId,
+            projectId: projectIdToRestore,
+            details: {
+              path: 'live-pty',
+              liveTerminalCount: liveProjectTerminals.length
+            }
+          })
+
           const layout = await loadPersistedTerminals(projectIdToRestore)
           if (isCancelled()) {
             debugLog('useTerminalRestore', `CANCELLED [${callId}] after live layout load`)
@@ -351,6 +391,18 @@ export function useTerminalRestore(): void {
 
             useTerminalStore.getState().selectTerminal(terminalIdToSelect)
           }
+
+          emitTerminalContinuityEvent({
+            name: 'restore-complete',
+            correlationId: continuityCorrelationId,
+            projectId: projectIdToRestore,
+            terminalId: terminalIdToSelect ?? undefined,
+            details: {
+              path: 'live-pty',
+              liveTerminalCount: liveProjectTerminals.length,
+              persistedLayoutLoaded: layout !== null
+            }
+          })
           return
         }
 
@@ -361,14 +413,96 @@ export function useTerminalRestore(): void {
           return
         }
 
-        if (layout && layout.terminals.length > 0) {
-          await restoreFromLayout(projectIdToRestore, layout, isCancelled)
-        } else {
-          await createDefaultTerminal(projectIdToRestore, isCancelled)
+        const restoreMode = layout && layout.terminals.length > 0 ? 'layout' : 'default'
+        emitTerminalContinuityEvent({
+          name: 'restore-path-selected',
+          correlationId: continuityCorrelationId,
+          projectId: projectIdToRestore,
+          details: {
+            path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+            persistedTerminalCount: layout?.terminals.length ?? 0
+          }
+        })
+
+        let attempt = 0
+
+        while (!isCancelled()) {
+          const restoreResult =
+            restoreMode === 'layout'
+              ? await restoreFromLayout(projectIdToRestore, layout!, isCancelled)
+              : await createDefaultTerminal(projectIdToRestore, isCancelled)
+
+          if (restoreResult.status === 'completed') {
+            if (!isCancelled()) {
+              emitTerminalContinuityEvent({
+                name: 'restore-complete',
+                correlationId: continuityCorrelationId,
+                projectId: projectIdToRestore,
+                terminalId: restoreResult.selectedTerminalId,
+                details: {
+                  path: restoreResult.path,
+                  persistedTerminalCount: layout?.terminals.length ?? 0,
+                  restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
+                  attempt
+                }
+              })
+            }
+            break
+          }
+
+          if (restoreResult.status === 'cancelled') {
+            break
+          }
+
+          if (restoreResult.status === 'failed') {
+            emitTerminalContinuityEvent({
+              name: 'restore-failed',
+              correlationId: continuityCorrelationId,
+              projectId: projectIdToRestore,
+              details: {
+                callId,
+                attempt,
+                reason: 'permanent-restore-failure',
+                path: restoreResult.path
+              }
+            })
+            break
+          }
+
+          attempt += 1
+          const retryDelayMs = RESTORE_RETRY_DELAY_MS * attempt
+          emitTerminalContinuityEvent({
+            name: 'restore-failed',
+            correlationId: continuityCorrelationId,
+            projectId: projectIdToRestore,
+            details: {
+              callId,
+              attempt,
+              reason: attempt >= MAX_RESTORE_RETRIES ? 'retry-limit-reached' : 'spawn-blocked',
+              owner: GLOBAL_SPAWN_LOCK_OWNER,
+              path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+              nextDelayMs: attempt >= MAX_RESTORE_RETRIES ? undefined : retryDelayMs
+            }
+          })
+
+          if (attempt >= MAX_RESTORE_RETRIES) {
+            break
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
         }
       } catch (err: unknown) {
         debugLog('useTerminalRestore', `RESTORE ERROR [${callId}]`, {
           error: err instanceof Error ? err.message : String(err)
+        })
+        emitTerminalContinuityEvent({
+          name: 'restore-failed',
+          correlationId: continuityCorrelationId,
+          projectId: projectIdToRestore,
+          details: {
+            callId,
+            error: err instanceof Error ? err.message : String(err)
+          }
         })
         console.error('Failed to restore terminals:', err)
         if (isCancelled()) {
@@ -507,17 +641,24 @@ function selectTerminalForProject(
 /**
  * Restore terminals from persisted layout (only when no terminals exist in memory)
  */
+interface RestoreExecutionResult {
+  status: 'completed' | 'cancelled' | 'blocked' | 'failed'
+  selectedTerminalId?: string
+  restoredTerminalCount?: number
+  path: 'live-pty' | 'persisted-replay' | 'default-terminal'
+}
+
 async function restoreFromLayout(
   projectId: string,
   layout: PersistedTerminalLayout,
   isCancelled: () => boolean
-): Promise<void> {
+): Promise<RestoreExecutionResult> {
   const restoreId = `restore-${Math.random().toString(36).slice(2, 7)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(restoreId)) {
     debugLog('restoreFromLayout', `BLOCKED [${restoreId}] Global spawn lock is active!`)
-    return
+    return { status: 'blocked', path: 'persisted-replay' }
   }
 
   resetSpawnCallCount(restoreId)
@@ -528,13 +669,13 @@ async function restoreFromLayout(
       limit: MAX_SPAWN_LIMIT
     })
     releaseGlobalSpawnLock(restoreId)
-    return
+    return { status: 'failed', path: 'persisted-replay' }
   }
 
   try {
     if (isCancelled()) {
       debugLog('restoreFromLayout', `CANCELLED [${restoreId}] before restore`)
-      return
+      return { status: 'cancelled', path: 'persisted-replay' }
     }
 
     const terminalStore = useTerminalStore.getState()
@@ -574,7 +715,7 @@ async function restoreFromLayout(
       if (isCancelled()) {
         await cleanupSpawnedPtys(newTerminals, restoreId, 'during restore loop')
         debugLog('restoreFromLayout', `CANCELLED [${restoreId}] during restore loop`)
-        return
+        return { status: 'cancelled', path: 'persisted-replay' }
       }
 
       const terminalCallId = `${restoreId}-${persistedTerminal.name}-${Math.random().toString(36).slice(2, 5)}`
@@ -595,7 +736,7 @@ async function restoreFromLayout(
         if (isCancelled()) {
           await cleanupSpawnedPtys(newTerminals, restoreId, 'after shell resolution')
           debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after shell resolution`)
-          return
+          return { status: 'cancelled', path: 'persisted-replay' }
         }
 
         const normalizedShell = normalizeShellForStartup(resolvedShell)
@@ -651,7 +792,7 @@ async function restoreFromLayout(
     if (isCancelled()) {
       await cleanupSpawnedPtys(newTerminals, restoreId, 'before store mutation')
       debugLog('restoreFromLayout', `CANCELLED [${restoreId}] before store mutation`)
-      return
+      return { status: 'cancelled', path: 'persisted-replay' }
     }
 
     if (newTerminals.length === 0) {
@@ -663,8 +804,11 @@ async function restoreFromLayout(
           persistedCount: layout.terminals.length
         }
       )
-      await createDefaultTerminal(projectId, isCancelled)
-      return
+      const fallbackResult = await createDefaultTerminal(projectId, isCancelled)
+      return {
+        ...fallbackResult,
+        path: fallbackResult.path
+      }
     }
 
     // Add all terminals at once
@@ -696,6 +840,13 @@ async function restoreFromLayout(
       spawnTrackerEntries: SPAWN_TRACKER.size,
       totalSpawnCalls: SPAWN_CALL_COUNT
     })
+
+    return {
+      status: 'completed',
+      path: 'persisted-replay',
+      selectedTerminalId: activeId || undefined,
+      restoredTerminalCount: newTerminals.length
+    }
   } finally {
     // FIX #2: Always release the global spawn lock
     releaseGlobalSpawnLock(restoreId)
@@ -708,13 +859,16 @@ async function restoreFromLayout(
 /**
  * Create a default terminal when no persisted data exists
  */
-async function createDefaultTerminal(projectId: string, isCancelled: () => boolean): Promise<void> {
+async function createDefaultTerminal(
+  projectId: string,
+  isCancelled: () => boolean
+): Promise<RestoreExecutionResult> {
   const defaultId = `default-${Math.random().toString(36).slice(2, 7)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(defaultId)) {
     debugLog('createDefaultTerminal', `BLOCKED [${defaultId}] Global spawn lock is active`)
-    return
+    return { status: 'blocked', path: 'default-terminal' }
   }
 
   resetSpawnCallCount(defaultId)
@@ -722,7 +876,7 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
   try {
     if (isCancelled()) {
       debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] before restore`)
-      return
+      return { status: 'cancelled', path: 'default-terminal' }
     }
 
     const terminalStore = useTerminalStore.getState()
@@ -744,7 +898,12 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
         terminalIds: existingTerminals.map((t) => t.id)
       })
       terminalStore.selectTerminal(existingTerminals[0].id)
-      return
+      return {
+        status: 'completed',
+        path: 'default-terminal',
+        selectedTerminalId: existingTerminals[0].id,
+        restoredTerminalCount: existingTerminals.length
+      }
     }
 
     // CRITICAL: Also check if a spawn is already in progress for this project
@@ -756,7 +915,7 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
       debugLog('createDefaultTerminal', `SKIPPED [${defaultId}]: terminals already being created`, {
         count: restoringTerminals.length
       })
-      return
+      return { status: 'blocked', path: 'default-terminal' }
     }
 
     // Get shell from fallback chain: project -> app settings -> system default
@@ -766,7 +925,7 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
     const resolvedShell = await resolveShellToPath(shellSetting)
     if (isCancelled()) {
       debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after shell resolution`)
-      return
+      return { status: 'cancelled', path: 'default-terminal' }
     }
 
     const shell = normalizeShellForStartup(resolvedShell)
@@ -805,12 +964,12 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
       } else {
         debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after failed spawn`)
       }
-      return
+      return { status: 'cancelled', path: 'default-terminal' }
     }
 
     if (!spawnResult.success) {
       debugLog('createDefaultTerminal', `Spawn FAILED [${defaultId}]`)
-      return
+      return { status: 'failed', path: 'default-terminal' }
     }
 
     SPAWN_CALL_COUNT++
@@ -831,6 +990,13 @@ async function createDefaultTerminal(projectId: string, isCancelled: () => boole
       totalTerminalsInStore: freshTerminalStore.terminals.length,
       totalSpawnCalls: SPAWN_CALL_COUNT
     })
+
+    return {
+      status: 'completed',
+      path: 'default-terminal',
+      selectedTerminalId: newTerminal.id,
+      restoredTerminalCount: 1
+    }
   } finally {
     // FIX #2: Always release the global spawn lock
     releaseGlobalSpawnLock(defaultId)
