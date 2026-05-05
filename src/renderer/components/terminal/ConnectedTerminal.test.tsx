@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
+import { toast } from 'sonner'
 
 // Mock Tauri APIs BEFORE importing the component
 vi.mock('@tauri-apps/api/event', () => ({
@@ -17,6 +18,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   )
 }))
 
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn()
+  }
+}))
+
 // Import the mocked modules
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -25,6 +32,10 @@ import { invoke } from '@tauri-apps/api/core'
 const mockTerminalConstructor = vi.fn()
 const mockTerminalInstance = {
   loadAddon: vi.fn(),
+  registerLinkProvider: vi.fn((provider) => {
+    capturedLinkProviders.push(provider)
+    return { dispose: vi.fn() }
+  }),
   open: vi.fn(),
   onData: vi.fn<(_cb: (data: string) => void) => { dispose: () => void }>((cb) => {
     capturedDataCallback = cb
@@ -48,7 +59,15 @@ const mockTerminalInstance = {
   dispose: vi.fn(),
   cols: 80,
   rows: 24,
-  options: {} as Record<string, unknown>
+  options: {} as Record<string, unknown>,
+  buffer: {
+    active: {
+      getLine: vi.fn((index: number) => ({
+        translateToString: () =>
+          index === 0 ? 'missing.ts src/renderer/App.tsx' : ''
+      }))
+    }
+  }
 }
 
 let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
@@ -72,9 +91,12 @@ let lastCreatedWebglInstance: {
   onContextLoss: ReturnType<typeof vi.fn>
 } | null = null
 
-const mockWebLinksAddonInstance = {
-  dispose: vi.fn()
-}
+const capturedLinkProviders: Array<{
+  provideLinks: (
+    y: number,
+    callback: (links: Array<{ activate: (event: MouseEvent, text: string) => void | Promise<void>; text: string }>) => void
+  ) => void
+}> = []
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
@@ -82,6 +104,7 @@ vi.mock('@xterm/xterm', () => ({
       mockTerminalConstructor(options)
     }
     loadAddon = mockTerminalInstance.loadAddon
+    registerLinkProvider = mockTerminalInstance.registerLinkProvider
     open = mockTerminalInstance.open
     onData = mockTerminalInstance.onData
     onResize = mockTerminalInstance.onResize
@@ -98,6 +121,7 @@ vi.mock('@xterm/xterm', () => ({
     cols = mockTerminalInstance.cols
     rows = mockTerminalInstance.rows
     options = mockTerminalInstance.options
+    buffer = mockTerminalInstance.buffer
   }
 }))
 
@@ -125,10 +149,17 @@ vi.mock('@xterm/addon-webgl', () => ({
   }
 }))
 
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: class MockWebLinksAddon {
-    dispose = mockWebLinksAddonInstance.dispose
+
+vi.mock('@/lib/file-path-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/file-path-links')>()
+  return {
+    ...actual,
+    openFilePathFromTerminal: vi.fn()
   }
+})
+
+vi.mock('@/stores/project-store', () => ({
+  useActiveProject: vi.fn(() => ({ path: '/project-root' }))
 }))
 
 // Mock window.api with proper typing for mocks
@@ -187,6 +218,7 @@ Object.defineProperty(window, 'api', {
 import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { openFilePathFromTerminal } from '@/lib/file-path-links'
 
 vi.mock('@/hooks/use-terminal-restore', () => ({
   isTerminalPendingPtyAssignment: vi.fn(() => false)
@@ -244,6 +276,7 @@ describe('ConnectedTerminal', () => {
     capturedDataCallback = null
     capturedExitCallback = null
     lastCreatedWebglInstance = null
+    capturedLinkProviders.length = 0
 
     global.ResizeObserver = class MockResizeObserver {
       observe = vi.fn()
@@ -268,6 +301,7 @@ describe('ConnectedTerminal', () => {
     })
 
     mockTerminalStoreState.findTerminalByPtyId.mockReset()
+    mockTerminalStoreState.findTerminalByPtyId.mockReturnValue({ cwd: '/terminal-cwd' })
     mockTerminalStoreState.updateTerminalActivity.mockReset()
     mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
     mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
@@ -1060,6 +1094,121 @@ describe('ConnectedTerminal', () => {
       // Terminal container should be in the DOM
       expect(container.querySelector('div')).toBeTruthy()
     })
+  })
+
+
+  describe('Terminal file path link handling', () => {
+    it('should open a file path only on ctrl/meta click', async () => {
+      vi.mocked(openFilePathFromTerminal).mockResolvedValue({ ok: true })
+      render(<ConnectedTerminal terminalId="external-123" />)
+
+      await vi.waitFor(() => {
+        expect(capturedLinkProviders.at(-1)).toBeDefined()
+      })
+
+      const provider = capturedLinkProviders.at(-1)!
+      let links: Array<{
+        activate: (event: MouseEvent, text: string) => void | Promise<void>
+        text: string
+      }> = []
+
+      provider.provideLinks(1, (provided) => {
+        links = provided
+      })
+
+      expect(links.find((link) => link.text === 'missing.ts')).toBeUndefined()
+
+      const fileLink = links.find((link) => link.text === 'src/renderer/App.tsx')
+      expect(fileLink).toBeDefined()
+
+      const plainClick = new MouseEvent('click', { ctrlKey: false, metaKey: false })
+      const plainPreventDefaultSpy = vi.spyOn(plainClick, 'preventDefault')
+      await fileLink!.activate(plainClick, fileLink!.text)
+
+      expect(openFilePathFromTerminal).not.toHaveBeenCalled()
+      expect(plainPreventDefaultSpy).not.toHaveBeenCalled()
+
+      const ctrlClick = new MouseEvent('click', { ctrlKey: true, metaKey: false })
+      const ctrlPreventDefaultSpy = vi.spyOn(ctrlClick, 'preventDefault')
+      await fileLink!.activate(ctrlClick, fileLink!.text)
+
+      expect(ctrlPreventDefaultSpy).toHaveBeenCalled()
+      expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx', {
+        cwd: '/terminal-cwd',
+        projectRoot: '/project-root'
+      })
+    })
+
+    it('should invoke path open with missing terminal cwd context on ctrl+click', async () => {
+      vi.mocked(openFilePathFromTerminal).mockResolvedValue({
+        ok: false,
+        reason: 'missing-context',
+        message: 'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
+      })
+      mockTerminalStoreState.findTerminalByPtyId.mockReturnValue(undefined)
+      render(<ConnectedTerminal terminalId="external-123" />)
+
+      await vi.waitFor(() => {
+        expect(capturedLinkProviders.at(-1)).toBeDefined()
+      })
+
+      const provider = capturedLinkProviders.at(-1)!
+      let links: Array<{
+        activate: (event: MouseEvent, text: string) => void | Promise<void>
+        text: string
+      }> = []
+
+      provider.provideLinks(1, (provided) => {
+        links = provided
+      })
+
+      const fileLink = links.find((link) => link.text === 'src/renderer/App.tsx')
+      expect(fileLink).toBeDefined()
+
+      const ctrlClick = new MouseEvent('click', { ctrlKey: true, metaKey: false })
+      const ctrlPreventDefaultSpy = vi.spyOn(ctrlClick, 'preventDefault')
+      await fileLink!.activate(ctrlClick, fileLink!.text)
+
+      expect(ctrlPreventDefaultSpy).toHaveBeenCalled()
+      expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx', {
+        cwd: undefined,
+        projectRoot: '/project-root'
+      })
+      expect(toast.error).toHaveBeenCalledWith(
+        'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
+      )
+    })
+
+    it('should report unexpected ctrl click open failures with toast and console error', async () => {
+      const failure = new Error('boom')
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.mocked(openFilePathFromTerminal).mockRejectedValue(failure)
+      render(<ConnectedTerminal terminalId="external-123" />)
+
+      await vi.waitFor(() => {
+        expect(capturedLinkProviders.at(-1)).toBeDefined()
+      })
+
+      const provider = capturedLinkProviders.at(-1)!
+      let links: Array<{
+        activate: (event: MouseEvent, text: string) => void | Promise<void>
+        text: string
+      }> = []
+
+      provider.provideLinks(1, (provided) => {
+        links = provided
+      })
+
+      const fileLink = links.find((link) => link.text === 'src/renderer/App.tsx')
+      expect(fileLink).toBeDefined()
+
+      const ctrlClick = new MouseEvent('click', { ctrlKey: true, metaKey: false })
+      await fileLink!.activate(ctrlClick, fileLink!.text)
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith('[Terminal File Link Open Failed]', failure)
+      expect(toast.error).toHaveBeenCalledWith('Failed to open file from terminal output.')
+    })
+
   })
 
   describe('WebGL context loss recovery', () => {

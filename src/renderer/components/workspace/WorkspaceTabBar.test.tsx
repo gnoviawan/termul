@@ -8,24 +8,37 @@ const mockSetActiveTab = vi.fn()
 const mockSetActivePane = vi.fn()
 const mockReorderTabsInPane = vi.fn()
 const mockCloseTab = vi.fn()
+const mockCloseFileIfIdle = vi.fn(() => true)
+
+const mockWorkspaceStoreState = {
+  setActiveTab: mockSetActiveTab,
+  setActivePane: mockSetActivePane,
+  reorderTabsInPane: mockReorderTabsInPane,
+  closeTab: mockCloseTab
+}
+
+const mockEditorOpenFiles = new Map<string, { isDirty: boolean; operationStatus?: string }>()
+const mockEditorStoreState = {
+  openFiles: mockEditorOpenFiles,
+  closeFileIfIdle: mockCloseFileIfIdle
+}
 
 vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: vi.fn((selector: (state: unknown) => unknown) =>
-    selector({
-      setActiveTab: mockSetActiveTab,
-      setActivePane: mockSetActivePane,
-      reorderTabsInPane: mockReorderTabsInPane,
-      closeTab: mockCloseTab
-    })
+  useWorkspaceStore: Object.assign(
+    vi.fn((selector: (state: typeof mockWorkspaceStoreState) => unknown) => selector(mockWorkspaceStoreState)),
+    {
+      getState: () => mockWorkspaceStoreState
+    }
   ),
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
 
 vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: vi.fn((selector: (state: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
-    selector({
-      openFiles: new Map<string, { isDirty: boolean }>()
-    })
+  useEditorStore: Object.assign(
+    vi.fn((selector: (state: typeof mockEditorStoreState) => unknown) => selector(mockEditorStoreState)),
+    {
+      getState: () => mockEditorStoreState
+    }
   )
 }))
 
@@ -75,6 +88,9 @@ beforeEach(() => {
   mockSetActivePane.mockReset()
   mockReorderTabsInPane.mockReset()
   mockCloseTab.mockReset()
+  mockCloseFileIfIdle.mockReset()
+  mockCloseFileIfIdle.mockReturnValue(true)
+  mockEditorOpenFiles.clear()
   mockStartTabDrag.mockReset()
   mockSetReorderPreview.mockReset()
   mockClearReorderPreview.mockReset()
@@ -185,15 +201,75 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const closeButtons = screen.getAllByRole('button')
-    const tabCloseButton = closeButtons.find((button) =>
-      button.className.includes('opacity-0 group-hover:opacity-100')
-    )
+    const tabCloseButton = screen.getByTitle('Close tab')
 
-    expect(tabCloseButton).toBeTruthy()
-    fireEvent.click(tabCloseButton!)
+    fireEvent.click(tabCloseButton)
 
     expect(onCloseEditorTab).toHaveBeenCalledWith('/a.ts')
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('uses the fallback close path when no onCloseEditorTab callback is provided', async () => {
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('Close tab'))
+
+    expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
+    expect(mockCloseTab).toHaveBeenCalledWith('pane-a', 'edit-/a.ts')
+  })
+
+  it('does not close editor tabs while the file is saving', async () => {
+    mockEditorOpenFiles.set('/a.ts', { isDirty: true, operationStatus: 'saving' })
+    const onCloseEditorTab = vi.fn()
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+        onCloseEditorTab={onCloseEditorTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    const savingButton = screen.getByTitle('Saving file')
+    expect(savingButton).toBeDisabled()
+    fireEvent.click(savingButton)
+
+    expect(onCloseEditorTab).not.toHaveBeenCalled()
+    expect(mockCloseFileIfIdle).not.toHaveBeenCalled()
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('does not remove the workspace tab when fallback closeFileIfIdle returns false', async () => {
+    mockCloseFileIfIdle.mockReturnValue(false)
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('Close tab'))
+
+    expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
     expect(mockCloseTab).not.toHaveBeenCalled()
   })
 

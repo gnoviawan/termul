@@ -70,6 +70,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
   useMaxTerminalsPerProject: vi.fn(() => 10),
+  useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue')
 }))
@@ -696,6 +697,38 @@ describe('WorkspaceLayout - Empty States', () => {
       })
 
       getStateSpy.mockRestore()
+    })
+
+    it('still closes when waiting for app-settings persistence rejects', async () => {
+      let closeRequestedCallback: (() => Promise<boolean>) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => Promise<boolean>) => {
+        closeRequestedCallback = callback
+        return vi.fn()
+      })
+
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const project = createProject('a', '/workspace/a', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      mockWaitForPendingAppSettingsPersistence.mockRejectedValueOnce(new Error('settings flush failed'))
+
+      renderWithRouter()
+      expect(closeRequestedCallback).toBeDefined()
+      if (!closeRequestedCallback) throw new Error('close callback missing')
+
+      await expect(closeRequestedCallback()).resolves.toBe(false)
+
+      await waitFor(() => {
+        expect(mockApi.window.respondToClose).toHaveBeenCalledWith('close')
+      })
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to wait for app settings persistence before close:',
+        expect.any(Error)
+      )
+
+      consoleErrorSpy.mockRestore()
     })
   })
 
