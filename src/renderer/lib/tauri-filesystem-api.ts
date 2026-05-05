@@ -1,4 +1,5 @@
 import {
+	open,
 	readDir,
 	readTextFile,
 	writeTextFile,
@@ -69,6 +70,22 @@ function isBinaryFile(content: string): boolean {
 	const sample = content.slice(0, 512);
 	// eslint-disable-next-line no-control-regex
 	return /[\x00-\x08]/.test(sample);
+}
+
+async function readBinarySample(filePath: string, byteCount: number): Promise<string> {
+	const file = await open(filePath, { read: true });
+
+	try {
+		const bytes = new Uint8Array(byteCount);
+		const bytesRead = await file.read(bytes);
+		if (!bytesRead) {
+			return "";
+		}
+
+		return new TextDecoder().decode(bytes.subarray(0, bytesRead));
+	} finally {
+		await file.close();
+	}
 }
 
 function getExtension(filename: string): string | null {
@@ -155,15 +172,31 @@ export function createTauriFilesystemApi(): FilesystemApi {
 		async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {
 			try {
 				const info = await stat(filePath);
-				const content = await readTextFile(filePath).catch(() => "");
+				const modifiedAt = info.mtime?.getTime() ?? Date.now();
+
+				if (info.isDirectory) {
+					return {
+						success: true,
+						data: {
+							path: filePath,
+							size: info.size,
+							modifiedAt,
+							type: "directory",
+							isReadOnly: false,
+							isBinary: false,
+						},
+					};
+				}
+
+				const content = await readBinarySample(filePath, 512).catch(() => "");
 
 				return {
 					success: true,
 					data: {
 						path: filePath,
 						size: info.size,
-						modifiedAt: info.mtime?.getTime() ?? Date.now(),
-						type: info.isDirectory ? "directory" : "file",
+						modifiedAt,
+						type: "file",
 						isReadOnly: false, // Tauri plugin-fs doesn't expose readonly
 						isBinary: isBinaryFile(content),
 					},

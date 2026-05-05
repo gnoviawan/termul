@@ -405,12 +405,16 @@ function ConnectedTerminalComponent({
 			event.preventDefault();
 
 			try {
-				await openFilePathFromTerminal(uri, {
+				const result = await openFilePathFromTerminal(uri, {
 					cwd:
 						useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || "")
 							?.cwd,
 					projectRoot: activeProjectPathRef.current,
 				});
+
+				if (!result.ok) {
+					toast.error(result.message);
+				}
 			} catch (error) {
 				console.error("[Terminal File Link Open Failed]", error);
 				toast.error("Failed to open file from terminal output.");

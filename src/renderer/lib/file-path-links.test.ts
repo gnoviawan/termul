@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  buildTerminalPathLinks,
   extractPathCandidate,
   openFilePathFromTerminal,
   resolveFilePathCandidate,
@@ -44,6 +45,10 @@ describe('file-path-links parsing', () => {
     expect(trimWrappedPath('(src/foo.ts)')).toBe('src/foo.ts')
   })
 
+  it('strips only one wrapping layer per call', () => {
+    expect(trimWrappedPath('("src/foo.ts")')).toBe('"src/foo.ts"')
+  })
+
   it('strips line and column suffixes', () => {
     expect(stripLineColumnSuffix('src/foo.ts:12')).toBe('src/foo.ts')
     expect(stripLineColumnSuffix('src/foo.ts:12:3')).toBe('src/foo.ts')
@@ -58,6 +63,38 @@ describe('file-path-links parsing', () => {
   it('keeps plain file paths unchanged', () => {
     expect(extractPathCandidate('src/renderer/App.tsx')).toBe('src/renderer/App.tsx')
     expect(extractPathCandidate('./src/renderer/App.tsx')).toBe('./src/renderer/App.tsx')
+  })
+
+  it('does not extract file links from URL host/path fragments', () => {
+    const links = buildTerminalPathLinks('See https://example.com/src/App.tsx for details', 1, vi.fn())
+
+    expect(links).toEqual([])
+  })
+
+  it('does not extract file links from file URLs', () => {
+    const links = buildTerminalPathLinks('file:///c:/repo/src/App.tsx', 1, vi.fn())
+
+    expect(links).toEqual([])
+  })
+
+  it('does not extract file links from wrapped URLs', () => {
+    const links = buildTerminalPathLinks('(https://example.com/src/App.tsx)', 1, vi.fn())
+
+    expect(links).toEqual([])
+  })
+
+  it('keeps labeled absolute paths outside URLs', () => {
+    const links = buildTerminalPathLinks('Path: /repo/src/App.tsx', 1, vi.fn())
+
+    expect(links).toHaveLength(1)
+    expect(links[0]?.text).toBe('/repo/src/App.tsx')
+  })
+
+  it('keeps UNC-style file links outside URLs', () => {
+    const links = buildTerminalPathLinks('\\\\server\\share\\workspace\\src\\App.tsx', 1, vi.fn())
+
+    expect(links).toHaveLength(1)
+    expect(links[0]?.text).toBe('\\\\server\\share\\workspace\\src\\App.tsx')
   })
 })
 
@@ -91,8 +128,9 @@ describe('file-path-links resolution', () => {
       ok: true,
       path: '/repo/src/renderer/App.tsx'
     })
-    expect(mocks.getFileInfo).toHaveBeenCalledTimes(1)
+    expect(mocks.getFileInfo).toHaveBeenCalledTimes(2)
     expect(mocks.getFileInfo).toHaveBeenNthCalledWith(1, '/repo/src/renderer/App.tsx')
+    expect(mocks.getFileInfo).toHaveBeenNthCalledWith(2, '/fallback/src/renderer/App.tsx')
   })
 
   it('returns not-file when getFileInfo reports a directory', async () => {
@@ -143,6 +181,53 @@ describe('file-path-links resolution', () => {
     })
 
     expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+    expect(mocks.getFileInfo).toHaveBeenCalledTimes(2)
+    expect(mocks.getFileInfo).toHaveBeenNthCalledWith(1, '/tmp/shell/src/App.tsx')
+    expect(mocks.getFileInfo).toHaveBeenNthCalledWith(2, '/repo/src/App.tsx')
+  })
+
+  it('resolves paths with line and column suffixes using the plain file path', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx:12:3', {
+      cwd: '/repo',
+      projectRoot: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+    expect(mocks.getFileInfo).toHaveBeenCalledTimes(1)
+    expect(mocks.getFileInfo).toHaveBeenCalledWith('/repo/src/App.tsx')
+  })
+
+  it('keeps first candidate precedence when parallel checks find multiple files', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/tmp/shell/src/App.tsx' })
     expect(mocks.getFileInfo).toHaveBeenCalledTimes(2)
     expect(mocks.getFileInfo).toHaveBeenNthCalledWith(1, '/tmp/shell/src/App.tsx')
     expect(mocks.getFileInfo).toHaveBeenNthCalledWith(2, '/repo/src/App.tsx')
@@ -217,27 +302,32 @@ describe('file-path-links resolution', () => {
       cwd: '/repo'
     })
 
-    expect(opened).toBe(true)
+    expect(opened).toEqual({ ok: true })
     expect(mocks.openFile).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
     expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
     expect(mocks.toastError).not.toHaveBeenCalled()
   })
 
-  it('rejects missing files and shows toast during open', async () => {
+  it('returns not-found details and does not open missing files', async () => {
     mocks.getFileInfo.mockResolvedValue({ success: false, error: 'not found' })
 
-    await openFilePathFromTerminal('missing.ts', {
+    const opened = await openFilePathFromTerminal('missing.ts', {
       projectRoot: '/repo'
     })
 
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'not-found',
+      message: 'File not found: missing.ts'
+    })
     expect(mocks.getFileInfo).toHaveBeenCalledTimes(1)
     expect(mocks.getFileInfo).toHaveBeenCalledWith('/repo/missing.ts')
     expect(mocks.openFile).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith('File not found: missing.ts')
+    expect(mocks.toastError).not.toHaveBeenCalled()
   })
 
-  it('shows toast and does not open when resolved target is not a file', async () => {
+  it('returns a not-file message and does not open when resolved target is not a file', async () => {
     mocks.getFileInfo.mockResolvedValue({
       success: true,
       data: {
@@ -252,19 +342,27 @@ describe('file-path-links resolution', () => {
 
     const opened = await openFilePathFromTerminal('src', { cwd: '/repo' })
 
-    expect(opened).toBe(false)
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'not-file',
+      message: 'Path is a directory, not a file: src'
+    })
     expect(mocks.openFile).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith('File not found: src')
+    expect(mocks.toastError).not.toHaveBeenCalled()
   })
 
-  it('shows toast and does not open when context is missing', async () => {
+  it('returns a missing-context message and does not open when context is missing', async () => {
     const opened = await openFilePathFromTerminal('src/App.tsx', {})
 
-    expect(opened).toBe(false)
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'missing-context',
+      message: 'No project or working directory found; set a project/cwd to open paths: src/App.tsx'
+    })
     expect(mocks.getFileInfo).not.toHaveBeenCalled()
     expect(mocks.openFile).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith('File not found: src/App.tsx')
+    expect(mocks.toastError).not.toHaveBeenCalled()
   })
 })

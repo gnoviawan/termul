@@ -1,4 +1,3 @@
-import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -13,6 +12,14 @@ export interface FilePathResolutionContext {
 export type FilePathResolutionResult =
   | { ok: true; path: string }
   | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
+
+export type OpenFilePathResult =
+  | { ok: true }
+  | {
+      ok: false
+      reason: Extract<FilePathResolutionResult, { ok: false }>['reason']
+      message: string
+    }
 
 /** A 1-based xterm link range on a single rendered line. */
 export interface TerminalPathLinkRange {
@@ -52,7 +59,24 @@ function looksLikeFilePath(text: string): boolean {
   return text.includes('/') || text.includes('\\') || /^[A-Za-z]:/.test(text)
 }
 
+function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
+  if (!text.startsWith('/')) {
+    return false
+  }
+
+  const tokenStart = line.slice(0, start).search(/\S+$/)
+  if (tokenStart < 0) {
+    return false
+  }
+
+  const tokenPrefix = line.slice(tokenStart, start + 1).replace(/^[`"'([{]+/, '')
+  return URI_SCHEME_REGEX.test(tokenPrefix)
+}
+
 /** Extracts file-like links from a rendered terminal line for Ctrl/Cmd+Click activation. */
+// Range x-coordinates are based on JavaScript string indices. Wide or combining
+// terminal characters can render to different cell widths, and this module only
+// receives plain text, so it cannot accurately map visual cells here.
 export function buildTerminalPathLinks(
   line: string,
   lineNumber: number,
@@ -71,7 +95,7 @@ export function buildTerminalPathLinks(
     }
 
     const start = match.index ?? -1
-    if (start < 0) {
+    if (start < 0 || isUrlAdjacentPathMatch(line, start, text)) {
       continue
     }
 
@@ -217,11 +241,11 @@ function buildResolutionCandidates(candidate: string, roots: string[]): string[]
 
 /** Removes a single layer of wrapping quotes, brackets, or backticks from a path token. */
 export function trimWrappedPath(value: string): string {
-  let result = value.trim()
+  const result = value.trim()
 
   for (const [start, end] of WRAPPER_PAIRS) {
-    if (result.startsWith(start) && result.endsWith(end) && result.length >= 2) {
-      result = result.slice(1, -1).trim()
+    if (result.startsWith(start) && result.endsWith(end) && result.length >= start.length + end.length) {
+      return result.slice(start.length, result.length - end.length).trim()
     }
   }
 
@@ -261,10 +285,16 @@ export async function resolveFilePathCandidate(
     return { ok: false, reason: 'not-found' }
   }
 
+  const infoResults = await Promise.all(
+    absoluteCandidates.map(async (absolutePath) => ({
+      absolutePath,
+      infoResult: await filesystemApi.getFileInfo(absolutePath)
+    }))
+  )
+
   let sawDirectoryCandidate = false
 
-  for (const absolutePath of absoluteCandidates) {
-    const infoResult = await filesystemApi.getFileInfo(absolutePath)
+  for (const { absolutePath, infoResult } of infoResults) {
     if (!infoResult.success) {
       continue
     }
@@ -281,23 +311,38 @@ export async function resolveFilePathCandidate(
     : { ok: false, reason: 'not-found' }
 }
 
-function getErrorMessage(rawCandidate: string): string {
-  return `File not found: ${extractPathCandidate(rawCandidate)}`
+function getErrorMessage(
+  rawCandidate: string,
+  reason: Extract<FilePathResolutionResult, { ok: false }>['reason']
+): string {
+  const candidate = extractPathCandidate(rawCandidate)
+
+  switch (reason) {
+    case 'missing-context':
+      return `No project or working directory found; set a project/cwd to open paths: ${candidate}`
+    case 'not-file':
+      return `Path is a directory, not a file: ${candidate}`
+    case 'not-found':
+      return `File not found: ${candidate}`
+  }
 }
 
 /** Opens a resolved file path from terminal output and adds it to the editor workspace. */
 export async function openFilePathFromTerminal(
   rawCandidate: string,
   context: FilePathResolutionContext
-): Promise<boolean> {
+): Promise<OpenFilePathResult> {
   const resolution = await resolveFilePathCandidate(rawCandidate, context)
 
   if (!resolution.ok) {
-    toast.error(getErrorMessage(rawCandidate))
-    return false
+    return {
+      ok: false,
+      reason: resolution.reason,
+      message: getErrorMessage(rawCandidate, resolution.reason)
+    }
   }
 
   await useEditorStore.getState().openFile(resolution.path)
   useWorkspaceStore.getState().addEditorTab(resolution.path)
-  return true
+  return { ok: true }
 }

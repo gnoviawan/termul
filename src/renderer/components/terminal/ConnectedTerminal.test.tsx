@@ -1099,7 +1099,7 @@ describe('ConnectedTerminal', () => {
 
   describe('Terminal file path link handling', () => {
     it('should open a file path only on ctrl/meta click', async () => {
-      vi.mocked(openFilePathFromTerminal).mockResolvedValue(true)
+      vi.mocked(openFilePathFromTerminal).mockResolvedValue({ ok: true })
       render(<ConnectedTerminal terminalId="external-123" />)
 
       await vi.waitFor(() => {
@@ -1115,6 +1115,8 @@ describe('ConnectedTerminal', () => {
       provider.provideLinks(1, (provided) => {
         links = provided
       })
+
+      expect(links.find((link) => link.text === 'missing.ts')).toBeUndefined()
 
       const fileLink = links.find((link) => link.text === 'src/renderer/App.tsx')
       expect(fileLink).toBeDefined()
@@ -1138,7 +1140,11 @@ describe('ConnectedTerminal', () => {
     })
 
     it('should invoke path open with missing terminal cwd context on ctrl+click', async () => {
-      vi.mocked(openFilePathFromTerminal).mockResolvedValue(false)
+      vi.mocked(openFilePathFromTerminal).mockResolvedValue({
+        ok: false,
+        reason: 'missing-context',
+        message: 'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
+      })
       mockTerminalStoreState.findTerminalByPtyId.mockReturnValue(undefined)
       render(<ConnectedTerminal terminalId="external-123" />)
 
@@ -1168,6 +1174,9 @@ describe('ConnectedTerminal', () => {
         cwd: undefined,
         projectRoot: '/project-root'
       })
+      expect(toast.error).toHaveBeenCalledWith(
+        'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
+      )
     })
 
     it('should report unexpected ctrl click open failures with toast and console error', async () => {
