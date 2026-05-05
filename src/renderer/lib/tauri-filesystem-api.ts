@@ -163,6 +163,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
 						path: filePath,
 						size: info.size,
 						modifiedAt: info.mtime?.getTime() ?? Date.now(),
+						type: info.isDirectory ? "directory" : "file",
 						isReadOnly: false, // Tauri plugin-fs doesn't expose readonly
 						isBinary: isBinaryFile(content),
 					},

@@ -209,6 +209,7 @@ describe("tauriFilesystemApi", () => {
 			if (result.success) {
 				expect(result.data.size).toBe(2048);
 				expect(result.data.path).toBe("/test/file.txt");
+				expect(result.data.type).toBe("file");
 				expect(result.data.isReadOnly).toBe(false);
 				expect(result.data.isBinary).toBe(false);
 			}
