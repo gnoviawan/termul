@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterAll } from 'vitest'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { generateHeavyOutput, generateWideLines } from './terminal-performance.shared'
 
 /**
  * Terminal Performance Benchmark Suite
@@ -16,28 +17,6 @@ import { FitAddon } from '@xterm/addon-fit'
  * - Keep scenarios Termul-specific rather than generic
  */
 
-function deterministicToken(index: number): string {
-  const value = (index * 1664525 + 1013904223) >>> 0
-  return value.toString(36).padStart(8, '0').slice(0, 8)
-}
-
-function generateHeavyOutput(lineCount: number): string {
-  const lines: string[] = []
-  for (let i = 0; i < lineCount; i++) {
-    const prefix = `\u001b[32m[${String(i).padStart(4, '0')}]\u001b[0m `
-    const content = `Build step ${i}: ${'='.repeat(60)} ${deterministicToken(i)}`
-    lines.push(prefix + content)
-  }
-  return lines.join('\r\n')
-}
-
-function generateWideLines(lineCount: number, width: number): string {
-  const lines: string[] = []
-  for (let i = 0; i < lineCount; i++) {
-    lines.push(`Line ${i}: ${'x'.repeat(width)}`)
-  }
-  return lines.join('\r\n')
-}
 
 function createTerminal(): { terminal: Terminal; fitAddon: FitAddon; container: HTMLDivElement } {
   const container = document.createElement('div')
