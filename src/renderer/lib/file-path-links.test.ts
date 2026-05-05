@@ -11,6 +11,7 @@ import {
 const mocks = vi.hoisted(() => ({
   getFileInfo: vi.fn(),
   openFile: vi.fn(),
+  updateCursorPosition: vi.fn(),
   addEditorTab: vi.fn(),
   toastError: vi.fn()
 }))
@@ -22,7 +23,10 @@ vi.mock('@/lib/api', () => ({
 }))
 vi.mock('@/stores/editor-store', () => ({
   useEditorStore: {
-    getState: () => ({ openFile: mocks.openFile })
+    getState: () => ({
+      openFile: mocks.openFile,
+      updateCursorPosition: mocks.updateCursorPosition
+    })
   }
 }))
 
@@ -102,6 +106,7 @@ describe('file-path-links resolution', () => {
   beforeEach(() => {
     mocks.getFileInfo.mockReset()
     mocks.openFile.mockReset()
+    mocks.updateCursorPosition.mockReset()
     mocks.addEditorTab.mockReset()
     mocks.toastError.mockReset()
   })
@@ -304,6 +309,7 @@ describe('file-path-links resolution', () => {
 
     expect(opened).toEqual({ ok: true })
     expect(mocks.openFile).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
     expect(mocks.toastError).not.toHaveBeenCalled()
   })
@@ -323,6 +329,7 @@ describe('file-path-links resolution', () => {
     expect(mocks.getFileInfo).toHaveBeenCalledTimes(1)
     expect(mocks.getFileInfo).toHaveBeenCalledWith('/repo/missing.ts')
     expect(mocks.openFile).not.toHaveBeenCalled()
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
     expect(mocks.toastError).not.toHaveBeenCalled()
   })
@@ -348,6 +355,7 @@ describe('file-path-links resolution', () => {
       message: 'Path is a directory, not a file: src'
     })
     expect(mocks.openFile).not.toHaveBeenCalled()
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
     expect(mocks.toastError).not.toHaveBeenCalled()
   })
@@ -362,7 +370,79 @@ describe('file-path-links resolution', () => {
     })
     expect(mocks.getFileInfo).not.toHaveBeenCalled()
     expect(mocks.openFile).not.toHaveBeenCalled()
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
     expect(mocks.toastError).not.toHaveBeenCalled()
+  })
+
+  it('updates cursor position from line and column suffixes after opening', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+
+    const opened = await openFilePathFromTerminal('src/App.tsx:12:3', {
+      cwd: '/repo'
+    })
+
+    expect(opened).toEqual({ ok: true })
+    expect(mocks.openFile).toHaveBeenCalledWith('/repo/src/App.tsx')
+    expect(mocks.updateCursorPosition).toHaveBeenCalledWith('/repo/src/App.tsx', 12, 3)
+    expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/App.tsx')
+  })
+
+  it('defaults column to 1 when only line suffix is provided', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+
+    const opened = await openFilePathFromTerminal('src/App.tsx:9', {
+      cwd: '/repo'
+    })
+
+    expect(opened).toEqual({ ok: true })
+    expect(mocks.updateCursorPosition).toHaveBeenCalledWith('/repo/src/App.tsx', 9, 1)
+  })
+
+  it('returns open-failed when editor open throws', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+    mocks.openFile.mockRejectedValue(new Error('boom'))
+
+    const opened = await openFilePathFromTerminal('src/App.tsx:2:5', {
+      cwd: '/repo'
+    })
+
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Failed to open file: src/App.tsx (boom)'
+    })
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
+    expect(mocks.addEditorTab).not.toHaveBeenCalled()
   })
 })

@@ -13,11 +13,13 @@ export type FilePathResolutionResult =
   | { ok: true; path: string }
   | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
 
+type OpenFilePathFailureReason = Extract<FilePathResolutionResult, { ok: false }>['reason'] | 'open-failed'
+
 export type OpenFilePathResult =
   | { ok: true }
   | {
       ok: false
-      reason: Extract<FilePathResolutionResult, { ok: false }>['reason']
+      reason: OpenFilePathFailureReason
       message: string
     }
 
@@ -257,6 +259,24 @@ export function stripLineColumnSuffix(value: string): string {
   return value.replace(/:(\d+)(?::\d+)?$/, '')
 }
 
+function parseLineColumnSuffix(value: string): { line?: number; column?: number } {
+  const match = value.match(/:(\d+)(?::(\d+))?$/)
+  if (!match) {
+    return {}
+  }
+
+  const line = Number.parseInt(match[1], 10)
+  const parsedColumn = match[2] ? Number.parseInt(match[2], 10) : null
+
+  return {
+    line: Number.isFinite(line) && line > 0 ? line : undefined,
+    column:
+      parsedColumn !== null && Number.isFinite(parsedColumn) && parsedColumn > 0
+        ? parsedColumn
+        : undefined
+  }
+}
+
 /** Normalizes a terminal token into a file path candidate before filesystem resolution. */
 export function extractPathCandidate(value: string): string {
   return stripLineColumnSuffix(trimWrappedPath(value))
@@ -313,7 +333,8 @@ export async function resolveFilePathCandidate(
 
 function getErrorMessage(
   rawCandidate: string,
-  reason: Extract<FilePathResolutionResult, { ok: false }>['reason']
+  reason: OpenFilePathFailureReason,
+  details?: string
 ): string {
   const candidate = extractPathCandidate(rawCandidate)
 
@@ -324,6 +345,8 @@ function getErrorMessage(
       return `Path is a directory, not a file: ${candidate}`
     case 'not-found':
       return `File not found: ${candidate}`
+    case 'open-failed':
+      return details ? `Failed to open file: ${candidate} (${details})` : `Failed to open file: ${candidate}`
   }
 }
 
@@ -342,7 +365,24 @@ export async function openFilePathFromTerminal(
     }
   }
 
-  await useEditorStore.getState().openFile(resolution.path)
-  useWorkspaceStore.getState().addEditorTab(resolution.path)
-  return { ok: true }
+  const wrappedCandidate = trimWrappedPath(rawCandidate)
+  const position = parseLineColumnSuffix(wrappedCandidate)
+
+  try {
+    await useEditorStore.getState().openFile(resolution.path)
+
+    if (position.line) {
+      useEditorStore.getState().updateCursorPosition(resolution.path, position.line, position.column ?? 1)
+    }
+
+    useWorkspaceStore.getState().addEditorTab(resolution.path)
+    return { ok: true }
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      reason: 'open-failed',
+      message: getErrorMessage(rawCandidate, 'open-failed', details)
+    }
+  }
 }
