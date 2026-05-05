@@ -17,6 +17,8 @@ export const DEFAULT_CONTEXT_BAR_SETTINGS: ContextBarSettings = {
 // Persistence key for context bar settings
 export const CONTEXT_BAR_SETTINGS_KEY = "settings/context-bar";
 
+import type { TerminalRendererPreference } from "@/components/terminal/terminal-config";
+
 // Table of contents panel settings
 export interface TocSettings {
 	isVisible: boolean;
@@ -40,7 +42,7 @@ export interface AppSettings {
 	terminalFontFamily: string;
 	terminalFontSize: number;
 	terminalBufferSize: number; // Scrollback buffer size in lines
-	terminalRenderer: "auto" | "webgl" | "canvas";
+	terminalRenderer: TerminalRendererPreference;
 	defaultShell: string;
 	defaultProjectColor: string; // Default color for new projects (from PROJECT_COLORS)
 	maxTerminalsPerProject: number; // Maximum terminals allowed per project

@@ -32,6 +32,10 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import {
+  getXtermMigrationCanaryMode,
+  getXtermMigrationDefaultPath,
+} from './lib/xterm-migration'
 
 // Hook to prevent Alt key from showing the default browser menu bar
 function usePreventAltMenu(): void {
@@ -62,14 +66,28 @@ function usePreventAltMenu(): void {
 
 const queryClient = new QueryClient()
 
+const xtermMigrationCanaryMode = getXtermMigrationCanaryMode()
+const xtermDefaultPath = getXtermMigrationDefaultPath()
+
 // TODO(renderer-upgrade-adrs / ADR-xterm-renderer-upgrade): enforce the xterm 5.5
 // production baseline and require explicit validation for xterm 6.1 via a durable
 // build/CI/runtime gate (for example a checkRendererVersion helper wired during app
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
+// Story 3.1 now defines a default-off canary posture in code. Until later Epic 3
+// stories prove readiness, any canary mode remains opt-in and the default path stays
+// on the xterm 5.5 baseline.
 
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
   usePreventAltMenu()
+
+  useEffect(() => {
+    if (xtermMigrationCanaryMode !== 'off') {
+      console.info(
+        `[xterm migration] canary=${xtermMigrationCanaryMode} enabled; default baseline remains ${xtermDefaultPath}`
+      )
+    }
+  }, [])
   useTerminalAutoSave()
   useTerminalRestore()
   useTerminalDetachedOutput()

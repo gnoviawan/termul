@@ -1,9 +1,8 @@
 import { useRef, useCallback, useEffect } from 'react'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
-import { WebLinksAddon } from '@xterm/addon-web-links'
+import type { Terminal } from '@xterm/xterm'
+import type { FitAddon } from '@xterm/addon-fit'
 import { TERMINAL_THEME } from '../components/terminal/terminal-config'
+import { createTerminalSession, loadWebglAddon } from '../components/terminal/terminal-factory'
 
 export interface UseXtermOptions {
   onData?: (data: string) => void
@@ -40,6 +39,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
   const terminalRef = useRef<Terminal | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const webglAddonRef = useRef<ReturnType<typeof loadWebglAddon> | null>(null)
   const isReadyRef = useRef(false)
 
   const write = useCallback((data: string): void => {
@@ -85,36 +85,38 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
   useEffect(() => {
     if (!containerRef.current || terminalRef.current) return
 
-    const terminal = new Terminal({
+    const terminalSession = createTerminalSession({
       fontFamily,
       fontSize,
-      lineHeight: 1.2,
-      theme: TERMINAL_THEME,
-      cursorBlink: true,
-      cursorStyle: 'block',
-      allowTransparency: false,
       scrollback,
-      tabStopWidth: 4,
-      convertEol: true
+      convertEol: true,
+      terminalOptions: {
+        lineHeight: 1.2,
+        theme: TERMINAL_THEME,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        allowTransparency: false,
+        tabStopWidth: 4,
+      },
+      loadWebLinksAddon: true,
     })
 
+    const terminal = terminalSession.terminal
     terminalRef.current = terminal
 
-    const fitAddon = new FitAddon()
+    const fitAddon = terminalSession.fitAddon
     fitAddonRef.current = fitAddon
-    terminal.loadAddon(fitAddon)
-
-    const webLinksAddon = new WebLinksAddon()
-    terminal.loadAddon(webLinksAddon)
 
     terminal.open(containerRef.current)
 
     try {
-      const webglAddon = new WebglAddon()
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose()
+      const webglAddon = loadWebglAddon(terminal, {
+        onContextLoss: () => {
+          webglAddon.dispose()
+          webglAddonRef.current = null
+        }
       })
-      terminal.loadAddon(webglAddon)
+      webglAddonRef.current = webglAddon
     } catch {
       console.warn('WebGL addon failed to load, falling back to canvas renderer')
     }
@@ -134,6 +136,8 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
 
     return () => {
       isReadyRef.current = false
+      webglAddonRef.current?.dispose()
+      webglAddonRef.current = null
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null

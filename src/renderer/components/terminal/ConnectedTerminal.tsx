@@ -8,15 +8,13 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-import { Terminal } from "@xterm/xterm";
-import type { IDisposable } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { SearchAddon } from "@xterm/addon-search";
+import type { Terminal, IDisposable } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SearchAddon } from "@xterm/addon-search";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { RESIZE_DEBOUNCE_MS } from "./terminal-config";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -55,6 +53,11 @@ import {
 	recordTerminalContinuityEvent,
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
+import {
+	createTerminalSession,
+	loadWebglAddon as attachWebglAddon,
+	shouldUseWebglRenderer,
+} from "./terminal-factory";
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
@@ -63,10 +66,6 @@ const VISIBILITY_RECOVERY_DELAY_MS = 150; // DOM reflow after tab becomes visibl
 const POWER_RESUME_RECOVERY_DELAY_MS = 300; // System stabilize after wake
 const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per second
 const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
-
-const shouldUseWebglRenderer = (
-	rendererPreference: "auto" | "webgl" | "canvas",
-): boolean => rendererPreference !== "canvas";
 
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
@@ -455,22 +454,20 @@ function ConnectedTerminalComponent({
 		);
 
 		// Merge platform-aware options with dynamic app settings
-		const terminalOptions = {
-			...getTerminalOptions(navigator.platform),
+		const terminalSession = createTerminalSession({
+			platform: navigator.platform,
 			fontFamily,
 			fontSize,
 			scrollback: bufferSize,
-		};
-		const terminal = new Terminal(terminalOptions);
+			loadSearchAddon: true,
+			loadWebLinksAddon: true,
+		});
+		const terminal = terminalSession.terminal;
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
 
-		const fitAddon = new FitAddon();
+		const fitAddon = terminalSession.fitAddon;
 		fitAddonRef.current = fitAddon;
-		terminal.loadAddon(fitAddon);
-
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
 
 		const handleFilePathActivate = async (
 			event: MouseEvent,
@@ -506,10 +503,7 @@ function ConnectedTerminalComponent({
 			},
 		});
 
-		// Load search addon
-		const searchAddon = new SearchAddon();
-		searchAddonRef.current = searchAddon;
-		terminal.loadAddon(searchAddon);
+		searchAddonRef.current = terminalSession.searchAddon ?? null;
 
 		terminal.open(containerRef.current);
 
@@ -614,29 +608,29 @@ function ConnectedTerminalComponent({
 						renderer: "webgl",
 					},
 				});
-				const webglAddon = new WebglAddon();
-				webglAddon.onContextLoss(() => {
-					webglAddon.dispose();
-					webglAddonRef.current = null;
-					// Mark context as lost for recovery decisions
-					webglContextLostRef.current = true;
-					if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
-						webglContextLostRef.current = false;
-						return;
-					}
-					// Increment recovery counter BEFORE scheduling recovery
-					webglRecoveryAttemptsRef.current++;
-					// Clear any pending recovery timeout
-					if (webglRecoveryTimeoutRef.current) {
-						clearTimeout(webglRecoveryTimeoutRef.current);
-					}
-					// Delay before recovery to avoid rapid-fire loops
-					webglRecoveryTimeoutRef.current = setTimeout(() => {
-						webglRecoveryTimeoutRef.current = null;
-						loadWebglAddon(term, true);
-					}, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS);
+				const webglAddon = attachWebglAddon(term, {
+					onContextLoss: () => {
+						webglAddon.dispose();
+						webglAddonRef.current = null;
+						// Mark context as lost for recovery decisions
+						webglContextLostRef.current = true;
+						if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+							webglContextLostRef.current = false;
+							return;
+						}
+						// Increment recovery counter BEFORE scheduling recovery
+						webglRecoveryAttemptsRef.current++;
+						// Clear any pending recovery timeout
+						if (webglRecoveryTimeoutRef.current) {
+							clearTimeout(webglRecoveryTimeoutRef.current);
+						}
+						// Delay before recovery to avoid rapid-fire loops
+						webglRecoveryTimeoutRef.current = setTimeout(() => {
+							webglRecoveryTimeoutRef.current = null;
+							loadWebglAddon(term, true);
+						}, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS);
+					},
 				});
-				term.loadAddon(webglAddon);
 				webglAddonRef.current = webglAddon;
 				// Clear context lost flag on successful load
 				webglContextLostRef.current = false;

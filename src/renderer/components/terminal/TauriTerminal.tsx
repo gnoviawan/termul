@@ -1,16 +1,17 @@
 import { useRef, useEffect, useCallback, useState } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { spawn } from "tauri-pty";
 import type { ShellInfo } from "@/lib/tauri-types";
-import {
-	getTerminalOptions,
-	RESIZE_DEBOUNCE_MS,
-} from "@/components/terminal/terminal-config";
+import { RESIZE_DEBOUNCE_MS } from "@/components/terminal/terminal-config";
 import "@xterm/xterm/css/xterm.css";
+import {
+	createTerminalSession,
+	loadWebglAddon,
+} from "@/components/terminal/terminal-factory";
 
 const MAX_WEBGL_RETRIES = 3;
 
@@ -38,16 +39,14 @@ export function TauriTerminal(): React.JSX.Element {
 			const os = platform();
 			const isWindows = os === "windows";
 
-			// Create terminal with platform-aware options
-			const termOptions = getTerminalOptions(os === "windows" ? "Win32" : os);
-
-			const term = new Terminal(termOptions);
+			const terminalSession = createTerminalSession({
+				platform: os === "windows" ? "Win32" : os,
+			});
+			const term = terminalSession.terminal;
 			termRef.current = term;
 
-			// FitAddon
-			const fitAddon = new FitAddon();
+			const fitAddon = terminalSession.fitAddon;
 			fitAddonRef.current = fitAddon;
-			term.loadAddon(fitAddon);
 
 			// Open terminal in container
 			term.open(containerRef.current);
@@ -65,15 +64,15 @@ export function TauriTerminal(): React.JSX.Element {
 					return;
 				}
 				try {
-					const webglAddon = new WebglAddon();
-					webglAddonRef.current = webglAddon;
-					webglAddon.onContextLoss(() => {
-						webglAddon.dispose();
-						webglAddonRef.current = null;
-						webglAttempts++;
-						loadWebgl();
+					const webglAddon = loadWebglAddon(term, {
+						onContextLoss: () => {
+							webglAddon.dispose();
+							webglAddonRef.current = null;
+							webglAttempts++;
+							loadWebgl();
+						},
 					});
-					term.loadAddon(webglAddon);
+					webglAddonRef.current = webglAddon;
 				} catch {
 					webglAttempts++;
 					console.warn(`[TauriTerminal] WebGL attempt ${webglAttempts} failed`);

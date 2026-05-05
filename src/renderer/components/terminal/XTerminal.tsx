@@ -1,10 +1,12 @@
 import { useEffect, useRef, memo } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
 import { DEFAULT_TERMINAL_OPTIONS } from "@/components/terminal/terminal-config";
 import "@xterm/xterm/css/xterm.css";
+import {
+	createTerminalSession,
+	loadWebglAddon,
+} from "@/components/terminal/terminal-factory";
 
 export interface XTerminalProps {
 	onData?: (data: string) => void;
@@ -29,28 +31,31 @@ function XTerminalComponent({
 	const terminalRef = useRef<Terminal | null>(null);
 	const fitAddonRef = useRef<FitAddon | null>(null);
 	const resizeObserverRef = useRef<ResizeObserver | null>(null);
+	const webglAddonRef = useRef<ReturnType<typeof loadWebglAddon> | null>(null);
 
 	useEffect(() => {
 		if (!containerRef.current) return;
 
-		const terminal = new Terminal(TERMINAL_OPTIONS);
+		const terminalSession = createTerminalSession({
+			terminalOptions: TERMINAL_OPTIONS,
+			loadWebLinksAddon: true,
+		});
+		const terminal = terminalSession.terminal;
 		terminalRef.current = terminal;
 
-		const fitAddon = new FitAddon();
+		const fitAddon = terminalSession.fitAddon;
 		fitAddonRef.current = fitAddon;
-		terminal.loadAddon(fitAddon);
-
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
 
 		terminal.open(containerRef.current);
 
 		try {
-			const webglAddon = new WebglAddon();
-			webglAddon.onContextLoss(() => {
-				webglAddon.dispose();
+			const webglAddon = loadWebglAddon(terminal, {
+				onContextLoss: () => {
+					webglAddon.dispose();
+					webglAddonRef.current = null;
+				},
 			});
-			terminal.loadAddon(webglAddon);
+			webglAddonRef.current = webglAddon;
 		} catch {
 			console.warn(
 				"WebGL addon failed to load, falling back to canvas renderer",
@@ -90,6 +95,8 @@ function XTerminalComponent({
 
 		return () => {
 			resizeObserver.disconnect();
+			webglAddonRef.current?.dispose();
+			webglAddonRef.current = null;
 			terminal.dispose();
 			terminalRef.current = null;
 			fitAddonRef.current = null;
