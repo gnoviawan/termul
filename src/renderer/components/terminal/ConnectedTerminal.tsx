@@ -7,7 +7,9 @@ import {
 	useImperativeHandle,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { Terminal } from "@xterm/xterm";
+import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -42,12 +44,17 @@ import {
 } from "@/components/ui/context-menu";
 import { useTerminalClipboard } from "@/hooks/use-terminal-clipboard";
 import { terminalApi, systemApi } from "@/lib/api";
+import {
+	buildTerminalPathLinks,
+	openFilePathFromTerminal,
+} from "@/lib/file-path-links";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import {
 	getOrCreateProjectContinuityCorrelation,
 	recordTerminalContinuityEvent,
 } from "@/lib/terminal-continuity-instrumentation";
+import { useActiveProject } from "@/stores/project-store";
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
@@ -122,6 +129,7 @@ function ConnectedTerminalComponent({
 	const fitAddonRef = useRef<FitAddon | null>(null);
 	const searchAddonRef = useRef<SearchAddon | null>(null);
 	const webglAddonRef = useRef<WebglAddon | null>(null);
+	const fileLinkProviderDisposableRef = useRef<IDisposable | null>(null);
 	const webglRecoveryAttemptsRef = useRef<number>(0);
 	const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
@@ -139,6 +147,10 @@ function ConnectedTerminalComponent({
 	const rendererPreference = useTerminalRenderer();
 	const rendererPreferenceRef = useRef(rendererPreference);
 	rendererPreferenceRef.current = rendererPreference;
+
+	const activeProject = useActiveProject();
+	const activeProjectPathRef = useRef<string | undefined>(activeProject?.path);
+	activeProjectPathRef.current = activeProject?.path;
 
 	// Get keyboard shortcuts to intercept app shortcuts before xterm handles them
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -459,6 +471,40 @@ function ConnectedTerminalComponent({
 
 		const webLinksAddon = new WebLinksAddon();
 		terminal.loadAddon(webLinksAddon);
+
+		const handleFilePathActivate = async (
+			event: MouseEvent,
+			uri: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			try {
+				const result = await openFilePathFromTerminal(uri, {
+					cwd:
+						useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || "")
+							?.cwd,
+					projectRoot: activeProjectPathRef.current,
+				});
+
+				if (!result.ok) {
+					toast.error(result.message);
+				}
+			} catch (error) {
+				console.error("[Terminal File Link Open Failed]", error);
+				toast.error("Failed to open file from terminal output.");
+			}
+		};
+
+		fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
+			provideLinks(y, callback) {
+				const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+				callback(buildTerminalPathLinks(line, y, handleFilePathActivate));
+			},
+		});
 
 		// Load search addon
 		const searchAddon = new SearchAddon();
@@ -1106,6 +1152,10 @@ function ConnectedTerminalComponent({
 
 			// Dispose WebGL addon BEFORE terminal disposal for proper cursor layer cleanup
 			disposeWebglAddon();
+			if (fileLinkProviderDisposableRef.current) {
+				fileLinkProviderDisposableRef.current.dispose();
+				fileLinkProviderDisposableRef.current = null;
+			}
 
 			terminal.dispose();
 			terminalRef.current = null;

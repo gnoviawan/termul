@@ -31,7 +31,12 @@ const defaultStat: FileInfo = {
 
 // Mock @tauri-apps/plugin-fs BEFORE importing
 vi.mock("@tauri-apps/plugin-fs", () => ({
+	open: vi.fn(async () => ({
+		read: vi.fn(async () => 0),
+		close: vi.fn(async () => {}),
+	})),
 	readDir: vi.fn(async () => []),
+	readFile: vi.fn(async () => new Uint8Array()),
 	readTextFile: vi.fn(async () => ""),
 	writeTextFile: vi.fn(async () => {}),
 	mkdir: vi.fn(async () => {}),
@@ -44,7 +49,9 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 import {
+	open,
 	readDir,
+	readFile,
 	readTextFile,
 	writeTextFile,
 	mkdir,
@@ -72,7 +79,12 @@ describe("tauriFilesystemApi", () => {
 		_resetFilesystemStateForTesting();
 
 		// Restore default mocks after clearing
+		vi.mocked(open).mockResolvedValue({
+			read: vi.fn(async () => 0),
+			close: vi.fn(async () => {}),
+		} as never);
 		vi.mocked(readDir).mockResolvedValue([]);
+		vi.mocked(readFile).mockResolvedValue(new Uint8Array());
 		vi.mocked(readTextFile).mockResolvedValue("");
 		vi.mocked(writeTextFile).mockResolvedValue(undefined);
 		vi.mocked(mkdir).mockResolvedValue(undefined);
@@ -198,10 +210,17 @@ describe("tauriFilesystemApi", () => {
 	describe("getFileInfo", () => {
 		it("should return file metadata", async () => {
 			const testDate = new Date("2024-01-01T00:00:00Z");
+			const close = vi.fn(async () => {});
 			vi.mocked(stat).mockResolvedValue(
 				makeFileInfo({ size: 2048, mtime: testDate }),
 			);
-			vi.mocked(readTextFile).mockResolvedValue("some content");
+			vi.mocked(open).mockResolvedValue({
+				read: vi.fn(async (buffer: Uint8Array) => {
+					buffer.set(new TextEncoder().encode("some content"));
+					return 12;
+				}),
+				close,
+			} as never);
 
 			const result = await tauriFilesystemApi.getFileInfo("/test/file.txt");
 
@@ -209,17 +228,45 @@ describe("tauriFilesystemApi", () => {
 			if (result.success) {
 				expect(result.data.size).toBe(2048);
 				expect(result.data.path).toBe("/test/file.txt");
+				expect(result.data.type).toBe("file");
 				expect(result.data.isReadOnly).toBe(false);
 				expect(result.data.isBinary).toBe(false);
 			}
+			expect(open).toHaveBeenCalledWith("/test/file.txt", { read: true });
+			expect(close).toHaveBeenCalled();
+			expect(readTextFile).not.toHaveBeenCalled();
 		});
 
-		it("should detect binary files", async () => {
+		it("should not read directory contents when returning directory metadata", async () => {
 			const testDate = new Date("2024-01-01T00:00:00Z");
+			vi.mocked(stat).mockResolvedValue(
+				makeFileInfo({ isFile: false, isDirectory: true, size: 0, mtime: testDate }),
+			);
+
+			const result = await tauriFilesystemApi.getFileInfo("/test/folder");
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				expect(result.data.type).toBe("directory");
+				expect(result.data.isBinary).toBe(false);
+			}
+			expect(open).not.toHaveBeenCalled();
+			expect(readTextFile).not.toHaveBeenCalled();
+		});
+
+		it("should detect binary files from a bounded byte sample", async () => {
+			const testDate = new Date("2024-01-01T00:00:00Z");
+			const close = vi.fn(async () => {});
 			vi.mocked(stat).mockResolvedValue(
 				makeFileInfo({ size: 10, mtime: testDate }),
 			);
-			vi.mocked(readTextFile).mockResolvedValue("Hello\x00World");
+			vi.mocked(open).mockResolvedValue({
+				read: vi.fn(async (buffer: Uint8Array) => {
+					buffer.set(new Uint8Array([72, 101, 108, 108, 111, 0, 87, 111, 114, 108, 100]));
+					return 11;
+				}),
+				close,
+			} as never);
 
 			const result = await tauriFilesystemApi.getFileInfo("/test/binary.bin");
 
@@ -227,6 +274,9 @@ describe("tauriFilesystemApi", () => {
 			if (result.success) {
 				expect(result.data.isBinary).toBe(true);
 			}
+			expect(open).toHaveBeenCalledWith("/test/binary.bin", { read: true });
+			expect(close).toHaveBeenCalled();
+			expect(readTextFile).not.toHaveBeenCalled();
 		});
 
 		it("should handle errors", async () => {
@@ -409,13 +459,10 @@ describe("tauriFilesystemApi", () => {
 			const mockUnlisten = vi.fn();
 			vi.mocked(watchImmediate).mockResolvedValue(mockUnlisten);
 
-			// First watch
 			await tauriFilesystemApi.watchDirectory("/test");
-			// Second watch on same path
 			const result = await tauriFilesystemApi.watchDirectory("/test");
 
 			expect(result.success).toBe(true);
-			// watchImmediate should only be called once
 			expect(vi.mocked(watchImmediate)).toHaveBeenCalledTimes(1);
 		});
 	});
@@ -425,9 +472,7 @@ describe("tauriFilesystemApi", () => {
 			const mockUnlisten = vi.fn();
 			vi.mocked(watchImmediate).mockResolvedValue(mockUnlisten);
 
-			// First watch
 			await tauriFilesystemApi.watchDirectory("/test");
-			// Then unwatch
 			const result = await tauriFilesystemApi.unwatchDirectory("/test");
 
 			expect(result.success).toBe(true);
@@ -437,11 +482,10 @@ describe("tauriFilesystemApi", () => {
 		it("should handle unwatching non-watched directory gracefully", async () => {
 			const result = await tauriFilesystemApi.unwatchDirectory("/non-existent");
 
-			expect(result.success).toBe(true); // Should succeed even if not watching
+			expect(result.success).toBe(true);
 		});
 
 		it("should handle errors", async () => {
-			// Force an error by making unlisten throw
 			const badUnlisten = () => {
 				throw new Error("Unlisten failed");
 			};
@@ -472,7 +516,6 @@ describe("tauriFilesystemApi", () => {
 			await tauriFilesystemApi.watchDirectory("/test");
 			const cleanupFirst = tauriFilesystemApi.onFileChanged(callback);
 
-			// Cleanup should remove callback
 			const cleanup = tauriFilesystemApi.onFileChanged(callback);
 			cleanupFirst();
 			cleanup();

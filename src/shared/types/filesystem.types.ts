@@ -18,6 +18,7 @@ export interface FileInfo {
   path: string
   size: number
   modifiedAt: number
+  type: 'file' | 'directory'
   isReadOnly: boolean
   isBinary: boolean
 }

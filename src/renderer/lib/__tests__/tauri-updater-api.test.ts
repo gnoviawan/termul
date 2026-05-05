@@ -64,6 +64,8 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve()
 }
 
+const mockFetch = vi.fn()
+
 describe('tauri-updater-api', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -94,6 +96,8 @@ describe('tauri-updater-api', () => {
         size: 2048
       }
     } as never)
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
   })
 
   describe('checkForUpdates', () => {
@@ -133,28 +137,42 @@ describe('tauri-updater-api', () => {
       )
     })
 
-    it('falls back to GitHub release info when check rejects with a non-Error 404 object', async () => {
+    it('falls back to GitHub release metadata for missing-manifest style failures', async () => {
       vi.mocked(check).mockRejectedValue({ status: 404, url: 'latest.json' })
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({
-            tag_name: 'v9.9.9',
-            published_at: '2026-06-01T12:00:00.000Z',
-            html_url: 'https://github.com/gnoviawan/termul/releases/tag/v9.9.9',
-            body: 'stubbed fallback release notes'
-          })
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          tag_name: 'v0.3.4',
+          body: 'release notes',
+          html_url: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+          published_at: '2026-05-01T15:13:12Z'
         })
-      )
+      })
 
       await expect(checkForUpdates()).resolves.toEqual({
-        version: '9.9.9',
-        releaseDate: '2026-06-01T12:00:00.000Z',
-        releaseNotes: 'stubbed fallback release notes',
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v9.9.9',
-        isSecurityUpdate: false
+        version: '0.3.4',
+        releaseDate: '2026-05-01T15:13:12Z',
+        releaseNotes: 'release notes',
+        isSecurityUpdate: false,
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4'
       })
+
+      const state = await getUpdaterState()
+      expect(state.success).toBe(true)
+      if (state.success) {
+        expect(state.data.updateAvailable).toBe(true)
+        expect(state.data.version).toBe('0.3.4')
+        expect(state.data.isManualUpdateMode).toBe(true)
+      }
+    })
+
+    it('preserves non-fallback error details when the manifest error is not eligible for GitHub fallback', async () => {
+      vi.mocked(check).mockRejectedValue({ status: 500, url: 'latest.json' })
+
+      await expect(checkForUpdates()).rejects.toThrow(
+        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
+      )
+      expect(mockFetch).not.toHaveBeenCalled()
     })
   })
 
