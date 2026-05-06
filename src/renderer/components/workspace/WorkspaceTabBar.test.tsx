@@ -83,6 +83,29 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: mockUsePaneDnd
 }))
 
+const mockShellApiGetAvailableShells = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    success: true,
+    data: {
+      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
+      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
+    }
+  })
+)
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    shellApi: {
+      getAvailableShells: mockShellApiGetAvailableShells
+    },
+    clipboardApi: {
+      writeText: vi.fn()
+    }
+  }
+})
+
 beforeEach(() => {
   mockSetActiveTab.mockReset()
   mockSetActivePane.mockReset()
@@ -105,18 +128,11 @@ beforeEach(() => {
     handleTabReorder: mockHandleTabReorder
   })
 
-  vi.stubGlobal('api', {
-    shell: {
-      getAvailableShells: vi.fn().mockResolvedValue({
-        success: true,
-        data: {
-          default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
-          available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
-        }
-      })
-    },
-    clipboard: {
-      writeText: vi.fn()
+  mockShellApiGetAvailableShells.mockResolvedValue({
+    success: true,
+    data: {
+      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
+      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
     }
   })
 })
@@ -147,7 +163,7 @@ describe('WorkspaceTabBar', () => {
     })
   })
 
-  it('calls pane-scoped onAddTerminal when terminal action is clicked', async () => {
+  it('calls pane-scoped onAddTerminal when a shell is selected from the terminal menu', async () => {
     const onAddTerminal = vi.fn()
 
     render(
@@ -162,8 +178,28 @@ describe('WorkspaceTabBar', () => {
     await flushShellEffect()
 
     fireEvent.click(screen.getByTitle('New terminal (default shell)'))
+    fireEvent.click(screen.getByText('Bash'))
 
     expect(onAddTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls pane-scoped onAddBrowserTab when browser action is clicked', async () => {
+    const onAddBrowserTab = vi.fn()
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[]}
+        activeTabId={null}
+        onAddBrowserTab={onAddBrowserTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('New Browser Tab'))
+
+    expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
   })
 
   it('renders editor tab with non-jitter active style class', async () => {

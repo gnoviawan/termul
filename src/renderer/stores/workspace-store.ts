@@ -735,7 +735,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       newRoot = updateLeaf(newRoot, activePaneId, (leaf) => {
         const termTabs = leaf.tabs.filter((t) => t.type === 'terminal')
-        const newTabs = [...termTabs, ...editorTabs]
+        const existingNonEditorNonTerminal = leaf.tabs.filter(
+          (t) => t.type !== 'terminal' && t.type !== 'editor'
+        )
+        const dedupedEditorTabs = editorTabs.filter(
+          (editorTab, index, arr) => arr.findIndex((t) => t.id === editorTab.id) === index
+        )
+        const newTabs = [...termTabs, ...existingNonEditorNonTerminal, ...dedupedEditorTabs]
         let newActive = restoredActiveTabId ?? null
         if (!newActive || !newTabs.some((t) => t.id === newActive)) {
           newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null

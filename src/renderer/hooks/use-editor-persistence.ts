@@ -555,11 +555,17 @@ export function useEditorPersistence(projectId: string): void {
       }
     })
     const unsubWorkspace = useWorkspaceStore.subscribe(schedulePersist)
+    const unsubBrowserSessions = useBrowserSessionStore.subscribe((state, prevState) => {
+      if (state.tabs !== prevState.tabs) {
+        schedulePersist()
+      }
+    })
 
     return () => {
       unsubEditor()
       unsubExplorer()
       unsubWorkspace()
+      unsubBrowserSessions()
       if (persistTimeoutId) clearTimeout(persistTimeoutId)
     }
   }, [projectId])

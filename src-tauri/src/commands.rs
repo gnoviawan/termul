@@ -6,7 +6,7 @@ use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Webview};
 
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
@@ -325,7 +325,15 @@ pub async fn browser_tab_report_url(
     tab_id: String,
     url: String,
     app_handle: AppHandle,
+    webview: Webview,
 ) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report URL rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
     log::debug!("[BrowserTab] URL report: tab={} url={}", tab_id, url);
     let _ = app_handle.emit(
         "browser-tab-navigated",
@@ -339,7 +347,15 @@ pub async fn browser_tab_report_url(
 pub async fn browser_tab_report_loaded(
     tab_id: String,
     app_handle: AppHandle,
+    webview: Webview,
 ) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report loaded rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
     let _ = app_handle.emit(
         "browser-tab-loaded",

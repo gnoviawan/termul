@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
-import { browserTabNavigate, browserTabGoBack, browserTabGoForward, browserTabReload } from "@/lib/browser-api";
+import { browserTabGoBack, browserTabGoForward, browserTabReload } from "@/lib/browser-api";
 import { ArrowLeft, ArrowRight, RotateCcw, Globe, Loader2 } from "lucide-react";
 
 interface BrowserControlsProps {
@@ -25,15 +25,7 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
     if (!/^https?:\/\//i.test(url) && !/^about:/i.test(url)) {
       url = "https://" + url;
     }
-    browserTabNavigate(browserTabId, url)
-      .then((result) => {
-        if (result.success) {
-          useBrowserSessionStore.getState().updateUrl(browserTabId, url);
-        } else {
-          console.error('[BrowserControls] navigate failed:', result.error);
-        }
-      })
-      .catch(console.error);
+    useBrowserSessionStore.getState().updateUrl(browserTabId, url);
   }, [browserTabId, inputUrl]);
 
   const handleKeyDown = useCallback(

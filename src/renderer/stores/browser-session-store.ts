@@ -57,7 +57,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       const tab = state.tabs.get(id)
       if (!tab) return state
       const next = new Map(state.tabs)
-      next.set(id, { ...tab, url, loading: true })
+      next.set(id, { ...tab, url })
       return { tabs: next }
     })
   },

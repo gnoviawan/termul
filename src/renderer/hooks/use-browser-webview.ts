@@ -34,6 +34,22 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
   const mountedRef = useRef(true)
   const urlRef = useRef(url)
   const visibilityRef = useRef(isVisible)
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearLoadingTimeout = useCallback(() => {
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current)
+      loadingTimeoutRef.current = null
+    }
+  }, [])
+
+  const armLoadingTimeout = useCallback(() => {
+    clearLoadingTimeout()
+    loadingTimeoutRef.current = setTimeout(() => {
+      useBrowserSessionStore.getState().setLoading(browserTabId, false)
+      loadingTimeoutRef.current = null
+    }, 6000)
+  }, [browserTabId, clearLoadingTimeout])
 
   const updateBounds = useCallback(() => {
     const el = containerRef.current
@@ -58,6 +74,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
     // Set loading true before creating
     useBrowserSessionStore.getState().setLoading(browserTabId, true)
+    armLoadingTimeout()
 
     const bounds = getElementBounds(el)
     browserTabCreate(browserTabId, urlRef.current, bounds)
@@ -79,16 +96,19 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
           }
         } else {
           console.error('[BrowserWebview] create failed:', result.error)
+          clearLoadingTimeout()
           useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
         console.error('[BrowserWebview] create error:', err)
+        clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
 
     return () => {
       mountedRef.current = false
+      clearLoadingTimeout()
       browserTabDestroy(browserTabId)
         .then((result) => {
           if (!result.success) {
@@ -122,15 +142,18 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     urlRef.current = url
     if (!createdRef.current) return
     useBrowserSessionStore.getState().setLoading(browserTabId, true)
+    armLoadingTimeout()
     browserTabNavigate(browserTabId, url)
       .then((result) => {
         if (!result.success) {
           console.error('[BrowserWebview] navigate failed:', result.error)
+          clearLoadingTimeout()
           useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
         console.error('[BrowserWebview] navigate error:', err)
+        clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
   }, [url, browserTabId])
@@ -152,38 +175,40 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
   // Listen for URL sync and loaded events from webview poller
   useEffect(() => {
-    let unlistenNav: (() => void) | undefined
-    let unlistenLoaded: (() => void) | undefined
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    let disposed = false
+    let unlistenNav: () => void = () => {}
+    let unlistenLoaded: () => void = () => {}
 
-    onBrowserTabNavigated((payload) => {
+    const navSubscription = onBrowserTabNavigated((payload) => {
       if (payload.browserTabId === browserTabId) {
         useBrowserSessionStore.getState().updateUrl(browserTabId, payload.url)
       }
-    }).then((fn) => { unlistenNav = fn }).catch(console.error)
+    })
+    if (disposed) {
+      navSubscription.unlisten()
+    } else {
+      unlistenNav = () => navSubscription.unlisten()
+    }
 
-    onBrowserTabLoaded((payload) => {
+    const loadedSubscription = onBrowserTabLoaded((payload) => {
       if (payload.browserTabId === browserTabId) {
+        clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
-        if (timeoutId) {
-          clearTimeout(timeoutId)
-          timeoutId = undefined
-        }
       }
-    }).then((fn) => { unlistenLoaded = fn }).catch(console.error)
-
-    // Safety timeout: clear loading after 6 seconds regardless
-    // (in case the webview poller fails or the page is a slow SPA)
-    timeoutId = setTimeout(() => {
-      useBrowserSessionStore.getState().setLoading(browserTabId, false)
-    }, 6000)
+    })
+    if (disposed) {
+      loadedSubscription.unlisten()
+    } else {
+      unlistenLoaded = () => loadedSubscription.unlisten()
+    }
 
     return () => {
-      if (unlistenNav) unlistenNav()
-      if (unlistenLoaded) unlistenLoaded()
-      if (timeoutId) clearTimeout(timeoutId)
+      disposed = true
+      unlistenNav()
+      unlistenLoaded()
+      clearLoadingTimeout()
     }
-  }, [browserTabId])
+  }, [browserTabId, clearLoadingTimeout])
 
   return { containerRef }
 }

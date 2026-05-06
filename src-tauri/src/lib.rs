@@ -721,6 +721,10 @@ pub fn run() {
             // Prevent the default exit behavior so we can cleanup first
             api.prevent_exit();
 
+            let browser_tab_manager = app_handle
+                .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
@@ -728,10 +732,16 @@ pub fn run() {
                 // Spawn async cleanup task
                 tokio::spawn(async move {
                     pty_manager_clone.kill_all().await;
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
                     // After cleanup completes, allow the app to exit with code 0
                     app_handle_clone.exit(0);
                 });
             } else {
+                if let Some(browser_tab_manager) = browser_tab_manager {
+                    browser_tab_manager.destroy_all();
+                }
                 // No PTY manager, just exit
                 app_handle.exit(0);
             }

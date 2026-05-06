@@ -473,12 +473,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		}
 	}, [handleCreateTerminalInPane]);
 
-	const handleNewBrowserTab = useCallback(() => {
-		const paneId = useWorkspaceStore.getState().activePaneId;
-		if (paneId) {
+	const handleNewBrowserTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId) {
 			const browserTabId = crypto.randomUUID();
 			useBrowserSessionStore.getState().createTab(browserTabId);
-			useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
+			useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId);
 		}
 	}, []);
 

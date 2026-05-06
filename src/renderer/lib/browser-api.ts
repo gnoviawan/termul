@@ -23,6 +23,10 @@ export interface BrowserTabLoadedPayload {
   browserTabId: string
 }
 
+export interface BrowserEventSubscription {
+  unlisten: () => void
+}
+
 export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code: string }
@@ -73,19 +77,45 @@ export async function browserTabReload(tabId: string): Promise<IpcResult<void>> 
   return invoke('browser_tab_reload', { tabId })
 }
 
-// Event listeners for URL sync from webview poller
-export function onBrowserTabNavigated(
-  callback: (payload: BrowserTabNavigatedPayload) => void
-): Promise<UnlistenFn> {
-  return listen<BrowserTabNavigatedPayload>('browser-tab-navigated', (event) => {
+function createBrowserEventSubscription<T>(
+  eventName: string,
+  callback: (payload: T) => void
+): BrowserEventSubscription {
+  let resolvedUnlisten: UnlistenFn | null = null
+  let unlistenCalledEarly = false
+
+  void listen<T>(eventName, (event) => {
     callback(event.payload)
   })
+    .then((unlisten) => {
+      if (unlistenCalledEarly) {
+        unlisten()
+        return
+      }
+      resolvedUnlisten = unlisten
+    })
+    .catch(console.error)
+
+  return {
+    unlisten: () => {
+      if (resolvedUnlisten) {
+        resolvedUnlisten()
+        resolvedUnlisten = null
+      } else {
+        unlistenCalledEarly = true
+      }
+    }
+  }
+}
+
+export function onBrowserTabNavigated(
+  callback: (payload: BrowserTabNavigatedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-navigated', callback)
 }
 
 export function onBrowserTabLoaded(
   callback: (payload: BrowserTabLoadedPayload) => void
-): Promise<UnlistenFn> {
-  return listen<BrowserTabLoadedPayload>('browser-tab-loaded', (event) => {
-    callback(event.payload)
-  })
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-loaded', callback)
 }

@@ -776,10 +776,7 @@ export function WorkspaceTabBar({
 				{onAddTerminal && (
 					<div ref={terminalMenuRef} className="relative flex items-center h-full">
 						<button
-							onClick={() => {
-								onAddTerminal?.()
-								setIsTerminalMenuOpen((open) => !open)
-							}}
+							onClick={() => setIsTerminalMenuOpen((open) => !open)}
 							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
 							title="New terminal (default shell)"
 						>

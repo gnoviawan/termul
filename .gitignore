@@ -34,6 +34,7 @@ pnpm-debug.log*
 
 # Claude Code cache
 .claude/
+.codex/
 
 # Windows null file artifact
 nul
