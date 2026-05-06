@@ -156,7 +156,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    expect(screen.getByTitle('New terminal (default shell)')).toBeInTheDocument()
+    expect(screen.getByTitle('Open terminal menu')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.queryByTitle('Close pane')).not.toBeInTheDocument()
@@ -177,7 +177,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    fireEvent.click(screen.getByTitle('New terminal (default shell)'))
+    fireEvent.click(screen.getByTitle('Open terminal menu'))
     fireEvent.click(screen.getByText('Bash'))
 
     expect(onAddTerminal).toHaveBeenCalledTimes(1)

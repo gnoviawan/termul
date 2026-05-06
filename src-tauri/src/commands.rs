@@ -335,10 +335,12 @@ pub async fn browser_tab_report_url(
         ));
     }
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
-    let _ = app_handle.emit(
-        "browser-tab-navigated",
-        serde_json::json!({ "browserTabId": tab_id, "url": url }),
-    );
+    app_handle
+        .emit(
+            "browser-tab-navigated",
+            serde_json::json!({ "browserTabId": tab_id, "url": url }),
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -357,10 +359,12 @@ pub async fn browser_tab_report_loaded(
         ));
     }
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
-    let _ = app_handle.emit(
-        "browser-tab-loaded",
-        serde_json::json!({ "browserTabId": tab_id }),
-    );
+    app_handle
+        .emit(
+            "browser-tab-loaded",
+            serde_json::json!({ "browserTabId": tab_id }),
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

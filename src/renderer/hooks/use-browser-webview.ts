@@ -32,6 +32,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
   const containerRef = useRef<HTMLDivElement>(null)
   const createdRef = useRef(false)
   const mountedRef = useRef(true)
+  const mountTokenRef = useRef(0)
   const urlRef = useRef(url)
   const visibilityRef = useRef(isVisible)
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -69,6 +70,8 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
   // Create / destroy webview lifecycle
   useEffect(() => {
     mountedRef.current = true
+    mountTokenRef.current += 1
+    const mountToken = mountTokenRef.current
     const el = containerRef.current
     if (!el) return
 
@@ -79,7 +82,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     const bounds = getElementBounds(el)
     browserTabCreate(browserTabId, urlRef.current, bounds)
       .then((result) => {
-        if (!mountedRef.current) {
+        if (!mountedRef.current || mountToken !== mountTokenRef.current) {
           browserTabDestroy(browserTabId).catch(console.error)
           return
         }
@@ -108,6 +111,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
     return () => {
       mountedRef.current = false
+      mountTokenRef.current += 1
       clearLoadingTimeout()
       browserTabDestroy(browserTabId)
         .then((result) => {
@@ -177,6 +181,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
   useEffect(() => {
     const navSubscription = onBrowserTabNavigated((payload) => {
       if (payload.browserTabId === browserTabId) {
+        urlRef.current = payload.url
         useBrowserSessionStore.getState().updateUrl(browserTabId, payload.url)
       }
     })

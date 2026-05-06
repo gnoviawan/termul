@@ -298,7 +298,6 @@ function EditorTabWrapper({
 
 interface BrowserTabInlineProps {
 	tab: { type: "browser"; id: string; browserTabId: string };
-	label: string;
 	isActive: boolean;
 	isDragging: boolean;
 	isDropTarget: boolean;
@@ -313,7 +312,6 @@ interface BrowserTabInlineProps {
 
 function BrowserTabInline({
 	tab,
-	label,
 	isActive,
 	isDragging,
 	isDropTarget,
@@ -329,6 +327,20 @@ function BrowserTabInline({
 		x: number;
 		y: number;
 	} | null>(null);
+	const browserTab = useBrowserSessionStore((state) => state.getTab(tab.browserTabId));
+	const label = (() => {
+		if (!browserTab) return "Browser";
+		if (browserTab.title.trim()) return browserTab.title.trim();
+		if (browserTab.url) {
+			try {
+				const parsed = new URL(browserTab.url);
+				return parsed.host || parsed.hostname || browserTab.url;
+			} catch {
+				return browserTab.url.replace(/^https?:\/\//, "").split("/")[0] || "Browser";
+			}
+		}
+		return "Browser";
+	})();
 
 	return (
 		<>
@@ -648,21 +660,6 @@ export function WorkspaceTabBar({
 		return a.displayName.localeCompare(b.displayName);
 	});
 
-	const getBrowserTabLabel = useCallback((browserTabId: string): string => {
-		const browserTab = useBrowserSessionStore.getState().getTab(browserTabId);
-		if (!browserTab) return "Browser";
-		if (browserTab.title.trim()) return browserTab.title.trim();
-		if (browserTab.url) {
-			try {
-				const parsed = new URL(browserTab.url);
-				return parsed.host || parsed.hostname || browserTab.url;
-			} catch {
-				return browserTab.url.replace(/^https?:\/\//, "").split("/")[0] || "Browser";
-			}
-		}
-		return "Browser";
-	}, []);
-
 	const terminalStoreTerminals = useTerminalStore((state) => state.terminals);
 
 	// Check if this tab is being dragged
@@ -770,7 +767,6 @@ export function WorkspaceTabBar({
 											tab={
 												tab as { type: "browser"; id: string; browserTabId: string }
 											}
-											label={getBrowserTabLabel(tab.browserTabId)}
 											isActive={tab.id === activeTabId}
 											isDragging={dragging}
 											isDropTarget={isTarget}
@@ -806,7 +802,7 @@ export function WorkspaceTabBar({
 						<button
 							onClick={() => setIsTerminalMenuOpen((open) => !open)}
 							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-							title="New terminal (default shell)"
+							title="Open terminal menu"
 						>
 							<TerminalIcon size={12} />
 						</button>

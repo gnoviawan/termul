@@ -371,7 +371,7 @@ describe('WorkspaceLayout - Empty States', () => {
     it('should show pane-level new terminal action', () => {
       renderWithRouter()
 
-      expect(screen.getByTitle('New terminal (default shell)')).toBeInTheDocument()
+      expect(screen.getByTitle('Open terminal menu')).toBeInTheDocument()
     })
 
     it('should not show legacy terminal empty-state CTA', () => {
