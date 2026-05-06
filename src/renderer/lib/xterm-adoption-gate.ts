@@ -3,7 +3,7 @@ import { XTERM_6_PACKAGE_LINE } from './xterm6-compat'
 
 export interface AdoptionGateDecision {
   approved: boolean
-  baselinePath: 'xterm-5.5'
+  baselinePath: 'xterm-6.1'
   candidatePackageLine: typeof XTERM_6_PACKAGE_LINE
   blockers: string[]
   warnings: string[]
@@ -26,7 +26,7 @@ export function evaluateXtermAdoptionGate(input: AdoptionGateInput): AdoptionGat
   const rationale: string[] = []
 
   if (!input.approvalRecorded) {
-    blockers.push('No explicit approval recorded for replacing the xterm 5.5 baseline.')
+    blockers.push('No explicit approval recorded for the current xterm 6.1 production baseline.')
   } else {
     rationale.push('Explicit approval for baseline replacement is recorded.')
   }

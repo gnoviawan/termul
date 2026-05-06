@@ -584,7 +584,7 @@ function ConnectedTerminalComponent({
 			}
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
-					"WebGL recovery attempts exhausted, falling back to canvas renderer",
+					"WebGL recovery attempts exhausted, falling back to DOM renderer",
 				);
 				recordTerminalContinuityEvent({
 					name: "renderer-recovery-exhausted",
@@ -649,7 +649,7 @@ function ConnectedTerminalComponent({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
-					"WebGL addon failed to load, falling back to canvas renderer:",
+					"WebGL addon failed to load, falling back to DOM renderer:",
 					error,
 				);
 				webglAddonRef.current = null;

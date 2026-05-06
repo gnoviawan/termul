@@ -58,7 +58,7 @@ export function TauriTerminal(): React.JSX.Element {
 				if (disposedRef.current || webglAttempts >= MAX_WEBGL_RETRIES) {
 					if (webglAttempts >= MAX_WEBGL_RETRIES) {
 						console.warn(
-							"[TauriTerminal] WebGL failed after max retries, using canvas renderer",
+							"[TauriTerminal] WebGL failed after max retries, using DOM renderer",
 						);
 					}
 					return;

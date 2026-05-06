@@ -1,6 +1,7 @@
 export const XTERM_MIGRATION_CANARY_ENV = 'VITE_XTERM_MIGRATION_CANARY'
 
 export type XtermMigrationCanaryMode = 'off' | 'xterm-6.1'
+export type XtermProductionBaseline = 'xterm-6.1'
 
 const XTERM_6_1_CANARY_VALUES = new Set(['xterm-6.1', 'true', '1', 'on'])
 
@@ -21,6 +22,6 @@ export function isXtermMigrationCanaryEnabled(
   return getXtermMigrationCanaryMode(value) === 'xterm-6.1'
 }
 
-export function getXtermMigrationDefaultPath(): 'xterm-5.5' {
-  return 'xterm-5.5'
+export function getXtermMigrationDefaultPath(): XtermProductionBaseline {
+  return 'xterm-6.1'
 }

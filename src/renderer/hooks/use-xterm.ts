@@ -10,6 +10,7 @@ export interface UseXtermOptions {
   fontSize?: number
   fontFamily?: string
   scrollback?: number
+  renderer?: 'webgl' | 'dom'
 }
 
 export interface UseXtermReturn {
@@ -33,7 +34,8 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
     onResize,
     fontSize = 14,
     fontFamily = 'Menlo, Monaco, "Courier New", monospace',
-    scrollback = 10000
+    scrollback = 10000,
+    renderer = 'webgl'
   } = options
 
   const terminalRef = useRef<Terminal | null>(null)
@@ -109,16 +111,18 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
 
     terminal.open(containerRef.current)
 
-    try {
-      const webglAddon = loadWebglAddon(terminal, {
-        onContextLoss: () => {
-          webglAddon.dispose()
-          webglAddonRef.current = null
-        }
-      })
-      webglAddonRef.current = webglAddon
-    } catch {
-      console.warn('WebGL addon failed to load, falling back to canvas renderer')
+    if (renderer !== 'dom') {
+      try {
+        const webglAddon = loadWebglAddon(terminal, {
+          onContextLoss: () => {
+            webglAddon.dispose()
+            webglAddonRef.current = null
+          }
+        })
+        webglAddonRef.current = webglAddon
+      } catch {
+        console.warn('WebGL addon failed to load, falling back to DOM renderer')
+      }
     }
 
     fitAddon.fit()
@@ -142,7 +146,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [fontFamily, fontSize, scrollback, onData, onResize])
+  }, [fontFamily, fontSize, scrollback, renderer, onData, onResize])
 
   return {
     terminalRef,

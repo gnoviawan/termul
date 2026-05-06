@@ -35,7 +35,7 @@ export interface LoadWebglAddonOptions {
 export function shouldUseWebglRenderer(
   rendererPreference: TerminalRendererPreference,
 ): boolean {
-  return rendererPreference !== 'canvas'
+  return rendererPreference === 'webgl'
 }
 
 export function createTerminalSession(

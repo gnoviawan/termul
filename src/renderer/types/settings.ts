@@ -93,9 +93,8 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
 
 // Terminal renderer strategy options
 export const TERMINAL_RENDERER_OPTIONS = [
-	{ value: "auto", label: "Auto (WebGL with Canvas fallback)" },
-	{ value: "webgl", label: "WebGL" },
-	{ value: "canvas", label: "Canvas" },
+	{ value: "webgl", label: "WebGL (Default)" },
+	{ value: "dom", label: "DOM" },
 ];
 
 // Default application settings
@@ -103,7 +102,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
 	terminalFontSize: 14,
 	terminalBufferSize: 10000,
-	terminalRenderer: "auto",
+	terminalRenderer: "webgl",
 	defaultShell: "",
 	defaultProjectColor: "blue",
 	maxTerminalsPerProject: 10,

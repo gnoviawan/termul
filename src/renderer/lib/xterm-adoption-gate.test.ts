@@ -15,7 +15,7 @@ describe('xterm-adoption-gate', () => {
     })
 
     expect(result.approved).toBe(false)
-    expect(result.baselinePath).toBe('xterm-5.5')
+    expect(result.baselinePath).toBe('xterm-6.1')
     expect(result.blockers).toEqual(
       expect.arrayContaining([
         expect.stringContaining('No explicit approval recorded'),

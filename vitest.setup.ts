@@ -16,6 +16,11 @@ Object.defineProperty(window, 'matchMedia', {
   })
 })
 
+Object.defineProperty(window, 'devicePixelRatio', {
+  writable: true,
+  value: 1,
+})
+
 class ResizeObserverMock {
   observe() {}
   unobserve() {}
@@ -23,6 +28,63 @@ class ResizeObserverMock {
 }
 
 window.ResizeObserver = ResizeObserverMock
+
+const createCanvas2DContextMock = () => ({
+  canvas: { width: 1, height: 1 },
+  font: '',
+  fillStyle: '',
+  strokeStyle: '',
+  lineWidth: 1,
+  save: () => {},
+  restore: () => {},
+  scale: () => {},
+  translate: () => {},
+  beginPath: () => {},
+  closePath: () => {},
+  moveTo: () => {},
+  lineTo: () => {},
+  rect: () => {},
+  fillRect: () => {},
+  clearRect: () => {},
+  strokeRect: () => {},
+  fillText: () => {},
+  strokeText: () => {},
+  setLineDash: () => {},
+  measureText: (text: string) => ({
+    width: Math.max(1, text.length * 8),
+    actualBoundingBoxAscent: 8,
+    actualBoundingBoxDescent: 2,
+    fontBoundingBoxAscent: 8,
+    fontBoundingBoxDescent: 2,
+  }),
+  getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+  putImageData: () => {},
+  createImageData: () => ({ data: new Uint8ClampedArray(4) }),
+})
+
+Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+  writable: true,
+  value: () => createCanvas2DContextMock(),
+})
+
+class OffscreenCanvasMock {
+  width: number
+  height: number
+
+  constructor(width: number, height: number) {
+    this.width = width
+    this.height = height
+  }
+
+  getContext() {
+    return createCanvas2DContextMock()
+  }
+}
+
+Object.defineProperty(globalThis, 'OffscreenCanvas', {
+  writable: true,
+  value: OffscreenCanvasMock,
+})
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()

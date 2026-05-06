@@ -55,6 +55,7 @@ describe('use-app-settings', () => {
       success: true,
       data: {
         ...DEFAULT_APP_SETTINGS,
+        terminalRenderer: 'webgl',
         sidebarVisible: false,
         fileExplorerVisible: true
       }

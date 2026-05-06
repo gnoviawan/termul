@@ -25,8 +25,8 @@ describe('xterm-migration', () => {
     expect(isXtermMigrationCanaryEnabled('disabled')).toBe(false)
   })
 
-  it('keeps the production default path on xterm 5.5', () => {
-    expect(getXtermMigrationDefaultPath()).toBe('xterm-5.5')
+  it('uses xterm 6.1 as the production default path', () => {
+    expect(getXtermMigrationDefaultPath()).toBe('xterm-6.1')
     expect(XTERM_MIGRATION_CANARY_ENV).toBe('VITE_XTERM_MIGRATION_CANARY')
   })
 })

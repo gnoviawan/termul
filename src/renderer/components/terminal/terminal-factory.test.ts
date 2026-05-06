@@ -148,9 +148,8 @@ describe('terminal-factory', () => {
     expect(mocks.loadAddon).toHaveBeenCalled()
   })
 
-  it('uses WebGL for auto and webgl preferences, but not canvas', () => {
-    expect(shouldUseWebglRenderer('auto')).toBe(true)
+  it('uses WebGL only for the webgl preference', () => {
     expect(shouldUseWebglRenderer('webgl')).toBe(true)
-    expect(shouldUseWebglRenderer('canvas')).toBe(false)
+    expect(shouldUseWebglRenderer('dom')).toBe(false)
   })
 })

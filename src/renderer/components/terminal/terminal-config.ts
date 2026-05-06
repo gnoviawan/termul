@@ -1,6 +1,6 @@
 import type { ITerminalOptions, ITheme } from "@xterm/xterm";
 
-export type TerminalRendererPreference = "auto" | "webgl" | "canvas";
+export type TerminalRendererPreference = "webgl" | "dom";
 
 // Resize debounce delay in milliseconds - prevents flooding PTY with resize events during drag
 export const RESIZE_DEBOUNCE_MS = 50;
