@@ -466,7 +466,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		const paneId = useWorkspaceStore.getState().activePaneId;
 		if (paneId) {
 			const browserTabId = crypto.randomUUID();
-			useBrowserSessionStore.getState().createTab(browserTabId, "about:blank");
+			useBrowserSessionStore.getState().createTab(browserTabId);
 			useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
 		}
 	}, []);
@@ -620,7 +620,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				const paneId = useWorkspaceStore.getState().activePaneId;
 				if (paneId) {
 					const browserTabId = crypto.randomUUID();
-					useBrowserSessionStore.getState().createTab(browserTabId, "about:blank");
+					useBrowserSessionStore.getState().createTab(browserTabId);
 					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
 				}
 				return;

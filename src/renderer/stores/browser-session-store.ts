@@ -22,10 +22,12 @@ export interface BrowserSessionState {
   getTab: (id: string) => BrowserTab | undefined
 }
 
+const DEFAULT_BROWSER_URL = 'https://www.google.com'
+
 export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => ({
   tabs: new Map(),
 
-  createTab: (id: string, url: string = 'about:blank') => {
+  createTab: (id: string, url: string = DEFAULT_BROWSER_URL) => {
     const tab: BrowserTab = {
       id,
       url,

@@ -1,8 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { browserTabNavigate, browserTabGoBack, browserTabGoForward, browserTabReload } from "@/lib/browser-api";
-import { ArrowLeft, ArrowRight, RotateCcw, Globe } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw, Globe, Loader2 } from "lucide-react";
 
 interface BrowserControlsProps {
   browserTabId: string;
@@ -11,6 +11,13 @@ interface BrowserControlsProps {
 export function BrowserControls({ browserTabId }: BrowserControlsProps): React.JSX.Element {
   const tab = useBrowserSessionStore((state) => state.tabs.get(browserTabId));
   const [inputUrl, setInputUrl] = useState(tab?.url || "");
+
+  // Sync inputUrl with store URL changes (e.g. from real-time sync)
+  useEffect(() => {
+    if (tab?.url) {
+      setInputUrl(tab.url);
+    }
+  }, [tab?.url]);
 
   const handleNavigate = useCallback(() => {
     let url = inputUrl.trim();
@@ -65,7 +72,11 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
         <RotateCcw size={14} />
       </button>
       <div className="flex-1 flex items-center gap-2 min-w-0">
-        <Globe size={14} className="text-muted-foreground shrink-0" />
+        {tab.loading ? (
+          <Loader2 size={14} className="text-primary shrink-0 animate-spin" />
+        ) : (
+          <Globe size={14} className="text-muted-foreground shrink-0" />
+        )}
         <input
           type="text"
           value={inputUrl}

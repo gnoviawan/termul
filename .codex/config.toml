@@ -1,0 +1,10 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic"
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "GLM-4.7-Air"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "GLM-4.7"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "GLM-4.7"
+API_TIMEOUT_MS = "3000000"
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"

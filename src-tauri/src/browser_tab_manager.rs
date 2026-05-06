@@ -44,6 +44,121 @@ impl BrowserTabManager {
             .ok_or_else(|| format!("Webview '{}' not found", tab_id))
     }
 
+    fn start_url_poller(&self, tab_id: String) {
+        let app_handle = self.app_handle.clone();
+        std::thread::spawn(move || {
+            // Wait for webview to fully initialize before injecting scripts
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+
+            // Script that polls URL and readyState continuously.
+            // This is more reliable than window.load for SPAs (React, Vue, Angular).
+            let poller_script = format!(
+                r#"
+                (function() {{
+                    if (window.__termul_poller) return;
+                    window.__termul_poller = true;
+
+                    var tabId = '{}';
+                    var lastUrl = location.href;
+                    var lastReady = '';
+                    var loadedReported = false;
+
+                    var invoke = function(cmd, args) {{
+                        try {{
+                            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                                window.__TAURI_INTERNALS__.invoke(cmd, args);
+                                return true;
+                            }}
+                        }} catch(e) {{}}
+                        try {{
+                            if (window.__TAURI__ && window.__TAURI__.invoke) {{
+                                window.__TAURI__.invoke(cmd, args);
+                                return true;
+                            }}
+                        }} catch(e) {{}}
+                        try {{
+                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
+                                window.__TAURI__.core.invoke(cmd, args);
+                                return true;
+                            }}
+                        }} catch(e) {{}}
+                        return false;
+                    }};
+
+                    var reportUrl = function(url) {{
+                        invoke('browser_tab_report_url', {{ tabId: tabId, url: url }});
+                    }};
+
+                    var reportLoaded = function() {{
+                        if (loadedReported) return;
+                        loadedReported = true;
+                        invoke('browser_tab_report_loaded', {{ tabId: tabId }});
+                    }};
+
+                    var check = function() {{
+                        var url = location.href;
+                        var ready = document.readyState;
+
+                        // Report URL change
+                        if (url !== lastUrl) {{
+                            lastUrl = url;
+                            reportUrl(url);
+                            // Reset loaded flag on navigation — new page needs to load
+                            loadedReported = false;
+                            lastReady = '';
+                        }}
+
+                        // Report loaded when readyState stabilizes at 'complete'
+                        if (ready === 'complete' && lastReady !== 'complete') {{
+                            reportLoaded();
+                        }}
+                        lastReady = ready;
+                    }};
+
+                    // Poll every 400ms
+                    setInterval(check, 400);
+
+                    // Hook history.pushState for SPA navigation
+                    var origPush = history.pushState;
+                    var origReplace = history.replaceState;
+                    history.pushState = function() {{
+                        origPush.apply(this, arguments);
+                        setTimeout(check, 50);
+                        setTimeout(check, 300);
+                    }};
+                    history.replaceState = function() {{
+                        origReplace.apply(this, arguments);
+                        setTimeout(check, 50);
+                        setTimeout(check, 300);
+                    }};
+                    window.addEventListener('popstate', function() {{
+                        setTimeout(check, 50);
+                        setTimeout(check, 300);
+                    }});
+
+                    // Initial check
+                    check();
+                }})();
+                "#,
+                tab_id
+            );
+
+            // Try to inject the poller script. Retry a few times if webview not ready.
+            for attempt in 0..5 {
+                match app_handle.get_webview(&tab_id) {
+                    Some(webview) => {
+                        let _ = webview.eval(&poller_script);
+                        log::info!("[BrowserTab] Injected URL poller for tab={} (attempt={})", tab_id, attempt);
+                        break;
+                    }
+                    None => {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                }
+            }
+        });
+    }
+
     pub fn create(
         &self,
         tab_id: String,
@@ -68,8 +183,8 @@ impl BrowserTabManager {
             )
             .map_err(|e| format!("Failed to create webview: {}", e))?;
 
-        // Note: Navigation events will be emitted from the frontend via IPC
-        // when the URL changes, since tauri::Webview doesn't have an on_navigation handler.
+        // Start background poller to sync URL and loading state from webview
+        self.start_url_poller(tab_id.clone());
 
         let info = BrowserTabInfo {
             id: tab_id.clone(),

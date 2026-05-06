@@ -344,7 +344,7 @@ function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
         if (tab.type === 'browser') {
           const bTabId = browserTabId(tab.browserTabId)
           // Restore browser session entry lazily
-          useBrowserSessionStore.getState().createTab(tab.browserTabId, tab.url || 'about:blank')
+          useBrowserSessionStore.getState().createTab(tab.browserTabId, tab.url)
           return [
             {
               type: 'browser',

@@ -5,8 +5,11 @@ import {
   browserTabHide,
   browserTabNavigate,
   browserTabResize,
-  browserTabShow
+  browserTabShow,
+  onBrowserTabNavigated,
+  onBrowserTabLoaded,
 } from '@/lib/browser-api'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserBounds {
   x: number
@@ -53,11 +56,13 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     const el = containerRef.current
     if (!el) return
 
+    // Set loading true before creating
+    useBrowserSessionStore.getState().setLoading(browserTabId, true)
+
     const bounds = getElementBounds(el)
     browserTabCreate(browserTabId, urlRef.current, bounds)
       .then((result) => {
         if (!mountedRef.current) {
-          // Unmounted before create resolved — destroy the orphaned webview
           browserTabDestroy(browserTabId).catch(console.error)
           return
         }
@@ -74,10 +79,12 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
           }
         } else {
           console.error('[BrowserWebview] create failed:', result.error)
+          useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
         console.error('[BrowserWebview] create error:', err)
+        useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
 
     return () => {
@@ -114,13 +121,18 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     if (url === urlRef.current) return
     urlRef.current = url
     if (!createdRef.current) return
+    useBrowserSessionStore.getState().setLoading(browserTabId, true)
     browserTabNavigate(browserTabId, url)
       .then((result) => {
         if (!result.success) {
           console.error('[BrowserWebview] navigate failed:', result.error)
+          useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
-      .catch(console.error)
+      .catch((err) => {
+        console.error('[BrowserWebview] navigate error:', err)
+        useBrowserSessionStore.getState().setLoading(browserTabId, false)
+      })
   }, [url, browserTabId])
 
   // Resize observer
@@ -137,6 +149,41 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       ro.disconnect()
     }
   }, [updateBounds])
+
+  // Listen for URL sync and loaded events from webview poller
+  useEffect(() => {
+    let unlistenNav: (() => void) | undefined
+    let unlistenLoaded: (() => void) | undefined
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+
+    onBrowserTabNavigated((payload) => {
+      if (payload.browserTabId === browserTabId) {
+        useBrowserSessionStore.getState().updateUrl(browserTabId, payload.url)
+      }
+    }).then((fn) => { unlistenNav = fn }).catch(console.error)
+
+    onBrowserTabLoaded((payload) => {
+      if (payload.browserTabId === browserTabId) {
+        useBrowserSessionStore.getState().setLoading(browserTabId, false)
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = undefined
+        }
+      }
+    }).then((fn) => { unlistenLoaded = fn }).catch(console.error)
+
+    // Safety timeout: clear loading after 6 seconds regardless
+    // (in case the webview poller fails or the page is a slow SPA)
+    timeoutId = setTimeout(() => {
+      useBrowserSessionStore.getState().setLoading(browserTabId, false)
+    }, 6000)
+
+    return () => {
+      if (unlistenNav) unlistenNav()
+      if (unlistenLoaded) unlistenLoaded()
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [browserTabId])
 
   return { containerRef }
 }

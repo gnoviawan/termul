@@ -6,7 +6,7 @@ use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
@@ -317,6 +317,35 @@ pub async fn browser_tab_reload(
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RELOAD_FAILED")),
     }
+}
+
+/// Report URL from browser tab webview (called by injected JS poller)
+#[tauri::command]
+pub async fn browser_tab_report_url(
+    tab_id: String,
+    url: String,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    log::debug!("[BrowserTab] URL report: tab={} url={}", tab_id, url);
+    let _ = app_handle.emit(
+        "browser-tab-navigated",
+        serde_json::json!({ "browserTabId": tab_id, "url": url }),
+    );
+    Ok(())
+}
+
+/// Report page loaded from browser tab webview (called by injected JS poller)
+#[tauri::command]
+pub async fn browser_tab_report_loaded(
+    tab_id: String,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
+    let _ = app_handle.emit(
+        "browser-tab-loaded",
+        serde_json::json!({ "browserTabId": tab_id }),
+    );
+    Ok(())
 }
 
 // ==================== Data Migration Commands ====================

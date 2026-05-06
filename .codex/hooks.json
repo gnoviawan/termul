@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'E:\\open-source\\PecutAPP\\termul\\.codex\\hooks\\stop-hook.ps1'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'E:\\open-source\\PecutAPP\\termul\\.codex\\hooks\\stop-hook.ps1'"
+          }
+        ]
+      }
+    ]
+  }
+}

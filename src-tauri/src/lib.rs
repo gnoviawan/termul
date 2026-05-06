@@ -702,6 +702,9 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            // Browser tab URL sync commands (called by injected JS)
+            commands::browser_tab_report_url,
+            commands::browser_tab_report_loaded,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,

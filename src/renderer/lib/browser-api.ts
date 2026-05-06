@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export interface BrowserBounds {
   x: number
@@ -11,6 +12,15 @@ export interface BrowserTabInfo {
   id: string
   url: string
   title: string
+}
+
+export interface BrowserTabNavigatedPayload {
+  browserTabId: string
+  url: string
+}
+
+export interface BrowserTabLoadedPayload {
+  browserTabId: string
 }
 
 export type IpcResult<T> =
@@ -61,4 +71,21 @@ export async function browserTabGoForward(tabId: string): Promise<IpcResult<void
 
 export async function browserTabReload(tabId: string): Promise<IpcResult<void>> {
   return invoke('browser_tab_reload', { tabId })
+}
+
+// Event listeners for URL sync from webview poller
+export function onBrowserTabNavigated(
+  callback: (payload: BrowserTabNavigatedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<BrowserTabNavigatedPayload>('browser-tab-navigated', (event) => {
+    callback(event.payload)
+  })
+}
+
+export function onBrowserTabLoaded(
+  callback: (payload: BrowserTabLoadedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<BrowserTabLoadedPayload>('browser-tab-loaded', (event) => {
+    callback(event.payload)
+  })
 }
