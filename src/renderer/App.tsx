@@ -74,7 +74,7 @@ const xtermDefaultPath = getXtermMigrationDefaultPath()
 // build/CI/runtime gate (for example a checkRendererVersion helper wired during app
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 // Story 3.1 now defines a default-off canary posture in code. Until later Epic 3
-// stories prove readiness, any canary mode remains opt-in and the default path stays
+// stories prove readiness, any canary mode remains opt-in and the production baseline stays
 // on the xterm 5.5 baseline.
 
 // Component to handle app-level effects like auto-save

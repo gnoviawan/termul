@@ -34,7 +34,8 @@
 		"build:tauri:linux": "tauri build --target x86_64-unknown-linux-gnu --config src-tauri/tauri.conf.prod.json",
 		"tauri": "tauri",
 		"prepare": "husky",
-		"build:frontend:tauri": "vite build --config vite.config.tauri.ts"
+		"build:frontend:tauri": "vite build --config vite.config.tauri.ts",
+		"xterm:gate": "node scripts/check-xterm-adoption-gate.mjs"
 	},
 	"dependencies": {
 		"@blocknote/code-block": "^0.46.2",

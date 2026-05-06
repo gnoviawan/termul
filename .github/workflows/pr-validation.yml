@@ -63,6 +63,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Verify xterm adoption gate
+        run: npm run xterm:gate
+
   rust-checks:
     name: Rust Checks
     runs-on: ubuntu-22.04
