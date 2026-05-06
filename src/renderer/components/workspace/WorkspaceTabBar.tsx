@@ -298,6 +298,7 @@ function EditorTabWrapper({
 
 interface BrowserTabInlineProps {
 	tab: { type: "browser"; id: string; browserTabId: string };
+	label: string;
 	isActive: boolean;
 	isDragging: boolean;
 	isDropTarget: boolean;
@@ -312,6 +313,7 @@ interface BrowserTabInlineProps {
 
 function BrowserTabInline({
 	tab,
+	label,
 	isActive,
 	isDragging,
 	isDropTarget,
@@ -362,8 +364,8 @@ function BrowserTabInline({
 					size={12}
 					className={cn("mr-2", isActive ? "text-primary" : "")}
 				/>
-				<span className={cn("text-[11px] font-medium", isActive && "text-foreground")}>
-					{tab.browserTabId}
+				<span className={cn("text-[11px] font-medium truncate", isActive && "text-foreground")}>
+					{label}
 				</span>
 				<button
 					onClick={(e) => {
@@ -482,6 +484,8 @@ export function WorkspaceTabBar({
 		return () => window.removeEventListener("resize", checkOverflow);
 	}, [tabs.length]);
 
+	// Native child webviews paint above the DOM, so the terminal popover would be
+	// obscured unless we temporarily hide browser webviews while the menu is open.
 	useEffect(() => {
 		const browserTabs = tabs.filter(
 			(tab): tab is WorkspaceTab & { type: "browser"; browserTabId: string } =>
@@ -489,17 +493,25 @@ export function WorkspaceTabBar({
 		);
 		if (browserTabs.length === 0) return;
 
-		if (isTerminalMenuOpen) {
-			for (const tab of browserTabs) {
+		const hideAll = (tabsToHide: Array<{ browserTabId: string }>): void => {
+			for (const tab of tabsToHide) {
 				void browserTabHide(tab.browserTabId).catch(console.error);
 			}
+		};
+
+		const showActive = (activeBrowserTab?: { browserTabId: string }): void => {
+			if (activeBrowserTab) {
+				void browserTabShow(activeBrowserTab.browserTabId).catch(console.error);
+			}
+		};
+
+		if (isTerminalMenuOpen) {
+			hideAll(browserTabs);
 			return;
 		}
 
 		const activeBrowserTab = browserTabs.find((tab) => tab.id === activeTabId);
-		if (activeBrowserTab) {
-			void browserTabShow(activeBrowserTab.browserTabId).catch(console.error);
-		}
+		showActive(activeBrowserTab);
 	}, [isTerminalMenuOpen, tabs, activeTabId]);
 
 	const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -636,6 +648,21 @@ export function WorkspaceTabBar({
 		return a.displayName.localeCompare(b.displayName);
 	});
 
+	const getBrowserTabLabel = useCallback((browserTabId: string): string => {
+		const browserTab = useBrowserSessionStore.getState().getTab(browserTabId);
+		if (!browserTab) return "Browser";
+		if (browserTab.title.trim()) return browserTab.title.trim();
+		if (browserTab.url) {
+			try {
+				const parsed = new URL(browserTab.url);
+				return parsed.host || parsed.hostname || browserTab.url;
+			} catch {
+				return browserTab.url.replace(/^https?:\/\//, "").split("/")[0] || "Browser";
+			}
+		}
+		return "Browser";
+	}, []);
+
 	const terminalStoreTerminals = useTerminalStore((state) => state.terminals);
 
 	// Check if this tab is being dragged
@@ -743,6 +770,7 @@ export function WorkspaceTabBar({
 											tab={
 												tab as { type: "browser"; id: string; browserTabId: string }
 											}
+											label={getBrowserTabLabel(tab.browserTabId)}
 											isActive={tab.id === activeTabId}
 											isDragging={dragging}
 											isDropTarget={isTarget}

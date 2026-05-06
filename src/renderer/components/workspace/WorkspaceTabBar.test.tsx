@@ -181,6 +181,9 @@ describe('WorkspaceTabBar', () => {
     fireEvent.click(screen.getByText('Bash'))
 
     expect(onAddTerminal).toHaveBeenCalledTimes(1)
+    expect(onAddTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'bash', displayName: 'Bash', path: '/bin/bash' })
+    )
   })
 
   it('calls pane-scoped onAddBrowserTab when browser action is clicked', async () => {

@@ -118,7 +118,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
         .catch(console.error)
       createdRef.current = false
     }
-  }, [browserTabId])
+  }, [browserTabId, clearLoadingTimeout, armLoadingTimeout])
 
   // Show / hide on visibility change
   useEffect(() => {
@@ -156,7 +156,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
         clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
-  }, [url, browserTabId])
+  }, [url, browserTabId, clearLoadingTimeout, armLoadingTimeout])
 
   // Resize observer
   useEffect(() => {
@@ -175,37 +175,21 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
   // Listen for URL sync and loaded events from webview poller
   useEffect(() => {
-    let disposed = false
-    let unlistenNav: () => void = () => {}
-    let unlistenLoaded: () => void = () => {}
-
     const navSubscription = onBrowserTabNavigated((payload) => {
       if (payload.browserTabId === browserTabId) {
         useBrowserSessionStore.getState().updateUrl(browserTabId, payload.url)
       }
     })
-    if (disposed) {
-      navSubscription.unlisten()
-    } else {
-      unlistenNav = () => navSubscription.unlisten()
-    }
-
     const loadedSubscription = onBrowserTabLoaded((payload) => {
       if (payload.browserTabId === browserTabId) {
         clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       }
     })
-    if (disposed) {
-      loadedSubscription.unlisten()
-    } else {
-      unlistenLoaded = () => loadedSubscription.unlisten()
-    }
 
     return () => {
-      disposed = true
-      unlistenNav()
-      unlistenLoaded()
+      navSubscription.unlisten()
+      loadedSubscription.unlisten()
       clearLoadingTimeout()
     }
   }, [browserTabId, clearLoadingTimeout])

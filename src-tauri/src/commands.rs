@@ -334,7 +334,7 @@ pub async fn browser_tab_report_url(
             caller_label, tab_id
         ));
     }
-    log::debug!("[BrowserTab] URL report: tab={} url={}", tab_id, url);
+    log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
     let _ = app_handle.emit(
         "browser-tab-navigated",
         serde_json::json!({ "browserTabId": tab_id, "url": url }),

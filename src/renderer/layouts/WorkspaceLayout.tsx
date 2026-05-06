@@ -521,6 +521,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					}
 				} else if (activeTab?.type === "terminal") {
 					handleCloseTerminal(activeTab.terminalId, activeTab.id);
+				} else if (activeTab?.type === "browser") {
+					useBrowserSessionStore.getState().removeTab(activeTab.browserTabId);
+					useWorkspaceStore.getState().removeTab(activeTab.id);
 				}
 				return;
 			}
@@ -1107,7 +1110,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onClose={() => setIsCommandPaletteOpen(false)}
 				projects={projects}
 				onSwitchProject={selectProject}
-				onAddTerminal={handleNewTerminal}
+				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 			/>
