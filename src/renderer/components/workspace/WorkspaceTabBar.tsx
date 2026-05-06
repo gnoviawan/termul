@@ -22,6 +22,7 @@ import type { TabReorderPosition } from "@/types/workspace.types";
 import { ContextMenu } from "@/components/ContextMenu";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { shellApi, clipboardApi } from "@/lib/api";
+import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(
@@ -480,6 +481,26 @@ export function WorkspaceTabBar({
 		window.addEventListener("resize", checkOverflow);
 		return () => window.removeEventListener("resize", checkOverflow);
 	}, [tabs.length]);
+
+	useEffect(() => {
+		const browserTabs = tabs.filter(
+			(tab): tab is WorkspaceTab & { type: "browser"; browserTabId: string } =>
+				tab.type === "browser",
+		);
+		if (browserTabs.length === 0) return;
+
+		if (isTerminalMenuOpen) {
+			for (const tab of browserTabs) {
+				void browserTabHide(tab.browserTabId).catch(console.error);
+			}
+			return;
+		}
+
+		const activeBrowserTab = browserTabs.find((tab) => tab.id === activeTabId);
+		if (activeBrowserTab) {
+			void browserTabShow(activeBrowserTab.browserTabId).catch(console.error);
+		}
+	}, [isTerminalMenuOpen, tabs, activeTabId]);
 
 	const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
 		if (tabsContainerRef.current) {
