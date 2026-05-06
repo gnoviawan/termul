@@ -1,9 +1,23 @@
 import { create } from 'zustand'
 
-export type AnnotationType = 'note' | 'region'
+export type AnnotationType = 'note' | 'region' | 'element'
 export type Intent = 'fix' | 'change' | 'question' | 'approve'
 export type Severity = 'blocking' | 'important' | 'suggestion'
 export type OutputLevel = 'compact' | 'standard' | 'detailed'
+
+const MAX_TEXT_CONTENT_LENGTH = 2000
+const MAX_SELECTOR_LENGTH = 500
+const MAX_ATTRIBUTE_VALUE_LENGTH = 500
+const ATTRIBUTE_ALLOWLIST = new Set([
+  'id',
+  'class',
+  'name',
+  'role',
+  'type',
+  'aria-label',
+  'aria-describedby',
+  'data-testid',
+])
 
 export interface RegionGeometry {
   type: 'rect'
@@ -19,6 +33,24 @@ export interface NoteGeometry {
   y: number
 }
 
+export interface ElementGeometry {
+  type: 'element'
+  tagName: string
+  selector: string
+  selectorConfidence: 'unique-id' | 'unique-class' | 'fallback'
+  attributes: Record<string, string>
+  textContent: string
+  textTruncated: boolean
+  boundingBox: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+}
+
+export type AnnotationGeometry = RegionGeometry | NoteGeometry | ElementGeometry
+
 export interface Annotation {
   id: string
   browserTabId: string
@@ -26,7 +58,7 @@ export interface Annotation {
   normalizedUrl: string
   pageTitle: string
   type: AnnotationType
-  geometry: RegionGeometry | NoteGeometry
+  geometry: AnnotationGeometry
   intent: Intent
   severity: Severity
   description: string
@@ -48,6 +80,99 @@ export interface AnnotationState {
   updateAnnotation: (normalizedUrl: string, id: string, updates: Partial<Pick<Annotation, 'intent' | 'severity' | 'description'>>) => void
   getAnnotationsForUrl: (url: string) => Annotation[]
   clearAnnotationsForTab: (browserTabId: string) => void
+}
+
+function stripControlChars(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+}
+
+function sanitizeCapturedString(value: string): string {
+  return stripControlChars(value)
+}
+
+function truncateWithEllipsis(value: string, maxLength: number): { value: string; truncated: boolean } {
+  if (value.length <= maxLength) {
+    return { value, truncated: false }
+  }
+
+  return {
+    value: `${value.slice(0, Math.max(0, maxLength - 1))}…`,
+    truncated: true,
+  }
+}
+
+function toFiniteNumber(value: number): number {
+  return Number.isFinite(value) ? value : 0
+}
+
+function sanitizeElementGeometry(geometry: ElementGeometry): ElementGeometry {
+  const sanitizedTagName = sanitizeCapturedString(geometry.tagName)
+  const sanitizedSelector = truncateWithEllipsis(sanitizeCapturedString(geometry.selector), MAX_SELECTOR_LENGTH).value
+  const sanitizedAttributes = Object.fromEntries(
+    Object.entries(geometry.attributes)
+      .filter(([key]) => ATTRIBUTE_ALLOWLIST.has(key))
+      .map(([key, value]) => {
+        const sanitizedValue = truncateWithEllipsis(
+          sanitizeCapturedString(String(value ?? '')),
+          MAX_ATTRIBUTE_VALUE_LENGTH
+        ).value
+        return [key, sanitizedValue]
+      })
+  )
+
+  const textResult = truncateWithEllipsis(
+    sanitizeCapturedString(geometry.textContent),
+    MAX_TEXT_CONTENT_LENGTH
+  )
+
+  return {
+    ...geometry,
+    tagName: sanitizedTagName,
+    selector: sanitizedSelector,
+    attributes: sanitizedAttributes,
+    textContent: textResult.value,
+    textTruncated: geometry.textTruncated || textResult.truncated,
+    boundingBox: {
+      x: toFiniteNumber(geometry.boundingBox.x),
+      y: toFiniteNumber(geometry.boundingBox.y),
+      width: toFiniteNumber(geometry.boundingBox.width),
+      height: toFiniteNumber(geometry.boundingBox.height),
+    },
+  }
+}
+
+function sanitizeGeometry(geometry: AnnotationGeometry): AnnotationGeometry {
+  if (geometry.type === 'element') {
+    return sanitizeElementGeometry(geometry)
+  }
+
+  if (geometry.type === 'rect') {
+    return {
+      ...geometry,
+      x: toFiniteNumber(geometry.x),
+      y: toFiniteNumber(geometry.y),
+      width: toFiniteNumber(geometry.width),
+      height: toFiniteNumber(geometry.height),
+    }
+  }
+
+  return {
+    ...geometry,
+    x: toFiniteNumber(geometry.x),
+    y: toFiniteNumber(geometry.y),
+  }
+}
+
+function sanitizeAnnotationData(
+  annotationData: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'>
+): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
+  return {
+    ...annotationData,
+    url: sanitizeCapturedString(annotationData.url),
+    normalizedUrl: sanitizeCapturedString(annotationData.normalizedUrl),
+    pageTitle: sanitizeCapturedString(annotationData.pageTitle),
+    geometry: sanitizeGeometry(annotationData.geometry),
+  }
 }
 
 /**
@@ -86,8 +211,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   addAnnotation: (annotationData) => {
     const id = crypto.randomUUID()
     const now = Date.now()
+    const sanitizedAnnotationData = sanitizeAnnotationData(annotationData)
     const annotation: Annotation = {
-      ...annotationData,
+      ...sanitizedAnnotationData,
       id,
       schemaVersion: 1,
       createdAt: now,

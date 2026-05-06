@@ -323,9 +323,10 @@ pub async fn browser_tab_reload(
 #[tauri::command]
 pub async fn browser_tab_inject_annotation(
     tab_id: String,
+    mode: String,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match browser_manager.inject_annotation_script(&tab_id) {
+    match browser_manager.inject_annotation_script(&tab_id, &mode) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_ANNOTATION_FAILED")),
     }
@@ -449,6 +450,71 @@ pub async fn browser_tab_report_title(
         .emit(
             "browser-tab-title-changed",
             serde_json::json!({ "browserTabId": tab_id, "title": title }),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Report element captured from browser tab webview (called by injected annotation overlay)
+#[tauri::command]
+pub async fn browser_tab_report_element_captured(
+    tab_id: String,
+    url: String,
+    title: String,
+    viewport_width: f64,
+    viewport_height: f64,
+    tag_name: String,
+    selector: String,
+    selector_confidence: String,
+    attributes: serde_json::Value,
+    text_content: String,
+    text_truncated: bool,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    app_handle: AppHandle,
+    webview: Webview,
+) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report element captured rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
+
+    let attributes = attributes
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Browser tab report element captured rejected: attributes must be an object".to_string())?;
+
+    log::debug!(
+        "[BrowserTab] Element captured: tab={} tag={} selector={}",
+        tab_id, tag_name, selector
+    );
+    app_handle
+        .emit(
+            "browser-tab-element-captured",
+            serde_json::json!({
+                "browserTabId": tab_id,
+                "url": url,
+                "title": title,
+                "viewportWidth": viewport_width,
+                "viewportHeight": viewport_height,
+                "tagName": tag_name,
+                "selector": selector,
+                "selectorConfidence": selector_confidence,
+                "attributes": attributes,
+                "textContent": text_content,
+                "textTruncated": text_truncated,
+                "boundingBox": {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height
+                }
+            }),
         )
         .map_err(|error| error.to_string())?;
     Ok(())

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -9,8 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trash2 } from "lucide-react";
-import { useAnnotationStore, type Annotation, type Intent, type Severity, normalizeUrl } from "@/stores/annotation-store";
+import { useAnnotationStore, type Annotation, type ElementGeometry, type Intent, type Severity, normalizeUrl } from "@/stores/annotation-store";
 
 interface AnnotationPanelProps {
   browserTabId: string;
@@ -32,6 +34,57 @@ const intentBadgeClass: Record<Intent, string> = {
   question: "bg-blue-100 text-blue-700 border-blue-200",
   approve: "bg-green-100 text-green-700 border-green-200",
 };
+
+const selectorConfidenceClass: Record<ElementGeometry["selectorConfidence"], string> = {
+  "unique-id": "bg-green-100 text-green-800 border-green-200",
+  "unique-class": "bg-orange-100 text-orange-800 border-orange-200",
+  fallback: "bg-gray-100 text-gray-700 border-gray-200",
+};
+
+function truncateForDisplay(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function AnnotationElementDetails({ geometry }: { geometry: ElementGeometry }): React.JSX.Element {
+  const selectorPreview = truncateForDisplay(geometry.selector, 60);
+  const textPreview = truncateForDisplay(geometry.textContent, 80) || "(no text)";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0">
+          {`<${geometry.tagName}>`}
+        </Badge>
+        <Badge className={cn("text-[10px] border", selectorConfidenceClass[geometry.selectorConfidence])}>
+          {geometry.selectorConfidence}
+        </Badge>
+      </div>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="text-[11px] text-muted-foreground font-mono break-all cursor-default">
+            {selectorPreview}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-md break-all text-xs font-mono">
+          {geometry.selector}
+        </TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="text-[11px] text-muted-foreground cursor-default whitespace-pre-wrap break-words">
+            {textPreview}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-md whitespace-pre-wrap break-words text-xs">
+          {geometry.textContent || "(no text)"}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
 
 function AnnotationItem({
   annotation,
@@ -78,12 +131,16 @@ function AnnotationItem({
         </button>
       </div>
 
-      {annotation.type === "region" && annotation.geometry.type === 'rect' && (
+      {annotation.type === "region" && annotation.geometry.type === "rect" && (
         <div className="text-[11px] text-muted-foreground font-mono">
           rect(
           {Math.round(annotation.geometry.x)}, {Math.round(annotation.geometry.y)},{" "}
           {Math.round(annotation.geometry.width)}, {Math.round(annotation.geometry.height)})
         </div>
+      )}
+
+      {annotation.type === "element" && annotation.geometry.type === "element" && (
+        <AnnotationElementDetails geometry={annotation.geometry} />
       )}
 
       {isEditing ? (
@@ -157,7 +214,7 @@ function AnnotationItem({
   );
 }
 
-export function AnnotationPanel({ browserTabId, url }: AnnotationPanelProps): React.JSX.Element {
+export function AnnotationPanel({ browserTabId: _browserTabId, url }: AnnotationPanelProps): React.JSX.Element {
   const annotations = useAnnotationStore((state) => state.getAnnotationsForUrl(url));
   const removeAnnotation = useAnnotationStore((state) => state.removeAnnotation);
   const updateAnnotation = useAnnotationStore((state) => state.updateAnnotation);

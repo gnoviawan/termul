@@ -54,12 +54,57 @@ describe('annotation-store', () => {
       const url1 = normalizeUrl('https://example.com/page1')
       const url2 = normalizeUrl('https://example.com/page2')
 
-      store.addAnnotation(makeAnnotation(url1, 'tab-1'))
-      store.addAnnotation(makeAnnotation(url1, 'tab-1'))
-      store.addAnnotation(makeAnnotation(url2, 'tab-1'))
+      store.addAnnotation(makeRegionAnnotation(url1, 'tab-1'))
+      store.addAnnotation(makeRegionAnnotation(url1, 'tab-1'))
+      store.addAnnotation(makeRegionAnnotation(url2, 'tab-1'))
 
       expect(store.getAnnotationsForUrl('https://example.com/page1')).toHaveLength(2)
       expect(store.getAnnotationsForUrl('https://example.com/page2')).toHaveLength(1)
+    })
+
+    it('sanitizes and stores element annotations in geometry union', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com/page')
+
+      const added = store.addAnnotation({
+        browserTabId: 'tab-1',
+        url: 'https://example.com/page',
+        normalizedUrl: url,
+        pageTitle: 'Example Page',
+        type: 'element',
+        geometry: {
+          type: 'element',
+          tagName: 'button',
+          selector: '#submit-button',
+          selectorConfidence: 'unique-id',
+          attributes: {
+            id: 'submit-button',
+            class: 'btn btn-primary',
+          },
+          textContent: 'Submit',
+          textTruncated: false,
+          boundingBox: { x: 12, y: 24, width: 140, height: 40 },
+        },
+        intent: 'question',
+        severity: 'suggestion',
+        description: 'Captured button',
+        viewportWidth: 1280,
+        viewportHeight: 720,
+      })
+
+      expect(added.type).toBe('element')
+      expect(added.geometry.type).toBe('element')
+      if (added.geometry.type === 'element') {
+        expect(added.geometry.tagName).toBe('button')
+        expect(added.geometry.selector).toBe('#submit-button')
+        expect(added.geometry.selectorConfidence).toBe('unique-id')
+        expect(added.geometry.attributes).toEqual({
+          id: 'submit-button',
+          class: 'btn btn-primary',
+        })
+        expect(added.geometry.textContent).toBe('Submit')
+        expect(added.geometry.boundingBox.width).toBe(140)
+      }
     })
   })
 
@@ -67,7 +112,7 @@ describe('annotation-store', () => {
     it('returns annotations keyed by normalized url', () => {
       const store = useAnnotationStore.getState()
       const url = 'https://example.com?utm_source=track'
-      store.addAnnotation(makeAnnotation(normalizeUrl(url), 'tab-1'))
+      store.addAnnotation(makeRegionAnnotation(normalizeUrl(url), 'tab-1'))
 
       expect(store.getAnnotationsForUrl(url)).toHaveLength(1)
       expect(store.getAnnotationsForUrl('https://example.com')).toHaveLength(1)
@@ -83,7 +128,7 @@ describe('annotation-store', () => {
     it('updates intent, severity and description', () => {
       const store = useAnnotationStore.getState()
       const url = normalizeUrl('https://example.com')
-      const added = store.addAnnotation(makeAnnotation(url, 'tab-1'))
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
 
       store.updateAnnotation(url, added.id, {
         intent: 'change',
@@ -97,22 +142,48 @@ describe('annotation-store', () => {
       expect(updated.description).toBe('Updated description')
       expect(updated.updatedAt).toBeGreaterThanOrEqual(added.createdAt)
     })
+
+    it('roundtrips element geometry without type loss', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com/element')
+      const added = store.addAnnotation(makeElementAnnotation(url, 'tab-1'))
+
+      store.updateAnnotation(url, added.id, {
+        description: 'Updated element annotation',
+      })
+
+      const updated = store.getAnnotationsForUrl('https://example.com/element')[0]
+      expect(updated.type).toBe('element')
+      expect(updated.geometry.type).toBe('element')
+      if (updated.geometry.type === 'element') {
+        expect(updated.geometry.selector).toBe('#submit-button')
+      }
+    })
   })
 
   describe('removeAnnotation', () => {
     it('removes annotation by id', () => {
       const store = useAnnotationStore.getState()
       const url = normalizeUrl('https://example.com')
-      const added = store.addAnnotation(makeAnnotation(url, 'tab-1'))
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
 
       store.removeAnnotation(url, added.id)
       expect(store.getAnnotationsForUrl('https://example.com')).toHaveLength(0)
     })
 
+    it('removes element annotations by id', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com/element')
+      const added = store.addAnnotation(makeElementAnnotation(url, 'tab-1'))
+
+      store.removeAnnotation(url, added.id)
+      expect(store.getAnnotationsForUrl('https://example.com/element')).toHaveLength(0)
+    })
+
     it('cleans up empty url entries', () => {
       const store = useAnnotationStore.getState()
       const url = normalizeUrl('https://example.com')
-      const added = store.addAnnotation(makeAnnotation(url, 'tab-1'))
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
 
       store.removeAnnotation(url, added.id)
       expect(store.annotationsByUrl.has(url)).toBe(false)
@@ -123,8 +194,8 @@ describe('annotation-store', () => {
     it('removes annotations only for specified tab', () => {
       const store = useAnnotationStore.getState()
       const url = normalizeUrl('https://example.com')
-      store.addAnnotation(makeAnnotation(url, 'tab-1'))
-      store.addAnnotation(makeAnnotation(url, 'tab-2'))
+      store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      store.addAnnotation(makeRegionAnnotation(url, 'tab-2'))
 
       store.clearAnnotationsForTab('tab-1')
 
@@ -134,7 +205,7 @@ describe('annotation-store', () => {
   })
 })
 
-function makeAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
+function makeRegionAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
   return {
     browserTabId,
     url: 'https://example.com',
@@ -147,5 +218,38 @@ function makeAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annot
     description: 'Test annotation',
     viewportWidth: 1920,
     viewportHeight: 1080,
+  }
+}
+
+function makeElementAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
+  return {
+    browserTabId,
+    url: 'https://example.com/element',
+    normalizedUrl,
+    pageTitle: 'Example Element',
+    type: 'element',
+    geometry: {
+      type: 'element',
+      tagName: 'button',
+      selector: '#submit-button',
+      selectorConfidence: 'unique-id',
+      attributes: {
+        id: 'submit-button',
+        class: 'btn btn-primary',
+      },
+      textContent: 'Submit now',
+      textTruncated: false,
+      boundingBox: {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 40,
+      },
+    },
+    intent: 'question',
+    severity: 'suggestion',
+    description: 'Element annotation',
+    viewportWidth: 1440,
+    viewportHeight: 900,
   }
 }

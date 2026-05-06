@@ -708,6 +708,7 @@ pub fn run() {
             commands::browser_tab_report_url,
             commands::browser_tab_report_loaded,
             commands::browser_tab_report_region_captured,
+            commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
             // Data migration commands
             commands::data_migration_get_version,

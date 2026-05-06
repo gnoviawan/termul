@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+export type AnnotationSubMode = 'draw' | 'select'
+
 export interface BrowserTab {
   id: string
   url: string
@@ -8,6 +10,7 @@ export interface BrowserTab {
   canGoBack: boolean
   canGoForward: boolean
   annotationMode: boolean
+  annotationSubMode: AnnotationSubMode
 }
 
 export interface BrowserSessionState {
@@ -21,6 +24,7 @@ export interface BrowserSessionState {
   setLoading: (id: string, loading: boolean) => void
   setNavCapabilities: (id: string, canGoBack: boolean, canGoForward: boolean) => void
   setAnnotationMode: (id: string, enabled: boolean) => void
+  setAnnotationSubMode: (id: string, mode: AnnotationSubMode) => void
   getTab: (id: string) => BrowserTab | undefined
 }
 
@@ -38,6 +42,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       canGoBack: false,
       canGoForward: false,
       annotationMode: false,
+      annotationSubMode: 'draw',
     }
     set((state) => {
       const next = new Map(state.tabs)
@@ -101,6 +106,16 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       if (!tab) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, annotationMode: enabled })
+      return { tabs: next }
+    })
+  },
+
+  setAnnotationSubMode: (id: string, mode: AnnotationSubMode) => {
+    set((state) => {
+      const tab = state.tabs.get(id)
+      if (!tab) return state
+      const next = new Map(state.tabs)
+      next.set(id, { ...tab, annotationSubMode: mode })
       return { tabs: next }
     })
   },

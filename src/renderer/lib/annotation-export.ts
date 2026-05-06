@@ -1,4 +1,32 @@
-import type { Annotation, OutputLevel } from '@/stores/annotation-store'
+import type { Annotation, ElementGeometry, OutputLevel } from '@/stores/annotation-store'
+
+function truncateForExport(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
+function escapeMarkdown(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, '\\$1')
+}
+
+function formatRect(geometry: { x: number; y: number; width: number; height: number }): string {
+  return `rect(${Math.round(geometry.x)}, ${Math.round(geometry.y)}, ${Math.round(geometry.width)}, ${Math.round(geometry.height)})`
+}
+
+function formatElementCompact(geometry: ElementGeometry): string {
+  return `${escapeMarkdown(geometry.tagName)} > ${escapeMarkdown(truncateForExport(geometry.selector, 60))} (${geometry.selectorConfidence})`
+}
+
+function formatElementTextPreview(geometry: ElementGeometry): string {
+  return escapeMarkdown(truncateForExport(geometry.textContent, 80) || '(no text)')
+}
+
+function formatElementBoundingBox(geometry: ElementGeometry): string {
+  return `x=${Math.round(geometry.boundingBox.x)}, y=${Math.round(geometry.boundingBox.y)}, w=${Math.round(geometry.boundingBox.width)}, h=${Math.round(geometry.boundingBox.height)}`
+}
 
 export function exportAnnotationsToMarkdown(annotations: Annotation[], level: OutputLevel): string {
   if (annotations.length === 0) {
@@ -9,41 +37,59 @@ export function exportAnnotationsToMarkdown(annotations: Annotation[], level: Ou
   const title = annotations[0]?.pageTitle || 'Annotations'
   const url = annotations[0]?.url || ''
 
-  lines.push(`# ${title}`)
+  lines.push(`# ${escapeMarkdown(title)}`)
   if (url) {
-    lines.push(`> ${url}`)
+    lines.push(`> ${escapeMarkdown(url)}`)
   }
   lines.push('')
 
   if (level === 'compact') {
     annotations.forEach((a, i) => {
-      if (a.type === 'region') {
-        const g = a.geometry as { type: 'rect'; x: number; y: number; width: number; height: number }
-        lines.push(`${i + 1}. rect(${Math.round(g.x)},${Math.round(g.y)},${Math.round(g.width)},${Math.round(g.height)}) > ${a.description || '(no comment)'}`)
+      if (a.type === 'region' && a.geometry.type === 'rect') {
+        lines.push(`${i + 1}. ${formatRect(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`)
+      } else if (a.type === 'element' && a.geometry.type === 'element') {
+        lines.push(`${i + 1}. ${formatElementCompact(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`)
       } else {
-        lines.push(`${i + 1}. note > ${a.description || '(no comment)'}`)
+        lines.push(`${i + 1}. note > ${escapeMarkdown(a.description || '(no comment)')}`)
       }
     })
   } else if (level === 'standard') {
     annotations.forEach((a, i) => {
-      lines.push(`${i + 1}. **[${a.intent}]** *${a.severity}* — ${a.description || '(no description)'}`)
-      if (a.type === 'region') {
-        const g = a.geometry as { type: 'rect'; x: number; y: number; width: number; height: number }
-        lines.push(`   Region: rect(${Math.round(g.x)}, ${Math.round(g.y)}, ${Math.round(g.width)}, ${Math.round(g.height)})`)
+      lines.push(`${i + 1}. **[${a.intent}]** *${a.severity}* — ${escapeMarkdown(a.description || '(no description)')}`)
+      if (a.type === 'region' && a.geometry.type === 'rect') {
+        lines.push(`   Region: ${formatRect(a.geometry)}`)
+      } else if (a.type === 'element' && a.geometry.type === 'element') {
+        lines.push(`   Element: ${formatElementCompact(a.geometry)}`)
+        lines.push(`   Text: ${formatElementTextPreview(a.geometry)}`)
       }
       lines.push('')
     })
   } else {
-    // detailed
     annotations.forEach((a, i) => {
       lines.push(`## Annotation ${i + 1}`)
       lines.push(`- **Type:** ${a.type}`)
       lines.push(`- **Intent:** ${a.intent}`)
       lines.push(`- **Severity:** ${a.severity}`)
-      lines.push(`- **Description:** ${a.description || '(none)'}`)
-      if (a.type === 'region') {
-        const g = a.geometry as { type: 'rect'; x: number; y: number; width: number; height: number }
-        lines.push(`- **Geometry:** rect(x=${Math.round(g.x)}, y=${Math.round(g.y)}, w=${Math.round(g.width)}, h=${Math.round(g.height)})`)
+      lines.push(`- **Description:** ${escapeMarkdown(a.description || '(none)')}`)
+      if (a.type === 'region' && a.geometry.type === 'rect') {
+        lines.push(`- **Geometry:** ${formatRect(a.geometry)}`)
+      } else if (a.type === 'element' && a.geometry.type === 'element') {
+        lines.push(`- **Tag:** ${escapeMarkdown(a.geometry.tagName)}`)
+        lines.push(`- **Selector:** ${escapeMarkdown(a.geometry.selector)}`)
+        lines.push(`- **Selector Confidence:** ${a.geometry.selectorConfidence}`)
+        lines.push(`- **Text Preview:** ${formatElementTextPreview(a.geometry)}`)
+        lines.push(`- **Bounding Box:** ${formatElementBoundingBox(a.geometry)}`)
+        lines.push('')
+        lines.push('| Attribute | Value |')
+        lines.push('| --- | --- |')
+        const entries = Object.entries(a.geometry.attributes)
+        if (entries.length === 0) {
+          lines.push('| (none) | |')
+        } else {
+          entries.forEach(([key, value]) => {
+            lines.push(`| ${escapeMarkdown(key)} | ${escapeMarkdown(value)} |`)
+          })
+        }
       }
       lines.push(`- **Viewport:** ${a.viewportWidth}x${a.viewportHeight}`)
       lines.push(`- **Created:** ${new Date(a.createdAt).toISOString()}`)

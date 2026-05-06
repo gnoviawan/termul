@@ -10,9 +10,13 @@ import { AnnotationExportModal } from "./AnnotationExportModal";
 
 interface BrowserControlsProps {
   browserTabId: string;
+  annotationOverlayAvailable: boolean;
 }
 
-export function BrowserControls({ browserTabId }: BrowserControlsProps): React.JSX.Element {
+export function BrowserControls({
+  browserTabId,
+  annotationOverlayAvailable,
+}: BrowserControlsProps): React.JSX.Element {
   const tab = useBrowserSessionStore(
     useShallow((state) => state.tabs.get(browserTabId))
   );
@@ -73,6 +77,10 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
     useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode);
   }, [browserTabId, tab?.annotationMode]);
 
+  const handleChangeAnnotationSubMode = useCallback((mode: "draw" | "select") => {
+    useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, mode);
+  }, [browserTabId]);
+
   const handleAddNote = useCallback(() => {
     if (!tab) return;
     const url = tab.url;
@@ -97,8 +105,8 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
 
   const annotations = useAnnotationStore(
     useShallow((state) => {
-      if (!tab) return EMPTY_ANNOTATION_ARRAY
-      return state.getAnnotationsForUrl(tab.url)
+      if (!tab) return EMPTY_ANNOTATION_ARRAY;
+      return state.getAnnotationsForUrl(tab.url);
     })
   );
 
@@ -161,8 +169,11 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
       {tab.annotationMode && (
         <AnnotationToolbar
           annotationMode={tab.annotationMode}
+          annotationSubMode={tab.annotationSubMode}
+          annotationOverlayAvailable={annotationOverlayAvailable}
           hasAnnotations={annotations.length > 0}
           onToggleAnnotationMode={handleToggleAnnotationMode}
+          onChangeAnnotationSubMode={handleChangeAnnotationSubMode}
           onAddNote={handleAddNote}
           onExport={handleOpenExport}
         />

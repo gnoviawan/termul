@@ -1,18 +1,42 @@
 (function() {
-  // DOM-based guard survives SPA navigations (window object may persist but DOM is new)
   if (document.getElementById('__termul_annotation_layer')) return;
 
-  const OVERLAY_ID = '__termul_annotation_layer';
-  const RECT_ID = '__termul_annotation_rect';
+  var OVERLAY_ID = '__termul_annotation_layer';
+  var RECT_ID = '__termul_annotation_rect';
+  var HIGHLIGHT_ID = '__termul_annotation_highlight';
+  var MAX_TEXT_CONTENT_LENGTH = 2000;
+  var MAX_SELECTOR_LENGTH = 500;
+  var MAX_ATTRIBUTE_VALUE_LENGTH = 500;
+  var ATTRIBUTE_ALLOWLIST = [
+    'id',
+    'class',
+    'name',
+    'role',
+    'type',
+    'aria-label',
+    'aria-describedby',
+    'data-testid'
+  ];
 
-  const overlay = document.createElement('div');
+  var mode = window.__termul_annotation_mode === 'select' ? 'select' : 'draw';
+  var overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
-  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2147483647;cursor:crosshair;pointer-events:auto;';
+  overlay.style.cssText = mode === 'select'
+    ? 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none;background:transparent;'
+    : 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2147483647;cursor:crosshair;pointer-events:auto;background:transparent;';
 
-  let startX = 0;
-  let startY = 0;
-  let rectEl = null;
-  let isDragging = false;
+  var previousCursor = document.documentElement.style.cursor;
+  if (mode === 'select') {
+    document.documentElement.style.cursor = 'pointer';
+  }
+
+  var startX = 0;
+  var startY = 0;
+  var rectEl = null;
+  var highlightEl = null;
+  var isDragging = false;
+  var trackedElement = null;
+  var highlightRafId = 0;
 
   function invoke(cmd, args) {
     try {
@@ -20,25 +44,281 @@
         window.__TAURI_INTERNALS__.invoke(cmd, args);
         return true;
       }
-    } catch(e) {}
+    } catch (e) {}
     try {
       if (window.__TAURI__ && window.__TAURI__.invoke) {
         window.__TAURI__.invoke(cmd, args);
         return true;
       }
-    } catch(e) {}
+    } catch (e) {}
     try {
       if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
         window.__TAURI__.core.invoke(cmd, args);
         return true;
       }
-    } catch(e) {}
+    } catch (e) {}
     return false;
   }
 
+  function stripControlChars(value) {
+    return String(value == null ? '' : value).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  }
+
+  function truncateWithEllipsis(value, maxLength) {
+    if (value.length <= maxLength) {
+      return { value: value, truncated: false };
+    }
+
+    return {
+      value: value.slice(0, Math.max(0, maxLength - 1)) + '…',
+      truncated: true
+    };
+  }
+
+  function sanitizeAndTruncate(value, maxLength) {
+    return truncateWithEllipsis(stripControlChars(value), maxLength);
+  }
+
+  function isOverlayElement(element) {
+    return !!(
+      element && (
+        element.id === OVERLAY_ID ||
+        element.id === RECT_ID ||
+        element.id === HIGHLIGHT_ID ||
+        element === overlay ||
+        element === rectEl ||
+        element === highlightEl
+      )
+    );
+  }
+
+  function isSensitiveElement(element) {
+    if (!element || !(element instanceof Element)) return true;
+
+    var tagName = element.tagName.toLowerCase();
+    if (tagName === 'input' || tagName === 'textarea') return true;
+
+    if (tagName === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'password') {
+      return true;
+    }
+
+    if (element.closest('[contenteditable]')) return true;
+    if (element.closest('form')) return true;
+
+    return false;
+  }
+
+  function hasVisibleBounds(element) {
+    if (!element || !document.contains(element)) return false;
+    var rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function ensureHighlight() {
+    if (highlightEl) return highlightEl;
+
+    highlightEl = document.createElement('div');
+    highlightEl.id = HIGHLIGHT_ID;
+    highlightEl.style.cssText = [
+      'position:fixed',
+      'top:0',
+      'left:0',
+      'width:0',
+      'height:0',
+      'z-index:2147483647',
+      'pointer-events:none',
+      'border:2px dashed #f97316',
+      'background:transparent',
+      'box-sizing:border-box',
+      'display:none'
+    ].join(';');
+    document.body.appendChild(highlightEl);
+    return highlightEl;
+  }
+
+  function hideHighlight() {
+    if (!highlightEl) return;
+    highlightEl.style.display = 'none';
+  }
+
+  function stopHighlightTracking() {
+    if (highlightRafId) {
+      cancelAnimationFrame(highlightRafId);
+      highlightRafId = 0;
+    }
+  }
+
+  function clearTrackedElement() {
+    trackedElement = null;
+    stopHighlightTracking();
+    hideHighlight();
+  }
+
+  function updateHighlightFrame() {
+    highlightRafId = 0;
+
+    if (!trackedElement || !document.contains(trackedElement)) {
+      clearTrackedElement();
+      return;
+    }
+
+    var rect = trackedElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      clearTrackedElement();
+      return;
+    }
+
+    var highlight = ensureHighlight();
+    highlight.style.display = 'block';
+    highlight.style.left = rect.left + 'px';
+    highlight.style.top = rect.top + 'px';
+    highlight.style.width = rect.width + 'px';
+    highlight.style.height = rect.height + 'px';
+
+    highlightRafId = requestAnimationFrame(updateHighlightFrame);
+  }
+
+  function setTrackedElement(element) {
+    if (element === trackedElement) return;
+
+    trackedElement = element;
+    stopHighlightTracking();
+
+    if (!trackedElement) {
+      hideHighlight();
+      return;
+    }
+
+    highlightRafId = requestAnimationFrame(updateHighlightFrame);
+  }
+
+  function resolveElementAtPoint(clientX, clientY) {
+    var previousOverlayDisplay = overlay.style.display;
+    var previousHighlightDisplay = highlightEl ? highlightEl.style.display : '';
+
+    overlay.style.display = 'none';
+    if (highlightEl) {
+      highlightEl.style.display = 'none';
+    }
+
+    var element = document.elementFromPoint(clientX, clientY);
+
+    overlay.style.display = previousOverlayDisplay;
+    if (highlightEl) {
+      highlightEl.style.display = previousHighlightDisplay;
+    }
+
+    if (!element || !document.contains(element)) return null;
+    if (element === document.documentElement || element === document.body) return null;
+    if (isOverlayElement(element)) return null;
+
+    return element;
+  }
+
+  function getElementChildIndex(element) {
+    var parent = element.parentElement;
+    if (!parent) return 1;
+
+    var children = parent.children;
+    for (var index = 0; index < children.length; index += 1) {
+      if (children[index] === element) {
+        return index + 1;
+      }
+    }
+
+    return 1;
+  }
+
+  function generateSelector(element) {
+    var tagName = element.tagName.toLowerCase();
+
+    if (element.id) {
+      var escapedId = CSS.escape(element.id);
+      var idSelector = '#' + escapedId;
+      if (document.querySelectorAll(idSelector).length === 1) {
+        return {
+          selector: sanitizeAndTruncate(idSelector, MAX_SELECTOR_LENGTH).value,
+          selectorConfidence: 'unique-id'
+        };
+      }
+    }
+
+    if (element.classList && element.classList.length > 0) {
+      var classes = Array.prototype.slice.call(element.classList)
+        .filter(function(className) {
+          return !!className;
+        })
+        .map(function(className) {
+          return '.' + CSS.escape(className);
+        });
+
+      if (classes.length > 0) {
+        var classSelector = tagName + classes.join('');
+        if (document.querySelectorAll(classSelector).length === 1) {
+          return {
+            selector: sanitizeAndTruncate(classSelector, MAX_SELECTOR_LENGTH).value,
+            selectorConfidence: 'unique-class'
+          };
+        }
+      }
+    }
+
+    var segments = [];
+    var current = element;
+    while (current && current !== document.body) {
+      segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + getElementChildIndex(current) + ')');
+      current = current.parentElement;
+    }
+
+    var fallbackSelector = segments.length > 0 ? 'body > ' + segments.join(' > ') : 'body';
+    return {
+      selector: sanitizeAndTruncate(fallbackSelector, MAX_SELECTOR_LENGTH).value,
+      selectorConfidence: 'fallback'
+    };
+  }
+
+  function collectAttributes(element) {
+    var attributes = {};
+
+    for (var index = 0; index < ATTRIBUTE_ALLOWLIST.length; index += 1) {
+      var attributeName = ATTRIBUTE_ALLOWLIST[index];
+      var attributeValue = element.getAttribute(attributeName);
+      if (attributeValue == null) continue;
+
+      attributes[attributeName] = sanitizeAndTruncate(attributeValue, MAX_ATTRIBUTE_VALUE_LENGTH).value;
+    }
+
+    return attributes;
+  }
+
+  function captureElementPayload(element) {
+    var rect = element.getBoundingClientRect();
+    var selectorInfo = generateSelector(element);
+    var textResult = sanitizeAndTruncate(element.textContent || '', MAX_TEXT_CONTENT_LENGTH);
+
+    return {
+      tabId: window.__termul_annotation_tab_id || '',
+      url: stripControlChars(location.href),
+      title: stripControlChars(document.title || ''),
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      tagName: stripControlChars(element.tagName.toLowerCase()),
+      selector: selectorInfo.selector,
+      selectorConfidence: selectorInfo.selectorConfidence,
+      attributes: collectAttributes(element),
+      textContent: textResult.value,
+      textTruncated: textResult.truncated,
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
   function onMouseDown(e) {
-    // Left click only
+    if (mode !== 'draw') return;
     if (e.button !== 0) return;
+
     isDragging = true;
     startX = e.clientX;
     startY = e.clientY;
@@ -54,34 +334,46 @@
   }
 
   function onMouseMove(e) {
-    if (!isDragging || !rectEl) return;
-    const currentX = e.clientX;
-    const currentY = e.clientY;
-    const x = Math.min(startX, currentX);
-    const y = Math.min(startY, currentY);
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-    rectEl.style.left = x + 'px';
-    rectEl.style.top = y + 'px';
-    rectEl.style.width = width + 'px';
-    rectEl.style.height = height + 'px';
+    if (mode === 'draw') {
+      if (!isDragging || !rectEl) return;
+
+      var currentX = e.clientX;
+      var currentY = e.clientY;
+      var x = Math.min(startX, currentX);
+      var y = Math.min(startY, currentY);
+      var width = Math.abs(currentX - startX);
+      var height = Math.abs(currentY - startY);
+      rectEl.style.left = x + 'px';
+      rectEl.style.top = y + 'px';
+      rectEl.style.width = width + 'px';
+      rectEl.style.height = height + 'px';
+      return;
+    }
+
+    var resolvedElement = resolveElementAtPoint(e.clientX, e.clientY);
+    if (!resolvedElement || isSensitiveElement(resolvedElement) || !hasVisibleBounds(resolvedElement)) {
+      clearTrackedElement();
+      return;
+    }
+
+    setTrackedElement(resolvedElement);
   }
 
   function onMouseUp(e) {
+    if (mode !== 'draw') return;
     if (!isDragging) return;
     isDragging = false;
 
     if (!rectEl) return;
 
-    const currentX = e.clientX;
-    const currentY = e.clientY;
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
+    var currentX = e.clientX;
+    var currentY = e.clientY;
+    var width = Math.abs(currentX - startX);
+    var height = Math.abs(currentY - startY);
 
-    // Discard zero-area drags
     if (width > 0 && height > 0) {
-      const x = Math.min(startX, currentX);
-      const y = Math.min(startY, currentY);
+      var x = Math.min(startX, currentX);
+      var y = Math.min(startY, currentY);
       invoke('browser_tab_report_region_captured', {
         tabId: window.__termul_annotation_tab_id || '',
         x: x,
@@ -95,6 +387,28 @@
     rectEl = null;
   }
 
+  function onClick(e) {
+    if (mode !== 'select') return;
+    if (!e.isTrusted) return;
+    if (typeof e.button === 'number' && e.button !== 0) return;
+
+    var target = trackedElement || resolveElementAtPoint(e.clientX, e.clientY);
+    if (!target) return;
+    if (isOverlayElement(target)) return;
+    if (target === document.documentElement || target === document.body) return;
+    if (!document.contains(target)) return;
+    if (!hasVisibleBounds(target)) return;
+    if (isSensitiveElement(target)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') {
+      e.stopImmediatePropagation();
+    }
+
+    invoke('browser_tab_report_element_captured', captureElementPayload(target));
+  }
+
   function onKeyDown(e) {
     if (e.key === 'Escape' && isDragging) {
       isDragging = false;
@@ -106,31 +420,41 @@
   }
 
   function onContextMenu(e) {
+    if (mode !== 'draw') return;
     e.preventDefault();
     e.stopPropagation();
   }
 
-  // Expose cleanup globally so remove_annotation_overlay can call it
   window.__termul_remove_annotation_overlay = function() {
     overlay.remove();
     if (rectEl) {
       rectEl.remove();
       rectEl = null;
     }
-    document.removeEventListener('mousedown', onMouseDown);
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-    document.removeEventListener('keydown', onKeyDown);
-    document.removeEventListener('contextmenu', onContextMenu);
+    if (highlightEl) {
+      highlightEl.remove();
+      highlightEl = null;
+    }
+    trackedElement = null;
+    stopHighlightTracking();
+    document.removeEventListener('mousedown', onMouseDown, true);
+    document.removeEventListener('mousemove', onMouseMove, true);
+    document.removeEventListener('mouseup', onMouseUp, true);
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    document.removeEventListener('contextmenu', onContextMenu, true);
+    document.documentElement.style.cursor = previousCursor;
     delete window.__termul_remove_annotation_overlay;
     delete window.__termul_annotation_tab_id;
+    delete window.__termul_annotation_mode;
   };
 
-  document.addEventListener('mousedown', onMouseDown);
-  document.addEventListener('mousemove', onMouseMove);
-  document.addEventListener('mouseup', onMouseUp);
-  document.addEventListener('keydown', onKeyDown);
-  document.addEventListener('contextmenu', onContextMenu);
+  document.addEventListener('mousedown', onMouseDown, true);
+  document.addEventListener('mousemove', onMouseMove, true);
+  document.addEventListener('mouseup', onMouseUp, true);
+  document.addEventListener('click', onClick, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  document.addEventListener('contextmenu', onContextMenu, true);
 
   document.body.appendChild(overlay);
 })();

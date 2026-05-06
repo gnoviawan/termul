@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { AnnotationSubMode } from '@/stores/browser-session-store'
 
 export interface BrowserBounds {
   x: number
@@ -29,6 +30,26 @@ export interface RegionCapturedPayload {
   y: number
   width: number
   height: number
+}
+
+export interface ElementCapturedPayload {
+  browserTabId: string
+  url: string
+  title: string
+  viewportWidth: number
+  viewportHeight: number
+  tagName: string
+  selector: string
+  selectorConfidence: 'unique-id' | 'unique-class' | 'fallback'
+  attributes: Record<string, string>
+  textContent: string
+  textTruncated: boolean
+  boundingBox: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
 }
 
 export interface BrowserTabTitleChangedPayload {
@@ -121,8 +142,11 @@ function createBrowserEventSubscription<T>(
   }
 }
 
-export async function browserTabInjectAnnotation(tabId: string): Promise<IpcResult<void>> {
-  return invoke('browser_tab_inject_annotation', { tabId })
+export async function browserTabInjectAnnotation(
+  tabId: string,
+  mode: AnnotationSubMode
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_inject_annotation', { tabId, mode })
 }
 
 export async function browserTabRemoveAnnotationOverlay(tabId: string): Promise<IpcResult<void>> {
@@ -145,6 +169,12 @@ export function onBrowserTabRegionCaptured(
   callback: (payload: RegionCapturedPayload) => void
 ): BrowserEventSubscription {
   return createBrowserEventSubscription('browser-tab-region-captured', callback)
+}
+
+export function onBrowserTabElementCaptured(
+  callback: (payload: ElementCapturedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-element-captured', callback)
 }
 
 export function onBrowserTabTitleChanged(
