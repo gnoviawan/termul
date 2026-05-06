@@ -34,6 +34,7 @@ pnpm-debug.log*
 
 # Claude Code cache
 .claude/
+.codex/
 
 # Windows null file artifact
 nul
@@ -75,3 +76,4 @@ VERIFICATION_CHECKLIST.md
 .github/copilot-instructions.md
 /.pi
 /.pi-lens
+/.agents

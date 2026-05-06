@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
@@ -46,7 +47,9 @@ import {
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
 	findPaneContainingTab,
+	browserTabId,
 } from "@/stores/workspace-store";
+import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { useCreateSnapshot, useSnapshotLoader } from "@/hooks/use-snapshots";
 import { useRecentCommandsLoader } from "@/hooks/use-recent-commands";
 import {
@@ -460,6 +463,25 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
+	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
+		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (!targetPaneId) return;
+		if (shell) {
+			handleCreateTerminalInPane(targetPaneId, shell.path);
+		} else {
+			handleCreateTerminalInPane(targetPaneId);
+		}
+	}, [handleCreateTerminalInPane]);
+
+	const handleNewBrowserTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId) {
+			const browserTabId = crypto.randomUUID();
+			useBrowserSessionStore.getState().createTab(browserTabId);
+			useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId);
+		}
+	}, []);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if typing in an input/textarea/editable element
@@ -499,6 +521,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					}
 				} else if (activeTab?.type === "terminal") {
 					handleCloseTerminal(activeTab.terminalId, activeTab.id);
+				} else if (activeTab?.type === "browser") {
+					useBrowserSessionStore.getState().removeTab(activeTab.browserTabId);
+					useWorkspaceStore.getState().removeTab(activeTab.id);
 				}
 				return;
 			}
@@ -598,6 +623,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				}
 				const paneId = useWorkspaceStore.getState().activePaneId;
 				handleCreateTerminalInPane(paneId);
+				return;
+			}
+
+			// New browser tab (Ctrl+Shift+N) - only on workspace routes
+			if (matchesShortcut(e, getActiveKey("newBrowserTab"))) {
+				if (!isWorkspaceRoute) return;
+				e.preventDefault();
+				e.stopPropagation();
+				const paneId = useWorkspaceStore.getState().activePaneId;
+				if (paneId) {
+					const browserTabId = crypto.randomUUID();
+					useBrowserSessionStore.getState().createTab(browserTabId);
+					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
+				}
 				return;
 			}
 
@@ -1024,12 +1063,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 										<div className="flex-1 min-h-0 h-full overflow-hidden">
 											<PaneRenderer
 												node={paneRoot}
-												onNewTerminal={(paneId) => {
-													handleCreateTerminalInPane(paneId);
-												}}
-												onNewTerminalWithShell={(paneId, shell) => {
-													handleCreateTerminalInPane(paneId, shell.path);
-												}}
+												onAddTerminal={handleAddTerminal}
+												onAddBrowserTab={handleNewBrowserTab}
 												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
@@ -1075,7 +1110,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onClose={() => setIsCommandPaletteOpen(false)}
 				projects={projects}
 				onSwitchProject={selectProject}
-				onNewTerminal={handleNewTerminal}
+				onAddTerminal={() => handleAddTerminal(undefined)}
+				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 			/>
 

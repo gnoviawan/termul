@@ -4,6 +4,7 @@ import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { EditorPanel } from "@/components/editor/EditorPanel";
+import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { useWorkspaceStore, getAllLeafPanes } from "@/stores/workspace-store";
 import { useTerminalStore, useTerminalActions } from "@/stores/terminal-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
@@ -16,8 +17,8 @@ import { useShallow } from "zustand/shallow";
 
 interface PaneContentProps {
 	pane: LeafNode;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -27,8 +28,8 @@ interface PaneContentProps {
 
 export function PaneContent({
 	pane,
-	onNewTerminal,
-	onNewTerminalWithShell,
+	onAddTerminal,
+	onAddBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -115,16 +116,13 @@ export function PaneContent({
 				tabs={pane.tabs}
 				activeTabId={pane.activeTabId}
 				closingTerminalIds={closingTerminalIds}
-				onNewTerminal={useMemo(
-					() => (onNewTerminal ? () => onNewTerminal(pane.id) : undefined),
-					[onNewTerminal, pane.id],
+				onAddTerminal={useMemo(
+					() => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
+					[onAddTerminal, pane.id],
 				)}
-				onNewTerminalWithShell={useMemo(
-					() =>
-						onNewTerminalWithShell
-							? (shell) => onNewTerminalWithShell(pane.id, shell)
-							: undefined,
-					[onNewTerminalWithShell, pane.id],
+				onAddBrowserTab={useMemo(
+					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
+					[onAddBrowserTab, pane.id],
 				)}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
@@ -243,6 +241,30 @@ export function PaneContent({
 									>
 										<EditorPanel
 											filePath={tab.filePath}
+											isVisible={isVisible}
+										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "browser" } =>
+									t.type === "browser",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<BrowserPanel
+											browserTabId={tab.browserTabId}
 											isVisible={isVisible}
 										/>
 									</div>

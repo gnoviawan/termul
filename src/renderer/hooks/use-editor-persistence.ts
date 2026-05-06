@@ -9,8 +9,10 @@ import {
   findPaneById,
   getAllLeafPanes,
   editorTabId,
-  terminalTabId
+  terminalTabId,
+  browserTabId
 } from '@/stores/workspace-store'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { loadPersistedTerminals } from './useTerminalAutoSave'
 import type { EditorFileState } from '@/stores/editor-store'
 import type { PaneNode, SplitNode, PaneDirection } from '@/types/workspace.types'
@@ -39,7 +41,13 @@ interface PersistedTerminalTabRef {
   terminalId: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef
+interface PersistedBrowserTabRef {
+  type: 'browser'
+  browserTabId: string
+  url?: string
+}
+
+type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -106,6 +114,11 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
 
       if (tab.type === 'terminal') {
         return [{ type: 'terminal', terminalId: tab.terminalId }]
+      }
+
+      if (tab.type === 'browser') {
+        const browserTab = useBrowserSessionStore.getState().tabs.get(tab.browserTabId)
+        return [{ type: 'browser', browserTabId: tab.browserTabId, url: browserTab?.url }]
       }
 
       return []
@@ -264,6 +277,10 @@ function reconcileTerminalTabs(
           return openFilePaths.has(tab.filePath) ? [tab] : []
         }
 
+        if (tab.type === 'browser') {
+          return [tab]
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -320,6 +337,19 @@ function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
               type: 'editor',
               id: editorTabId(tab.filePath),
               filePath: tab.filePath
+            }
+          ]
+        }
+
+        if (tab.type === 'browser') {
+          const bTabId = browserTabId(tab.browserTabId)
+          // Restore browser session entry lazily
+          useBrowserSessionStore.getState().createTab(tab.browserTabId, tab.url)
+          return [
+            {
+              type: 'browser',
+              id: bTabId,
+              browserTabId: tab.browserTabId
             }
           ]
         }
@@ -525,11 +555,17 @@ export function useEditorPersistence(projectId: string): void {
       }
     })
     const unsubWorkspace = useWorkspaceStore.subscribe(schedulePersist)
+    const unsubBrowserSessions = useBrowserSessionStore.subscribe((state, prevState) => {
+      if (state.tabs !== prevState.tabs) {
+        schedulePersist()
+      }
+    })
 
     return () => {
       unsubEditor()
       unsubExplorer()
       unsubWorkspace()
+      unsubBrowserSessions()
       if (persistTimeoutId) clearTimeout(persistTimeoutId)
     }
   }, [projectId])

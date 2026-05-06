@@ -165,6 +165,12 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		description: "Create a new terminal",
 		defaultKey: "ctrl+t",
 	},
+	newBrowserTab: {
+		id: "newBrowserTab",
+		label: "New Browser Tab",
+		description: "Create a new browser tab",
+		defaultKey: "ctrl+shift+n",
+	},
 	nextTerminal: {
 		id: "nextTerminal",
 		label: "Next Tab",
