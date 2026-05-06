@@ -13,6 +13,7 @@ interface PaneRendererProps {
 	node: PaneNode;
 	onNewTerminal?: (paneId: string) => void;
 	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onNewBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -24,6 +25,7 @@ export function PaneRenderer({
 	node,
 	onNewTerminal,
 	onNewTerminalWithShell,
+	onNewBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -190,6 +192,7 @@ interface PaneRendererPanelProps {
 	onDragging: (isDragging: boolean) => void;
 	onNewTerminal?: (paneId: string) => void;
 	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onNewBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -206,6 +209,7 @@ const PaneRendererPanel = memo(
 		onDragging,
 		onNewTerminal,
 		onNewTerminalWithShell,
+		onNewBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -224,6 +228,7 @@ const PaneRendererPanel = memo(
 						node={child}
 						onNewTerminal={onNewTerminal}
 						onNewTerminalWithShell={onNewTerminalWithShell}
+						onNewBrowserTab={onNewBrowserTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}

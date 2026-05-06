@@ -402,6 +402,7 @@ interface WorkspaceTabBarProps {
 	closingTerminalIds?: string[];
 	onNewTerminal?: () => void;
 	onNewTerminalWithShell?: (shell: ShellInfo) => void;
+	onNewBrowserTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -415,6 +416,7 @@ export function WorkspaceTabBar({
 	closingTerminalIds = [],
 	onNewTerminal,
 	onNewTerminalWithShell,
+	onNewBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -819,6 +821,17 @@ export function WorkspaceTabBar({
 
 			{/* Spacer */}
 			<div className="flex-1" />
+
+			{/* New Browser Tab Button */}
+			{onNewBrowserTab && (
+				<button
+					onClick={onNewBrowserTab}
+					className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors ml-1 shrink-0"
+					title="New Browser Tab"
+				>
+					<Globe size={12} />
+				</button>
+			)}
 		</div>
 	);
 }

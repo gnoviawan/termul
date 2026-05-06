@@ -46,7 +46,9 @@ import {
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
 	findPaneContainingTab,
+	browserTabId,
 } from "@/stores/workspace-store";
+import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { useCreateSnapshot, useSnapshotLoader } from "@/hooks/use-snapshots";
 import { useRecentCommandsLoader } from "@/hooks/use-recent-commands";
 import {
@@ -460,6 +462,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
+	const handleNewBrowserTab = useCallback(() => {
+		const paneId = useWorkspaceStore.getState().activePaneId;
+		if (paneId) {
+			const browserTabId = crypto.randomUUID();
+			useBrowserSessionStore.getState().createTab(browserTabId, "about:blank");
+			useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
+		}
+	}, []);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if typing in an input/textarea/editable element
@@ -598,6 +609,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				}
 				const paneId = useWorkspaceStore.getState().activePaneId;
 				handleCreateTerminalInPane(paneId);
+				return;
+			}
+
+			// New browser tab (Ctrl+Shift+N) - only on workspace routes
+			if (matchesShortcut(e, getActiveKey("newBrowserTab"))) {
+				if (!isWorkspaceRoute) return;
+				e.preventDefault();
+				e.stopPropagation();
+				const paneId = useWorkspaceStore.getState().activePaneId;
+				if (paneId) {
+					const browserTabId = crypto.randomUUID();
+					useBrowserSessionStore.getState().createTab(browserTabId, "about:blank");
+					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
+				}
 				return;
 			}
 
@@ -1030,7 +1055,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 												onNewTerminalWithShell={(paneId, shell) => {
 													handleCreateTerminalInPane(paneId, shell.path);
 												}}
-												onCloseTerminal={handleCloseTerminal}
+												onNewBrowserTab={handleNewBrowserTab}
+															onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
 												closingTerminalIds={closingTerminalIds}
@@ -1076,6 +1102,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				projects={projects}
 				onSwitchProject={selectProject}
 				onNewTerminal={handleNewTerminal}
+				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 			/>
 

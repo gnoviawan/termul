@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Terminal, Layers, SplitSquareVertical, Save } from 'lucide-react'
+import { Terminal, Layers, SplitSquareVertical, Save, Globe } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Command,
@@ -73,6 +73,13 @@ export function CommandPalette({
         type: 'action'
       },
       {
+        id: 'new-browser-tab',
+        icon: <Globe size={18} />,
+        label: 'New Browser Tab',
+        shortcut: 'Ctrl+Shift+N',
+        type: 'action'
+      },
+      {
         id: 'save-snapshot',
         icon: <Save size={18} />,
         label: 'Save Workspace Snapshot',
@@ -117,13 +124,15 @@ export function CommandPalette({
         onSwitchProject(cmd.projectId)
       } else if (cmd.id === 'new-terminal') {
         onNewTerminal()
+      } else if (cmd.id === 'new-browser-tab' && onNewBrowserTab) {
+        onNewBrowserTab()
       } else if (cmd.id === 'save-snapshot' && onSaveSnapshot) {
         onSaveSnapshot()
       }
 
       onClose()
     },
-    [saveRecentCommand, onSwitchProject, onNewTerminal, onSaveSnapshot, onClose]
+    [saveRecentCommand, onSwitchProject, onNewTerminal, onNewBrowserTab, onSaveSnapshot, onClose]
   )
 
   // Handle Escape key - use capture phase to intercept before cmdk handles it
