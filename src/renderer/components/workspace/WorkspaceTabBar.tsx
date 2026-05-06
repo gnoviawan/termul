@@ -812,14 +812,14 @@ export function WorkspaceTabBar({
 						</button>
 
 						{isTerminalMenuOpen && (
-							<div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
-								<div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-secondary/30">
+							<div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
+								<div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30">
 									Terminal
 								</div>
 								{loading ? (
-									<div className="py-1 px-3 space-y-2">
-										<Skeleton className="h-8 w-full" />
-										<Skeleton className="h-8 w-full" />
+									<div className="py-1 px-2.5 space-y-1.5">
+										<Skeleton className="h-6 w-full" />
+										<Skeleton className="h-6 w-full" />
 									</div>
 								) : sortedShells && sortedShells.length > 0 ? (
 									<div className="py-1">
@@ -828,14 +828,14 @@ export function WorkspaceTabBar({
 												key={shell.name}
 												onClick={() => handleSelectShell(shell)}
 												className={cn(
-													"w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2",
+													"w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-secondary flex items-center gap-2 leading-none",
 													shell.name === defaultShell && "text-primary",
 												)}
 											>
-												<TerminalIcon size={12} />
-												<span>{shell.displayName}</span>
+												<TerminalIcon size={11} />
+												<span className="truncate">{shell.displayName}</span>
 												{shell.name === defaultShell && (
-													<span className="ml-auto text-xs text-muted-foreground">
+													<span className="ml-auto text-[10px] text-muted-foreground">
 														(default)
 													</span>
 												)}
@@ -843,7 +843,7 @@ export function WorkspaceTabBar({
 										))}
 									</div>
 								) : (
-									<div className="px-3 py-2 text-sm text-muted-foreground">
+									<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
 										No shells detected
 									</div>
 								)}
