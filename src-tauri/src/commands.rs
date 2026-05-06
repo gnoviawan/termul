@@ -1,3 +1,4 @@
+use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
@@ -202,6 +203,120 @@ pub async fn terminal_set_visibility(
     cwd_tracker.set_visibility(request.is_visible);
     git_tracker.set_visibility(request.is_visible);
     Ok(IpcResult::success(()))
+}
+
+// ==================== Browser Tab Commands ====================
+
+/// Create a new browser tab webview
+#[tauri::command]
+pub async fn browser_tab_create(
+    tab_id: String,
+    url: String,
+    bounds: BrowserBounds,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<BrowserTabInfo>, String> {
+    match browser_manager.create(tab_id, url, bounds) {
+        Ok(info) => Ok(IpcResult::success(info)),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
+    }
+}
+
+/// Navigate a browser tab to a new URL
+#[tauri::command]
+pub async fn browser_tab_navigate(
+    tab_id: String,
+    url: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.navigate(&tab_id, url) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_NAVIGATE_FAILED")),
+    }
+}
+
+/// Resize/reposition a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_resize(
+    tab_id: String,
+    bounds: BrowserBounds,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.resize(&tab_id, bounds) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RESIZE_FAILED")),
+    }
+}
+
+/// Show a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_show(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.show(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_SHOW_FAILED")),
+    }
+}
+
+/// Hide a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_hide(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.hide(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_HIDE_FAILED")),
+    }
+}
+
+/// Destroy a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_destroy(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.destroy(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_DESTROY_FAILED")),
+    }
+}
+
+/// Go back in browser tab history
+#[tauri::command]
+pub async fn browser_tab_go_back(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.go_back(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_GO_BACK_FAILED")),
+    }
+}
+
+/// Go forward in browser tab history
+#[tauri::command]
+pub async fn browser_tab_go_forward(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.go_forward(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_GO_FORWARD_FAILED")),
+    }
+}
+
+/// Reload a browser tab
+#[tauri::command]
+pub async fn browser_tab_reload(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.reload(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RELOAD_FAILED")),
+    }
 }
 
 // ==================== Data Migration Commands ====================

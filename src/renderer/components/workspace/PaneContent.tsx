@@ -4,6 +4,7 @@ import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { EditorPanel } from "@/components/editor/EditorPanel";
+import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { useWorkspaceStore, getAllLeafPanes } from "@/stores/workspace-store";
 import { useTerminalStore, useTerminalActions } from "@/stores/terminal-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
@@ -243,6 +244,30 @@ export function PaneContent({
 									>
 										<EditorPanel
 											filePath={tab.filePath}
+											isVisible={isVisible}
+										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "browser" } =>
+									t.type === "browser",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<BrowserPanel
+											browserTabId={tab.browserTabId}
 											isVisible={isVisible}
 										/>
 									</div>

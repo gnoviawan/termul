@@ -1,4 +1,5 @@
 // Module declarations
+mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
@@ -619,6 +620,10 @@ pub fn run() {
             ));
             app.manage(pty_manager.clone());
 
+            // Create Browser Tab Manager
+            let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            app.manage(browser_tab_manager);
+
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
@@ -687,6 +692,16 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_set_visibility,
+            // Browser tab commands
+            commands::browser_tab_create,
+            commands::browser_tab_navigate,
+            commands::browser_tab_resize,
+            commands::browser_tab_show,
+            commands::browser_tab_hide,
+            commands::browser_tab_destroy,
+            commands::browser_tab_go_back,
+            commands::browser_tab_go_forward,
+            commands::browser_tab_reload,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,

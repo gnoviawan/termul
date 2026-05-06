@@ -21,6 +21,7 @@ interface CommandPaletteProps {
   onSwitchProject: (id: string) => void
   onNewTerminal: () => void
   onSaveSnapshot?: () => void
+  onNewBrowserTab?: () => void
 }
 
 interface CommandDef {
@@ -39,7 +40,8 @@ export function CommandPalette({
   projects,
   onSwitchProject,
   onNewTerminal,
-  onSaveSnapshot
+  onSaveSnapshot,
+  onNewBrowserTab
 }: CommandPaletteProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()

@@ -8,6 +8,7 @@ import {
 	Edit2,
 	Loader2,
 	Skull,
+	Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
@@ -21,6 +22,7 @@ import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
 import type { Terminal } from "@/types/project";
 import type { TabReorderPosition } from "@/types/workspace.types";
 import { ContextMenu } from "@/components/ContextMenu";
+import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { shellApi, clipboardApi } from "@/lib/api";
 
 // Helper to compute drop position from mouse coordinates
@@ -292,6 +294,104 @@ function EditorTabWrapper({
 				onCopyPath={onCopyPath}
 			/>
 		</div>
+	);
+}
+
+interface BrowserTabInlineProps {
+	tab: { type: "browser"; id: string; browserTabId: string };
+	isActive: boolean;
+	isDragging: boolean;
+	isDropTarget: boolean;
+	dropPosition: TabReorderPosition | null;
+	onSelect: () => void;
+	onClose: () => void;
+	onDragStart: (e: React.DragEvent) => void;
+	onDragOver: (e: React.DragEvent) => void;
+	onDragLeave: () => void;
+	onDrop: (e: React.DragEvent) => void;
+}
+
+function BrowserTabInline({
+	tab,
+	isActive,
+	isDragging,
+	isDropTarget,
+	dropPosition,
+	onSelect,
+	onClose,
+	onDragStart,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: BrowserTabInlineProps): React.JSX.Element {
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
+
+	return (
+		<>
+			<div
+				draggable
+				onDragStart={onDragStart}
+				onDragOver={onDragOver}
+				onDragLeave={onDragLeave}
+				onDrop={onDrop}
+				onClick={onSelect}
+				onContextMenu={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					setContextMenu({ x: e.clientX, y: e.clientY });
+				}}
+				className={cn(
+					"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					isActive
+						? "bg-background border-b-primary"
+						: "hover:bg-secondary/50 text-muted-foreground",
+					isDragging && "opacity-50 scale-[0.98]",
+				)}
+			>
+				{/* Drop indicator line */}
+				{isDropTarget && dropPosition === "before" && (
+					<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+				)}
+				{isDropTarget && dropPosition === "after" && (
+					<div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+				)}
+
+				<Globe
+					size={12}
+					className={cn("mr-2", isActive ? "text-primary" : "")}
+				/>
+				<span className={cn("text-[11px] font-medium", isActive && "text-foreground")}>
+					{tab.browserTabId}
+				</span>
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onClose();
+					}}
+					className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+				>
+					<XIcon size={11} />
+				</button>
+			</div>
+
+			{contextMenu && (
+				<ContextMenu
+					items={[
+						{
+							label: "Close",
+							icon: <XIcon size={12} />,
+							onClick: onClose,
+						},
+					]}
+					x={contextMenu.x}
+					y={contextMenu.y}
+					onClose={() => setContextMenu(null)}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -593,7 +693,7 @@ export function WorkspaceTabBar({
 												/>
 											);
 										})()
-									) : (
+									) : tab.type === "editor" ? (
 										<EditorTabWrapper
 											tab={
 												tab as { type: "editor"; id: string; filePath: string }
@@ -614,6 +714,28 @@ export function WorkspaceTabBar({
 											onCopyPath={() =>
 												void clipboardApi.writeText(tab.filePath)
 											}
+											onDragStart={(e) => handleTabDragStart(tab.id, e)}
+											onDragOver={(e) => handleTabDragOver(tab.id, e)}
+											onDragLeave={handleTabDragLeave}
+											onDrop={(e) => handleTabDrop(tab.id, e)}
+										/>
+									) : (
+										<BrowserTabInline
+											tab={
+												tab as { type: "browser"; id: string; browserTabId: string }
+											}
+											isActive={tab.id === activeTabId}
+											isDragging={dragging}
+											isDropTarget={isTarget}
+											dropPosition={position}
+											onSelect={() => {
+												setActiveTab(paneId, tab.id);
+												setActivePane(paneId);
+											}}
+											onClose={() => {
+												useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+												useWorkspaceStore.getState().closeTab(paneId, tab.id)
+											}}
 											onDragStart={(e) => handleTabDragStart(tab.id, e)}
 											onDragOver={(e) => handleTabDragOver(tab.id, e)}
 											onDragLeave={handleTabDragLeave}
