@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useShallow } from "zustand/shallow";
 import {
 	Terminal as TerminalIcon,
-	ChevronDown,
 	X as XIcon,
 	Edit2,
 	Loader2,
@@ -430,11 +429,11 @@ export function WorkspaceTabBar({
 		handleTabReorder,
 	} = usePaneDnd();
 
-	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+	const [isTerminalMenuOpen, setIsTerminalMenuOpen] = useState(false);
 	const [shells, setShells] = useState<DetectedShells | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [hasOverflow, setHasOverflow] = useState(false);
-	const dropdownRef = useRef<HTMLDivElement>(null);
+	const terminalMenuRef = useRef<HTMLDivElement>(null);
 	const tabsContainerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -456,19 +455,19 @@ export function WorkspaceTabBar({
 	useEffect(() => {
 		const handleClickOutside = (e: globalThis.MouseEvent): void => {
 			if (
-				dropdownRef.current &&
-				!dropdownRef.current.contains(e.target as Node)
+				terminalMenuRef.current &&
+				!terminalMenuRef.current.contains(e.target as Node)
 			) {
-				setIsDropdownOpen(false);
+				setIsTerminalMenuOpen(false);
 			}
 		};
-		if (isDropdownOpen) {
+		if (isTerminalMenuOpen) {
 			document.addEventListener("mousedown", handleClickOutside);
 		}
 		return () => {
 			document.removeEventListener("mousedown", handleClickOutside);
 		};
-	}, [isDropdownOpen]);
+	}, [isTerminalMenuOpen]);
 
 	useEffect(() => {
 		const checkOverflow = (): void => {
@@ -494,7 +493,7 @@ export function WorkspaceTabBar({
 			if (onAddTerminal) {
 				onAddTerminal(shell);
 			}
-			setIsDropdownOpen(false);
+			setIsTerminalMenuOpen(false);
 		},
 		[onAddTerminal],
 	);
@@ -643,14 +642,14 @@ export function WorkspaceTabBar({
 				e.dataTransfer.dropEffect = "move";
 			}}
 		>
-			<div className="relative flex items-center h-full min-w-0 shrink">
+			<div className="relative flex items-center h-full min-w-0 flex-1 overflow-hidden">
 				<div
 					ref={tabsContainerRef}
 					onWheel={handleWheel}
 					onDragLeave={handleContainerDragLeave}
-					className="overflow-x-auto scrollbar-hide flex items-center h-full"
+					className="overflow-x-auto scrollbar-hide flex items-center h-full min-w-0 flex-1"
 				>
-					<div className="flex items-center h-full">
+					<div className="flex items-center h-full min-w-max">
 						{tabs.map((tab) => {
 							const dragging = isTabDragging(tab.id);
 							const { isTarget, position } = isTabDropTarget(tab.id);
@@ -752,109 +751,68 @@ export function WorkspaceTabBar({
 				)}
 			</div>
 
-			{/* Add Buttons: Terminal + Browser */}
-			{(onAddTerminal || onAddBrowserTab) && (
-				<div
-					ref={dropdownRef}
-					className="relative flex items-center ml-1 shrink-0"
-				>
-					{/* Terminal: icon opens default shell, dropdown for shell selection */}
-					{onAddTerminal && (
-						<>
-							<button
-								onClick={() => onAddTerminal()}
-								className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
-								title="New terminal (default shell)"
-							>
-								<TerminalIcon size={12} />
-							</button>
-							<button
-								onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-								className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-								title="New tab options"
-							>
-								<ChevronDown size={12} />
-							</button>
-						</>
-					)}
-
-					{/* Browser: standalone icon when terminal handler absent */}
-					{onAddBrowserTab && !onAddTerminal && (
+			<div className="ml-auto flex items-center gap-1 px-2 shrink-0 h-full border-l border-border/60">
+				{onAddTerminal && (
+					<div ref={terminalMenuRef} className="relative flex items-center h-full">
 						<button
-							onClick={onAddBrowserTab}
+							onClick={() => setIsTerminalMenuOpen((open) => !open)}
 							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-							title="New Browser Tab"
+							title="New terminal"
 						>
-							<Globe size={12} />
+							<TerminalIcon size={12} />
 						</button>
-					)}
 
-					{/* Dropdown menu: shells + browser tab */}
-					{isDropdownOpen && (
-						<div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
-							{/* Section: Terminal shells */}
-							{onAddTerminal && (
-								<>
-									<div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-secondary/30">
-										Terminal
-									</div>
-									{loading ? (
-										<div className="py-1 px-3 space-y-2">
-											<Skeleton className="h-8 w-full" />
-											<Skeleton className="h-8 w-full" />
-										</div>
-									) : sortedShells && sortedShells.length > 0 ? (
-										<div className="py-1">
-											{sortedShells.map((shell) => (
-												<button
-													key={shell.name}
-													onClick={() => handleSelectShell(shell)}
-													className={cn(
-														"w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2",
-														shell.name === defaultShell && "text-primary",
-													)}
-												>
-													<TerminalIcon size={12} />
-													<span>{shell.displayName}</span>
-													{shell.name === defaultShell && (
-														<span className="ml-auto text-xs text-muted-foreground">
-															(default)
-														</span>
-													)}
-												</button>
-											))}
-										</div>
-									) : (
-										<div className="px-3 py-2 text-sm text-muted-foreground">
-											No shells detected
-										</div>
-									)}
-									{/* Divider */}
-									{onAddBrowserTab && (
-										<div className="border-t border-border my-1" />
-									)}
-								</>
-							)}
-
-							{/* Section: Browser Tab */}
-							{onAddBrowserTab && (
-								<div className="py-1">
-									<button
-										onClick={() => {
-											onAddBrowserTab();
-											setIsDropdownOpen(false);
-										}}
-										className="w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2"
-									>
-										<Globe size={12} />
-										<span>Browser Tab</span>
-									</button>
+						{isTerminalMenuOpen && (
+							<div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
+								<div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-secondary/30">
+									Terminal
 								</div>
-							)}
-						</div>
-					)}
-				</div>
-			)}
+								{loading ? (
+									<div className="py-1 px-3 space-y-2">
+										<Skeleton className="h-8 w-full" />
+										<Skeleton className="h-8 w-full" />
+									</div>
+								) : sortedShells && sortedShells.length > 0 ? (
+									<div className="py-1">
+										{sortedShells.map((shell) => (
+											<button
+												key={shell.name}
+												onClick={() => handleSelectShell(shell)}
+												className={cn(
+													"w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2",
+													shell.name === defaultShell && "text-primary",
+												)}
+											>
+												<TerminalIcon size={12} />
+												<span>{shell.displayName}</span>
+												{shell.name === defaultShell && (
+													<span className="ml-auto text-xs text-muted-foreground">
+														(default)
+													</span>
+												)}
+											</button>
+										))}
+									</div>
+								) : (
+									<div className="px-3 py-2 text-sm text-muted-foreground">
+										No shells detected
+									</div>
+								)}
+							</div>
+						)}
+					</div>
+				)}
+
+				{onAddBrowserTab && (
+					<button
+						onClick={onAddBrowserTab}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title="New Browser Tab"
+					>
+						<Globe size={12} />
+					</button>
+				)}
+			</div>
 		</div>
 	);
 }
