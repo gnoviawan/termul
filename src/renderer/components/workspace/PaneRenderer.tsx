@@ -38,6 +38,7 @@ export function PaneRenderer({
 				pane={node}
 				onNewTerminal={onNewTerminal}
 				onNewTerminalWithShell={onNewTerminalWithShell}
+				onNewBrowserTab={onNewBrowserTab}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
@@ -51,6 +52,7 @@ export function PaneRenderer({
 			node={node}
 			onNewTerminal={onNewTerminal}
 			onNewTerminalWithShell={onNewTerminalWithShell}
+			onNewBrowserTab={onNewBrowserTab}
 			onCloseTerminal={onCloseTerminal}
 			onRenameTerminal={onRenameTerminal}
 			onCloseEditorTab={onCloseEditorTab}
@@ -64,6 +66,7 @@ interface PaneLeafRendererProps {
 	pane: LeafNode;
 	onNewTerminal?: (paneId: string) => void;
 	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onNewBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -76,6 +79,7 @@ const PaneLeafRenderer = memo(
 		pane,
 		onNewTerminal,
 		onNewTerminalWithShell,
+		onNewBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -87,6 +91,7 @@ const PaneLeafRenderer = memo(
 				pane={pane}
 				onNewTerminal={onNewTerminal}
 				onNewTerminalWithShell={onNewTerminalWithShell}
+				onNewBrowserTab={onNewBrowserTab}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
@@ -101,6 +106,7 @@ interface PaneSplitRendererProps {
 	node: SplitNode;
 	onNewTerminal?: (paneId: string) => void;
 	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onNewBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -113,6 +119,7 @@ const PaneSplitRenderer = memo(
 		node,
 		onNewTerminal,
 		onNewTerminalWithShell,
+		onNewBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
