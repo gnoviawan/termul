@@ -147,7 +147,7 @@ describe('WorkspaceTabBar', () => {
     })
   })
 
-  it('calls pane-scoped onNewTerminal when plus is clicked', async () => {
+  it('calls pane-scoped onAddTerminal when terminal action is clicked', async () => {
     const onAddTerminal = vi.fn()
 
     render(
