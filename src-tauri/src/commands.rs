@@ -1,3 +1,4 @@
+use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
@@ -5,7 +6,7 @@ use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State, Webview};
 
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +203,169 @@ pub async fn terminal_set_visibility(
     cwd_tracker.set_visibility(request.is_visible);
     git_tracker.set_visibility(request.is_visible);
     Ok(IpcResult::success(()))
+}
+
+// ==================== Browser Tab Commands ====================
+
+/// Create a new browser tab webview
+#[tauri::command]
+pub async fn browser_tab_create(
+    tab_id: String,
+    url: String,
+    bounds: BrowserBounds,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<BrowserTabInfo>, String> {
+    match browser_manager.create(tab_id, url, bounds) {
+        Ok(info) => Ok(IpcResult::success(info)),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
+    }
+}
+
+/// Navigate a browser tab to a new URL
+#[tauri::command]
+pub async fn browser_tab_navigate(
+    tab_id: String,
+    url: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.navigate(&tab_id, url) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_NAVIGATE_FAILED")),
+    }
+}
+
+/// Resize/reposition a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_resize(
+    tab_id: String,
+    bounds: BrowserBounds,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.resize(&tab_id, bounds) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RESIZE_FAILED")),
+    }
+}
+
+/// Show a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_show(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.show(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_SHOW_FAILED")),
+    }
+}
+
+/// Hide a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_hide(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.hide(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_HIDE_FAILED")),
+    }
+}
+
+/// Destroy a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_destroy(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.destroy(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_DESTROY_FAILED")),
+    }
+}
+
+/// Go back in browser tab history
+#[tauri::command]
+pub async fn browser_tab_go_back(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.go_back(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_GO_BACK_FAILED")),
+    }
+}
+
+/// Go forward in browser tab history
+#[tauri::command]
+pub async fn browser_tab_go_forward(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.go_forward(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_GO_FORWARD_FAILED")),
+    }
+}
+
+/// Reload a browser tab
+#[tauri::command]
+pub async fn browser_tab_reload(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.reload(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RELOAD_FAILED")),
+    }
+}
+
+/// Report URL from browser tab webview (called by injected JS poller)
+#[tauri::command]
+pub async fn browser_tab_report_url(
+    tab_id: String,
+    url: String,
+    app_handle: AppHandle,
+    webview: Webview,
+) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report URL rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
+    log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
+    app_handle
+        .emit(
+            "browser-tab-navigated",
+            serde_json::json!({ "browserTabId": tab_id, "url": url }),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Report page loaded from browser tab webview (called by injected JS poller)
+#[tauri::command]
+pub async fn browser_tab_report_loaded(
+    tab_id: String,
+    app_handle: AppHandle,
+    webview: Webview,
+) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report loaded rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
+    log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
+    app_handle
+        .emit(
+            "browser-tab-loaded",
+            serde_json::json!({ "browserTabId": tab_id }),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 // ==================== Data Migration Commands ====================
