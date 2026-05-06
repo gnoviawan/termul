@@ -134,7 +134,7 @@ describe('WorkspaceTabBar', () => {
         paneId="pane-a"
         tabs={[]}
         activeTabId={null}
-        onNewTerminal={vi.fn()}
+        onAddTerminal={vi.fn()}
       />
     )
 
@@ -148,14 +148,14 @@ describe('WorkspaceTabBar', () => {
   })
 
   it('calls pane-scoped onNewTerminal when plus is clicked', async () => {
-    const onNewTerminal = vi.fn()
+    const onAddTerminal = vi.fn()
 
     render(
       <WorkspaceTabBar
         paneId="pane-a"
         tabs={[]}
         activeTabId={null}
-        onNewTerminal={onNewTerminal}
+        onAddTerminal={onAddTerminal}
       />
     )
 
@@ -163,7 +163,7 @@ describe('WorkspaceTabBar', () => {
 
     fireEvent.click(screen.getByTitle('New terminal (default shell)'))
 
-    expect(onNewTerminal).toHaveBeenCalledTimes(1)
+    expect(onAddTerminal).toHaveBeenCalledTimes(1)
   })
 
   it('renders editor tab with non-jitter active style class', async () => {

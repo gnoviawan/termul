@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
@@ -460,6 +461,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const handleNewTerminal = useCallback(() => {
 		const paneId = useWorkspaceStore.getState().activePaneId;
 		handleCreateTerminalInPane(paneId);
+	}, [handleCreateTerminalInPane]);
+
+	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
+		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (!targetPaneId) return;
+		if (shell) {
+			handleCreateTerminalInPane(targetPaneId, shell.path);
+		} else {
+			handleCreateTerminalInPane(targetPaneId);
+		}
 	}, [handleCreateTerminalInPane]);
 
 	const handleNewBrowserTab = useCallback(() => {
@@ -1049,14 +1060,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 										<div className="flex-1 min-h-0 h-full overflow-hidden">
 											<PaneRenderer
 												node={paneRoot}
-												onNewTerminal={(paneId) => {
-													handleCreateTerminalInPane(paneId);
-												}}
-												onNewTerminalWithShell={(paneId, shell) => {
-													handleCreateTerminalInPane(paneId, shell.path);
-												}}
-												onNewBrowserTab={handleNewBrowserTab}
-															onCloseTerminal={handleCloseTerminal}
+												onAddTerminal={handleAddTerminal}
+												onAddBrowserTab={handleNewBrowserTab}
+												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
 												closingTerminalIds={closingTerminalIds}
@@ -1101,7 +1107,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onClose={() => setIsCommandPaletteOpen(false)}
 				projects={projects}
 				onSwitchProject={selectProject}
-				onNewTerminal={handleNewTerminal}
+				onAddTerminal={handleNewTerminal}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 			/>

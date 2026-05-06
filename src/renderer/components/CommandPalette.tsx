@@ -19,7 +19,7 @@ interface CommandPaletteProps {
   onClose: () => void
   projects: Project[]
   onSwitchProject: (id: string) => void
-  onNewTerminal: () => void
+  onAddTerminal?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
 }
@@ -39,7 +39,7 @@ export function CommandPalette({
   onClose,
   projects,
   onSwitchProject,
-  onNewTerminal,
+  onAddTerminal,
   onSaveSnapshot,
   onNewBrowserTab
 }: CommandPaletteProps): React.JSX.Element {
@@ -123,7 +123,7 @@ export function CommandPalette({
       if (cmd.type === 'project' && cmd.projectId) {
         onSwitchProject(cmd.projectId)
       } else if (cmd.id === 'new-terminal') {
-        onNewTerminal()
+        onAddTerminal?.()
       } else if (cmd.id === 'new-browser-tab' && onNewBrowserTab) {
         onNewBrowserTab()
       } else if (cmd.id === 'save-snapshot' && onSaveSnapshot) {
@@ -132,7 +132,7 @@ export function CommandPalette({
 
       onClose()
     },
-    [saveRecentCommand, onSwitchProject, onNewTerminal, onNewBrowserTab, onSaveSnapshot, onClose]
+    [saveRecentCommand, onSwitchProject, onAddTerminal, onNewBrowserTab, onSaveSnapshot, onClose]
   )
 
   // Handle Escape key - use capture phase to intercept before cmdk handles it

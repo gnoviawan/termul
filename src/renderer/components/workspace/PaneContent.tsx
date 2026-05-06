@@ -17,9 +17,8 @@ import { useShallow } from "zustand/shallow";
 
 interface PaneContentProps {
 	pane: LeafNode;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
-	onNewBrowserTab?: (paneId: string) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -29,9 +28,8 @@ interface PaneContentProps {
 
 export function PaneContent({
 	pane,
-	onNewTerminal,
-	onNewTerminalWithShell,
-	onNewBrowserTab,
+	onAddTerminal,
+	onAddBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -118,24 +116,17 @@ export function PaneContent({
 				tabs={pane.tabs}
 				activeTabId={pane.activeTabId}
 				closingTerminalIds={closingTerminalIds}
-				onNewTerminal={useMemo(
-					() => (onNewTerminal ? () => onNewTerminal(pane.id) : undefined),
-					[onNewTerminal, pane.id],
+				onAddTerminal={useMemo(
+					() => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
+					[onAddTerminal, pane.id],
 				)}
-				onNewTerminalWithShell={useMemo(
-					() =>
-						onNewTerminalWithShell
-							? (shell) => onNewTerminalWithShell(pane.id, shell)
-							: undefined,
-					[onNewTerminalWithShell, pane.id],
+				onAddBrowserTab={useMemo(
+					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
+					[onAddBrowserTab, pane.id],
 				)}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
-				onNewBrowserTab={useMemo(
-					() => (onNewBrowserTab ? () => onNewBrowserTab(pane.id) : undefined),
-					[onNewBrowserTab, pane.id],
-				)}
 				defaultShell={defaultShell}
 			/>
 

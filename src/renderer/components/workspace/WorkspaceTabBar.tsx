@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useShallow } from "zustand/shallow";
 import {
-	Plus,
 	Terminal as TerminalIcon,
 	ChevronDown,
 	X as XIcon,
@@ -400,9 +399,8 @@ interface WorkspaceTabBarProps {
 	tabs: WorkspaceTab[];
 	activeTabId: string | null;
 	closingTerminalIds?: string[];
-	onNewTerminal?: () => void;
-	onNewTerminalWithShell?: (shell: ShellInfo) => void;
-	onNewBrowserTab?: () => void;
+	onAddTerminal?: (shell?: ShellInfo) => void;
+	onAddBrowserTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -414,9 +412,8 @@ export function WorkspaceTabBar({
 	tabs,
 	activeTabId,
 	closingTerminalIds = [],
-	onNewTerminal,
-	onNewTerminalWithShell,
-	onNewBrowserTab,
+	onAddTerminal,
+	onAddBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -494,12 +491,12 @@ export function WorkspaceTabBar({
 
 	const handleSelectShell = useCallback(
 		(shell: ShellInfo) => {
-			if (onNewTerminalWithShell) {
-				onNewTerminalWithShell(shell);
+			if (onAddTerminal) {
+				onAddTerminal(shell);
 			}
 			setIsDropdownOpen(false);
 		},
-		[onNewTerminalWithShell],
+		[onAddTerminal],
 	);
 
 	const handleCloseEditorTab = useCallback(
@@ -755,34 +752,54 @@ export function WorkspaceTabBar({
 				)}
 			</div>
 
-			{/* Split Button: New Terminal */}
-			{onNewTerminal && (
+			{/* Add Buttons: Terminal + Browser */}
+			{(onAddTerminal || onAddBrowserTab) && (
 				<div
 					ref={dropdownRef}
 					className="relative flex items-center ml-1 shrink-0"
 				>
-					<button
-						onClick={onNewTerminal}
-						className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
-						title="New terminal (default shell)"
-					>
-						<Plus size={12} />
-					</button>
-					{onNewTerminalWithShell && (
+					{/* Terminal: icon opens default shell, dropdown for shell selection */}
+					{onAddTerminal && (
 						<>
+							<button
+								onClick={() => onAddTerminal()}
+								className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
+								title="New terminal (default shell)"
+							>
+								<TerminalIcon size={12} />
+							</button>
 							<button
 								onClick={() => setIsDropdownOpen(!isDropdownOpen)}
 								className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-								title="Select shell"
+								title="New tab options"
 							>
 								<ChevronDown size={12} />
 							</button>
+						</>
+					)}
 
-							{isDropdownOpen && (
-								<div className="absolute top-full left-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
+					{/* Browser: standalone icon when terminal handler absent */}
+					{onAddBrowserTab && !onAddTerminal && (
+						<button
+							onClick={onAddBrowserTab}
+							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+							title="New Browser Tab"
+						>
+							<Globe size={12} />
+						</button>
+					)}
+
+					{/* Dropdown menu: shells + browser tab */}
+					{isDropdownOpen && (
+						<div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
+							{/* Section: Terminal shells */}
+							{onAddTerminal && (
+								<>
+									<div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-secondary/30">
+										Terminal
+									</div>
 									{loading ? (
 										<div className="py-1 px-3 space-y-2">
-											<Skeleton className="h-8 w-full" />
 											<Skeleton className="h-8 w-full" />
 											<Skeleton className="h-8 w-full" />
 										</div>
@@ -812,25 +829,31 @@ export function WorkspaceTabBar({
 											No shells detected
 										</div>
 									)}
+									{/* Divider */}
+									{onAddBrowserTab && (
+										<div className="border-t border-border my-1" />
+									)}
+								</>
+							)}
+
+							{/* Section: Browser Tab */}
+							{onAddBrowserTab && (
+								<div className="py-1">
+									<button
+										onClick={() => {
+											onAddBrowserTab();
+											setIsDropdownOpen(false);
+										}}
+										className="w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2"
+									>
+										<Globe size={12} />
+										<span>Browser Tab</span>
+									</button>
 								</div>
 							)}
-						</>
+						</div>
 					)}
 				</div>
-			)}
-
-			{/* Spacer */}
-			<div className="flex-1" />
-
-			{/* New Browser Tab Button */}
-			{onNewBrowserTab && (
-				<button
-					onClick={onNewBrowserTab}
-					className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors ml-1 shrink-0"
-					title="New Browser Tab"
-				>
-					<Globe size={12} />
-				</button>
 			)}
 		</div>
 	);
