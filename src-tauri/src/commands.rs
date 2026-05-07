@@ -484,6 +484,7 @@ pub async fn browser_tab_report_title(
 
 /// Report element captured from browser tab webview (called by injected annotation overlay)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn browser_tab_report_element_captured(
     tab_id: String,
     url: String,
