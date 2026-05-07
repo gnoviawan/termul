@@ -69,6 +69,7 @@ import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
 } from "@/stores/keyboard-shortcuts-store";
+import { isPlatformModifier, isMac } from "@/lib/platform";
 import {
 	useTerminalFontSize,
 	useDefaultShell,
@@ -136,6 +137,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
+
+	// Ref for terminal close handler — used inside keydown effect to avoid
+	// declaration-order dependency. The ref is updated each render.
+	const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null);
 
 	// File watcher hook
 	useFileWatcher();
@@ -495,8 +500,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				target.isContentEditable ||
 				target.closest('[contenteditable="true"]');
 
-			// Ctrl+S should work even in editors
-			if (e.ctrlKey && e.key === "s" && !e.shiftKey && !e.altKey) {
+			// Ctrl+S / ⌘+S should work even in editors
+			if (isPlatformModifier(e) && e.key === "s" && !e.shiftKey && !e.altKey) {
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					useEditorStore.getState().saveFile(activeTab.filePath);
@@ -504,8 +509,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+W - close tab
-			if (e.ctrlKey && e.key === "w" && !e.shiftKey && !e.altKey) {
+			// Ctrl+W / ⌘+W - close tab
+			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
+			// On Windows/Linux: Ctrl+W closes tab
+			const isCloseTabModifier = isMac ? e.metaKey : e.ctrlKey;
+			if (isCloseTabModifier && e.key === "w" && !e.shiftKey && !e.altKey) {
+				// On macOS, don't intercept Ctrl+W in terminal — let it go to the shell
+				if (isMac && e.ctrlKey && isInTerminal) {
+					return;
+				}
+
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					const fileState = useEditorStore
@@ -520,7 +533,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						}
 					}
 				} else if (activeTab?.type === "terminal") {
-					handleCloseTerminal(activeTab.terminalId, activeTab.id);
+					handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id);
 				} else if (activeTab?.type === "browser") {
 					useBrowserSessionStore.getState().removeTab(activeTab.browserTabId);
 					useWorkspaceStore.getState().removeTab(activeTab.id);
@@ -528,8 +541,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+B - toggle file explorer (skip when in editor/input/terminal)
-			if (e.ctrlKey && e.key === "b" && !e.shiftKey && !e.altKey) {
+			// Ctrl+B / ⌘+B - toggle file explorer (skip when in editor/input/terminal)
+			if (isPlatformModifier(e) && e.key === "b" && !e.shiftKey && !e.altKey) {
 				if (!isInEditor && !isInInput && !isInTerminal) {
 					e.preventDefault();
 					void updatePanelVisibility(
@@ -858,6 +871,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		},
 		[closeTerminalTabByTabId, closingTerminalIds, confirmTerminalClose],
 	);
+
+	// Keep ref in sync so the keydown effect can call it without declaration-order issues
+	handleCloseTerminalRef.current = handleCloseTerminal;
 
 	const handleConfirmCloseTerminal = useCallback(async () => {
 		if (!closeConfirmTerminal) {
