@@ -15,7 +15,6 @@ import {
   onBrowserTabLoaded,
 } from "@/lib/browser-api";
 import { toast } from "sonner";
-import { useShallow } from "zustand/shallow";
 
 interface BrowserPanelProps {
   browserTabId: string;
@@ -26,13 +25,18 @@ const DEFAULT_URL = "https://www.google.com";
 const ANNOTATION_UNAVAILABLE_MESSAGE = "Annotation mode is not available on this page due to security policies";
 
 export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): React.JSX.Element {
-  const tab = useBrowserSessionStore(
-    useShallow((state) => state.tabs.get(browserTabId))
+  const url = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.url || DEFAULT_URL
   );
-  const url = tab?.url || DEFAULT_URL;
-  const loading = tab?.loading ?? false;
-  const annotationMode = tab?.annotationMode ?? false;
-  const annotationSubMode = tab?.annotationSubMode ?? "draw";
+  const loading = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.loading ?? false
+  );
+  const annotationMode = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
+  );
+  const annotationSubMode = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.annotationSubMode ?? "draw"
+  );
 
   const { containerRef } = useBrowserWebview(browserTabId, isVisible, url);
   const injectedModeRef = useRef<AnnotationSubMode | null>(null);

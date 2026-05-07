@@ -18,7 +18,7 @@ export function useAnnotationMarkers(
   )
 
   const annotations = useAnnotationStore((state) =>
-    state.annotationsByUrl.get(normalizedUrl) ?? []
+    state.annotationsByUrl.get(normalizedUrl)
   )
   const selectedId = useAnnotationStore(
     (state) => state.selectedAnnotationIdByUrl.get(normalizedUrl) ?? null
@@ -41,9 +41,11 @@ export function useAnnotationMarkers(
   useEffect(() => {
     if (!annotationMode || !isVisible) return
 
+    const annotationList = annotations ?? []
+
     // Auto-clear stale selection
     if (selectedId !== null) {
-      const exists = annotations.some((a) => a.id === selectedId)
+      const exists = annotationList.some((a) => a.id === selectedId)
       if (!exists) {
         useAnnotationStore.getState().clearSelectedAnnotationId(normalizedUrl)
       }
@@ -52,7 +54,7 @@ export function useAnnotationMarkers(
     const callRust = () => {
       pendingRef.current = false
 
-      const filtered = annotations.filter(
+      const filtered = annotationList.filter(
         (a): a is typeof a & { type: 'region' | 'element' } =>
           a.type === 'region' || a.type === 'element'
       )

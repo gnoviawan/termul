@@ -301,6 +301,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   clearSelectedAnnotationId: (normalizedUrl) => {
     set((state) => {
+      if (state.selectedAnnotationIdByUrl.get(normalizedUrl) === null) return state
       const next = new Map(state.selectedAnnotationIdByUrl)
       next.set(normalizedUrl, null)
       return { selectedAnnotationIdByUrl: next }

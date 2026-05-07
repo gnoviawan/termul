@@ -17,10 +17,22 @@ export function BrowserControls({
   browserTabId,
   annotationOverlayAvailable,
 }: BrowserControlsProps): React.JSX.Element {
-  const tab = useBrowserSessionStore(
-    useShallow((state) => state.tabs.get(browserTabId))
+  const tabUrl = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.url ?? ''
   );
-  const [inputUrl, setInputUrl] = useState(tab?.url || "");
+  const tabTitle = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.title ?? ''
+  );
+  const tabLoading = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.loading ?? false
+  );
+  const tabAnnotationMode = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
+  );
+  const tabAnnotationSubMode = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.annotationSubMode ?? 'draw'
+  );
+  const [inputUrl, setInputUrl] = useState(tabUrl || "");
   const [exportOpen, setExportOpen] = useState(false);
   const webviewWasVisibleRef = useRef(false);
 
@@ -48,10 +60,10 @@ export function BrowserControls({
 
   // Sync inputUrl with store URL changes (e.g. from real-time sync)
   useEffect(() => {
-    if (tab?.url) {
-      setInputUrl(tab.url);
+    if (tabUrl) {
+      setInputUrl(tabUrl);
     }
-  }, [tab?.url]);
+  }, [tabUrl]);
 
   const handleNavigate = useCallback(() => {
     let url = inputUrl.trim();
@@ -73,17 +85,17 @@ export function BrowserControls({
   );
 
   const handleToggleAnnotationMode = useCallback(() => {
-    const currentMode = tab?.annotationMode ?? false;
+    const currentMode = tabAnnotationMode;
     useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode);
-  }, [browserTabId, tab?.annotationMode]);
+  }, [browserTabId, tabAnnotationMode]);
 
   const handleChangeAnnotationSubMode = useCallback((mode: "draw" | "select") => {
     useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, mode);
   }, [browserTabId]);
 
   const handleAddNote = useCallback(() => {
-    if (!tab) return;
-    const url = tab.url;
+    const url = tabUrl;
+    if (!url) return;
     const normalizedUrl = normalizeUrl(url);
     const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1920;
     const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 1080;
@@ -92,7 +104,7 @@ export function BrowserControls({
       browserTabId,
       url,
       normalizedUrl,
-      pageTitle: tab.title || "",
+      pageTitle: tabTitle || "",
       type: "note",
       geometry: { type: "point", x: 0, y: 0 },
       intent: "question",
@@ -101,16 +113,16 @@ export function BrowserControls({
       viewportWidth,
       viewportHeight,
     });
-  }, [browserTabId, tab]);
+  }, [browserTabId, tabUrl, tabTitle]);
 
   const annotations = useAnnotationStore(
     useShallow((state) => {
-      if (!tab) return EMPTY_ANNOTATION_ARRAY;
-      return state.getAnnotationsForUrl(tab.url);
+      if (!tabUrl) return EMPTY_ANNOTATION_ARRAY;
+      return state.getAnnotationsForUrl(tabUrl);
     })
   );
 
-  if (!tab) return <></>;
+  if (!tabUrl) return <></>;
 
   return (
     <div className="flex flex-col shrink-0">
@@ -137,7 +149,7 @@ export function BrowserControls({
           <RotateCcw size={14} />
         </button>
         <div className="flex-1 flex items-center gap-2 min-w-0">
-          {tab.loading ? (
+          {tabLoading ? (
             <Loader2 size={14} className="text-primary shrink-0 animate-spin" />
           ) : (
             <Globe size={14} className="text-muted-foreground shrink-0" />
@@ -156,20 +168,20 @@ export function BrowserControls({
           onClick={handleToggleAnnotationMode}
           className={cn(
             "p-1.5 rounded transition-colors shrink-0",
-            tab.annotationMode
+            tabAnnotationMode
               ? "bg-primary text-primary-foreground hover:bg-primary/90"
               : "hover:bg-secondary text-muted-foreground hover:text-foreground"
           )}
-          title={tab.annotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+          title={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
         >
           <Pencil size={14} />
         </button>
       </div>
 
-      {tab.annotationMode && (
+      {tabAnnotationMode && (
         <AnnotationToolbar
-          annotationMode={tab.annotationMode}
-          annotationSubMode={tab.annotationSubMode}
+          annotationMode={tabAnnotationMode}
+          annotationSubMode={tabAnnotationSubMode}
           annotationOverlayAvailable={annotationOverlayAvailable}
           hasAnnotations={annotations.length > 0}
           onToggleAnnotationMode={handleToggleAnnotationMode}

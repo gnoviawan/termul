@@ -63,7 +63,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   updateUrl: (id: string, url: string) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.url === url) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, url })
       return { tabs: next }
@@ -73,7 +73,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   updateTitle: (id: string, title: string) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.title === title) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, title })
       return { tabs: next }
@@ -83,7 +83,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   setLoading: (id: string, loading: boolean) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.loading === loading) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, loading })
       return { tabs: next }
