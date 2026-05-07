@@ -25,9 +25,39 @@ export const useGitFileStatusStore = create<GitFileStatusState>((set, get) => ({
 
 	setStatuses: (entries) => {
 		const map = new Map<string, GitFileStatusEntry>()
+
+		// Add direct file entries
 		for (const entry of entries) {
 			map.set(entry.path, entry)
 		}
+
+		// Propagate status to parent folders so they appear colored in the tree.
+		// Priority: conflicted > modified > added > untracked > renamed > deleted
+		const priority: Record<GitFileStatus, number> = {
+			conflicted: 6,
+			modified: 5,
+			added: 4,
+			untracked: 3,
+			renamed: 2,
+			deleted: 1,
+		}
+
+		for (const entry of entries) {
+			const parts = entry.path.split('/')
+			// Walk up parent directories
+			for (let i = parts.length - 1; i >= 2; i--) {
+				const dirPath = parts.slice(0, i).join('/')
+				const existing = map.get(dirPath)
+
+				if (!existing) {
+					map.set(dirPath, { path: dirPath, status: entry.status, isStaged: entry.isStaged })
+				} else if ((priority[entry.status] ?? 0) > (priority[existing.status] ?? 0)) {
+					// Higher-priority status wins
+					map.set(dirPath, { path: dirPath, status: entry.status, isStaged: entry.isStaged })
+				}
+			}
+		}
+
 		set({ statusMap: map, isLoaded: true })
 	},
 

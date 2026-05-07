@@ -111,8 +111,9 @@ export function FileTreeNode({
           size={14}
           className={cn(
             'flex-shrink-0 mr-1.5',
-            isDir ? 'text-blue-400' : 'text-muted-foreground',
-            gitStatus && gitStatusStyle(gitStatus.status).color
+            gitStatus
+              ? gitStatusStyle(gitStatus.status).color
+              : isDir ? 'text-blue-400' : 'text-muted-foreground'
           )}
         />
         <span
