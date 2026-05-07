@@ -85,6 +85,7 @@ export function EditorPanel({
             content={fileState.content}
             language={fileState.language}
             isVisible={isVisible}
+            initialLine={fileState.cursorPosition.line}
             onChange={handleChange}
             onCursorChange={handleCursorChange}
             onScrollChange={handleScrollChange}

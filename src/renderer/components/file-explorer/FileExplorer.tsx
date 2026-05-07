@@ -36,6 +36,13 @@ export function FileExplorer(): React.JSX.Element {
 		rootLoadError,
 		selectedPaths,
 		clipboard,
+		searchQuery,
+		searchResults,
+		searchLoading,
+		searchError,
+		searchTruncated,
+		searchScannedFiles,
+		searchFailedFiles,
 	} = useFileExplorer();
 	const {
 		toggleDirectory,
@@ -51,6 +58,9 @@ export function FileExplorer(): React.JSX.Element {
 		collapseAll,
 		refreshDirectory,
 		setRootLoadError,
+		setSearchQuery,
+		searchInRoot,
+		resetSearch,
 	} = useFileExplorerActions();
 
 	const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -61,8 +71,11 @@ export function FileExplorer(): React.JSX.Element {
 	);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const searchDebounceRef = useRef<number | null>(null);
+	const searchRequestIdRef = useRef(0);
 
 	const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined;
+	const normalizedSearchQuery = searchQuery ?? "";
 
 	// Auto-expand root directory on mount
 	useEffect(() => {
@@ -70,6 +83,31 @@ export function FileExplorer(): React.JSX.Element {
 			toggleDirectory(rootPath);
 		}
 	}, [rootPath, directoryContents, rootLoadError, toggleDirectory]);
+
+	useEffect(() => {
+		resetSearch();
+	}, [rootPath, resetSearch]);
+
+	useEffect(() => {
+		if (searchDebounceRef.current !== null) {
+			window.clearTimeout(searchDebounceRef.current);
+		}
+
+		if (!rootPath) {
+			return;
+		}
+
+		searchDebounceRef.current = window.setTimeout(() => {
+			searchRequestIdRef.current += 1;
+			void searchInRoot(normalizedSearchQuery, searchRequestIdRef.current);
+		}, 200);
+
+		return () => {
+			if (searchDebounceRef.current !== null) {
+				window.clearTimeout(searchDebounceRef.current);
+			}
+		};
+	}, [rootPath, normalizedSearchQuery, searchInRoot]);
 
 	// Focus inline input when it appears
 	useEffect(() => {
@@ -471,11 +509,68 @@ export function FileExplorer(): React.JSX.Element {
 		setDeleteConfirm(null);
 	}, [deleteConfirm, refreshDirectory]);
 
+	const handleSearchMatchClick = useCallback(
+		async (filePath: string, lineNumber: number) => {
+			selectPath(filePath);
+			try {
+				await useEditorStore.getState().openFile(filePath);
+				useWorkspaceStore.getState().addEditorTab(filePath);
+				useEditorStore.getState().updateCursorPosition(filePath, lineNumber, 1);
+				window.dispatchEvent(
+					new CustomEvent("termul:reveal-line", {
+						detail: { filePath, lineNumber },
+					}),
+				);
+			} catch {
+				toast.warning("File opened, but failed to focus target line");
+			}
+		},
+		[selectPath],
+	);
+
 	const handleRootRetry = useCallback(() => {
 		if (!rootPath) return;
 		setRootLoadError(null);
 		void toggleDirectory(rootPath);
 	}, [rootPath, setRootLoadError, toggleDirectory]);
+
+	const renderHighlightedLine = useCallback(
+		(lineText: string) => {
+			const query = normalizedSearchQuery.trim();
+			if (!query) return lineText;
+
+			const lowerLine = lineText.toLowerCase();
+			const lowerQuery = query.toLowerCase();
+			const parts: React.ReactNode[] = [];
+			let startIndex = 0;
+			let matchIndex = lowerLine.indexOf(lowerQuery, startIndex);
+
+			while (matchIndex !== -1) {
+				if (matchIndex > startIndex) {
+					parts.push(lineText.slice(startIndex, matchIndex));
+				}
+
+				parts.push(
+					<span
+						key={`${matchIndex}-${matchIndex + query.length}`}
+						className="rounded-sm border border-primary/35 bg-primary/20 px-0.5 text-foreground transition-colors group-hover:bg-primary/25 group-focus-visible:bg-primary/30"
+					>
+						{lineText.slice(matchIndex, matchIndex + query.length)}
+					</span>,
+				);
+
+				startIndex = matchIndex + query.length;
+				matchIndex = lowerLine.indexOf(lowerQuery, startIndex);
+			}
+
+			if (startIndex < lineText.length) {
+				parts.push(lineText.slice(startIndex));
+			}
+
+			return parts.length > 0 ? parts : lineText;
+		},
+		[normalizedSearchQuery],
+	);
 
 	// Open terminal in directory
 	const handleOpenInTerminal = useCallback((dirPath: string) => {
@@ -568,7 +663,17 @@ export function FileExplorer(): React.JSX.Element {
 				</button>
 			</div>
 
-			{/* Tree */}
+			<div className="px-3 py-2 border-b border-border">
+				<input
+					type="text"
+					value={normalizedSearchQuery}
+					onChange={(event) => setSearchQuery(event.target.value)}
+					placeholder="Search in files..."
+					className="w-full bg-input border border-border rounded px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
+				/>
+			</div>
+
+			{/* Tree / Search Results */}
 			<div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
 				{!rootPath && (
 					<div className="px-3 py-4 text-sm text-muted-foreground">
@@ -599,7 +704,7 @@ export function FileExplorer(): React.JSX.Element {
 					</div>
 				)}
 
-				{rootPath && rootEntries && !rootLoadError && (
+				{rootPath && rootEntries && !rootLoadError && !normalizedSearchQuery.trim() && (
 					<>
 						{rootEntries.map((entry) => (
 							<FileTreeNodeWrapper
@@ -613,6 +718,66 @@ export function FileExplorer(): React.JSX.Element {
 							/>
 						))}
 					</>
+				)}
+
+				{rootPath && normalizedSearchQuery.trim() && (
+					<div className="px-2 space-y-2">
+						{searchLoading && (
+							<div className="text-xs text-muted-foreground px-1 py-2">Searching...</div>
+						)}
+						{searchError && (
+							<div className="text-xs text-red-400 px-1 py-2 break-words">{searchError}</div>
+						)}
+						{!searchLoading && !searchError && searchResults.length === 0 && (
+							<div className="text-xs text-muted-foreground px-1 py-2">No results</div>
+						)}
+						{searchResults.map((fileResult) => (
+							<div key={fileResult.filePath} className="border border-border rounded-md p-1">
+								<button
+									onClick={() =>
+										void handleSearchMatchClick(
+											fileResult.filePath,
+											fileResult.matches[0]?.lineNumber ?? 1,
+										)
+									}
+									className="w-full text-left text-[11px] text-primary hover:underline truncate"
+									title={fileResult.filePath}
+								>
+									{fileResult.filePath}
+								</button>
+								<div className="mt-1 space-y-0.5">
+									{fileResult.matches.map((match) => (
+										<button
+											key={`${fileResult.filePath}:${match.lineNumber}:${match.lineText}`}
+											onClick={() =>
+												void handleSearchMatchClick(
+													fileResult.filePath,
+													match.lineNumber,
+												)
+											}
+											className="group w-full flex items-start gap-2 overflow-hidden text-left text-[11px] text-foreground hover:bg-secondary rounded px-1 py-0.5"
+										>
+											<span className="text-muted-foreground shrink-0">
+												{match.lineNumber}
+											</span>
+											<span className="block min-w-0 flex-1 truncate">{renderHighlightedLine(match.lineText)}</span>
+										</button>
+									))}
+								</div>
+							</div>
+						))}
+						{(searchTruncated || searchFailedFiles > 0) && (
+							<div className="text-[11px] text-muted-foreground px-1 py-1">
+								{searchTruncated ? "Results truncated for performance." : ""}
+								{searchFailedFiles > 0
+									? ` ${searchFailedFiles} file(s) could not be read.`
+									: ""}
+								{searchScannedFiles > 0
+									? ` Scanned ${searchScannedFiles} file(s).`
+									: ""}
+							</div>
+						)}
+					</div>
 				)}
 
 				{/* Inline input for new file/folder/rename */}

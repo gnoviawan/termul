@@ -730,6 +730,8 @@ pub fn run() {
             commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
             commands::browser_tab_report_annotation_marker_clicked,
+            // Filesystem/search commands
+            commands::search_content,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,

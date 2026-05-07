@@ -5,6 +5,8 @@ use crate::migrations::{
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::process::Command;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State, Webview};
 
@@ -593,6 +595,179 @@ pub async fn browser_tab_report_annotation_marker_clicked(
 #[serde(rename_all = "camelCase")]
 pub struct RollbackRequest {
     pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchMatch {
+    pub line_number: usize,
+    pub line_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResult {
+    pub file_path: String,
+    pub matches: Vec<FileSearchMatch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResponse {
+    pub results: Vec<FileSearchResult>,
+    pub truncated: bool,
+    pub scanned_files: usize,
+    pub failed_files: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentRequest {
+    pub root_path: String,
+    pub query: String,
+}
+
+#[tauri::command]
+pub async fn search_content(
+    request: SearchContentRequest,
+) -> Result<IpcResult<FileSearchResponse>, String> {
+    let trimmed_query = request.query.trim();
+    if trimmed_query.is_empty() {
+        return Ok(IpcResult::success(FileSearchResponse {
+            results: vec![],
+            truncated: false,
+            scanned_files: 0,
+            failed_files: 0,
+        }));
+    }
+
+    let max_files_with_matches: usize = 100;
+    let max_matches_per_file: usize = 30;
+
+    let mut args = vec![
+        "--json".to_string(),
+        "-F".to_string(),
+        "-i".to_string(),
+        "-n".to_string(),
+        "--max-filesize".to_string(),
+        "1M".to_string(),
+        "--max-count".to_string(),
+        max_matches_per_file.to_string(),
+    ];
+
+    for ignored in [
+        "node_modules",
+        ".git",
+        ".next",
+        ".cache",
+        ".turbo",
+        "dist",
+        "build",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        "venv",
+        ".env",
+        "coverage",
+        ".nyc_output",
+    ] {
+        args.push("-g".to_string());
+        args.push(format!("!**/{}/**", ignored));
+    }
+
+    args.push(trimmed_query.to_string());
+    args.push(request.root_path);
+
+    let output = Command::new("rg").args(args).output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return Ok(IpcResult::error(format!("rg spawn failed: {}", e), "SEARCH_ERROR")),
+    };
+
+    let code = output.status.code().unwrap_or(0);
+    if code > 1 {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Ok(IpcResult::error(
+            format!("rg failed ({}): {}", code, stderr),
+            "SEARCH_ERROR",
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
+    let mut truncated = false;
+
+    for line in stdout.lines() {
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if parsed.get("type").and_then(|v| v.as_str()) != Some("match") {
+            continue;
+        }
+
+        let file_path = match parsed
+            .get("data")
+            .and_then(|d| d.get("path"))
+            .and_then(|p| p.get("text"))
+            .and_then(|t| t.as_str())
+        {
+            Some(p) => p.replace('\\', "/"),
+            None => continue,
+        };
+
+        let line_number = match parsed
+            .get("data")
+            .and_then(|d| d.get("line_number"))
+            .and_then(|n| n.as_u64())
+        {
+            Some(n) => n as usize,
+            None => continue,
+        };
+
+        let line_text = parsed
+            .get("data")
+            .and_then(|d| d.get("lines"))
+            .and_then(|l| l.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+
+        if !grouped.contains_key(&file_path) {
+            if grouped.len() >= max_files_with_matches {
+                truncated = true;
+                break;
+            }
+            grouped.insert(file_path.clone(), Vec::new());
+        }
+
+        if let Some(matches) = grouped.get_mut(&file_path) {
+            if matches.len() >= max_matches_per_file {
+                truncated = true;
+                continue;
+            }
+            matches.push(FileSearchMatch {
+                line_number,
+                line_text,
+            });
+        }
+    }
+
+    let results = grouped
+        .into_iter()
+        .map(|(file_path, matches)| FileSearchResult { file_path, matches })
+        .collect();
+
+    Ok(IpcResult::success(FileSearchResponse {
+        results,
+        truncated,
+        scanned_files: 0,
+        failed_files: 0,
+    }))
 }
 
 /// Get current schema version

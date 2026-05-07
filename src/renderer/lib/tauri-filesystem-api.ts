@@ -10,6 +10,7 @@ import {
 	watchImmediate,
 	type WatchEvent,
 } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import type {
 	IpcResult,
 	FilesystemApi,
@@ -40,6 +41,40 @@ const ALWAYS_IGNORE = [
 ];
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+const SEARCH_MAX_FILES_WITH_MATCHES = 100;
+const SEARCH_MAX_MATCHES_PER_FILE = 30;
+
+async function searchWithRipgrep(rootPath: string, query: string): Promise<{
+	results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>;
+	truncated: boolean;
+	scannedFiles: number;
+	failedFiles: number;
+} | null> {
+	try {
+		const response = await invoke<{
+			success: boolean;
+			data?: {
+				results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>;
+				truncated: boolean;
+				scannedFiles: number;
+				failedFiles: number;
+			};
+		}>('search_content', {
+			request: {
+				rootPath,
+				query,
+			},
+		});
+
+		if (!response?.success || !response.data) {
+			return null;
+		}
+
+		return response.data;
+	} catch {
+		return null;
+	}
+}
 
 const activeWatchers = new Map<string, () => void>();
 const activeCallbacks = new Map<string, Set<FileChangeCallback>>();
@@ -91,6 +126,40 @@ async function readBinarySample(filePath: string, byteCount: number): Promise<st
 function getExtension(filename: string): string | null {
 	const idx = filename.lastIndexOf(".");
 	return idx >= 0 ? filename.slice(idx) : null;
+}
+
+function includesCaseInsensitive(haystack: string, needle: string): boolean {
+	return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+}
+
+async function collectFilesRecursively(rootPath: string): Promise<string[]> {
+	const files: string[] = [];
+	const queue: string[] = [rootPath.replace(/\\/g, "/")];
+
+	while (queue.length > 0) {
+		const dir = queue.shift();
+		if (!dir) continue;
+
+		let entries: Awaited<ReturnType<typeof readDir>>;
+		try {
+			entries = await readDir(dir);
+		} catch {
+			continue;
+		}
+
+		for (const entry of entries) {
+			const name = entry.name;
+			if (shouldIgnore(name)) continue;
+			const fullPath = `${dir}/${name}`.replace(/\/+/g, "/");
+			if (entry.isDirectory) {
+				queue.push(fullPath);
+			} else {
+				files.push(fullPath);
+			}
+		}
+	}
+
+	return files;
 }
 
 /**
@@ -203,6 +272,104 @@ export function createTauriFilesystemApi(): FilesystemApi {
 				};
 			} catch (err) {
 				return { success: false, error: String(err), code: "STAT_ERROR" };
+			}
+		},
+
+		async searchContent(rootPath: string, query: string) {
+			const normalizedRootPath = rootPath.replace(/\\/g, "/");
+			const trimmedQuery = query.trim();
+			if (!trimmedQuery) {
+				return {
+					success: true,
+					data: {
+						results: [],
+						truncated: false,
+						scannedFiles: 0,
+						failedFiles: 0,
+					},
+				};
+			}
+
+			const ripgrepResult = await searchWithRipgrep(normalizedRootPath, trimmedQuery);
+			if (ripgrepResult) {
+				return {
+					success: true,
+					data: ripgrepResult,
+				};
+			}
+
+			try {
+				const allFiles = await collectFilesRecursively(normalizedRootPath);
+				const results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }> = [];
+				let truncated = false;
+				let scannedFiles = 0;
+				let failedFiles = 0;
+
+				for (const filePath of allFiles) {
+					if (results.length >= SEARCH_MAX_FILES_WITH_MATCHES) {
+						truncated = true;
+						break;
+					}
+
+					let info;
+					try {
+						info = await stat(filePath);
+					} catch {
+						failedFiles += 1;
+						continue;
+					}
+
+					if (info.isDirectory || info.size > MAX_FILE_SIZE) {
+						continue;
+					}
+
+					scannedFiles += 1;
+
+					let content = "";
+					try {
+						content = await readTextFile(filePath);
+					} catch {
+						failedFiles += 1;
+						continue;
+					}
+
+					if (isBinaryFile(content)) {
+						continue;
+					}
+
+					const lines = content.split(/\r?\n/);
+					const matches: Array<{ lineNumber: number; lineText: string }> = [];
+
+					for (let i = 0; i < lines.length; i += 1) {
+						if (includesCaseInsensitive(lines[i], trimmedQuery)) {
+							matches.push({ lineNumber: i + 1, lineText: lines[i] });
+							if (matches.length >= SEARCH_MAX_MATCHES_PER_FILE) {
+								truncated = true;
+								break;
+							}
+						}
+					}
+
+					if (matches.length > 0) {
+						results.push({ filePath, matches });
+					}
+				}
+
+				return {
+					success: true,
+					data: {
+						results,
+						truncated,
+						scannedFiles,
+						failedFiles,
+					},
+				};
+			} catch (err) {
+				return {
+					success: false,
+					error: String(err),
+					code: "SEARCH_ERROR",
+				};
 			}
 		},
 

@@ -13,6 +13,7 @@ interface CodeEditorProps {
   language: string
   readOnly?: boolean
   isVisible: boolean
+  initialLine?: number
   onChange: (content: string) => void
   onCursorChange: (line: number, col: number) => void
   onScrollChange: (scrollTop: number) => void
@@ -29,15 +30,18 @@ function getTocPercentBounds(panelWidth: number): { minPercent: number; maxPerce
 }
 
 export function CodeEditor({
+  filePath,
   content,
   language,
   readOnly = false,
   isVisible,
+  initialLine,
   onChange,
   onCursorChange,
   onScrollChange
 }: CodeEditorProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const hasAppliedInitialLineRef = useRef(false)
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
@@ -127,6 +131,29 @@ export function CodeEditor({
       view.focus()
     }
   }, [isVisible, view])
+
+  useEffect(() => {
+    if (!view || !isVisible || !initialLine || hasAppliedInitialLineRef.current) {
+      return
+    }
+
+    scrollToLine(initialLine)
+    hasAppliedInitialLineRef.current = true
+  }, [initialLine, isVisible, scrollToLine, view])
+
+  useEffect(() => {
+    const handler = (event: Event): void => {
+      const customEvent = event as CustomEvent<{ filePath: string; lineNumber: number }>
+      if (!customEvent.detail) return
+      if (customEvent.detail.filePath !== filePath) return
+      if (!isVisible) return
+
+      scrollToLine(customEvent.detail.lineNumber)
+    }
+
+    window.addEventListener('termul:reveal-line', handler)
+    return () => window.removeEventListener('termul:reveal-line', handler)
+  }, [filePath, isVisible, scrollToLine])
 
   useEffect(() => {
     if (!canRenderToc) {

@@ -220,6 +220,7 @@ import type {
 	FileContent,
 	FileInfo,
 	FileChangeEvent,
+	FileSearchResponse,
 } from "./filesystem.types";
 
 export type FileChangeCallback = (event: FileChangeEvent) => void;
@@ -229,6 +230,10 @@ export interface FilesystemApi {
 	readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>;
 	readFile: (filePath: string) => Promise<IpcResult<FileContent>>;
 	getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>;
+	searchContent: (
+		rootPath: string,
+		query: string,
+	) => Promise<IpcResult<FileSearchResponse>>;
 	writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>;
 	createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>;
 	createDirectory: (dirPath: string) => Promise<IpcResult<void>>;
@@ -244,7 +249,13 @@ export interface FilesystemApi {
 	onFileDeleted: (callback: FileChangeCallback) => () => void;
 }
 
-export type { DirectoryEntry, FileContent, FileInfo, FileChangeEvent };
+export type {
+	DirectoryEntry,
+	FileContent,
+	FileInfo,
+	FileChangeEvent,
+	FileSearchResponse,
+};
 
 // ============================================================================
 // Session Persistence Types

@@ -10,7 +10,16 @@ const mockExplorerState = {
   rootPath: null as string | null,
   directoryContents: new Map<string, Array<{ path: string; name: string; type: 'file' | 'directory' }>>(),
   isVisible: true,
-  rootLoadError: null as null | { message: string; code?: string }
+  rootLoadError: null as null | { message: string; code?: string },
+  selectedPaths: new Set<string>(),
+  clipboard: null,
+  searchQuery: '',
+  searchResults: [],
+  searchLoading: false,
+  searchError: null,
+  searchTruncated: false,
+  searchScannedFiles: 0,
+  searchFailedFiles: 0
 }
 
 vi.mock('@/stores/file-explorer-store', () => ({
@@ -18,9 +27,20 @@ vi.mock('@/stores/file-explorer-store', () => ({
   useFileExplorerActions: () => ({
     toggleDirectory: mockToggleDirectory,
     selectPath: vi.fn(),
+    togglePathSelection: vi.fn(),
+    selectPathRange: vi.fn(),
+    selectAll: vi.fn(),
+    clearSelection: vi.fn(),
+    copySelected: vi.fn(),
+    cutSelected: vi.fn(),
+    paste: vi.fn(),
+    duplicateSelected: vi.fn(),
     collapseAll: vi.fn(),
     refreshDirectory: mockRefreshDirectory,
-    setRootLoadError: mockSetRootLoadError
+    setRootLoadError: mockSetRootLoadError,
+    setSearchQuery: vi.fn(),
+    searchInRoot: vi.fn(),
+    resetSearch: vi.fn()
   }),
   useFileExplorerStore: {
     getState: vi.fn(() => ({
