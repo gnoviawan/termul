@@ -150,7 +150,7 @@ export function CodeEditor({
 
   return (
     <div
-      className={isVisible ? 'h-full w-full' : 'h-full w-full absolute inset-0 invisible pointer-events-none overflow-hidden'}
+      className={isVisible ? 'h-full w-full' : 'absolute inset-0 invisible pointer-events-none overflow-hidden'}
     >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
