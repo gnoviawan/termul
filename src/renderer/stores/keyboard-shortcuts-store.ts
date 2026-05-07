@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
+import { isMac } from '@/lib/platform'
 
 interface KeyboardShortcutsState {
   shortcuts: KeyboardShortcutsConfig
@@ -77,13 +78,31 @@ export function findConflictingShortcut(
   return undefined
 }
 
-// Helper: Normalize a keyboard event to our key format
+// Helper: Normalize a keyboard event to our key format.
+//
+// Modifier tokens (preserved in output):
+//   ctrl → Ctrl key on Windows/Linux, or Ctrl key on macOS
+//   cmd  → Meta/⌘ key on macOS (only emitted on macOS)
+//
+// On macOS both modifiers can technically be held simultaneously, but in
+// practice users only use one at a time for app shortcuts, so we emit the
+// first that matches the platform convention.
 export function normalizeKeyEvent(e: KeyboardEvent): string {
   const parts: string[] = []
 
-  // Add modifiers in alphabetical order
+  // Add modifiers in canonical order: alt → cmd/ctrl → shift
   if (e.altKey) parts.push('alt')
-  if (e.ctrlKey || e.metaKey) parts.push('ctrl')
+
+  if (isMac) {
+    // macOS: prefer cmd (metaKey) but also track ctrl if only ctrl is held.
+    // This lets us distinguish ⌘+K from Ctrl+K on macOS.
+    if (e.metaKey) parts.push('cmd')
+    else if (e.ctrlKey) parts.push('ctrl')
+  } else {
+    if (e.ctrlKey) parts.push('ctrl')
+    else if (e.metaKey) parts.push('cmd')
+  }
+
   if (e.shiftKey) parts.push('shift')
 
   // Add the key itself (lowercase)
@@ -94,9 +113,7 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
   if (key === 'escape') key = 'esc'
 
   // Normalize key values for common keys that might have variations
-  // Minus/hyphen keys
   if (key === '-' || key === '–' || key === '—' || key === '_') key = '-'
-  // Plus/equal keys (often on same key)
   if (key === '=' || key === '+') key = '='
 
   // Skip if only modifier was pressed
@@ -112,14 +129,14 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
 export function formatKeyForDisplay(key: string): string {
   if (!key) return ''
 
-  const isMac = navigator.platform.toUpperCase().includes('MAC')
-
   return key
     .split('+')
     .map((part) => {
       switch (part) {
         case 'ctrl':
-          return isMac ? '⌘' : 'Ctrl'
+          return isMac ? '⌃' : 'Ctrl'
+        case 'cmd':
+          return isMac ? '⌘' : 'Meta'
         case 'alt':
           return isMac ? '⌥' : 'Alt'
         case 'shift':
@@ -141,8 +158,26 @@ export function formatKeyForDisplay(key: string): string {
     .join(isMac ? '' : '+')
 }
 
-// Helper: Check if a keyboard event matches a shortcut key
+// Helper: Check if a keyboard event matches a shortcut key.
+//
+// Platform-aware matching:
+//   - Config stores keys in 'ctrl+...' format (backward compatible).
+//   - On macOS, 'cmd+...' from normalizeKeyEvent also matches 'ctrl+...' config entries.
+//   - On Windows/Linux, matching is exact.
 export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean {
   const normalized = normalizeKeyEvent(e)
-  return normalized === shortcutKey
+  if (normalized === shortcutKey) return true
+
+  // macOS cross-modifier alias: 'cmd+x' matches 'ctrl+x' config and vice-versa.
+  // This lets the same 'ctrl+k' default work with both ⌘+K and Ctrl+K on Mac.
+  if (isMac) {
+    const aliased = normalized.startsWith('cmd+')
+      ? 'ctrl+' + normalized.slice(4)
+      : normalized.startsWith('ctrl+')
+        ? 'cmd+' + normalized.slice(5)
+        : normalized
+    return aliased === shortcutKey
+  }
+
+  return false
 }
