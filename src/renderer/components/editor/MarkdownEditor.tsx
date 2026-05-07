@@ -183,7 +183,9 @@ export function MarkdownEditor({
   }, [canRenderToc, getTocPanelSizePercent])
 
   return (
-    <div className="w-full h-full" style={{ display: isVisible ? 'block' : 'none' }}>
+    <div
+      className={isVisible ? 'w-full h-full' : 'w-full h-full absolute inset-0 invisible pointer-events-none overflow-hidden'}
+    >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
           <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
