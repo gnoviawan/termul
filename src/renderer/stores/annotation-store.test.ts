@@ -4,7 +4,7 @@ import { useAnnotationStore, normalizeUrl, type Annotation } from './annotation-
 describe('annotation-store', () => {
   beforeEach(() => {
     // Reset store state before each test
-    useAnnotationStore.setState({ annotationsByUrl: new Map() })
+    useAnnotationStore.setState({ annotationsByUrl: new Map(), selectedAnnotationIdByUrl: new Map() })
   })
 
   describe('normalizeUrl', () => {
@@ -201,6 +201,83 @@ describe('annotation-store', () => {
 
       expect(store.getAnnotationsForUrl('https://example.com')).toHaveLength(1)
       expect(store.getAnnotationsForUrl('https://example.com')[0].browserTabId).toBe('tab-2')
+    })
+
+    it('clears selection for urls that become empty', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com')
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      store.setSelectedAnnotationId(url, added.id)
+
+      store.clearAnnotationsForTab('tab-1')
+
+      expect(store.selectedAnnotationIdByUrl.has(url)).toBe(false)
+    })
+  })
+
+  describe('selectedAnnotationIdByUrl', () => {
+    it('sets and gets selected annotation id per url', () => {
+      const url1 = normalizeUrl('https://example.com/page1')
+      const url2 = normalizeUrl('https://example.com/page2')
+
+      useAnnotationStore.getState().setSelectedAnnotationId(url1, 'anno-1')
+      useAnnotationStore.getState().setSelectedAnnotationId(url2, 'anno-2')
+
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url1)).toBe('anno-1')
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url2)).toBe('anno-2')
+    })
+
+    it('clears selected id on removal if it matches', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com')
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      store.setSelectedAnnotationId(url, added.id)
+
+      store.removeAnnotation(url, added.id)
+
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url)).toBeNull()
+    })
+
+    it('does not clear selected id on removal of a different annotation', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com')
+      const added1 = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      const added2 = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      store.setSelectedAnnotationId(url, added1.id)
+
+      store.removeAnnotation(url, added2.id)
+
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url)).toBe(added1.id)
+    })
+
+    it('isolates selections across urls', () => {
+      const store = useAnnotationStore.getState()
+      const url1 = normalizeUrl('https://example.com/page1')
+      const url2 = normalizeUrl('https://example.com/page2')
+
+      store.setSelectedAnnotationId(url1, 'anno-1')
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url2)).toBeUndefined()
+    })
+
+    it('clears selection via clearSelectedAnnotationId', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com')
+      store.setSelectedAnnotationId(url, 'anno-1')
+
+      store.clearSelectedAnnotationId(url)
+
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url)).toBeNull()
+    })
+
+    it('persists selection across unrelated updates', () => {
+      const store = useAnnotationStore.getState()
+      const url = normalizeUrl('https://example.com')
+      const added = store.addAnnotation(makeRegionAnnotation(url, 'tab-1'))
+      store.setSelectedAnnotationId(url, added.id)
+
+      store.updateAnnotation(url, added.id, { description: 'Updated' })
+
+      expect(useAnnotationStore.getState().selectedAnnotationIdByUrl.get(url)).toBe(added.id)
     })
   })
 })

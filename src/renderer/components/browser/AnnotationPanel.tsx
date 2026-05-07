@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -88,15 +88,26 @@ function AnnotationElementDetails({ geometry }: { geometry: ElementGeometry }): 
 
 function AnnotationItem({
   annotation,
+  isSelected,
+  onSelect,
   onUpdate,
   onDelete,
 }: {
   annotation: Annotation;
+  isSelected: boolean;
+  onSelect: () => void;
   onUpdate: (id: string, updates: Partial<Pick<Annotation, "intent" | "severity" | "description">>) => void;
   onDelete: (id: string) => void;
 }): React.JSX.Element {
   const [isEditing, setIsEditing] = useState(false);
   const [draftDescription, setDraftDescription] = useState(annotation.description);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [isSelected]);
 
   const handleSave = () => {
     onUpdate(annotation.id, { description: draftDescription });
@@ -104,7 +115,14 @@ function AnnotationItem({
   };
 
   return (
-    <div className="rounded-md border border-border bg-card p-3 space-y-2">
+    <div
+      ref={cardRef}
+      onClick={onSelect}
+      className={cn(
+        "rounded-md border border-border bg-card p-3 space-y-2 cursor-pointer transition-all",
+        isSelected && "ring-2 ring-primary"
+      )}
+    >
       <div className="flex items-center gap-2">
         <span
           className={cn(
@@ -123,7 +141,10 @@ function AnnotationItem({
         </span>
         <div className="flex-1" />
         <button
-          onClick={() => onDelete(annotation.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(annotation.id);
+          }}
           className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
           title="Delete annotation"
         >
@@ -165,7 +186,8 @@ function AnnotationItem({
         </div>
       ) : (
         <div
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
             setDraftDescription(annotation.description);
             setIsEditing(true);
           }}
@@ -218,6 +240,10 @@ export function AnnotationPanel({ browserTabId: _browserTabId, url }: Annotation
   const annotations = useAnnotationStore((state) => state.getAnnotationsForUrl(url));
   const removeAnnotation = useAnnotationStore((state) => state.removeAnnotation);
   const updateAnnotation = useAnnotationStore((state) => state.updateAnnotation);
+  const setSelectedAnnotationId = useAnnotationStore((state) => state.setSelectedAnnotationId);
+  const selectedAnnotationId = useAnnotationStore(
+    (state) => state.selectedAnnotationIdByUrl.get(normalizeUrl(url)) ?? null
+  );
 
   const normalizedUrl = normalizeUrl(url);
 
@@ -240,6 +266,8 @@ export function AnnotationPanel({ browserTabId: _browserTabId, url }: Annotation
             <AnnotationItem
               key={annotation.id}
               annotation={annotation}
+              isSelected={selectedAnnotationId === annotation.id}
+              onSelect={() => setSelectedAnnotationId(normalizedUrl, annotation.id)}
               onUpdate={(id, updates) => {
                 updateAnnotation(normalizedUrl, id, updates);
               }}

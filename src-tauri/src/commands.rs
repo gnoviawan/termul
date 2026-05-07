@@ -344,6 +344,33 @@ pub async fn browser_tab_remove_annotation_overlay(
     }
 }
 
+/// Inject annotation markers into a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_inject_annotation_markers(
+    tab_id: String,
+    annotations_json: String,
+    selected_id: Option<String>,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.inject_annotation_markers(&tab_id, &annotations_json, selected_id.as_deref()) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED")),
+    }
+}
+
+/// Update annotation marker selection in a browser tab webview
+#[tauri::command]
+pub async fn browser_tab_update_annotation_marker_selection(
+    tab_id: String,
+    selected_id: Option<String>,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.update_annotation_marker_selection(&tab_id, selected_id.as_deref()) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED")),
+    }
+}
+
 /// Report URL from browser tab webview (called by injected JS poller)
 #[tauri::command]
 pub async fn browser_tab_report_url(
@@ -520,7 +547,36 @@ pub async fn browser_tab_report_element_captured(
     Ok(())
 }
 
-// ==================== Data Migration Commands ====================
+/// Report annotation marker clicked from browser tab webview
+#[tauri::command]
+pub async fn browser_tab_report_annotation_marker_clicked(
+    tab_id: String,
+    annotation_id: String,
+    app_handle: AppHandle,
+    webview: Webview,
+) -> Result<(), String> {
+    let caller_label = webview.label().to_string();
+    if caller_label != tab_id {
+        return Err(format!(
+            "Browser tab report annotation marker clicked rejected: caller '{}' does not match payload '{}'",
+            caller_label, tab_id
+        ));
+    }
+    log::debug!(
+        "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
+        tab_id, annotation_id
+    );
+    app_handle
+        .emit(
+            "browser-tab-annotation-marker-clicked",
+            serde_json::json!({
+                "browserTabId": tab_id,
+                "annotationId": annotation_id,
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
 
 /// Rollback request
 #[derive(Debug, Clone, Deserialize)]

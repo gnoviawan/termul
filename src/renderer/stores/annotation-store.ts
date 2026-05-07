@@ -73,6 +73,7 @@ export const EMPTY_ANNOTATION_ARRAY: Annotation[] = []
 
 export interface AnnotationState {
   annotationsByUrl: Map<string, Annotation[]>
+  selectedAnnotationIdByUrl: Map<string, string | null>
 
   // Actions
   addAnnotation: (annotation: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'>) => Annotation
@@ -80,6 +81,8 @@ export interface AnnotationState {
   updateAnnotation: (normalizedUrl: string, id: string, updates: Partial<Pick<Annotation, 'intent' | 'severity' | 'description'>>) => void
   getAnnotationsForUrl: (url: string) => Annotation[]
   clearAnnotationsForTab: (browserTabId: string) => void
+  setSelectedAnnotationId: (normalizedUrl: string, id: string | null) => void
+  clearSelectedAnnotationId: (normalizedUrl: string) => void
 }
 
 function stripControlChars(value: string): string {
@@ -207,6 +210,7 @@ export function normalizeUrl(rawUrl: string): string {
 
 export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   annotationsByUrl: new Map(),
+  selectedAnnotationIdByUrl: new Map(),
 
   addAnnotation: (annotationData) => {
     const id = crypto.randomUUID()
@@ -240,7 +244,11 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       } else {
         next.set(normalizedUrl, filtered)
       }
-      return { annotationsByUrl: next }
+      const selectedNext = new Map(state.selectedAnnotationIdByUrl)
+      if (selectedNext.get(normalizedUrl) === id) {
+        selectedNext.set(normalizedUrl, null)
+      }
+      return { annotationsByUrl: next, selectedAnnotationIdByUrl: selectedNext }
     })
   },
 
@@ -269,13 +277,32 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   clearAnnotationsForTab: (browserTabId) => {
     set((state) => {
       const next = new Map<string, Annotation[]>()
+      const selectedNext = new Map(state.selectedAnnotationIdByUrl)
       for (const [normalizedUrl, annotations] of state.annotationsByUrl) {
         const filtered = annotations.filter((a) => a.browserTabId !== browserTabId)
         if (filtered.length > 0) {
           next.set(normalizedUrl, filtered)
+        } else {
+          selectedNext.delete(normalizedUrl)
         }
       }
-      return { annotationsByUrl: next }
+      return { annotationsByUrl: next, selectedAnnotationIdByUrl: selectedNext }
+    })
+  },
+
+  setSelectedAnnotationId: (normalizedUrl, id) => {
+    set((state) => {
+      const next = new Map(state.selectedAnnotationIdByUrl)
+      next.set(normalizedUrl, id)
+      return { selectedAnnotationIdByUrl: next }
+    })
+  },
+
+  clearSelectedAnnotationId: (normalizedUrl) => {
+    set((state) => {
+      const next = new Map(state.selectedAnnotationIdByUrl)
+      next.set(normalizedUrl, null)
+      return { selectedAnnotationIdByUrl: next }
     })
   },
 }))

@@ -57,6 +57,27 @@ export interface BrowserTabTitleChangedPayload {
   title: string
 }
 
+export interface AnnotationMarkerClickedPayload {
+  browserTabId: string
+  annotationId: string
+}
+
+export interface MarkerAnnotation {
+  id: string
+  type: 'region' | 'element'
+  x: number
+  y: number
+  width: number
+  height: number
+  selector?: string
+  boundingBox?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+}
+
 export interface BrowserEventSubscription {
   unlisten: () => void
 }
@@ -181,4 +202,25 @@ export function onBrowserTabTitleChanged(
   callback: (payload: BrowserTabTitleChangedPayload) => void
 ): BrowserEventSubscription {
   return createBrowserEventSubscription('browser-tab-title-changed', callback)
+}
+
+export async function browserTabInjectAnnotationMarkers(
+  tabId: string,
+  annotations: MarkerAnnotation[],
+  selectedId: string | null
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_inject_annotation_markers', { tabId, annotationsJson: JSON.stringify(annotations), selectedId })
+}
+
+export async function browserTabUpdateAnnotationMarkerSelection(
+  tabId: string,
+  selectedId: string | null
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_update_annotation_marker_selection', { tabId, selectedId })
+}
+
+export function onBrowserTabAnnotationMarkerClicked(
+  callback: (payload: AnnotationMarkerClickedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-annotation-marker-clicked', callback)
 }

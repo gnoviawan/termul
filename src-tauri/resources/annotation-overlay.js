@@ -195,10 +195,14 @@
   function resolveElementAtPoint(clientX, clientY) {
     var previousOverlayDisplay = overlay.style.display;
     var previousHighlightDisplay = highlightEl ? highlightEl.style.display : '';
+    var previousMarkerDisplay = markerContainer ? markerContainer.style.display : '';
 
     overlay.style.display = 'none';
     if (highlightEl) {
       highlightEl.style.display = 'none';
+    }
+    if (markerContainer) {
+      markerContainer.style.display = 'none';
     }
 
     var element = document.elementFromPoint(clientX, clientY);
@@ -207,10 +211,14 @@
     if (highlightEl) {
       highlightEl.style.display = previousHighlightDisplay;
     }
+    if (markerContainer) {
+      markerContainer.style.display = previousMarkerDisplay;
+    }
 
     if (!element || !document.contains(element)) return null;
     if (element === document.documentElement || element === document.body) return null;
     if (isOverlayElement(element)) return null;
+    if (isMarkerElement(element)) return null;
 
     return element;
   }
@@ -395,6 +403,7 @@
     var target = trackedElement || resolveElementAtPoint(e.clientX, e.clientY);
     if (!target) return;
     if (isOverlayElement(target)) return;
+    if (isMarkerElement(target)) return;
     if (target === document.documentElement || target === document.body) return;
     if (!document.contains(target)) return;
     if (!hasVisibleBounds(target)) return;
@@ -425,7 +434,194 @@
     e.stopPropagation();
   }
 
+  // --- Marker System ---
+  var MARKER_CONTAINER_ID = '__termul_marker_container';
+  var MARKER_CLASS = '__termul_marker';
+  var markerContainer = null;
+  var markerRegistry = {};
+  var markerRafId = 0;
+
+  function isMarkerElement(element) {
+    return !!(element && element.classList && element.classList.contains(MARKER_CLASS));
+  }
+
+  function stopMarkerTracking() {
+    if (markerRafId) {
+      cancelAnimationFrame(markerRafId);
+      markerRafId = 0;
+    }
+  }
+
+  function isOffScreen(rect) {
+    return rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth;
+  }
+
+  function updateMarkerPositions() {
+    markerRafId = 0;
+    var hasVisible = false;
+
+    for (var id in markerRegistry) {
+      if (!markerRegistry.hasOwnProperty(id)) continue;
+      var entry = markerRegistry[id];
+      var markerEl = entry.element;
+      var data = entry.data;
+
+      if (data.type === 'element') {
+        if (!data.selector) {
+          markerEl.style.display = 'none';
+          continue;
+        }
+        try {
+          var resolved = document.querySelector(data.selector);
+          if (!resolved || !document.contains(resolved)) {
+            markerEl.style.display = 'none';
+            continue;
+          }
+          var rect = resolved.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0 || isOffScreen(rect)) {
+            markerEl.style.display = 'none';
+            continue;
+          }
+          // Safety: if resolved element's rect is far from captured boundingBox, hide marker
+          var bbox = data.boundingBox;
+          if (bbox) {
+            var dx = Math.abs(rect.left - bbox.x);
+            var dy = Math.abs(rect.top - bbox.y);
+            var dw = Math.abs(rect.width - bbox.width);
+            var dh = Math.abs(rect.height - bbox.height);
+            if (dx > 50 || dy > 50 || dw > 50 || dh > 50) {
+              markerEl.style.display = 'none';
+              continue;
+            }
+          }
+          markerEl.style.left = rect.left + 'px';
+          markerEl.style.top = rect.top + 'px';
+          markerEl.style.display = 'block';
+          hasVisible = true;
+        } catch (err) {
+          markerEl.style.display = 'none';
+        }
+      } else if (data.type === 'region') {
+        var regionRect = { left: data.x, top: data.y, right: data.x + 16, bottom: data.y + 16 };
+        if (isOffScreen(regionRect)) {
+          markerEl.style.display = 'none';
+        } else {
+          markerEl.style.left = data.x + 'px';
+          markerEl.style.top = data.y + 'px';
+          markerEl.style.display = 'block';
+          hasVisible = true;
+        }
+      }
+    }
+
+    if (Object.keys(markerRegistry).length > 0) {
+      markerRafId = requestAnimationFrame(updateMarkerPositions);
+    }
+  }
+
+  function startMarkerTracking() {
+    if (markerRafId) return;
+    markerRafId = requestAnimationFrame(updateMarkerPositions);
+  }
+
+  function ensureMarkerContainer() {
+    if (markerContainer) return markerContainer;
+    markerContainer = document.createElement('div');
+    markerContainer.id = MARKER_CONTAINER_ID;
+    markerContainer.style.cssText = [
+      'position:fixed',
+      'top:0',
+      'left:0',
+      'width:100vw',
+      'height:100vh',
+      'z-index:2147483646',
+      'pointer-events:none'
+    ].join(';');
+    document.body.appendChild(markerContainer);
+    return markerContainer;
+  }
+
+  function createMarkerElement(data, selectedId) {
+    var el = document.createElement('div');
+    el.className = MARKER_CLASS;
+    el.dataset.annotationId = data.id;
+    el.style.cssText = [
+      'position:absolute',
+      'width:16px',
+      'height:16px',
+      'border-radius:50%',
+      'border:2px solid #3b82f6',
+      'background:transparent',
+      'pointer-events:auto',
+      'cursor:pointer',
+      'box-sizing:border-box',
+      'transition:transform 0.15s ease,background 0.15s ease'
+    ].join(';');
+
+    if (data.id === selectedId) {
+      el.style.background = '#3b82f6';
+      el.style.borderColor = '#ffffff';
+      el.style.transform = 'scale(1.2)';
+    }
+
+    el.addEventListener('click', function onMarkerClick(e) {
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      invoke('browser_tab_report_annotation_marker_clicked', {
+        tabId: window.__termul_annotation_tab_id || '',
+        annotationId: data.id
+      });
+    });
+
+    return el;
+  }
+
+  window.__termul_render_markers = function(annotations, selectedId) {
+    window.__termul_remove_markers();
+    if (!annotations || annotations.length === 0) return;
+
+    var container = ensureMarkerContainer();
+    markerRegistry = {};
+    var fragment = document.createDocumentFragment();
+
+    for (var i = 0; i < annotations.length; i++) {
+      var data = annotations[i];
+      var markerEl = createMarkerElement(data, selectedId);
+      markerEl.style.left = (data.x || 0) + 'px';
+      markerEl.style.top = (data.y || 0) + 'px';
+      fragment.appendChild(markerEl);
+      markerRegistry[data.id] = { element: markerEl, data: data };
+    }
+    container.appendChild(fragment);
+
+    startMarkerTracking();
+  };
+
+  window.__termul_update_marker_selection = function(selectedId) {
+    if (!markerContainer) return;
+    var markers = markerContainer.querySelectorAll('.' + MARKER_CLASS);
+    for (var i = 0; i < markers.length; i++) {
+      var m = markers[i];
+      var isSelected = m.dataset.annotationId === selectedId;
+      m.style.background = isSelected ? '#3b82f6' : 'transparent';
+      m.style.borderColor = isSelected ? '#ffffff' : '#3b82f6';
+      m.style.transform = isSelected ? 'scale(1.2)' : 'scale(1)';
+    }
+  };
+
+  window.__termul_remove_markers = function() {
+    stopMarkerTracking();
+    if (markerContainer) {
+      markerContainer.remove();
+      markerContainer = null;
+    }
+    markerRegistry = {};
+  };
+  // --- End Marker System ---
+
   window.__termul_remove_annotation_overlay = function() {
+    window.__termul_remove_markers();
     overlay.remove();
     if (rectEl) {
       rectEl.remove();

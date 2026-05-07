@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useBrowserWebview } from "@/hooks/use-browser-webview";
 import { useBrowserSessionStore, type AnnotationSubMode } from "@/stores/browser-session-store";
 import { useAnnotationCapture } from "@/hooks/use-annotation-capture";
+import { useAnnotationMarkers } from "@/hooks/use-annotation-markers";
 import { BrowserControls } from "./BrowserControls";
 import { AnnotationPanel } from "./AnnotationPanel";
+import { normalizeUrl } from "@/stores/annotation-store";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 import {
@@ -38,6 +40,9 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
 
   // Subscribe to annotation capture events
   useAnnotationCapture(browserTabId);
+
+  // Mount annotation markers hook
+  useAnnotationMarkers(browserTabId, isVisible, normalizeUrl(url));
 
   // Listen for title changes and update store
   useEffect(() => {

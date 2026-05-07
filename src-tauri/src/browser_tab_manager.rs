@@ -309,6 +309,59 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    fn escape_js_string_literal(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('\'', "\\'")
+    }
+
+    pub fn inject_annotation_markers(
+        &self,
+        tab_id: &str,
+        annotations_json: &str,
+        selected_id: Option<&str>,
+    ) -> Result<(), String> {
+        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
+            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
+        }
+        drop(annotation_injected);
+
+        let webview = self.get_webview(tab_id)?;
+        let escaped_json = Self::escape_js_string_literal(annotations_json);
+        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
+        let js = format!(
+            "window.__termul_render_markers(JSON.parse('{}'), {});",
+            escaped_json,
+            selected_id_js,
+        );
+        webview
+            .eval(&js)
+            .map_err(|e| format!("Failed to inject annotation markers: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_annotation_marker_selection(
+        &self,
+        tab_id: &str,
+        selected_id: Option<&str>,
+    ) -> Result<(), String> {
+        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
+            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
+        }
+        drop(annotation_injected);
+
+        let webview = self.get_webview(tab_id)?;
+        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
+        let js = format!(
+            "window.__termul_update_marker_selection({});",
+            selected_id_js,
+        );
+        webview
+            .eval(&js)
+            .map_err(|e| format!("Failed to update annotation marker selection: {}", e))?;
+        Ok(())
+    }
+
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
         let parsed_url: tauri::Url = url
