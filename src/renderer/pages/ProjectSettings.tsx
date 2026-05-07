@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Settings, Save, Info, Plus, X, ChevronDown, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   useProjects,
   useActiveProject,
@@ -19,6 +20,7 @@ import { parseEnvFile, mergeEnvVars } from '@/lib/env-parser'
 export default function ProjectSettings() {
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+  const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
   const {
@@ -179,6 +181,20 @@ export default function ProjectSettings() {
               </p>
             </div>
           </div>
+          <button
+            onClick={() => {
+              if (hasChanges) {
+                setIsCloseConfirmOpen(true)
+              } else {
+                navigate('/')
+              }
+            }}
+            className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            title="Close"
+            aria-label="Close project settings"
+          >
+            <X size={18} className="text-muted-foreground group-hover:text-foreground" />
+          </button>
         </div>
 
         {/* Content */}
@@ -456,6 +472,20 @@ export default function ProjectSettings() {
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}
         onCreateProject={addProject}
+      />
+
+      <ConfirmDialog
+        isOpen={isCloseConfirmOpen}
+        title="Unsaved Changes"
+        message={`You have unsaved changes in ${activeProject?.name ?? 'this project'}. Leaving will discard them.`}
+        confirmLabel="Leave"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          setIsCloseConfirmOpen(false)
+          navigate('/')
+        }}
+        onCancel={() => setIsCloseConfirmOpen(false)}
       />
     </>
   )
