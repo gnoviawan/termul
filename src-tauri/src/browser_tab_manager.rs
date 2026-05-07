@@ -22,6 +22,7 @@ pub struct BrowserBounds {
 pub struct BrowserTabManager {
     app_handle: AppHandle,
     tabs: Arc<Mutex<HashMap<String, BrowserTabInfo>>>,
+    annotation_injected: Arc<Mutex<HashMap<String, Option<String>>>>,
 }
 
 impl BrowserTabManager {
@@ -29,6 +30,7 @@ impl BrowserTabManager {
         Self {
             app_handle,
             tabs: Arc::new(Mutex::new(HashMap::new())),
+            annotation_injected: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -50,7 +52,7 @@ impl BrowserTabManager {
             // Wait for webview to fully initialize before injecting scripts
             std::thread::sleep(std::time::Duration::from_millis(1500));
 
-            // Script that polls URL and readyState continuously.
+            // Script that polls URL, title and readyState continuously.
             // This is more reliable than window.load for SPAs (React, Vue, Angular).
             let poller_script = format!(
                 r#"
@@ -60,6 +62,7 @@ impl BrowserTabManager {
 
                     var tabId = '{}';
                     var lastUrl = location.href;
+                    var lastTitle = '';
                     var lastReady = '';
                     var loadedReported = false;
 
@@ -89,6 +92,10 @@ impl BrowserTabManager {
                         invoke('browser_tab_report_url', {{ tabId: tabId, url: url }});
                     }};
 
+                    var reportTitle = function(title) {{
+                        invoke('browser_tab_report_title', {{ tabId: tabId, title: title }});
+                    }};
+
                     var reportLoaded = function() {{
                         if (loadedReported) return;
                         loadedReported = true;
@@ -98,6 +105,7 @@ impl BrowserTabManager {
                     var check = function() {{
                         var url = location.href;
                         var ready = document.readyState;
+                        var title = document.title || '';
 
                         // Report URL change
                         if (url !== lastUrl) {{
@@ -106,6 +114,12 @@ impl BrowserTabManager {
                             // Reset loaded flag on navigation — new page needs to load
                             loadedReported = false;
                             lastReady = '';
+                        }}
+
+                        // Report title change
+                        if (title !== lastTitle) {{
+                            lastTitle = title;
+                            reportTitle(title);
                         }}
 
                         // Report loaded when readyState stabilizes at 'complete'
@@ -193,11 +207,185 @@ impl BrowserTabManager {
         };
 
         let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;
-        tabs.insert(tab_id, info.clone());
+        tabs.insert(tab_id.clone(), info.clone());
+        drop(tabs);
+
+        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        annotation_injected.insert(tab_id, None);
+        drop(annotation_injected);
+
         Ok(info)
     }
 
+    pub fn inject_annotation_script(&self, tab_id: &str, mode: &str) -> Result<(), String> {
+        let normalized_mode = match mode {
+            "select" => "select",
+            _ => "draw",
+        };
+
+        {
+            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            let current_mode = annotation_injected
+                .get(tab_id)
+                .and_then(|value| value.as_deref());
+            if current_mode == Some(normalized_mode) {
+                return Ok(());
+            }
+        }
+
+        let webview = self.get_webview(tab_id)?;
+
+        {
+            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            let current_mode = annotation_injected
+                .get(tab_id)
+                .and_then(|value| value.as_deref());
+            if current_mode.is_some() && current_mode != Some(normalized_mode) {
+                drop(annotation_injected);
+                self.remove_annotation_overlay(tab_id)?;
+            }
+        }
+
+        let overlay_script = include_str!("../resources/annotation-overlay.js");
+        let bootstrap_script = format!(
+            r#"
+            window.__termul_annotation_mode = {mode:?};
+            window.__termul_annotation_tab_id = {tab_id:?};
+            {overlay_script}
+            "#,
+            mode = normalized_mode,
+            tab_id = tab_id,
+            overlay_script = overlay_script,
+        );
+
+        webview
+            .eval(&bootstrap_script)
+            .map_err(|e| format!("Failed to inject annotation overlay: {}", e))?;
+
+        webview
+            .eval(
+                r#"
+                if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                    throw new Error('Annotation overlay bootstrap probe failed');
+                }
+                "#,
+            )
+            .map_err(|e| format!("Annotation overlay probe failed: {}", e))?;
+
+        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        annotation_injected.insert(tab_id.to_string(), Some(normalized_mode.to_string()));
+        log::info!(
+            "[BrowserTab] Injected annotation overlay for tab={} mode={}",
+            tab_id,
+            normalized_mode
+        );
+        Ok(())
+    }
+
+    pub fn remove_annotation_overlay(&self, tab_id: &str) -> Result<(), String> {
+        let was_injected = {
+            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            annotation_injected
+                .get(tab_id)
+                .and_then(|value| value.as_deref())
+                .is_some()
+        };
+
+        if !was_injected {
+            return Ok(());
+        }
+
+        let webview = self.get_webview(tab_id)?;
+        let cleanup_script = r#"
+            if (window.__termul_remove_annotation_overlay) {
+                window.__termul_remove_annotation_overlay();
+            }
+        "#;
+        let _ = webview.eval(cleanup_script);
+
+        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        annotation_injected.insert(tab_id.to_string(), None);
+        log::info!("[BrowserTab] Removed annotation overlay for tab={}", tab_id);
+        Ok(())
+    }
+
+    fn escape_js_string_literal(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('\'', "\\'")
+    }
+
+    pub fn inject_annotation_markers(
+        &self,
+        tab_id: &str,
+        annotations_json: &str,
+        selected_id: Option<&str>,
+    ) -> Result<(), String> {
+        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
+            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
+        }
+        drop(annotation_injected);
+
+        let webview = self.get_webview(tab_id)?;
+
+        let probe = r#"
+            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                throw new Error('Annotation overlay probe failed');
+            }
+        "#;
+        if webview.eval(probe).is_err() {
+            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            annotation_injected.insert(tab_id.to_string(), None);
+            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
+        }
+        let escaped_json = Self::escape_js_string_literal(annotations_json);
+        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
+        let js = format!(
+            "window.__termul_render_markers(JSON.parse('{}'), {});",
+            escaped_json,
+            selected_id_js,
+        );
+        webview
+            .eval(&js)
+            .map_err(|e| format!("Failed to inject annotation markers: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_annotation_marker_selection(
+        &self,
+        tab_id: &str,
+        selected_id: Option<&str>,
+    ) -> Result<(), String> {
+        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
+            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
+        }
+        drop(annotation_injected);
+
+        let webview = self.get_webview(tab_id)?;
+
+        let probe = r#"
+            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                throw new Error('Annotation overlay probe failed');
+            }
+        "#;
+        if webview.eval(probe).is_err() {
+            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            annotation_injected.insert(tab_id.to_string(), None);
+            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
+        }
+        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
+        let js = format!(
+            "window.__termul_update_marker_selection({});",
+            selected_id_js,
+        );
+        webview
+            .eval(&js)
+            .map_err(|e| format!("Failed to update annotation marker selection: {}", e))?;
+        Ok(())
+    }
+
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         let parsed_url: tauri::Url = url
             .parse()
@@ -235,16 +423,25 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    pub fn invalidate_annotation_injected(&self, tab_id: &str) {
+        let mut annotation_injected = self.annotation_injected.lock().unwrap_or_else(|e| e.into_inner());
+        annotation_injected.insert(tab_id.to_string(), None);
+    }
+
     pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
         if let Ok(webview) = self.get_webview(tab_id) {
             let _ = webview.close();
         }
         let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;
         tabs.remove(tab_id);
+        drop(tabs);
+        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+        annotation_injected.remove(tab_id);
         Ok(())
     }
 
     pub fn go_back(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.back()")
@@ -253,6 +450,7 @@ impl BrowserTabManager {
     }
 
     pub fn go_forward(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.forward()")
@@ -261,6 +459,7 @@ impl BrowserTabManager {
     }
 
     pub fn reload(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.location.reload()")
@@ -277,6 +476,8 @@ impl BrowserTabManager {
             }
         }
         tabs.clear();
+        let mut annotation_injected = self.annotation_injected.lock().unwrap_or_else(|e| e.into_inner());
+        annotation_injected.clear();
     }
 }
 

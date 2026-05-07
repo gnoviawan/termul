@@ -21,6 +21,7 @@ import type { Terminal } from "@/types/project";
 import type { TabReorderPosition } from "@/types/workspace.types";
 import { ContextMenu } from "@/components/ContextMenu";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
+import { useAnnotationStore } from "@/stores/annotation-store";
 import { shellApi, clipboardApi } from "@/lib/api";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
@@ -777,6 +778,7 @@ export function WorkspaceTabBar({
 											}}
 											onClose={() => {
 												useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+												useAnnotationStore.getState().clearAnnotationsForTab(tab.browserTabId)
 												useWorkspaceStore.getState().closeTab(paneId, tab.id)
 											}}
 											onDragStart={(e) => handleTabDragStart(tab.id, e)}

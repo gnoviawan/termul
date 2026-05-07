@@ -719,9 +719,17 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            commands::browser_tab_inject_annotation,
+            commands::browser_tab_remove_annotation_overlay,
+            commands::browser_tab_inject_annotation_markers,
+            commands::browser_tab_update_annotation_marker_selection,
             // Browser tab URL sync commands (called by injected JS)
             commands::browser_tab_report_url,
             commands::browser_tab_report_loaded,
+            commands::browser_tab_report_region_captured,
+            commands::browser_tab_report_element_captured,
+            commands::browser_tab_report_title,
+            commands::browser_tab_report_annotation_marker_clicked,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,

@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+export type AnnotationSubMode = 'draw' | 'select'
+
 export interface BrowserTab {
   id: string
   url: string
@@ -7,6 +9,8 @@ export interface BrowserTab {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
+  annotationMode: boolean
+  annotationSubMode: AnnotationSubMode
 }
 
 export interface BrowserSessionState {
@@ -19,6 +23,8 @@ export interface BrowserSessionState {
   updateTitle: (id: string, title: string) => void
   setLoading: (id: string, loading: boolean) => void
   setNavCapabilities: (id: string, canGoBack: boolean, canGoForward: boolean) => void
+  setAnnotationMode: (id: string, enabled: boolean) => void
+  setAnnotationSubMode: (id: string, mode: AnnotationSubMode) => void
   getTab: (id: string) => BrowserTab | undefined
 }
 
@@ -35,6 +41,8 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       loading: true,
       canGoBack: false,
       canGoForward: false,
+      annotationMode: false,
+      annotationSubMode: 'draw',
     }
     set((state) => {
       const next = new Map(state.tabs)
@@ -55,7 +63,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   updateUrl: (id: string, url: string) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.url === url) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, url })
       return { tabs: next }
@@ -65,7 +73,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   updateTitle: (id: string, title: string) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.title === title) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, title })
       return { tabs: next }
@@ -75,7 +83,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
   setLoading: (id: string, loading: boolean) => {
     set((state) => {
       const tab = state.tabs.get(id)
-      if (!tab) return state
+      if (!tab || tab.loading === loading) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, loading })
       return { tabs: next }
@@ -88,6 +96,26 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       if (!tab) return state
       const next = new Map(state.tabs)
       next.set(id, { ...tab, canGoBack, canGoForward })
+      return { tabs: next }
+    })
+  },
+
+  setAnnotationMode: (id: string, enabled: boolean) => {
+    set((state) => {
+      const tab = state.tabs.get(id)
+      if (!tab || tab.annotationMode === enabled) return state
+      const next = new Map(state.tabs)
+      next.set(id, { ...tab, annotationMode: enabled })
+      return { tabs: next }
+    })
+  },
+
+  setAnnotationSubMode: (id: string, mode: AnnotationSubMode) => {
+    set((state) => {
+      const tab = state.tabs.get(id)
+      if (!tab || tab.annotationSubMode === mode) return state
+      const next = new Map(state.tabs)
+      next.set(id, { ...tab, annotationSubMode: mode })
       return { tabs: next }
     })
   },

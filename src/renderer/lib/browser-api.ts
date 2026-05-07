@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { AnnotationSubMode } from '@/stores/browser-session-store'
 
 export interface BrowserBounds {
   x: number
@@ -21,6 +22,62 @@ export interface BrowserTabNavigatedPayload {
 
 export interface BrowserTabLoadedPayload {
   browserTabId: string
+}
+
+export interface RegionCapturedPayload {
+  browserTabId: string
+  x: number
+  y: number
+  width: number
+  height: number
+  viewportWidth: number
+  viewportHeight: number
+}
+
+export interface ElementCapturedPayload {
+  browserTabId: string
+  url: string
+  title: string
+  viewportWidth: number
+  viewportHeight: number
+  tagName: string
+  selector: string
+  selectorConfidence: 'unique-id' | 'unique-class' | 'fallback'
+  attributes: Record<string, string>
+  textContent: string
+  textTruncated: boolean
+  boundingBox: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+}
+
+export interface BrowserTabTitleChangedPayload {
+  browserTabId: string
+  title: string
+}
+
+export interface AnnotationMarkerClickedPayload {
+  browserTabId: string
+  annotationId: string
+}
+
+export interface MarkerAnnotation {
+  id: string
+  type: 'region' | 'element'
+  x: number
+  y: number
+  width: number
+  height: number
+  selector?: string
+  boundingBox?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
 }
 
 export interface BrowserEventSubscription {
@@ -108,6 +165,17 @@ function createBrowserEventSubscription<T>(
   }
 }
 
+export async function browserTabInjectAnnotation(
+  tabId: string,
+  mode: AnnotationSubMode
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_inject_annotation', { tabId, mode })
+}
+
+export async function browserTabRemoveAnnotationOverlay(tabId: string): Promise<IpcResult<void>> {
+  return invoke('browser_tab_remove_annotation_overlay', { tabId })
+}
+
 export function onBrowserTabNavigated(
   callback: (payload: BrowserTabNavigatedPayload) => void
 ): BrowserEventSubscription {
@@ -118,4 +186,43 @@ export function onBrowserTabLoaded(
   callback: (payload: BrowserTabLoadedPayload) => void
 ): BrowserEventSubscription {
   return createBrowserEventSubscription('browser-tab-loaded', callback)
+}
+
+export function onBrowserTabRegionCaptured(
+  callback: (payload: RegionCapturedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-region-captured', callback)
+}
+
+export function onBrowserTabElementCaptured(
+  callback: (payload: ElementCapturedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-element-captured', callback)
+}
+
+export function onBrowserTabTitleChanged(
+  callback: (payload: BrowserTabTitleChangedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-title-changed', callback)
+}
+
+export async function browserTabInjectAnnotationMarkers(
+  tabId: string,
+  annotations: MarkerAnnotation[],
+  selectedId: string | null
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_inject_annotation_markers', { tabId, annotationsJson: JSON.stringify(annotations), selectedId })
+}
+
+export async function browserTabUpdateAnnotationMarkerSelection(
+  tabId: string,
+  selectedId: string | null
+): Promise<IpcResult<void>> {
+  return invoke('browser_tab_update_annotation_marker_selection', { tabId, selectedId })
+}
+
+export function onBrowserTabAnnotationMarkerClicked(
+  callback: (payload: AnnotationMarkerClickedPayload) => void
+): BrowserEventSubscription {
+  return createBrowserEventSubscription('browser-tab-annotation-marker-clicked', callback)
 }
