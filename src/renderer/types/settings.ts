@@ -209,6 +209,24 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		description: "Show or hide the project sidebar",
 		defaultKey: "ctrl+shift+b",
 	},
+	closeTab: {
+		id: "closeTab",
+		label: "Close Tab",
+		description: "Close the active tab (terminal, editor, or browser)",
+		defaultKey: "ctrl+w",
+	},
+	saveFile: {
+		id: "saveFile",
+		label: "Save File",
+		description: "Save the current editor file",
+		defaultKey: "ctrl+s",
+	},
+	toggleFileExplorer: {
+		id: "toggleFileExplorer",
+		label: "Toggle File Explorer",
+		description: "Show or hide the file explorer panel",
+		defaultKey: "ctrl+b",
+	},
 	fileExplorerRename: {
 		id: "fileExplorerRename",
 		label: "Rename File",

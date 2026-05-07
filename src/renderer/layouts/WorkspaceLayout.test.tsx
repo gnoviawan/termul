@@ -92,7 +92,11 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
     zoomIn: { customKey: 'ctrl+=', defaultKey: 'ctrl+=' },
     zoomOut: { customKey: 'ctrl+-', defaultKey: 'ctrl+-' },
     zoomReset: { customKey: 'ctrl+0', defaultKey: 'ctrl+0' },
-    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' }
+    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' },
+    closeTab: { customKey: 'ctrl+w', defaultKey: 'ctrl+w' },
+    saveFile: { customKey: 'ctrl+s', defaultKey: 'ctrl+s' },
+    toggleFileExplorer: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
+    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' }
   }
 
   return {

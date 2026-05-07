@@ -5,6 +5,7 @@ import {
 	ResizableHandle,
 } from "@/components/ui/resizable";
 import { PaneContent } from "./PaneContent";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { PaneNode, SplitNode, LeafNode } from "@/types/workspace.types";
 import type { ShellInfo } from "@shared/types/ipc.types";
@@ -81,16 +82,18 @@ const PaneLeafRenderer = memo(
 		defaultShell,
 	}: PaneLeafRendererProps): React.JSX.Element => {
 		return (
-			<PaneContent
-				pane={pane}
-				onAddTerminal={onAddTerminal}
-				onAddBrowserTab={onAddBrowserTab}
-				onCloseTerminal={onCloseTerminal}
-				onRenameTerminal={onRenameTerminal}
-				onCloseEditorTab={onCloseEditorTab}
-				closingTerminalIds={closingTerminalIds}
-				defaultShell={defaultShell}
-			/>
+			<ErrorBoundary context="Terminal Pane">
+				<PaneContent
+					pane={pane}
+					onAddTerminal={onAddTerminal}
+					onAddBrowserTab={onAddBrowserTab}
+					onCloseTerminal={onCloseTerminal}
+					onRenameTerminal={onRenameTerminal}
+					onCloseEditorTab={onCloseEditorTab}
+					closingTerminalIds={closingTerminalIds}
+					defaultShell={defaultShell}
+				/>
+			</ErrorBoundary>
 		);
 	},
 );

@@ -34,6 +34,7 @@ import {
 	useKeyboardShortcutsStore,
 	normalizeKeyEvent,
 } from "@/stores/keyboard-shortcuts-store";
+import { isMac, isPlatformModifier } from "@/lib/platform";
 import { useTerminalStore } from "@/stores/terminal-store";
 import {
 	ContextMenu,
@@ -522,9 +523,19 @@ function ConnectedTerminalComponent({
 			const shortcuts = shortcutsRef.current;
 
 			// Check if this key matches any app shortcut
+			// On macOS: Ctrl+key shortcuts should pass through to the shell (not intercepted by app)
+			// Only ⌘+key shortcuts are intercepted by the app on macOS
 			for (const shortcut of Object.values(shortcuts)) {
 				const activeKey = shortcut.customKey ?? shortcut.defaultKey;
 				if (normalized === activeKey) {
+					// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
+					// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
+					// The ⌘ equivalent is handled by the clipboardModifier block above.
+					if (isMac && event.ctrlKey && !event.metaKey) {
+						// Passthrough: let xterm send the raw ctrl sequence to the shell
+						return true;
+					}
+
 					// Don't call stopPropagation() - let event bubble to window handler
 					// Return false to prevent xterm from handling the event
 					return false;
@@ -532,9 +543,11 @@ function ConnectedTerminalComponent({
 			}
 
 			// Handle copy/paste/select all keyboard shortcuts
-			const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+			// macOS convention: ⌘+C/V/A for clipboard operations, Ctrl+C = SIGINT
+			// Windows/Linux convention: Ctrl+C/V/A for everything
+			const clipboardModifier = isPlatformModifier(event);
 
-			if (isCtrlOrCmd) {
+			if (clipboardModifier) {
 				// Rate limit check
 				const now = Date.now();
 				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) {
@@ -570,7 +583,7 @@ function ConnectedTerminalComponent({
 						// Select all
 						terminal.selectAll();
 						return false;
-				}
+					}
 			}
 
 			return true;

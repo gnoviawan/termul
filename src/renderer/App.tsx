@@ -32,10 +32,15 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { isWindows } from '@/lib/platform'
 
-// Hook to prevent Alt key from showing the default browser menu bar
+// Hook to prevent Alt key from showing the default browser menu bar.
+// Only needed on Windows — on macOS, Alt/Option is used for typing special characters.
 function usePreventAltMenu(): void {
   useEffect(() => {
+    // Skip on macOS — Alt/Option is needed for typing special chars (@, €, £, etc.)
+    if (!isWindows) return
+
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Alt') {
         e.preventDefault()

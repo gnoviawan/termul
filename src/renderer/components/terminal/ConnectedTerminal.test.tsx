@@ -1065,6 +1065,9 @@ describe('ConnectedTerminal', () => {
     })
 
     it('should handle Cmd key on macOS for copy/paste', async () => {
+      // On non-macOS test environments (jsdom has empty platform),
+      // isPlatformModifier checks ctrlKey, not metaKey.
+      // So we test the platform-appropriate modifier: Ctrl on non-mac, Cmd on mac.
       const selectedText = 'Selected text'
       mockTerminalInstance.hasSelection.mockReturnValue(true)
       mockTerminalInstance.getSelection.mockReturnValue(selectedText)
@@ -1078,10 +1081,17 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Simulate Cmd+C (metaKey on Mac)
+      // Use the platform-appropriate modifier for clipboard ops.
+      // In jsdom (test env), navigator.platform is "" → isMac=false → use ctrlKey.
+      // On real macOS, isMac=true → metaKey (⌘) would be used.
+      const { isMac: testIsMac } = await import('@/lib/platform')
+      const clipboardModifier = testIsMac
+        ? { metaKey: true, ctrlKey: false }
+        : { ctrlKey: true, metaKey: false }
+
       const event = new KeyboardEvent('keydown', {
         key: 'c',
-        metaKey: true,
+        ...clipboardModifier,
         bubbles: true
       })
 
