@@ -181,6 +181,21 @@ pub async fn project_git_file_statuses(
     Ok(IpcResult::success(entries))
 }
 
+/// Get unified diff for a single file
+#[tauri::command]
+pub async fn project_git_diff_file(
+    project_path: String,
+    file_path: String,
+) -> Result<IpcResult<String>, String> {
+    let diff = tokio::task::spawn_blocking(move || {
+        crate::trackers::git_tracker::GitTracker::get_file_diff(&project_path, &file_path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    Ok(IpcResult::success(diff))
+}
+
 /// Get the exit code for a terminal
 #[tauri::command]
 pub async fn terminal_get_exit_code(

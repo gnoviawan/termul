@@ -42,4 +42,24 @@ async function projectGitFileStatuses(
 
 export const gitApi = {
 	projectGitFileStatuses,
+	projectGitDiffFile,
+}
+
+async function projectGitDiffFile(
+	projectPath: string,
+	filePath: string,
+): Promise<string> {
+	if (!isTauriContext()) return ''
+
+	const result = await invoke<{
+		success: boolean
+		data?: string
+		error?: string
+	}>('project_git_diff_file', { projectPath, filePath })
+
+	if (result.success && result.data) {
+		return result.data
+	}
+
+	return ''
 }

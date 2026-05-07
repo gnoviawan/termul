@@ -705,6 +705,7 @@ pub fn run() {
             commands::terminal_get_git_branch,
             commands::terminal_get_git_status,
             commands::project_git_file_statuses,
+            commands::project_git_diff_file,
             commands::terminal_get_exit_code,
             commands::terminal_update_orphan_detection,
             commands::terminal_add_renderer_ref,

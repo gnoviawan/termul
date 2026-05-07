@@ -975,6 +975,47 @@ impl GitTracker {
         entries
     }
 
+    /// Get the unified diff for a single file.
+    ///
+    /// Runs `git diff` for unstaged changes, or `git diff --cached` for staged.
+    /// Returns the raw unified diff string for the frontend to parse/render.
+    pub fn get_file_diff(cwd: &str, file_path: &str) -> String {
+        let relative = file_path.strip_prefix(cwd).unwrap_or(file_path);
+        let relative = relative.trim_start_matches('/');
+
+        // Try unstaged diff first, fall back to staged (cached)
+        let output = Self::run_git_command(cwd, &["diff", "--", relative])
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout).to_string();
+                    if !s.is_empty() {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                Self::run_git_command(cwd, &["diff", "--cached", "--", relative])
+                    .and_then(|o| {
+                        if o.status.success() {
+                            let s = String::from_utf8_lossy(&o.stdout).to_string();
+                            if !s.is_empty() {
+                                Some(s)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+            });
+
+        output.unwrap_or_default()
+    }
+
     /// Static version of emit_branch_changed for use in async context
     fn emit_branch_changed_static(
         app_handle: &AppHandle,

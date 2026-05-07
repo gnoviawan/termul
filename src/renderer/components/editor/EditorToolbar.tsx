@@ -1,4 +1,4 @@
-import { Code2, Eye, List } from 'lucide-react'
+import { Code2, Eye, List, GitCompare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { useTocIsVisible, useTocSettingsStore } from '@/stores/toc-settings-store'
@@ -7,12 +7,18 @@ interface EditorToolbarProps {
   viewMode: 'code' | 'markdown'
   onToggleViewMode: () => void
   filePath: string
+  hasGitChanges?: boolean
+  showDiff?: boolean
+  onToggleDiff?: () => void
 }
 
 export function EditorToolbar({
   viewMode,
   onToggleViewMode,
-  filePath
+  filePath,
+  hasGitChanges = false,
+  showDiff = false,
+  onToggleDiff,
 }: EditorToolbarProps): React.JSX.Element {
   const fileName = filePath.split(/[\\/]/).pop() || filePath
   const isTocVisible = useTocIsVisible()
@@ -42,9 +48,11 @@ export function EditorToolbar({
           size="sm"
           onClick={onToggleViewMode}
           className={cn(
-            'h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary'
+            'h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary',
+            showDiff && 'pointer-events-none opacity-40',
           )}
-          title={viewMode === 'markdown' ? 'Switch to source mode' : 'Switch to WYSIWYG mode'}
+          title={showDiff ? 'Disabled in diff mode' : viewMode === 'markdown' ? 'Switch to source mode' : 'Switch to WYSIWYG mode'}
+          disabled={showDiff}
         >
           {viewMode === 'markdown' ? (
             <>
@@ -58,6 +66,23 @@ export function EditorToolbar({
             </>
           )}
         </Button>
+
+        {hasGitChanges && onToggleDiff && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleDiff}
+            className={cn(
+              'h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground',
+              showDiff && 'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground',
+            )}
+            title={showDiff ? 'Close diff view' : 'Show git diff'}
+            aria-pressed={showDiff}
+          >
+            <GitCompare size={12} />
+            <span>Diff</span>
+          </Button>
+        )}
       </div>
     </div>
   )
