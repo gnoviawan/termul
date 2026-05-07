@@ -69,7 +69,7 @@ import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
 } from "@/stores/keyboard-shortcuts-store";
-import { isPlatformModifier, isMac } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
 import {
 	useTerminalFontSize,
 	useDefaultShell,
@@ -500,8 +500,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				target.isContentEditable ||
 				target.closest('[contenteditable="true"]');
 
-			// Ctrl+S / ⌘+S should work even in editors
-			if (isPlatformModifier(e) && e.key === "s" && !e.shiftKey && !e.altKey) {
+			// Save File (Ctrl+S / ⌘+S) — should work even in editors
+			if (matchesShortcut(e, getActiveKey("saveFile"))) {
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					useEditorStore.getState().saveFile(activeTab.filePath);
@@ -509,11 +509,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+W / ⌘+W - close tab
+			// Close Tab (Ctrl+W / ⌘+W)
 			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
 			// On Windows/Linux: Ctrl+W closes tab
-			const isCloseTabModifier = isMac ? e.metaKey : e.ctrlKey;
-			if (isCloseTabModifier && e.key === "w" && !e.shiftKey && !e.altKey) {
+			if (matchesShortcut(e, getActiveKey("closeTab"))) {
 				// On macOS, don't intercept Ctrl+W in terminal — let it go to the shell
 				if (isMac && e.ctrlKey && isInTerminal) {
 					return;
@@ -541,8 +540,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+B / ⌘+B - toggle file explorer (skip when in editor/input/terminal)
-			if (isPlatformModifier(e) && e.key === "b" && !e.shiftKey && !e.altKey) {
+			// Toggle File Explorer (Ctrl+B / ⌘+B) — skip when in editor/input/terminal
+			if (matchesShortcut(e, getActiveKey("toggleFileExplorer"))) {
 				if (!isInEditor && !isInInput && !isInTerminal) {
 					e.preventDefault();
 					void updatePanelVisibility(
