@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, ExternalLink, X } from 'lucide-react'
 import {
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -30,6 +31,7 @@ import { shellApi, terminalApi } from '@/lib/api'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 
 export default function AppPreferences(): React.JSX.Element {
+  const navigate = useNavigate()
   const isAurUpdater = isAurUpdateMode()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
@@ -156,6 +158,14 @@ export default function AppPreferences(): React.JSX.Element {
               Configure global application settings
             </p>
           </div>
+          <button
+            onClick={() => { navigate('/') }}
+            className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            title="Close"
+            aria-label="Close preferences"
+          >
+            <X size={18} className="text-muted-foreground hover:text-foreground" />
+          </button>
         </div>
 
         {/* Content */}
