@@ -604,10 +604,13 @@ pub fn run() {
             // so the custom HTML titlebar is used instead.
             #[cfg(target_os = "macos")]
             {
-                use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_decorations(true);
-                    let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+                    if let Err(e) = window.set_decorations(true) {
+                        log::warn!("[macOS] Failed to enable window decorations: {}", e);
+                    }
+                    if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
+                        log::warn!("[macOS] Failed to set overlay title bar style: {}", e);
+                    }
                 }
             }
 
@@ -743,8 +746,10 @@ pub fn run() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
 
-                // Spawn async cleanup task
-                tokio::spawn(async move {
+                // Spawn async cleanup task via tauri::async_runtime
+                // (not tokio::spawn directly — the run callback may fire on
+                // a thread without a Tokio reactor, e.g. macOS WKWebView events)
+                tauri::async_runtime::spawn(async move {
                     pty_manager_clone.kill_all().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();

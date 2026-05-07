@@ -241,10 +241,9 @@ describe('matchesShortcut', () => {
   })
 
   it('should match cmd+k against ctrl+k on macOS (alias)', async () => {
-    // Dynamic import to get fresh module with mock applied
     const { isMac: currentIsMac } = await import('@/lib/platform')
     if (!currentIsMac) {
-      // Non-macOS test env: cmd+k does NOT alias to ctrl+k
+      // Non-macOS: cmd+k does NOT alias to ctrl+k
       const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true })
       expect(normalizeKeyEvent(event)).toBe('cmd+k')
       expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
@@ -256,12 +255,22 @@ describe('matchesShortcut', () => {
     expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
   })
 
-  it('should also match ctrl+k against ctrl+k directly', () => {
+  it('should reject ctrl+k on macOS (shell passthrough guard)', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) {
+      // Non-macOS: ctrl+k matches ctrl+k normally
+      const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
+      expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+      return
+    }
+    // macOS: ctrl+k must NOT match — reserved for shell passthrough
     const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
-    expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+    expect(matchesShortcut(event, 'ctrl+k')).toBe(false)
   })
 
-  it('should match ctrlKey against ctrl config', () => {
+  it('should match ctrl+k against ctrl+k directly (non-macOS)', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (currentIsMac) return // tested in shell passthrough guard test
     const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
     expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
   })

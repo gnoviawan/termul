@@ -165,6 +165,11 @@ export function formatKeyForDisplay(key: string): string {
 //   - On macOS, 'cmd+...' from normalizeKeyEvent also matches 'ctrl+...' config entries.
 //   - On Windows/Linux, matching is exact.
 export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean {
+  // On macOS, Ctrl+... (without ⌘) is the shell passthrough modifier.
+  // It must never trigger app shortcuts — only ⌘+... does.
+  // This mirrors the passthrough guard in ConnectedTerminal.tsx.
+  if (isMac && e.ctrlKey && !e.metaKey) return false
+
   const normalized = normalizeKeyEvent(e)
   if (normalized === shortcutKey) return true
 
