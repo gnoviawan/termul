@@ -554,14 +554,11 @@
       'background:transparent',
       'pointer-events:auto',
       'cursor:pointer',
-      'box-sizing:border-box',
-      'transition:transform 0.15s ease,background 0.15s ease'
+      'box-sizing:border-box'
     ].join(';');
 
     if (data.id === selectedId) {
-      el.style.background = '#3b82f6';
-      el.style.borderColor = '#ffffff';
-      el.style.transform = 'scale(1.2)';
+      el.classList.add('__termul_marker_selected');
     }
 
     el.addEventListener('click', function onMarkerClick(e) {
@@ -575,6 +572,33 @@
     });
 
     return el;
+  }
+
+  // Inject marker styling once
+  if (!document.getElementById('__termul_marker_styles')) {
+    var style = document.createElement('style');
+    style.id = '__termul_marker_styles';
+    style.textContent = [
+      '.' + MARKER_CLASS + ' {',
+      '  transition: transform 0.15s ease, background 0.1s ease, border-color 0.1s ease;',
+      '}',
+      '.' + MARKER_CLASS + '.__termul_marker_selected {',
+      '  background: #3b82f6;',
+      '  border-color: #ffffff;',
+      '  transform: scale(1.2);',
+      '  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);',
+      '  z-index: 1;',
+      '}',
+      '@media (prefers-reduced-motion: reduce) {',
+      '  .' + MARKER_CLASS + ' {',
+      '    transition: none;',
+      '  }',
+      '  .' + MARKER_CLASS + '.__termul_marker_selected {',
+      '    transform: scale(1);',
+      '  }',
+      '}'
+    ].join('\n');
+    document.head.appendChild(style);
   }
 
   window.__termul_render_markers = function(annotations, selectedId) {
@@ -603,10 +627,12 @@
     var markers = markerContainer.querySelectorAll('.' + MARKER_CLASS);
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
-      var isSelected = m.dataset.annotationId === selectedId;
-      m.style.background = isSelected ? '#3b82f6' : 'transparent';
-      m.style.borderColor = isSelected ? '#ffffff' : '#3b82f6';
-      m.style.transform = isSelected ? 'scale(1.2)' : 'scale(1)';
+      var isSelected = String(m.dataset.annotationId) === String(selectedId);
+      if (isSelected) {
+        m.classList.add('__termul_marker_selected');
+      } else {
+        m.classList.remove('__termul_marker_selected');
+      }
     }
   };
 
@@ -615,6 +641,10 @@
     if (markerContainer) {
       markerContainer.remove();
       markerContainer = null;
+    }
+    var markerStylesEl = document.getElementById('__termul_marker_styles');
+    if (markerStylesEl) {
+      markerStylesEl.remove();
     }
     markerRegistry = {};
   };

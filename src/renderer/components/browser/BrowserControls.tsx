@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { browserTabGoBack, browserTabGoForward, browserTabReload } from "@/lib/browser-api";
 import { ArrowLeft, ArrowRight, RotateCcw, Globe, Loader2, Pencil } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface BrowserControlsProps {
   browserTabId: string;
@@ -95,18 +96,26 @@ export function BrowserControls({
             placeholder="Enter URL..."
           />
         </div>
-        <button
-          onClick={handleToggleAnnotationMode}
-          className={cn(
-            "p-1.5 rounded transition-colors shrink-0",
-            tabAnnotationMode
-              ? "bg-primary text-primary-foreground hover:bg-primary/90"
-              : "hover:bg-secondary text-muted-foreground hover:text-foreground"
-          )}
-          title={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
-        >
-          <Pencil size={14} />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleToggleAnnotationMode}
+              aria-pressed={tabAnnotationMode}
+              className={cn(
+                "p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95",
+                tabAnnotationMode
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20"
+                  : "hover:bg-secondary text-muted-foreground hover:text-foreground"
+              )}
+              aria-label={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+            >
+              <Pencil size={14} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

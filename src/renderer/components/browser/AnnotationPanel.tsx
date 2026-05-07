@@ -125,8 +125,10 @@ function AnnotationItem({
       ref={cardRef}
       onClick={onSelect}
       className={cn(
-        "rounded-md border border-border bg-card p-3 space-y-2 cursor-pointer transition-all",
-        isSelected && "ring-2 ring-primary"
+        "rounded-md border border-border bg-card p-3 space-y-2 cursor-pointer",
+        "motion-safe:transition-all motion-safe:duration-200",
+        "hover:border-primary/50 hover:shadow-sm",
+        isSelected && "ring-2 ring-primary border-primary shadow-md shadow-primary/10"
       )}
     >
       <div className="flex items-center gap-2">
@@ -288,7 +290,7 @@ export function AnnotationPanel({
   }, []);
 
   return (
-    <div className="w-72 border-l border-border bg-background flex flex-col shrink-0">
+    <div className="w-72 border-l border-border bg-background flex flex-col shrink-0 motion-safe:animate-slide-in">
       <div className="px-3 py-2 border-b border-border bg-card space-y-1.5">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium">Annotations</h3>
@@ -318,7 +320,7 @@ export function AnnotationPanel({
           <div
             role="group"
             aria-label="Annotation mode"
-            className="flex items-center rounded-md border border-border bg-background"
+            className="flex items-center rounded-md border border-border bg-background overflow-hidden"
           >
             <Tooltip>
               <TooltipTrigger asChild>
@@ -328,7 +330,7 @@ export function AnnotationPanel({
                   size="sm"
                   aria-pressed={annotationSubMode === "draw"}
                   onClick={() => onChangeAnnotationSubMode("draw")}
-                  className="h-7 w-7 p-0"
+                  className="h-7 w-7 p-0 motion-safe:transition-all motion-safe:duration-150"
                   aria-label="Draw rectangle annotations"
                 >
                   <Square size={13} />
@@ -347,7 +349,7 @@ export function AnnotationPanel({
                     aria-pressed={annotationSubMode === "select"}
                     onClick={() => onChangeAnnotationSubMode("select")}
                     disabled={selectDisabled}
-                    className="h-7 w-7 p-0"
+                    className="h-7 w-7 p-0 motion-safe:transition-all motion-safe:duration-150"
                     aria-label={selectDisabled ? "Select unavailable on this page" : "Select elements"}
                   >
                     <Crosshair size={13} />
@@ -367,7 +369,7 @@ export function AnnotationPanel({
                 size="sm"
                 type="button"
                 onClick={onAddNote}
-                className="h-7 w-7 p-0"
+                className="h-7 w-7 p-0 motion-safe:transition-all motion-safe:duration-150 hover:bg-primary/10"
                 aria-label="Add page note"
               >
                 <StickyNote size={13} />
@@ -386,7 +388,7 @@ export function AnnotationPanel({
                 type="button"
                 onClick={onExport}
                 disabled={!hasAnnotations}
-                className="h-7 w-7 p-0"
+                className="h-7 w-7 p-0 motion-safe:transition-all motion-safe:duration-150 hover:bg-primary/10"
                 aria-label={hasAnnotations ? "Export annotations" : "No annotations to export"}
               >
                 <FileDown size={13} />

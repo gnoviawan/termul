@@ -122,3 +122,59 @@ export function exportAnnotationsToJson(annotations: Annotation[]): string {
   }
   return JSON.stringify(payload, null, 2)
 }
+
+// ── AFS (Agentation Format Schema) adapter ──────────────────────────────
+// AFS-unsupported fields that MUST be absent from output:
+const AFS_UNSUPPORTED_FIELDS = new Set([
+  'status', 'thread', 'resolvedBy', 'resolvedAt',
+  'reactComponents', 'cssClasses', 'computedStyles',
+  'accessibility', 'nearbyText', 'selectedText',
+  'isFixed', 'isMultiSelect', 'fullPath', 'nearbyElements',
+  'kind', 'placement', 'rearrange',
+])
+
+export function exportAnnotationsToAfsJson(annotations: Annotation[]): string {
+  const afsAnnotations = annotations.map((a) => mapAnnotationToAfs(a))
+  return JSON.stringify({ annotations: afsAnnotations }, null, 2)
+}
+
+function mapAnnotationToAfs(a: Annotation): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    id: a.id,
+    comment: a.description ?? '',
+    timestamp: a.createdAt,
+    url: a.url,
+    intent: a.intent,
+    severity: a.severity,
+  }
+
+  if (a.type === 'element' && a.geometry.type === 'element') {
+    const geo = a.geometry
+    entry.elementPath = geo.selector
+    entry.element = geo.tagName
+    entry.x = (geo.boundingBox.x / a.viewportWidth) * 100
+    entry.y = geo.boundingBox.y
+    entry.boundingBox = { ...geo.boundingBox }
+  } else if (a.type === 'region' && a.geometry.type === 'rect') {
+    const geo = a.geometry
+    entry.elementPath = formatRect(geo)
+    entry.element = 'div'
+    entry.x = (geo.x / a.viewportWidth) * 100
+    entry.y = geo.y
+    entry.boundingBox = { x: geo.x, y: geo.y, width: geo.width, height: geo.height }
+  } else {
+    // note (or any type we can't map geometrically)
+    entry.element = 'body'
+    entry.x = 0
+    entry.y = 0
+  }
+
+  // Belt-and-suspenders: strip any AFS-unsupported keys that may have leaked.
+  for (const key of Object.keys(entry)) {
+    if (AFS_UNSUPPORTED_FIELDS.has(key)) {
+      delete entry[key]
+    }
+  }
+
+  return entry
+}

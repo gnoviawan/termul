@@ -20,6 +20,7 @@ import type { Annotation, OutputLevel } from "@/stores/annotation-store";
 import {
   exportAnnotationsToMarkdown,
   exportAnnotationsToJson,
+  exportAnnotationsToAfsJson,
 } from "@/lib/annotation-export";
 
 interface AnnotationExportModalProps {
@@ -33,15 +34,16 @@ export function AnnotationExportModal({
   onOpenChange,
   annotations,
 }: AnnotationExportModalProps): React.JSX.Element {
-  const [activeTab, setActiveTab] = useState<"markdown" | "json">("markdown");
+  const [activeTab, setActiveTab] = useState<"markdown" | "json" | "afs">("markdown");
   const [level, setLevel] = useState<OutputLevel>("standard");
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
   const markdownPreview = exportAnnotationsToMarkdown(annotations, level);
   const jsonPreview = exportAnnotationsToJson(annotations);
+  const afsPreview = exportAnnotationsToAfsJson(annotations);
 
   const handleCopy = async () => {
-    const text = activeTab === "markdown" ? markdownPreview : jsonPreview;
+    const text = activeTab === "markdown" ? markdownPreview : activeTab === "json" ? jsonPreview : afsPreview;
     const result = await clipboardApi.writeText(text);
     if (result.success) {
       setCopyState("copied");
@@ -56,11 +58,12 @@ export function AnnotationExportModal({
           <DialogTitle>Export Annotations</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "markdown" | "json")}>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "markdown" | "json" | "afs")}>
           <div className="flex items-center justify-between mb-3">
             <TabsList>
               <TabsTrigger value="markdown" className="text-xs">Markdown</TabsTrigger>
               <TabsTrigger value="json" className="text-xs">JSON</TabsTrigger>
+              <TabsTrigger value="afs" className="text-xs">AFS (Agentation Format)</TabsTrigger>
             </TabsList>
 
             {activeTab === "markdown" && (
@@ -95,6 +98,12 @@ export function AnnotationExportModal({
           <TabsContent value="json">
             <pre className="rounded-lg bg-muted p-4 text-xs font-mono whitespace-pre-wrap overflow-auto max-h-[400px]">
               {jsonPreview}
+            </pre>
+          </TabsContent>
+
+          <TabsContent value="afs">
+            <pre className="rounded-lg bg-muted p-4 text-xs font-mono whitespace-pre-wrap overflow-auto max-h-[400px]">
+              {afsPreview}
             </pre>
           </TabsContent>
         </Tabs>

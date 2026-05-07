@@ -118,6 +118,7 @@ export function useAnnotationMarkers(
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current)
         rafRef.current = 0
+        pendingRef.current = false
       }
     }
   }, [annotationMode, isVisible, annotations, selectedId, browserTabId, normalizedUrl])

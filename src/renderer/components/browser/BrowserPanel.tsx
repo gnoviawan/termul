@@ -233,7 +233,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
       <div className="flex flex-1 overflow-hidden">
         <div ref={containerRef} className="flex-1 bg-background relative">
           {loading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10 motion-safe:animate-fade-in">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <span className="mt-2 text-sm text-muted-foreground">Loading...</span>
             </div>
