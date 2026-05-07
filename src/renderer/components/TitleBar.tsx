@@ -6,6 +6,7 @@ import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { windowApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { isMac } from '@/lib/platform'
 
 const focusableButtonClass = 'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
@@ -45,6 +46,15 @@ export function TitleBar(): React.JSX.Element {
     <header
       className="h-8 flex items-center bg-background select-none shrink-0"
     >
+      {/* macOS: spacer for native traffic lights (close/minimize/zoom) */}
+      {isMac && (
+        <div className="flex items-center h-full" style={{ width: '70px', paddingLeft: '14px' }} data-tauri-drag-region>
+          <div className="flex items-center gap-2">
+            {/* Native traffic lights are rendered by macOS automatically */}
+          </div>
+        </div>
+      )}
+
       <div
         className="flex items-center h-full px-3"
         data-tauri-drag-region
@@ -120,32 +130,37 @@ export function TitleBar(): React.JSX.Element {
 
         <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 
-        <button
-          onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}
-          className={`${focusableButtonClass} cursor-pointer`}
-          title="Minimize"
-          aria-label="Minimize window"
-        >
-          <Minus size={16} />
-        </button>
+        {/* Window controls — hidden on macOS (native traffic lights) */}
+        {!isMac && (
+          <>
+            <button
+              onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}
+              className={`${focusableButtonClass} cursor-pointer`}
+              title="Minimize"
+              aria-label="Minimize window"
+            >
+              <Minus size={16} />
+            </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); void windowApi.toggleMaximize(); }}
-          className={`${focusableButtonClass} cursor-pointer`}
-          title={isMaximized ? 'Restore' : 'Maximize'}
-          aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
-        >
-          {isMaximized ? <Copy size={14} /> : <Square size={14} />}
-        </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); void windowApi.toggleMaximize(); }}
+              className={`${focusableButtonClass} cursor-pointer`}
+              title={isMaximized ? 'Restore' : 'Maximize'}
+              aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+            >
+              {isMaximized ? <Copy size={14} /> : <Square size={14} />}
+            </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); void windowApi.close(); }}
-          className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
-          title="Close"
-          aria-label="Close window"
-        >
-          <X size={16} />
-        </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); void windowApi.close(); }}
+              className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
+              title="Close"
+              aria-label="Close window"
+            >
+              <X size={16} />
+            </button>
+          </>
+        )}
       </div>
     </header>
   )

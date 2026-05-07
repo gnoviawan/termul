@@ -597,6 +597,20 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // macOS: Enable overlay title bar for native traffic lights.
+            // Window starts hidden (visible: false), so we set this before show().
+            // On Windows/Linux: set_decorations(false) removes native frame
+            // so the custom HTML titlebar is used instead.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(true);
+                    let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+            }
+
             app.manage(ViewMenuState::default());
 
             // Create CWD Tracker (takes app_handle directly)
