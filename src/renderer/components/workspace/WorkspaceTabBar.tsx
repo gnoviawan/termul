@@ -110,6 +110,12 @@ function TerminalTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button === 1 && !isClosing) {
+						e.preventDefault();
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -269,6 +275,12 @@ function EditorTabWrapper({
 			onDragOver={onDragOver}
 			onDragLeave={onDragLeave}
 			onDrop={onDrop}
+			onAuxClick={(e) => {
+				if (e.button === 1) {
+					e.preventDefault();
+					onClose();
+				}
+			}}
 			className={cn(
 				"relative h-full transition-all duration-150 ease-out",
 				isDragging && "opacity-50 scale-[0.98]",
@@ -351,6 +363,12 @@ function BrowserTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button === 1) {
+						e.preventDefault();
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
