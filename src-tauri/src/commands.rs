@@ -378,6 +378,7 @@ pub async fn browser_tab_report_url(
     url: String,
     app_handle: AppHandle,
     webview: Webview,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     let caller_label = webview.label().to_string();
     if caller_label != tab_id {
@@ -387,6 +388,7 @@ pub async fn browser_tab_report_url(
         ));
     }
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
+    browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
         .emit(
             "browser-tab-navigated",
@@ -402,6 +404,7 @@ pub async fn browser_tab_report_loaded(
     tab_id: String,
     app_handle: AppHandle,
     webview: Webview,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     let caller_label = webview.label().to_string();
     if caller_label != tab_id {
@@ -411,6 +414,7 @@ pub async fn browser_tab_report_loaded(
         ));
     }
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
+    browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
         .emit(
             "browser-tab-loaded",
@@ -422,6 +426,7 @@ pub async fn browser_tab_report_loaded(
 
 /// Report region captured from browser tab webview (called by injected annotation overlay)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn browser_tab_report_region_captured(
     tab_id: String,
     x: f64,
@@ -522,8 +527,8 @@ pub async fn browser_tab_report_element_captured(
         .ok_or_else(|| "Browser tab report element captured rejected: attributes must be an object".to_string())?;
 
     log::debug!(
-        "[BrowserTab] Element captured: tab={} tag={} selector={}",
-        tab_id, tag_name, selector
+        "[BrowserTab] Element captured: tab={} tag={} selector=<redacted>",
+        tab_id, tag_name
     );
     app_handle
         .emit(

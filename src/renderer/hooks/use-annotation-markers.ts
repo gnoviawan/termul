@@ -5,6 +5,7 @@ import {
   browserTabInjectAnnotationMarkers,
   browserTabUpdateAnnotationMarkerSelection,
   onBrowserTabAnnotationMarkerClicked,
+  onBrowserTabLoaded,
   type MarkerAnnotation,
 } from '@/lib/browser-api'
 
@@ -132,4 +133,14 @@ export function useAnnotationMarkers(
     })
     return () => subscription.unlisten()
   }, [browserTabId, normalizedUrl])
+
+  // Reset cached refs on page reload so reinjected overlay receives markers
+  useEffect(() => {
+    const subscription = onBrowserTabLoaded((payload) => {
+      if (payload.browserTabId !== browserTabId) return
+      prevAnnotationsRef.current = []
+      prevSelectedRef.current = null
+    })
+    return () => subscription.unlisten()
+  }, [browserTabId])
 }

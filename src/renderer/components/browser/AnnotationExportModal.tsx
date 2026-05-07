@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, X } from "lucide-react";
 import { clipboardApi } from "@/lib/clipboard-api";
 import type { Annotation, OutputLevel } from "@/stores/annotation-store";
 import {
@@ -87,13 +87,15 @@ export function AnnotationExportModal({
               </Select>
             )}
 
-            <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={handleCopy}>
+            <Button size="sm" variant="outline" className={`h-8 text-xs gap-1.5 ${copyState === "error" ? "text-red-500 border-red-300" : ""}`} onClick={handleCopy} aria-label={copyState === "error" ? "Copy failed" : undefined}>
               {copyState === "copied" ? (
                 <Check size={14} className="text-green-500" />
+              ) : copyState === "error" ? (
+                <X size={14} className="text-red-500" />
               ) : (
                 <Copy size={14} />
               )}
-              {copyState === "copied" ? "Copied" : "Copy"}
+              {copyState === "copied" ? "Copied" : copyState === "error" ? "Failed" : "Copy"}
             </Button>
           </div>
 

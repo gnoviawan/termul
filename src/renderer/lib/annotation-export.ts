@@ -152,14 +152,14 @@ function mapAnnotationToAfs(a: Annotation): Record<string, unknown> {
     const geo = a.geometry
     entry.elementPath = geo.selector
     entry.element = geo.tagName
-    entry.x = (geo.boundingBox.x / a.viewportWidth) * 100
+    entry.x = a.viewportWidth > 0 ? (geo.boundingBox.x / a.viewportWidth) * 100 : geo.boundingBox.x
     entry.y = geo.boundingBox.y
     entry.boundingBox = { ...geo.boundingBox }
   } else if (a.type === 'region' && a.geometry.type === 'rect') {
     const geo = a.geometry
     entry.elementPath = formatRect(geo)
     entry.element = 'div'
-    entry.x = (geo.x / a.viewportWidth) * 100
+    entry.x = a.viewportWidth > 0 ? (geo.x / a.viewportWidth) * 100 : geo.x
     entry.y = geo.y
     entry.boundingBox = { x: geo.x, y: geo.y, width: geo.width, height: geo.height }
   } else {

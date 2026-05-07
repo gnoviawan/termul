@@ -7,6 +7,7 @@ import {
   browserTabInjectAnnotationMarkers,
   browserTabUpdateAnnotationMarkerSelection,
   onBrowserTabAnnotationMarkerClicked,
+  onBrowserTabLoaded,
   type MarkerAnnotation,
 } from '@/lib/browser-api'
 
@@ -17,11 +18,13 @@ vi.mock('@/lib/browser-api', () => ({
     .fn()
     .mockResolvedValue({ success: true }),
   onBrowserTabAnnotationMarkerClicked: vi.fn(),
+  onBrowserTabLoaded: vi.fn(),
 }))
 
 const mockOnMarkerClicked = onBrowserTabAnnotationMarkerClicked as ReturnType<
   typeof vi.fn
 >
+const mockOnBrowserTabLoaded = onBrowserTabLoaded as ReturnType<typeof vi.fn>
 
 // Helper to setup browser tab state
 function setupBrowserTab(
@@ -129,8 +132,10 @@ describe('useAnnotationMarkers', () => {
       browserTabUpdateAnnotationMarkerSelection as ReturnType<typeof vi.fn>
     ).mockResolvedValue({ success: true })
 
-    // Default mock for onMarkerClicked - returns a subscription object
+    // Default mock for onMarkerClicked — returns a subscription object
     mockOnMarkerClicked.mockReturnValue({ unlisten: vi.fn() })
+    // Default mock for onBrowserTabLoaded — returns a subscription object
+    mockOnBrowserTabLoaded.mockReturnValue({ unlisten: vi.fn() })
   })
 
   describe('no-regression selection updates', () => {

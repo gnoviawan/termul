@@ -326,6 +326,17 @@ impl BrowserTabManager {
         drop(annotation_injected);
 
         let webview = self.get_webview(tab_id)?;
+
+        let probe = r#"
+            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                throw new Error('Annotation overlay probe failed');
+            }
+        "#;
+        if webview.eval(probe).is_err() {
+            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            annotation_injected.insert(tab_id.to_string(), None);
+            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
+        }
         let escaped_json = Self::escape_js_string_literal(annotations_json);
         let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
         let js = format!(
@@ -351,6 +362,17 @@ impl BrowserTabManager {
         drop(annotation_injected);
 
         let webview = self.get_webview(tab_id)?;
+
+        let probe = r#"
+            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
+                throw new Error('Annotation overlay probe failed');
+            }
+        "#;
+        if webview.eval(probe).is_err() {
+            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+            annotation_injected.insert(tab_id.to_string(), None);
+            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
+        }
         let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
         let js = format!(
             "window.__termul_update_marker_selection({});",
@@ -363,6 +385,7 @@ impl BrowserTabManager {
     }
 
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         let parsed_url: tauri::Url = url
             .parse()
@@ -400,6 +423,11 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    pub fn invalidate_annotation_injected(&self, tab_id: &str) {
+        let mut annotation_injected = self.annotation_injected.lock().unwrap_or_else(|e| e.into_inner());
+        annotation_injected.insert(tab_id.to_string(), None);
+    }
+
     pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
         if let Ok(webview) = self.get_webview(tab_id) {
             let _ = webview.close();
@@ -413,6 +441,7 @@ impl BrowserTabManager {
     }
 
     pub fn go_back(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.back()")
@@ -421,6 +450,7 @@ impl BrowserTabManager {
     }
 
     pub fn go_forward(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.forward()")
@@ -429,6 +459,7 @@ impl BrowserTabManager {
     }
 
     pub fn reload(&self, tab_id: &str) -> Result<(), String> {
+        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.location.reload()")
