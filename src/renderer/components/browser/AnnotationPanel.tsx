@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,12 +11,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Trash2 } from "lucide-react";
+import { Trash2, StickyNote, FileDown, X, Square, Crosshair } from "lucide-react";
 import { useAnnotationStore, type Annotation, type ElementGeometry, type Intent, type Severity, normalizeUrl } from "@/stores/annotation-store";
+import type { AnnotationSubMode } from "@/stores/browser-session-store";
 
 interface AnnotationPanelProps {
-  browserTabId: string;
   url: string;
+  annotationSubMode: AnnotationSubMode;
+  annotationOverlayAvailable: boolean;
+  onExitAnnotationMode: () => void;
+  onChangeAnnotationSubMode: (mode: AnnotationSubMode) => void;
+  onAddNote: () => void;
+  onExport: () => void;
 }
 
 const intentOptions: Intent[] = ["fix", "change", "question", "approve"];
@@ -236,7 +242,15 @@ function AnnotationItem({
   );
 }
 
-export function AnnotationPanel({ browserTabId: _browserTabId, url }: AnnotationPanelProps): React.JSX.Element {
+export function AnnotationPanel({
+  url,
+  annotationSubMode,
+  annotationOverlayAvailable,
+  onExitAnnotationMode,
+  onChangeAnnotationSubMode,
+  onAddNote,
+  onExport,
+}: AnnotationPanelProps): React.JSX.Element {
   const annotations = useAnnotationStore((state) => state.getAnnotationsForUrl(url));
   const removeAnnotation = useAnnotationStore((state) => state.removeAnnotation);
   const updateAnnotation = useAnnotationStore((state) => state.updateAnnotation);
@@ -246,12 +260,145 @@ export function AnnotationPanel({ browserTabId: _browserTabId, url }: Annotation
   );
 
   const normalizedUrl = normalizeUrl(url);
+  const selectDisabled = !annotationOverlayAvailable;
+  const hasAnnotations = annotations.length > 0;
+
+  const handleToolbarKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = e.currentTarget.querySelectorAll(
+      'button:not([disabled])'
+    );
+    const currentIndex = Array.from(buttons).findIndex((btn) => btn === document.activeElement);
+    if (currentIndex === -1) return;
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      const next = buttons[(currentIndex + 1) % buttons.length] as HTMLElement;
+      next?.focus();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const prev = buttons[(currentIndex - 1 + buttons.length) % buttons.length] as HTMLElement;
+      prev?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      (buttons[0] as HTMLElement)?.focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      (buttons[buttons.length - 1] as HTMLElement)?.focus();
+    }
+  }, []);
 
   return (
     <div className="w-72 border-l border-border bg-background flex flex-col shrink-0">
-      <div className="px-3 py-2 border-b border-border bg-card">
-        <h3 className="text-sm font-medium">Annotations</h3>
-        <p className="text-[10px] text-muted-foreground mt-0.5">
+      <div className="px-3 py-2 border-b border-border bg-card space-y-1.5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Annotations</h3>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={onExitAnnotationMode}
+                className="h-7 w-7 p-0"
+                aria-label="Exit annotation mode"
+              >
+                <X size={14} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Exit annotation mode</TooltipContent>
+          </Tooltip>
+        </div>
+
+        <div
+          role="toolbar"
+          aria-label="Annotation tools"
+          className="flex items-center gap-1"
+          onKeyDown={handleToolbarKeyDown}
+        >
+          <div
+            role="group"
+            aria-label="Annotation mode"
+            className="flex items-center rounded-md border border-border bg-background"
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant={annotationSubMode === "draw" ? "default" : "ghost"}
+                  size="sm"
+                  aria-pressed={annotationSubMode === "draw"}
+                  onClick={() => onChangeAnnotationSubMode("draw")}
+                  className="h-7 w-7 p-0"
+                  aria-label="Draw rectangle annotations"
+                >
+                  <Square size={13} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Draw rectangle</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={-1} className="outline-none">
+                  <Button
+                    type="button"
+                    variant={annotationSubMode === "select" ? "default" : "ghost"}
+                    size="sm"
+                    aria-pressed={annotationSubMode === "select"}
+                    onClick={() => onChangeAnnotationSubMode("select")}
+                    disabled={selectDisabled}
+                    className="h-7 w-7 p-0"
+                    aria-label={selectDisabled ? "Select unavailable on this page" : "Select elements"}
+                  >
+                    <Crosshair size={13} />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {selectDisabled ? "Annotation unavailable on this page" : "Select elements"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={onAddNote}
+                className="h-7 w-7 p-0"
+                aria-label="Add page note"
+              >
+                <StickyNote size={13} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Add page note</TooltipContent>
+          </Tooltip>
+
+          <div className="flex-1" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={onExport}
+                disabled={!hasAnnotations}
+                className="h-7 w-7 p-0"
+                aria-label={hasAnnotations ? "Export annotations" : "No annotations to export"}
+              >
+                <FileDown size={13} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {hasAnnotations ? "Export annotations" : "No annotations to export"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        <p className="text-[10px] text-muted-foreground">
           Session-scoped: annotations last until app close
         </p>
       </div>

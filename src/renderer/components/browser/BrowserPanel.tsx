@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useBrowserWebview } from "@/hooks/use-browser-webview";
 import { useBrowserSessionStore, type AnnotationSubMode } from "@/stores/browser-session-store";
 import { useAnnotationCapture } from "@/hooks/use-annotation-capture";
 import { useAnnotationMarkers } from "@/hooks/use-annotation-markers";
+import { useAnnotationStore, normalizeUrl, EMPTY_ANNOTATION_ARRAY } from "@/stores/annotation-store";
+import { useShallow } from "zustand/shallow";
 import { BrowserControls } from "./BrowserControls";
 import { AnnotationPanel } from "./AnnotationPanel";
-import { normalizeUrl } from "@/stores/annotation-store";
+import { AnnotationExportModal } from "./AnnotationExportModal";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 import {
   browserTabInjectAnnotation,
   browserTabRemoveAnnotationOverlay,
+  browserTabHide,
+  browserTabShow,
   onBrowserTabTitleChanged,
   onBrowserTabLoaded,
 } from "@/lib/browser-api";
@@ -28,6 +32,9 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
   const url = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.url || DEFAULT_URL
   );
+  const tabTitle = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.title ?? ''
+  );
   const loading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
   );
@@ -37,6 +44,65 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
   const annotationSubMode = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.annotationSubMode ?? "draw"
   );
+
+  const [exportOpen, setExportOpen] = useState(false);
+  const webviewWasVisibleRef = useRef(false);
+
+  const annotations = useAnnotationStore(
+    useShallow((state) => {
+      if (!url) return EMPTY_ANNOTATION_ARRAY;
+      return state.getAnnotationsForUrl(url);
+    })
+  );
+
+  const handleAddNote = useCallback(() => {
+    if (!url) return;
+    const normalizedUrl = normalizeUrl(url);
+    const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1920;
+    const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 1080;
+
+    useAnnotationStore.getState().addAnnotation({
+      browserTabId,
+      url,
+      normalizedUrl,
+      pageTitle: tabTitle || "",
+      type: "note",
+      geometry: { type: "point", x: 0, y: 0 },
+      intent: "question",
+      severity: "suggestion",
+      description: "",
+      viewportWidth,
+      viewportHeight,
+    });
+  }, [browserTabId, url, tabTitle]);
+
+  const handleOpenExport = useCallback(() => {
+    if (exportOpen) return;
+    browserTabHide(browserTabId)
+      .then((result) => {
+        if (result.success) {
+          webviewWasVisibleRef.current = true;
+        }
+      })
+      .catch(console.error);
+    setExportOpen(true);
+  }, [browserTabId, exportOpen]);
+
+  const handleCloseExport = useCallback((open: boolean) => {
+    setExportOpen(open);
+    if (!open && webviewWasVisibleRef.current) {
+      browserTabShow(browserTabId).catch(console.error);
+      webviewWasVisibleRef.current = false;
+    }
+  }, [browserTabId]);
+
+  const handleExitAnnotationMode = useCallback(() => {
+    useBrowserSessionStore.getState().setAnnotationMode(browserTabId, false);
+  }, [browserTabId]);
+
+  const handleChangeAnnotationSubMode = useCallback((mode: AnnotationSubMode) => {
+    useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, mode);
+  }, [browserTabId]);
 
   const { containerRef } = useBrowserWebview(browserTabId, isVisible, url);
   const injectedModeRef = useRef<AnnotationSubMode | null>(null);
@@ -162,10 +228,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
       )}
     >
       {isVisible && (
-        <BrowserControls
-          browserTabId={browserTabId}
-          annotationOverlayAvailable={annotationOverlayAvailable}
-        />
+        <BrowserControls browserTabId={browserTabId} />
       )}
       <div className="flex flex-1 overflow-hidden">
         <div ref={containerRef} className="flex-1 bg-background relative">
@@ -177,9 +240,22 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
           )}
         </div>
         {annotationMode && (
-          <AnnotationPanel browserTabId={browserTabId} url={url} />
+          <AnnotationPanel
+            url={url}
+            annotationSubMode={annotationSubMode}
+            annotationOverlayAvailable={annotationOverlayAvailable}
+            onExitAnnotationMode={handleExitAnnotationMode}
+            onChangeAnnotationSubMode={handleChangeAnnotationSubMode}
+            onAddNote={handleAddNote}
+            onExport={handleOpenExport}
+          />
         )}
       </div>
+      <AnnotationExportModal
+        open={exportOpen}
+        onOpenChange={handleCloseExport}
+        annotations={annotations}
+      />
     </div>
   );
 }

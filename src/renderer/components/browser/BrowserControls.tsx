@@ -1,27 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
-import { useAnnotationStore, normalizeUrl, EMPTY_ANNOTATION_ARRAY } from "@/stores/annotation-store";
-import { useShallow } from "zustand/shallow";
-import { browserTabGoBack, browserTabGoForward, browserTabReload, browserTabHide, browserTabShow } from "@/lib/browser-api";
+import { browserTabGoBack, browserTabGoForward, browserTabReload } from "@/lib/browser-api";
 import { ArrowLeft, ArrowRight, RotateCcw, Globe, Loader2, Pencil } from "lucide-react";
-import { AnnotationToolbar } from "./AnnotationToolbar";
-import { AnnotationExportModal } from "./AnnotationExportModal";
 
 interface BrowserControlsProps {
   browserTabId: string;
-  annotationOverlayAvailable: boolean;
 }
 
 export function BrowserControls({
   browserTabId,
-  annotationOverlayAvailable,
 }: BrowserControlsProps): React.JSX.Element {
   const tabUrl = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.url ?? ''
-  );
-  const tabTitle = useBrowserSessionStore(
-    (state) => state.tabs.get(browserTabId)?.title ?? ''
   );
   const tabLoading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
@@ -29,34 +20,7 @@ export function BrowserControls({
   const tabAnnotationMode = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
   );
-  const tabAnnotationSubMode = useBrowserSessionStore(
-    (state) => state.tabs.get(browserTabId)?.annotationSubMode ?? 'draw'
-  );
   const [inputUrl, setInputUrl] = useState(tabUrl || "");
-  const [exportOpen, setExportOpen] = useState(false);
-  const webviewWasVisibleRef = useRef(false);
-
-  // Toggle export modal with webview hide/show to prevent native webview
-  // from painting above the modal (same pattern as terminal menu dropdown).
-  const handleOpenExport = useCallback(() => {
-    // Hide the webview so the export modal is not occluded
-    browserTabHide(browserTabId)
-      .then((result) => {
-        if (result.success) {
-          webviewWasVisibleRef.current = true;
-        }
-      })
-      .catch(console.error);
-    setExportOpen(true);
-  }, [browserTabId]);
-
-  const handleCloseExport = useCallback((open: boolean) => {
-    setExportOpen(open);
-    if (!open && webviewWasVisibleRef.current) {
-      browserTabShow(browserTabId).catch(console.error);
-      webviewWasVisibleRef.current = false;
-    }
-  }, [browserTabId]);
 
   // Sync inputUrl with store URL changes (e.g. from real-time sync)
   useEffect(() => {
@@ -88,39 +52,6 @@ export function BrowserControls({
     const currentMode = tabAnnotationMode;
     useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode);
   }, [browserTabId, tabAnnotationMode]);
-
-  const handleChangeAnnotationSubMode = useCallback((mode: "draw" | "select") => {
-    useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, mode);
-  }, [browserTabId]);
-
-  const handleAddNote = useCallback(() => {
-    const url = tabUrl;
-    if (!url) return;
-    const normalizedUrl = normalizeUrl(url);
-    const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1920;
-    const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 1080;
-
-    useAnnotationStore.getState().addAnnotation({
-      browserTabId,
-      url,
-      normalizedUrl,
-      pageTitle: tabTitle || "",
-      type: "note",
-      geometry: { type: "point", x: 0, y: 0 },
-      intent: "question",
-      severity: "suggestion",
-      description: "",
-      viewportWidth,
-      viewportHeight,
-    });
-  }, [browserTabId, tabUrl, tabTitle]);
-
-  const annotations = useAnnotationStore(
-    useShallow((state) => {
-      if (!tabUrl) return EMPTY_ANNOTATION_ARRAY;
-      return state.getAnnotationsForUrl(tabUrl);
-    })
-  );
 
   if (!tabUrl) return <></>;
 
@@ -177,25 +108,6 @@ export function BrowserControls({
           <Pencil size={14} />
         </button>
       </div>
-
-      {tabAnnotationMode && (
-        <AnnotationToolbar
-          annotationMode={tabAnnotationMode}
-          annotationSubMode={tabAnnotationSubMode}
-          annotationOverlayAvailable={annotationOverlayAvailable}
-          hasAnnotations={annotations.length > 0}
-          onToggleAnnotationMode={handleToggleAnnotationMode}
-          onChangeAnnotationSubMode={handleChangeAnnotationSubMode}
-          onAddNote={handleAddNote}
-          onExport={handleOpenExport}
-        />
-      )}
-
-      <AnnotationExportModal
-        open={exportOpen}
-        onOpenChange={handleCloseExport}
-        annotations={annotations}
-      />
     </div>
   );
 }
