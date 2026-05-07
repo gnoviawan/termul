@@ -11,6 +11,7 @@ import { useEditorStore } from "@/stores/editor-store";
 import { useWorkspaceStore, editorTabId } from "@/stores/workspace-store";
 import { useTerminalStore } from "@/stores/terminal-store";
 import { useProjectStore } from "@/stores/project-store";
+import { startGitFileStatusPolling } from "@/stores/git-file-status-store";
 import type { DirectoryEntry } from "@shared/types/filesystem.types";
 import { toast } from "sonner";
 import { clipboardApi, filesystemApi, openerApi } from "@/lib/api";
@@ -70,6 +71,13 @@ export function FileExplorer(): React.JSX.Element {
 			toggleDirectory(rootPath);
 		}
 	}, [rootPath, directoryContents, rootLoadError, toggleDirectory]);
+
+	// Poll git file statuses for the explorer color indicators
+	useEffect(() => {
+		if (!rootPath) return;
+		const stop = startGitFileStatusPolling(rootPath);
+		return stop;
+	}, [rootPath]);
 
 	// Focus inline input when it appears
 	useEffect(() => {
@@ -287,6 +295,7 @@ export function FileExplorer(): React.JSX.Element {
 		directoryContents,
 		contextMenu,
 		clearSelection,
+		rootPath,
 	]);
 
 	const handleNewFile = useCallback((dirPath: string) => {

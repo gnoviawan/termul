@@ -8,6 +8,26 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State, Webview};
 
+/// Per-file git status for the file explorer
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Untracked,
+    Renamed,
+    Conflicted,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileStatusEntry {
+    pub path: String,
+    pub status: GitFileStatus,
+    pub is_staged: bool,
+}
+
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +165,20 @@ pub async fn terminal_get_git_status(
 ) -> Result<IpcResult<Option<GitStatus>>, String> {
     let status = git_tracker.get_status(&terminal_id);
     Ok(IpcResult::success(status))
+}
+
+/// Get per-file git status for a project directory
+#[tauri::command]
+pub async fn project_git_file_statuses(
+    project_path: String,
+) -> Result<IpcResult<Vec<GitFileStatusEntry>>, String> {
+    let entries = tokio::task::spawn_blocking(move || {
+        crate::trackers::git_tracker::GitTracker::get_file_statuses(&project_path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    Ok(IpcResult::success(entries))
 }
 
 /// Get the exit code for a terminal

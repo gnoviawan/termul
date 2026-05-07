@@ -2,7 +2,29 @@ import { ChevronRight, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileIcon } from './file-icon-map'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { useGitFileStatusStore } from '@/stores/git-file-status-store'
+import type { GitFileStatus } from '@/lib/tauri-git-api'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+
+/** Map git status to display color and label */
+function gitStatusStyle(status: GitFileStatus): { color: string; label: string } {
+  switch (status) {
+    case 'modified':
+      return { color: 'text-amber-500', label: 'M' }
+    case 'added':
+      return { color: 'text-emerald-500', label: 'A' }
+    case 'deleted':
+      return { color: 'text-red-500', label: 'D' }
+    case 'untracked':
+      return { color: 'text-emerald-400', label: 'U' }
+    case 'renamed':
+      return { color: 'text-blue-400', label: 'R' }
+    case 'conflicted':
+      return { color: 'text-orange-500', label: 'C' }
+    default:
+      return { color: 'text-muted-foreground', label: '?' }
+  }
+}
 
 interface FileTreeNodeProps {
   entry: DirectoryEntry
@@ -31,6 +53,7 @@ export function FileTreeNode({
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const Icon = getFileIcon(entry.extension, isDir, isExpanded)
+  const gitStatus = useGitFileStatusStore((state) => state.statusMap.get(entry.path))
   const { startFileDrag } = usePaneDnd()
 
   const handleClick = (e: React.MouseEvent): void => {
@@ -92,6 +115,17 @@ export function FileTreeNode({
           )}
         />
         <span className="truncate">{entry.name}</span>
+        {gitStatus && (() => {
+          const style = gitStatusStyle(gitStatus.status)
+          return (
+            <span
+              className={cn('ml-auto mr-2 text-[10px] font-bold leading-none', style.color)}
+              title={`${style.label}${gitStatus.isStaged ? ' (staged)' : ''}`}
+            >
+              {style.label}
+            </span>
+          )
+        })()}
       </div>
 
       {isDir && isExpanded && children && (

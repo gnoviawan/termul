@@ -895,6 +895,86 @@ impl GitTracker {
         status
     }
 
+    /// Get per-file git status for a directory.
+    ///
+    /// Runs `git status --porcelain` and returns structured entries suitable
+    /// for the file explorer to show colored status indicators.
+    pub fn get_file_statuses(cwd: &str) -> Vec<crate::commands::GitFileStatusEntry> {
+        use crate::commands::{GitFileStatus, GitFileStatusEntry};
+
+        let output = match Self::run_git_command(cwd, &["status", "--porcelain"]) {
+            Some(o) if o.status.success() => o,
+            _ => return Vec::new(),
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = Vec::new();
+
+        for line in stdout.lines() {
+            if line.len() < 4 {
+                continue;
+            }
+
+            let chars: Vec<char> = line.chars().collect();
+            let index_status = chars[0];
+            let work_tree_status = chars[1];
+
+            // Extract file path (skip "XY " prefix — 3 chars)
+            // Handle renames: "R100 old -> new" — we want the new name
+            let path_part = &line[3..];
+            let file_path = if let Some(arrow_pos) = path_part.find(" -> ") {
+                &path_part[arrow_pos + 4..]
+            } else {
+                path_part
+            };
+
+            // Make path absolute
+            let abs_path = if file_path.starts_with('/') {
+                file_path.to_string()
+            } else {
+                format!("{}/{}", cwd.trim_end_matches('/'), file_path)
+            };
+
+            // Determine status from XY codes
+            let (status, is_staged) = match (index_status, work_tree_status) {
+                // Untracked
+                ('?', '?') => (GitFileStatus::Untracked, false),
+                // Conflicted (unmerged)
+                ('U', _) | (_, 'U') | ('D', 'D') | ('A', 'A') => {
+                    (GitFileStatus::Conflicted, true)
+                }
+                // Renamed
+                ('R', _) => (GitFileStatus::Renamed, true),
+                // Copied
+                ('C', _) => (GitFileStatus::Added, true),
+                // Both index and worktree changed
+                ('M', 'M') => (GitFileStatus::Modified, false),
+                // Only index changed (staged)
+                ('M', ' ') | ('A', ' ') | ('D', ' ') => {
+                    let s = match index_status {
+                        'A' => GitFileStatus::Added,
+                        'D' => GitFileStatus::Deleted,
+                        _ => GitFileStatus::Modified,
+                    };
+                    (s, true)
+                }
+                // Only worktree changed
+                (' ', 'M') => (GitFileStatus::Modified, false),
+                (' ', 'D') => (GitFileStatus::Deleted, false),
+                // Fallback
+                _ => continue,
+            };
+
+            entries.push(GitFileStatusEntry {
+                path: abs_path,
+                status,
+                is_staged,
+            });
+        }
+
+        entries
+    }
+
     /// Static version of emit_branch_changed for use in async context
     fn emit_branch_changed_static(
         app_handle: &AppHandle,
