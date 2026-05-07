@@ -111,15 +111,23 @@ export function FileTreeNode({
           size={14}
           className={cn(
             'flex-shrink-0 mr-1.5',
-            isDir ? 'text-blue-400' : 'text-muted-foreground'
+            isDir ? 'text-blue-400' : 'text-muted-foreground',
+            gitStatus && gitStatusStyle(gitStatus.status).color
           )}
         />
-        <span className="truncate">{entry.name}</span>
+        <span
+          className={cn(
+            'truncate',
+            gitStatus && gitStatusStyle(gitStatus.status).color
+          )}
+        >
+          {entry.name}
+        </span>
         {gitStatus && (() => {
           const style = gitStatusStyle(gitStatus.status)
           return (
             <span
-              className={cn('ml-auto mr-2 text-[10px] font-bold leading-none', style.color)}
+              className={cn('ml-auto mr-2 text-[10px] font-bold leading-none opacity-60', style.color)}
               title={`${style.label}${gitStatus.isStaged ? ' (staged)' : ''}`}
             >
               {style.label}
