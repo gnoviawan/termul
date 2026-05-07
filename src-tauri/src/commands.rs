@@ -428,6 +428,8 @@ pub async fn browser_tab_report_region_captured(
     y: f64,
     width: f64,
     height: f64,
+    viewport_width: f64,
+    viewport_height: f64,
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
@@ -450,7 +452,9 @@ pub async fn browser_tab_report_region_captured(
                 "x": x,
                 "y": y,
                 "width": width,
-                "height": height
+                "height": height,
+                "viewportWidth": viewport_width,
+                "viewportHeight": viewport_height,
             }),
         )
         .map_err(|error| error.to_string())?;
@@ -472,7 +476,7 @@ pub async fn browser_tab_report_title(
             caller_label, tab_id
         ));
     }
-    log::debug!("[BrowserTab] Title report: tab={} title={}", tab_id, title);
+    log::debug!("[BrowserTab] Title report: tab={}", tab_id);
     app_handle
         .emit(
             "browser-tab-title-changed",

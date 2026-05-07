@@ -325,6 +325,7 @@
 
   function onMouseDown(e) {
     if (mode !== 'draw') return;
+    if (!e.isTrusted) return;
     if (e.button !== 0) return;
 
     isDragging = true;
@@ -343,6 +344,7 @@
 
   function onMouseMove(e) {
     if (mode === 'draw') {
+      if (!e.isTrusted) return;
       if (!isDragging || !rectEl) return;
 
       var currentX = e.clientX;
@@ -369,6 +371,7 @@
 
   function onMouseUp(e) {
     if (mode !== 'draw') return;
+    if (!e.isTrusted) return;
     if (!isDragging) return;
     isDragging = false;
 
@@ -387,7 +390,9 @@
         x: x,
         y: y,
         width: width,
-        height: height
+        height: height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight
       });
     }
 
@@ -642,16 +647,16 @@
       markerContainer.remove();
       markerContainer = null;
     }
-    var markerStylesEl = document.getElementById('__termul_marker_styles');
-    if (markerStylesEl) {
-      markerStylesEl.remove();
-    }
     markerRegistry = {};
   };
   // --- End Marker System ---
 
   window.__termul_remove_annotation_overlay = function() {
     window.__termul_remove_markers();
+    var markerStylesEl = document.getElementById('__termul_marker_styles');
+    if (markerStylesEl) {
+      markerStylesEl.remove();
+    }
     overlay.remove();
     if (rectEl) {
       rectEl.remove();

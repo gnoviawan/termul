@@ -36,7 +36,7 @@ export function AnnotationExportModal({
 }: AnnotationExportModalProps): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<"markdown" | "json" | "afs">("markdown");
   const [level, setLevel] = useState<OutputLevel>("standard");
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   const markdownPreview = exportAnnotationsToMarkdown(annotations, level);
   const jsonPreview = exportAnnotationsToJson(annotations);
@@ -44,9 +44,17 @@ export function AnnotationExportModal({
 
   const handleCopy = async () => {
     const text = activeTab === "markdown" ? markdownPreview : activeTab === "json" ? jsonPreview : afsPreview;
-    const result = await clipboardApi.writeText(text);
-    if (result.success) {
-      setCopyState("copied");
+    try {
+      const result = await clipboardApi.writeText(text);
+      if (result.success) {
+        setCopyState("copied");
+        setTimeout(() => setCopyState("idle"), 2000);
+      } else {
+        setCopyState("error");
+        setTimeout(() => setCopyState("idle"), 2000);
+      }
+    } catch {
+      setCopyState("error");
       setTimeout(() => setCopyState("idle"), 2000);
     }
   };

@@ -91,10 +91,12 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
   const handleCloseExport = useCallback((open: boolean) => {
     setExportOpen(open);
     if (!open && webviewWasVisibleRef.current) {
-      browserTabShow(browserTabId).catch(console.error);
+      if (isVisible) {
+        browserTabShow(browserTabId).catch(console.error);
+      }
       webviewWasVisibleRef.current = false;
     }
-  }, [browserTabId]);
+  }, [browserTabId, isVisible]);
 
   const handleExitAnnotationMode = useCallback(() => {
     useBrowserSessionStore.getState().setAnnotationMode(browserTabId, false);

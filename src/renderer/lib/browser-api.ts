@@ -30,6 +30,8 @@ export interface RegionCapturedPayload {
   y: number
   width: number
   height: number
+  viewportWidth: number
+  viewportHeight: number
 }
 
 export interface ElementCapturedPayload {

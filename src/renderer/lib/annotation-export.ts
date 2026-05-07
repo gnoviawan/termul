@@ -34,8 +34,8 @@ export function exportAnnotationsToMarkdown(annotations: Annotation[], level: Ou
   }
 
   const lines: string[] = []
-  const title = annotations[0]?.pageTitle || 'Annotations'
-  const url = annotations[0]?.url || ''
+  const title = annotations[0]?.pageTitle ?? 'Annotations'
+  const url = annotations[0]?.url ?? ''
 
   lines.push(`# ${escapeMarkdown(title)}`)
   if (url) {

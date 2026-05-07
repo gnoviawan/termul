@@ -257,15 +257,22 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     set((state) => {
       const next = new Map(state.annotationsByUrl)
       const existing = next.get(normalizedUrl) ?? []
+      let matched = false
       const updated = existing.map((a) => {
         if (a.id !== id) return a
+        matched = true
         return {
           ...a,
           ...updates,
           updatedAt: Date.now(),
         }
       })
-      next.set(normalizedUrl, updated)
+      if (!matched) return state
+      if (updated.length === 0) {
+        next.delete(normalizedUrl)
+      } else {
+        next.set(normalizedUrl, updated)
+      }
       return { annotationsByUrl: next }
     })
   },
@@ -283,6 +290,10 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         const filtered = annotations.filter((a) => a.browserTabId !== browserTabId)
         if (filtered.length > 0) {
           next.set(normalizedUrl, filtered)
+          const selectedId = selectedNext.get(normalizedUrl)
+          if (selectedId !== null && selectedId !== undefined && !filtered.some((a) => a.id === selectedId)) {
+            selectedNext.delete(normalizedUrl)
+          }
         } else {
           selectedNext.delete(normalizedUrl)
         }

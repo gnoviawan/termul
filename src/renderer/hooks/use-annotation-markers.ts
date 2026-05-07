@@ -103,6 +103,7 @@ export function useAnnotationMarkers(
 
       if (annotationsChanged) {
         prevAnnotationsRef.current = markerList
+        prevSelectedRef.current = selectedId
         void browserTabInjectAnnotationMarkers(browserTabId, markerList, selectedId)
       } else if (selectedChanged) {
         prevSelectedRef.current = selectedId

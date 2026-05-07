@@ -62,7 +62,7 @@ impl BrowserTabManager {
 
                     var tabId = '{}';
                     var lastUrl = location.href;
-                    var lastTitle = document.title || '';
+                    var lastTitle = '';
                     var lastReady = '';
                     var loadedReported = false;
 

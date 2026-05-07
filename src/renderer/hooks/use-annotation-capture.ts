@@ -16,8 +16,8 @@ export function useAnnotationCapture(browserTabId: string) {
       const tab = useBrowserSessionStore.getState().getTab(browserTabId)
       if (!tab) return
 
-      const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920
-      const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080
+      const viewportWidth = payload.viewportWidth || (typeof window !== 'undefined' ? window.innerWidth : 1920)
+      const viewportHeight = payload.viewportHeight || (typeof window !== 'undefined' ? window.innerHeight : 1080)
       const normalizedUrl = normalizeUrl(tab.url)
 
       useAnnotationStore.getState().addAnnotation({
