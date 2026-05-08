@@ -134,6 +134,11 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu
 
+          - platform: macos-aarch64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
