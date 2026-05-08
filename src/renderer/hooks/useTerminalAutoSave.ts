@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { extractScrollback } from '../utils/terminal-registry'
+import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 
 function transcriptToScrollback(transcript?: string): string[] | undefined {
   if (!transcript) {
@@ -47,6 +48,35 @@ function mergeScrollback(snapshot?: string[], transcript?: string): string[] | u
   }
 
   return undefined
+}
+
+interface PersistedTerminalSnapshot {
+  persistedTerminal: PersistedTerminal
+  scrollbackExtractionAvailable: boolean
+  extractedScrollbackLineCount: number
+}
+
+function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnapshot {
+  const extractedScrollback = extractScrollback(terminal.ptyId ?? terminal.id)
+
+  return {
+    persistedTerminal: {
+      id: terminal.id,
+      name: terminal.name,
+      shell: terminal.shell,
+      cwd: terminal.cwd,
+      scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
+      transcript: terminal.transcript
+    },
+    scrollbackExtractionAvailable: extractedScrollback !== undefined,
+    extractedScrollbackLineCount: extractedScrollback?.length ?? 0
+  }
+}
+
+export interface SaveTerminalLayoutOptions {
+  correlationId?: string
+  reason?: 'project-switch' | 'manual-save' | 'auto-save'
+  targetProjectId?: string
 }
 
 const terminalRestoreProjectsInProgress = new Map<string, string>()
@@ -99,18 +129,13 @@ export function serializeTerminalsForProject(
 ): PersistedTerminalLayout {
   const projectTerminals = terminals.filter((t) => t.projectId === projectId)
 
+  const terminalSnapshots = projectTerminals.map((terminal) =>
+    toPersistedTerminalSnapshot(terminal)
+  )
+
   return {
     activeTerminalId: projectTerminals.find((t) => t.id === activeTerminalId)?.id ?? null,
-    terminals: projectTerminals.map(
-      (t): PersistedTerminal => ({
-        id: t.id,
-        name: t.name,
-        shell: t.shell,
-        cwd: t.cwd,
-        scrollback: mergeScrollback(extractScrollback(t.ptyId ?? t.id), t.transcript),
-        transcript: t.transcript
-      })
-    ),
+    terminals: terminalSnapshots.map(({ persistedTerminal }) => persistedTerminal),
     updatedAt: new Date().toISOString()
   }
 }
@@ -228,9 +253,41 @@ export async function loadPersistedTerminals(
  * Manually trigger a save of the current terminal layout
  * Useful for ensuring save before app quit
  */
-export async function saveTerminalLayout(projectId: string): Promise<void> {
+export async function saveTerminalLayout(
+  projectId: string,
+  options?: SaveTerminalLayoutOptions
+): Promise<void> {
   const state = useTerminalStore.getState()
-  const layout = serializeTerminalsForProject(state.terminals, projectId, state.activeTerminalId)
+  const projectTerminals = state.terminals.filter((terminal) => terminal.projectId === projectId)
+  const terminalSnapshots = projectTerminals.map((terminal) => ({
+    terminal,
+    snapshot: toPersistedTerminalSnapshot(terminal)
+  }))
+  const layout: PersistedTerminalLayout = {
+    activeTerminalId: projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
+    terminals: terminalSnapshots.map(({ snapshot }) => snapshot.persistedTerminal),
+    updatedAt: new Date().toISOString()
+  }
+
+  if (options?.reason === 'project-switch') {
+    for (const { terminal, snapshot } of terminalSnapshots) {
+      recordTerminalContinuityEvent({
+        name: 'transcript-persistence-evaluated',
+        correlationId: options.correlationId,
+        projectId,
+        terminalId: terminal.id,
+        ptyId: terminal.ptyId,
+        details: {
+          reason: options.reason,
+          targetProjectId: options.targetProjectId,
+          transcriptLength: terminal.transcript?.length ?? 0,
+          scrollbackExtractionAvailable: snapshot.scrollbackExtractionAvailable,
+          extractedScrollbackLineCount: snapshot.extractedScrollbackLineCount,
+          persistedScrollbackLineCount: snapshot.persistedTerminal.scrollback?.length ?? 0
+        }
+      })
+    }
+  }
 
   // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
   // This preserves scrollback across project switches by updating the store before

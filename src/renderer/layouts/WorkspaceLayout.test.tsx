@@ -70,6 +70,7 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
   useMaxTerminalsPerProject: vi.fn(() => 10),
+  useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue')
 }))
@@ -91,7 +92,11 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
     zoomIn: { customKey: 'ctrl+=', defaultKey: 'ctrl+=' },
     zoomOut: { customKey: 'ctrl+-', defaultKey: 'ctrl+-' },
     zoomReset: { customKey: 'ctrl+0', defaultKey: 'ctrl+0' },
-    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' }
+    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' },
+    closeTab: { customKey: 'ctrl+w', defaultKey: 'ctrl+w' },
+    saveFile: { customKey: 'ctrl+s', defaultKey: 'ctrl+s' },
+    toggleFileExplorer: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
+    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' }
   }
 
   return {
@@ -370,7 +375,7 @@ describe('WorkspaceLayout - Empty States', () => {
     it('should show pane-level new terminal action', () => {
       renderWithRouter()
 
-      expect(screen.getByTitle('New terminal (default shell)')).toBeInTheDocument()
+      expect(screen.getByTitle('Open terminal menu')).toBeInTheDocument()
     })
 
     it('should not show legacy terminal empty-state CTA', () => {
@@ -696,6 +701,38 @@ describe('WorkspaceLayout - Empty States', () => {
       })
 
       getStateSpy.mockRestore()
+    })
+
+    it('still closes when waiting for app-settings persistence rejects', async () => {
+      let closeRequestedCallback: (() => Promise<boolean>) | undefined
+      mockApi.window.onCloseRequested.mockImplementation((callback: () => Promise<boolean>) => {
+        closeRequestedCallback = callback
+        return vi.fn()
+      })
+
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const project = createProject('a', '/workspace/a', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      mockWaitForPendingAppSettingsPersistence.mockRejectedValueOnce(new Error('settings flush failed'))
+
+      renderWithRouter()
+      expect(closeRequestedCallback).toBeDefined()
+      if (!closeRequestedCallback) throw new Error('close callback missing')
+
+      await expect(closeRequestedCallback()).resolves.toBe(false)
+
+      await waitFor(() => {
+        expect(mockApi.window.respondToClose).toHaveBeenCalledWith('close')
+      })
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to wait for app settings persistence before close:',
+        expect.any(Error)
+      )
+
+      consoleErrorSpy.mockRestore()
     })
   })
 

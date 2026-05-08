@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-is-maximized",
+    "core:webview:default",
     "store:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",

@@ -122,6 +122,15 @@ describe('terminal-registry', () => {
       expect(terminal.write).toHaveBeenCalledWith('line 1\r\nline 2\r\nline 3\r\n')
     })
 
+    it('preserves ANSI sequences while restoring scrollback', () => {
+      const terminal = createMockTerminal()
+      const scrollback = ['\u001b[32mgreen\u001b[0m output']
+
+      restoreScrollback(terminal, scrollback)
+
+      expect(terminal.write).toHaveBeenCalledWith('\u001b[32mgreen\u001b[0m output\r\n')
+    })
+
     it('should not write if scrollback is empty', () => {
       const terminal = createMockTerminal()
 

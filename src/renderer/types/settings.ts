@@ -40,6 +40,7 @@ export interface AppSettings {
 	terminalFontFamily: string;
 	terminalFontSize: number;
 	terminalBufferSize: number; // Scrollback buffer size in lines
+	terminalRenderer: "auto" | "webgl" | "canvas";
 	defaultShell: string;
 	defaultProjectColor: string; // Default color for new projects (from PROJECT_COLORS)
 	maxTerminalsPerProject: number; // Maximum terminals allowed per project
@@ -88,11 +89,19 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
 	{ value: 3600000, label: "1 hour" },
 ];
 
+// Terminal renderer strategy options
+export const TERMINAL_RENDERER_OPTIONS = [
+	{ value: "auto", label: "Auto (WebGL with Canvas fallback)" },
+	{ value: "webgl", label: "WebGL" },
+	{ value: "canvas", label: "Canvas" },
+];
+
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
 	terminalFontSize: 14,
 	terminalBufferSize: 10000,
+	terminalRenderer: "auto",
 	defaultShell: "",
 	defaultProjectColor: "blue",
 	maxTerminalsPerProject: 10,
@@ -156,6 +165,12 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		description: "Create a new terminal",
 		defaultKey: "ctrl+t",
 	},
+	newBrowserTab: {
+		id: "newBrowserTab",
+		label: "New Browser Tab",
+		description: "Create a new browser tab",
+		defaultKey: "ctrl+shift+n",
+	},
 	nextTerminal: {
 		id: "nextTerminal",
 		label: "Next Tab",
@@ -193,6 +208,24 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		label: "Toggle Sidebar",
 		description: "Show or hide the project sidebar",
 		defaultKey: "ctrl+shift+b",
+	},
+	closeTab: {
+		id: "closeTab",
+		label: "Close Tab",
+		description: "Close the active tab (terminal, editor, or browser)",
+		defaultKey: "ctrl+w",
+	},
+	saveFile: {
+		id: "saveFile",
+		label: "Save File",
+		description: "Save the current editor file",
+		defaultKey: "ctrl+s",
+	},
+	toggleFileExplorer: {
+		id: "toggleFileExplorer",
+		label: "Toggle File Explorer",
+		description: "Show or hide the file explorer panel",
+		defaultKey: "ctrl+b",
 	},
 	fileExplorerRename: {
 		id: "fileExplorerRename",

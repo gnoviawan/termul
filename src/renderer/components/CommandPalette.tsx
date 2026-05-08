@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Terminal, Layers, SplitSquareVertical, Save } from 'lucide-react'
+import { Terminal, Layers, SplitSquareVertical, Save, Globe } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Command,
@@ -19,8 +19,9 @@ interface CommandPaletteProps {
   onClose: () => void
   projects: Project[]
   onSwitchProject: (id: string) => void
-  onNewTerminal: () => void
+  onAddTerminal?: () => void
   onSaveSnapshot?: () => void
+  onNewBrowserTab?: () => void
 }
 
 interface CommandDef {
@@ -38,8 +39,9 @@ export function CommandPalette({
   onClose,
   projects,
   onSwitchProject,
-  onNewTerminal,
-  onSaveSnapshot
+  onAddTerminal,
+  onSaveSnapshot,
+  onNewBrowserTab
 }: CommandPaletteProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
@@ -68,6 +70,13 @@ export function CommandPalette({
         icon: <SplitSquareVertical size={18} />,
         label: 'Split Terminal Vertically',
         shortcut: 'Ctrl+Shift+D',
+        type: 'action'
+      },
+      {
+        id: 'new-browser-tab',
+        icon: <Globe size={18} />,
+        label: 'New Browser Tab',
+        shortcut: 'Ctrl+Shift+N',
         type: 'action'
       },
       {
@@ -114,14 +123,16 @@ export function CommandPalette({
       if (cmd.type === 'project' && cmd.projectId) {
         onSwitchProject(cmd.projectId)
       } else if (cmd.id === 'new-terminal') {
-        onNewTerminal()
+        onAddTerminal?.()
+      } else if (cmd.id === 'new-browser-tab' && onNewBrowserTab) {
+        onNewBrowserTab()
       } else if (cmd.id === 'save-snapshot' && onSaveSnapshot) {
         onSaveSnapshot()
       }
 
       onClose()
     },
-    [saveRecentCommand, onSwitchProject, onNewTerminal, onSaveSnapshot, onClose]
+    [saveRecentCommand, onSwitchProject, onAddTerminal, onNewBrowserTab, onSaveSnapshot, onClose]
   )
 
   // Handle Escape key - use capture phase to intercept before cmdk handles it

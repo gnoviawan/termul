@@ -42,6 +42,8 @@ export const useDefaultProjectColor = () =>
 	useAppSettingsStore((state) => state.settings.defaultProjectColor);
 export const useTerminalBufferSize = () =>
 	useAppSettingsStore((state) => state.settings.terminalBufferSize);
+export const useTerminalRenderer = () =>
+	useAppSettingsStore((state) => state.settings.terminalRenderer);
 export const useMaxTerminalsPerProject = () =>
 	useAppSettingsStore((state) => state.settings.maxTerminalsPerProject);
 export const useOrphanDetectionEnabled = () =>

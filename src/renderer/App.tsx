@@ -19,16 +19,28 @@ import { useGitStatus } from './hooks/use-git-status'
 import { useExitCode } from './hooks/use-exit-code'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+
+// PRODUCTION GUARDRAIL: The current xterm 6.0 migration branch is explicitly
+// excluded from production rollout. Phase 1 stabilization targets xterm 5.5.
+// Any future renderer upgrade must start from a fresh xterm 6.1 validation track
+// and meet ADR-defined benchmark and adoption criteria before replacing the 5.5
+// baseline. See _bmad-output/planning-artifacts/epics.md for the roadmap.
+
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { isWindows } from '@/lib/platform'
 
-// Hook to prevent Alt key from showing the default browser menu bar
+// Hook to prevent Alt key from showing the default browser menu bar.
+// Only needed on Windows — on macOS, Alt/Option is used for typing special characters.
 function usePreventAltMenu(): void {
   useEffect(() => {
+    // Skip on macOS — Alt/Option is needed for typing special chars (@, €, £, etc.)
+    if (!isWindows) return
+
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Alt') {
         e.preventDefault()
@@ -54,6 +66,11 @@ function usePreventAltMenu(): void {
 }
 
 const queryClient = new QueryClient()
+
+// TODO(renderer-upgrade-adrs / ADR-xterm-renderer-upgrade): enforce the xterm 5.5
+// production baseline and require explicit validation for xterm 6.1 via a durable
+// build/CI/runtime gate (for example a checkRendererVersion helper wired during app
+// initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {

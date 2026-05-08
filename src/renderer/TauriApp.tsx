@@ -27,6 +27,7 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 const queryClient = new QueryClient()
 
@@ -95,10 +96,12 @@ export default function TauriApp(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AppEffects />
-        <Toaster />
-        <Sonner />
-        <RouterProvider router={router} future={{ v7_startTransition: true }} />
+        <ErrorBoundary context="App Root">
+          <AppEffects />
+          <Toaster />
+          <Sonner />
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   )

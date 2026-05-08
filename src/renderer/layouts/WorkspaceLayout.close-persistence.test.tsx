@@ -153,7 +153,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => ({
 vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useDefaultShell: () => 'bash',
-  useMaxTerminalsPerProject: () => 10
+  useMaxTerminalsPerProject: () => 10,
+  useConfirmTerminalClose: () => true
 }))
 
 vi.mock('@/hooks/use-snapshots', () => ({
