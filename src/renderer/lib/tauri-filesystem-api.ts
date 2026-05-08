@@ -11,6 +11,7 @@ import {
 	type WatchEvent,
 } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
 	IpcResult,
 	FilesystemApi,
@@ -20,6 +21,7 @@ import type {
 	FileInfo,
 	FileChangeEvent,
 } from "@shared/types/ipc.types";
+import { cleanupTauriListener, isTauriContext } from "./tauri-runtime";
 
 const ALWAYS_IGNORE = [
 	"node_modules",
@@ -298,6 +300,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
 				};
 			}
 
+			return {
+				success: false,
+				error: "Search backend unavailable (ripgrep command failed)",
+				code: "SEARCH_BACKEND_UNAVAILABLE",
+			};
+
+			/* fallback disabled intentionally to preserve VSCode-like performance guarantees
 			try {
 				const allFiles = await collectFilesRecursively(normalizedRootPath);
 				const results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }> = [];
@@ -371,6 +380,108 @@ export function createTauriFilesystemApi(): FilesystemApi {
 					code: "SEARCH_ERROR",
 				};
 			}
+			*/
+		},
+
+		async searchContentStreamStart(searchId: string, rootPath: string, query: string) {
+			try {
+				const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+					"search_content_stream",
+					{ request: { searchId, rootPath, query } },
+				);
+				if (!response?.success) {
+					return {
+						success: false as const,
+						error: response?.error ?? "Failed to start search stream",
+						code: response?.code ?? "SEARCH_STREAM_ERROR",
+					};
+				}
+				return { success: true as const, data: undefined };
+			} catch (err) {
+				return { success: false as const, error: String(err), code: "SEARCH_STREAM_ERROR" };
+			}
+		},
+
+		async searchContentStreamCancel(searchId: string) {
+			try {
+				const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+					"search_content_cancel",
+					{ request: { searchId } },
+				);
+				if (!response?.success) {
+					return {
+						success: false as const,
+						error: response?.error ?? "Failed to cancel search stream",
+						code: response?.code ?? "SEARCH_STREAM_CANCEL_ERROR",
+					};
+				}
+				return { success: true as const, data: undefined };
+			} catch (err) {
+				return {
+					success: false as const,
+					error: String(err),
+					code: "SEARCH_STREAM_CANCEL_ERROR",
+				};
+			}
+		},
+
+		onSearchContentBatch(callback) {
+			if (!isTauriContext()) return () => {};
+			let unlisten: Promise<UnlistenFn> | undefined;
+			try {
+				unlisten = listen<{
+					searchId: string;
+					results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>;
+					truncated: boolean;
+				}>("search-content-batch", ({ payload }) => callback(payload));
+			} catch {
+				return () => {};
+			}
+			return () => cleanupTauriListener(unlisten);
+		},
+
+		async searchFileNames(rootPath: string, query: string) {
+			try {
+				const response = await invoke<{
+					success: boolean;
+					data?: { files: string[]; truncated: boolean };
+					error?: string;
+					code?: string;
+				}>("search_file_names", {
+					request: { rootPath, query }
+				});
+				if (!response?.success || !response.data) {
+					return {
+						success: false as const,
+						error: response?.error ?? "Failed to search file names",
+						code: response?.code ?? "SEARCH_FILENAME_ERROR"
+					};
+				}
+				return { success: true as const, data: response.data };
+			} catch (err) {
+				return {
+					success: false as const,
+					error: String(err),
+					code: "SEARCH_FILENAME_ERROR"
+				};
+			}
+		},
+
+		onSearchContentDone(callback) {
+			if (!isTauriContext()) return () => {};
+			let unlisten: Promise<UnlistenFn> | undefined;
+			try {
+				unlisten = listen<{
+					searchId: string;
+					truncated: boolean;
+					scannedFiles: number;
+					failedFiles: number;
+					error?: string;
+				}>("search-content-done", ({ payload }) => callback(payload));
+			} catch {
+				return () => {};
+			}
+			return () => cleanupTauriListener(unlisten);
 		},
 
 		async writeFile(

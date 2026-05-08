@@ -16,9 +16,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "tauri dev",
+		"dev": "set TERMUL_RG_PATH=bin/rg-x86_64-pc-windows-msvc.exe&& tauri dev",
 		"build": "tauri build --config src-tauri/tauri.conf.prod.json",
-		"start": "tauri dev",
+		"start": "set TERMUL_RG_PATH=bin/rg-x86_64-pc-windows-msvc.exe&& tauri dev",
 		"lint": "eslint .",
 		"test": "vitest run",
 		"test:watch": "vitest",

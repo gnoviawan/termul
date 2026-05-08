@@ -2,8 +2,7 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type {
   DirectoryEntry,
-  FileSearchResult,
-  FileSearchResponse
+  FileSearchResult
 } from '@shared/types/filesystem.types'
 import { filesystemApi } from '@/lib/api'
 
@@ -57,12 +56,14 @@ export interface FileExplorerState {
   rootLoadError: FileExplorerRootError | null
   searchQuery: string
   searchResults: FileSearchResult[]
+  searchFileNameMatches: string[]
   searchLoading: boolean
   searchError: string | null
   searchTruncated: boolean
   searchScannedFiles: number
   searchFailedFiles: number
   searchRequestId: number
+  searchLastCompletedQuery: string
 
   setRootPath: (path: string | null) => void
   toggleDirectory: (path: string) => Promise<void>
@@ -89,6 +90,45 @@ export interface FileExplorerState {
   resetSearch: () => void
 }
 
+let streamSubscribed = false
+
+function ensureSearchStreamSubscription(
+  set: (partial: Partial<FileExplorerState>) => void,
+  get: () => FileExplorerState
+): void {
+  if (streamSubscribed) return
+  streamSubscribed = true
+
+  filesystemApi.onSearchContentBatch((event) => {
+    const state = get()
+    const activeId = `search-${state.searchRequestId}`
+    if (event.searchId !== activeId) return
+
+    const merged = new Map(state.searchResults.map((file) => [file.filePath, file]))
+    for (const file of event.results) merged.set(file.filePath, file)
+
+    set({
+      searchResults: Array.from(merged.values()),
+      searchTruncated: event.truncated || state.searchTruncated
+    })
+  })
+
+  filesystemApi.onSearchContentDone((event) => {
+    const state = get()
+    const activeId = `search-${state.searchRequestId}`
+    if (event.searchId !== activeId) return
+
+    set({
+      searchLoading: false,
+      searchError: event.error ?? null,
+      searchTruncated: event.truncated,
+      searchScannedFiles: event.scannedFiles,
+      searchFailedFiles: event.failedFiles,
+      searchLastCompletedQuery: state.searchQuery.trim()
+    })
+  })
+}
+
 export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   rootPath: null,
   expandedDirs: new Set<string>(),
@@ -101,12 +141,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   rootLoadError: null,
   searchQuery: '',
   searchResults: [],
+  searchFileNameMatches: [],
   searchLoading: false,
   searchError: null,
   searchTruncated: false,
   searchScannedFiles: 0,
   searchFailedFiles: 0,
   searchRequestId: 0,
+  searchLastCompletedQuery: '',
 
   setRootPath: (path: string | null): void => {
     // Unwatch all previously expanded directories
@@ -125,12 +167,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       rootLoadError: null,
       searchQuery: '',
       searchResults: [],
+      searchFileNameMatches: [],
       searchLoading: false,
       searchError: null,
       searchTruncated: false,
       searchScannedFiles: 0,
       searchFailedFiles: 0,
-      searchRequestId: 0
+      searchRequestId: 0,
+      searchLastCompletedQuery: ''
     })
   },
 
@@ -493,6 +537,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         searchLoading: false,
         searchError: 'No project selected',
         searchResults: [],
+        searchFileNameMatches: [],
         searchTruncated: false,
         searchScannedFiles: 0,
         searchFailedFiles: 0,
@@ -502,11 +547,12 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     }
 
     const trimmed = query.trim()
-    if (!trimmed) {
+    if (!trimmed || trimmed.length < 2) {
       set({
         searchLoading: false,
         searchError: null,
         searchResults: [],
+        searchFileNameMatches: [],
         searchTruncated: false,
         searchScannedFiles: 0,
         searchFailedFiles: 0,
@@ -515,46 +561,91 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       return
     }
 
-    set({ searchLoading: true, searchError: null, searchRequestId: requestId })
+    ensureSearchStreamSubscription(set, get)
 
-    const result = await filesystemApi.searchContent(rootPath, trimmed)
-    if (get().searchRequestId !== requestId) {
-      return
+    const previousRequestId = Math.max(0, requestId - 1)
+    if (previousRequestId > 0) {
+      void filesystemApi.searchContentStreamCancel(`search-${previousRequestId}`)
     }
 
-    if (!result.success) {
+    const { searchLastCompletedQuery, searchResults } = get()
+    if (
+      searchLastCompletedQuery &&
+      trimmed.toLowerCase().startsWith(searchLastCompletedQuery.toLowerCase()) &&
+      searchResults.length > 0
+    ) {
+      const filtered = searchResults
+        .map((file) => ({
+          ...file,
+          matches: file.matches.filter((match) =>
+            match.lineText.toLowerCase().includes(trimmed.toLowerCase())
+          )
+        }))
+        .filter((file) => file.matches.length > 0)
       set({
-        searchLoading: false,
-        searchError: result.error,
-        searchResults: [],
+        searchResults: filtered,
+        searchFileNameMatches: [],
+        searchLoading: true,
+        searchError: null,
+        searchRequestId: requestId,
         searchTruncated: false,
         searchScannedFiles: 0,
         searchFailedFiles: 0
       })
+    } else {
+      set({
+        searchLoading: true,
+        searchError: null,
+        searchRequestId: requestId,
+        searchResults: [],
+        searchFileNameMatches: [],
+        searchTruncated: false,
+        searchScannedFiles: 0,
+        searchFailedFiles: 0
+      })
+    }
+
+    const streamStart = await filesystemApi.searchContentStreamStart(
+      `search-${requestId}`,
+      rootPath,
+      trimmed
+    )
+
+    if (get().searchRequestId !== requestId) {
+      void filesystemApi.searchContentStreamCancel(`search-${requestId}`)
       return
     }
 
-    const data: FileSearchResponse = result.data
-    set({
-      searchLoading: false,
-      searchError: null,
-      searchResults: data.results,
-      searchTruncated: data.truncated,
-      searchScannedFiles: data.scannedFiles,
-      searchFailedFiles: data.failedFiles
-    })
+    const fileNameResult = await filesystemApi.searchFileNames(rootPath, trimmed)
+    if (get().searchRequestId === requestId && fileNameResult.success) {
+      set({ searchFileNameMatches: fileNameResult.data.files })
+    }
+
+    if (!streamStart.success) {
+      set({
+        searchLoading: false,
+        searchError: streamStart.error,
+        searchResults: [],
+        searchFileNameMatches: [],
+        searchTruncated: false,
+        searchScannedFiles: 0,
+        searchFailedFiles: 0
+      })
+    }
   },
 
   resetSearch: (): void => {
     set({
       searchQuery: '',
       searchResults: [],
+      searchFileNameMatches: [],
       searchLoading: false,
       searchError: null,
       searchTruncated: false,
       searchScannedFiles: 0,
       searchFailedFiles: 0,
-      searchRequestId: 0
+      searchRequestId: 0,
+      searchLastCompletedQuery: ''
     })
   }
 }))
@@ -573,6 +664,7 @@ export function useFileExplorer(): Pick<
   | 'rootLoadError'
   | 'searchQuery'
   | 'searchResults'
+  | 'searchFileNameMatches'
   | 'searchLoading'
   | 'searchError'
   | 'searchTruncated'
@@ -592,6 +684,7 @@ export function useFileExplorer(): Pick<
       rootLoadError: state.rootLoadError,
       searchQuery: state.searchQuery,
       searchResults: state.searchResults,
+      searchFileNameMatches: state.searchFileNameMatches,
       searchLoading: state.searchLoading,
       searchError: state.searchError,
       searchTruncated: state.searchTruncated,

@@ -41,7 +41,9 @@ export function CodeEditor({
   onScrollChange
 }: CodeEditorProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
-  const hasAppliedInitialLineRef = useRef(false)
+  const lastAppliedLineRef = useRef<number | null>(null)
+  const pendingRevealLineRef = useRef<number | null>(null)
+  const pendingRevealTermRef = useRef<string | undefined>(undefined)
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
@@ -133,27 +135,78 @@ export function CodeEditor({
   }, [isVisible, view])
 
   useEffect(() => {
-    if (!view || !isVisible || !initialLine || hasAppliedInitialLineRef.current) {
+    if (!initialLine) {
+      return
+    }
+
+    if (!view || !isVisible) {
+      pendingRevealLineRef.current = initialLine
+      pendingRevealTermRef.current = undefined
+      return
+    }
+
+    if (lastAppliedLineRef.current === initialLine) {
       return
     }
 
     scrollToLine(initialLine)
-    hasAppliedInitialLineRef.current = true
+    lastAppliedLineRef.current = initialLine
+    pendingRevealLineRef.current = null
   }, [initialLine, isVisible, scrollToLine, view])
 
   useEffect(() => {
+    const pending = (window as unknown as {
+      __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string }
+    }).__termulPendingRevealLine
+
+    if (
+      pending &&
+      pending.filePath === filePath &&
+      isVisible &&
+      view
+    ) {
+      scrollToLine(pending.lineNumber, pending.searchTerm)
+      lastAppliedLineRef.current = pending.lineNumber
+      pendingRevealLineRef.current = null
+      pendingRevealTermRef.current = undefined
+      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine = undefined
+    }
+
     const handler = (event: Event): void => {
-      const customEvent = event as CustomEvent<{ filePath: string; lineNumber: number }>
+      const customEvent = event as CustomEvent<{
+        filePath: string
+        lineNumber: number
+        searchTerm?: string
+      }>
       if (!customEvent.detail) return
       if (customEvent.detail.filePath !== filePath) return
-      if (!isVisible) return
 
-      scrollToLine(customEvent.detail.lineNumber)
+      if (!isVisible || !view) {
+        pendingRevealLineRef.current = customEvent.detail.lineNumber
+        pendingRevealTermRef.current = customEvent.detail.searchTerm
+        return
+      }
+
+      scrollToLine(customEvent.detail.lineNumber, customEvent.detail.searchTerm)
+      lastAppliedLineRef.current = customEvent.detail.lineNumber
+      pendingRevealLineRef.current = null
+      pendingRevealTermRef.current = undefined
     }
 
     window.addEventListener('termul:reveal-line', handler)
     return () => window.removeEventListener('termul:reveal-line', handler)
-  }, [filePath, isVisible, scrollToLine])
+  }, [filePath, isVisible, scrollToLine, view])
+
+  useEffect(() => {
+    if (!isVisible || !view || pendingRevealLineRef.current == null) {
+      return
+    }
+
+    scrollToLine(pendingRevealLineRef.current, pendingRevealTermRef.current)
+    lastAppliedLineRef.current = pendingRevealLineRef.current
+    pendingRevealLineRef.current = null
+    pendingRevealTermRef.current = undefined
+  }, [isVisible, scrollToLine, view])
 
   useEffect(() => {
     if (!canRenderToc) {

@@ -100,7 +100,7 @@ interface UseCodeMirrorOptions {
 interface UseCodeMirrorResult {
   view: EditorView | null
   setContent: (content: string) => void
-  scrollToLine: (lineNumber: number) => void
+  scrollToLine: (lineNumber: number, highlightTerm?: string) => void
   getVisibleLineRange: () => VisibleLineRange | null
 }
 
@@ -295,27 +295,44 @@ export function useCodeMirror(
     isExternalUpdate.current = false
   }, [])
 
-  const scrollToLine = useCallback((lineNumber: number) => {
+  const scrollToLine = useCallback((lineNumber: number, highlightTerm?: string) => {
     const view = viewRef.current
     if (!view) return
 
     const safeLineNumber = Math.min(Math.max(1, lineNumber), view.state.doc.lines)
     const line = view.state.doc.line(safeLineNumber)
-    const lineBlock = view.lineBlockAt(line.from)
-    const targetScrollTop = lineBlock.top
+
+    const lineText = line.text
+    const normalizedHighlight = highlightTerm?.trim().toLowerCase()
+    const matchIndex = normalizedHighlight
+      ? lineText.toLowerCase().indexOf(normalizedHighlight)
+      : -1
+
+    const selection =
+      matchIndex >= 0 && normalizedHighlight
+        ? {
+            anchor: line.from + matchIndex,
+            head: line.from + matchIndex + normalizedHighlight.length
+          }
+        : { anchor: line.from }
 
     view.dispatch({
-      selection: { anchor: line.from }
+      selection,
+      effects: EditorView.scrollIntoView(line.from, {
+        y: 'center',
+        yMargin: 48
+      })
     })
 
-    view.scrollDOM.scrollTo({
-      top: targetScrollTop,
-      behavior: 'smooth'
+    // Ensure final position after layout/paint in hidden->visible tab transitions.
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView) return
+      const lineBlock = currentView.lineBlockAt(line.from)
+      onScrollChangeRef.current(lineBlock.top)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
     })
-
-    onScrollChangeRef.current(targetScrollTop)
-    onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
-    view.focus()
   }, [])
 
   const getVisibleLineRange = useCallback((): VisibleLineRange | null => {
