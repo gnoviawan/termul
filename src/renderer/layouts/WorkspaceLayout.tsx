@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
@@ -46,7 +47,9 @@ import {
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
 	findPaneContainingTab,
+	browserTabId,
 } from "@/stores/workspace-store";
+import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { useCreateSnapshot, useSnapshotLoader } from "@/hooks/use-snapshots";
 import { useRecentCommandsLoader } from "@/hooks/use-recent-commands";
 import {
@@ -66,6 +69,7 @@ import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
 } from "@/stores/keyboard-shortcuts-store";
+import { isMac } from "@/lib/platform";
 import {
 	useTerminalFontSize,
 	useDefaultShell,
@@ -133,6 +137,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
+
+	// Ref for terminal close handler — used inside keydown effect to avoid
+	// declaration-order dependency. The ref is updated each render.
+	const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null);
 
 	// File watcher hook
 	useFileWatcher();
@@ -460,6 +468,25 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
+	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
+		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (!targetPaneId) return;
+		if (shell) {
+			handleCreateTerminalInPane(targetPaneId, shell.path);
+		} else {
+			handleCreateTerminalInPane(targetPaneId);
+		}
+	}, [handleCreateTerminalInPane]);
+
+	const handleNewBrowserTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId) {
+			const browserTabId = crypto.randomUUID();
+			useBrowserSessionStore.getState().createTab(browserTabId);
+			useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId);
+		}
+	}, []);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if typing in an input/textarea/editable element
@@ -473,8 +500,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				target.isContentEditable ||
 				target.closest('[contenteditable="true"]');
 
-			// Ctrl+S should work even in editors
-			if (e.ctrlKey && e.key === "s" && !e.shiftKey && !e.altKey) {
+			// Save File (Ctrl+S / ⌘+S) — should work even in editors
+			if (matchesShortcut(e, getActiveKey("saveFile"))) {
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					useEditorStore.getState().saveFile(activeTab.filePath);
@@ -482,8 +509,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+W - close tab
-			if (e.ctrlKey && e.key === "w" && !e.shiftKey && !e.altKey) {
+			// Close Tab (Ctrl+W / ⌘+W)
+			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
+			// On Windows/Linux: Ctrl+W closes tab
+			if (matchesShortcut(e, getActiveKey("closeTab"))) {
+				// On macOS, don't intercept Ctrl+W in terminal — let it go to the shell
+				if (isMac && e.ctrlKey && isInTerminal) {
+					return;
+				}
+
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					const fileState = useEditorStore
@@ -498,13 +532,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						}
 					}
 				} else if (activeTab?.type === "terminal") {
-					handleCloseTerminal(activeTab.terminalId, activeTab.id);
+					handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id);
+				} else if (activeTab?.type === "browser") {
+					useBrowserSessionStore.getState().removeTab(activeTab.browserTabId);
+					useWorkspaceStore.getState().removeTab(activeTab.id);
 				}
 				return;
 			}
 
-			// Ctrl+B - toggle file explorer (skip when in editor/input/terminal)
-			if (e.ctrlKey && e.key === "b" && !e.shiftKey && !e.altKey) {
+			// Toggle File Explorer (Ctrl+B / ⌘+B) — skip when in editor/input/terminal
+			if (matchesShortcut(e, getActiveKey("toggleFileExplorer"))) {
 				if (!isInEditor && !isInInput && !isInTerminal) {
 					e.preventDefault();
 					void updatePanelVisibility(
@@ -598,6 +635,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				}
 				const paneId = useWorkspaceStore.getState().activePaneId;
 				handleCreateTerminalInPane(paneId);
+				return;
+			}
+
+			// New browser tab (Ctrl+Shift+N) - only on workspace routes
+			if (matchesShortcut(e, getActiveKey("newBrowserTab"))) {
+				if (!isWorkspaceRoute) return;
+				e.preventDefault();
+				e.stopPropagation();
+				const paneId = useWorkspaceStore.getState().activePaneId;
+				if (paneId) {
+					const browserTabId = crypto.randomUUID();
+					useBrowserSessionStore.getState().createTab(browserTabId);
+					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
+				}
 				return;
 			}
 
@@ -820,6 +871,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		[closeTerminalTabByTabId, closingTerminalIds, confirmTerminalClose],
 	);
 
+	// Keep ref in sync so the keydown effect can call it without declaration-order issues
+	handleCloseTerminalRef.current = handleCloseTerminal;
+
 	const handleConfirmCloseTerminal = useCallback(async () => {
 		if (!closeConfirmTerminal) {
 			return;
@@ -1024,12 +1078,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 										<div className="flex-1 min-h-0 h-full overflow-hidden">
 											<PaneRenderer
 												node={paneRoot}
-												onNewTerminal={(paneId) => {
-													handleCreateTerminalInPane(paneId);
-												}}
-												onNewTerminalWithShell={(paneId, shell) => {
-													handleCreateTerminalInPane(paneId, shell.path);
-												}}
+												onAddTerminal={handleAddTerminal}
+												onAddBrowserTab={handleNewBrowserTab}
 												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
@@ -1075,7 +1125,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onClose={() => setIsCommandPaletteOpen(false)}
 				projects={projects}
 				onSwitchProject={selectProject}
-				onNewTerminal={handleNewTerminal}
+				onAddTerminal={() => handleAddTerminal(undefined)}
+				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 			/>
 

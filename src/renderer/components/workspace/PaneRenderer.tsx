@@ -5,14 +5,15 @@ import {
 	ResizableHandle,
 } from "@/components/ui/resizable";
 import { PaneContent } from "./PaneContent";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { PaneNode, SplitNode, LeafNode } from "@/types/workspace.types";
 import type { ShellInfo } from "@shared/types/ipc.types";
 
 interface PaneRendererProps {
 	node: PaneNode;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -22,8 +23,8 @@ interface PaneRendererProps {
 
 export function PaneRenderer({
 	node,
-	onNewTerminal,
-	onNewTerminalWithShell,
+	onAddTerminal,
+	onAddBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -34,8 +35,8 @@ export function PaneRenderer({
 		return (
 			<PaneLeafRenderer
 				pane={node}
-				onNewTerminal={onNewTerminal}
-				onNewTerminalWithShell={onNewTerminalWithShell}
+				onAddTerminal={onAddTerminal}
+				onAddBrowserTab={onAddBrowserTab}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
@@ -47,8 +48,8 @@ export function PaneRenderer({
 	return (
 		<PaneSplitRenderer
 			node={node}
-			onNewTerminal={onNewTerminal}
-			onNewTerminalWithShell={onNewTerminalWithShell}
+			onAddTerminal={onAddTerminal}
+			onAddBrowserTab={onAddBrowserTab}
 			onCloseTerminal={onCloseTerminal}
 			onRenameTerminal={onRenameTerminal}
 			onCloseEditorTab={onCloseEditorTab}
@@ -60,8 +61,8 @@ export function PaneRenderer({
 
 interface PaneLeafRendererProps {
 	pane: LeafNode;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -72,8 +73,8 @@ interface PaneLeafRendererProps {
 const PaneLeafRenderer = memo(
 	({
 		pane,
-		onNewTerminal,
-		onNewTerminalWithShell,
+		onAddTerminal,
+		onAddBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -81,24 +82,26 @@ const PaneLeafRenderer = memo(
 		defaultShell,
 	}: PaneLeafRendererProps): React.JSX.Element => {
 		return (
-			<PaneContent
-				pane={pane}
-				onNewTerminal={onNewTerminal}
-				onNewTerminalWithShell={onNewTerminalWithShell}
-				onCloseTerminal={onCloseTerminal}
-				onRenameTerminal={onRenameTerminal}
-				onCloseEditorTab={onCloseEditorTab}
-				closingTerminalIds={closingTerminalIds}
-				defaultShell={defaultShell}
-			/>
+			<ErrorBoundary context="Terminal Pane">
+				<PaneContent
+					pane={pane}
+					onAddTerminal={onAddTerminal}
+					onAddBrowserTab={onAddBrowserTab}
+					onCloseTerminal={onCloseTerminal}
+					onRenameTerminal={onRenameTerminal}
+					onCloseEditorTab={onCloseEditorTab}
+					closingTerminalIds={closingTerminalIds}
+					defaultShell={defaultShell}
+				/>
+			</ErrorBoundary>
 		);
 	},
 );
 
 interface PaneSplitRendererProps {
 	node: SplitNode;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -109,8 +112,8 @@ interface PaneSplitRendererProps {
 const PaneSplitRenderer = memo(
 	({
 		node,
-		onNewTerminal,
-		onNewTerminalWithShell,
+		onAddTerminal,
+		onAddBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -168,8 +171,8 @@ const PaneSplitRenderer = memo(
 						defaultSize={node.sizes[index] ?? 50}
 						isLast={index === node.children.length - 1}
 						onDragging={handleDragging}
-						onNewTerminal={onNewTerminal}
-						onNewTerminalWithShell={onNewTerminalWithShell}
+						onAddTerminal={onAddTerminal}
+						onAddBrowserTab={onAddBrowserTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}
@@ -188,8 +191,8 @@ interface PaneRendererPanelProps {
 	defaultSize: number;
 	isLast: boolean;
 	onDragging: (isDragging: boolean) => void;
-	onNewTerminal?: (paneId: string) => void;
-	onNewTerminalWithShell?: (paneId: string, shell: ShellInfo) => void;
+	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
+	onAddBrowserTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -204,8 +207,8 @@ const PaneRendererPanel = memo(
 		defaultSize,
 		isLast,
 		onDragging,
-		onNewTerminal,
-		onNewTerminalWithShell,
+		onAddTerminal,
+		onAddBrowserTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -222,8 +225,8 @@ const PaneRendererPanel = memo(
 				>
 					<PaneRenderer
 						node={child}
-						onNewTerminal={onNewTerminal}
-						onNewTerminalWithShell={onNewTerminalWithShell}
+						onAddTerminal={onAddTerminal}
+						onAddBrowserTab={onAddBrowserTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}

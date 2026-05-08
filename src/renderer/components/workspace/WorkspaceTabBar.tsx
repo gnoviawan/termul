@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useShallow } from "zustand/shallow";
 import {
-	Plus,
 	Terminal as TerminalIcon,
-	ChevronDown,
 	X as XIcon,
 	Edit2,
 	Loader2,
 	Skull,
+	Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
@@ -21,7 +20,10 @@ import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
 import type { Terminal } from "@/types/project";
 import type { TabReorderPosition } from "@/types/workspace.types";
 import { ContextMenu } from "@/components/ContextMenu";
+import { useBrowserSessionStore } from "@/stores/browser-session-store";
+import { useAnnotationStore } from "@/stores/annotation-store";
 import { shellApi, clipboardApi } from "@/lib/api";
+import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(
@@ -295,13 +297,125 @@ function EditorTabWrapper({
 	);
 }
 
+interface BrowserTabInlineProps {
+	tab: { type: "browser"; id: string; browserTabId: string };
+	isActive: boolean;
+	isDragging: boolean;
+	isDropTarget: boolean;
+	dropPosition: TabReorderPosition | null;
+	onSelect: () => void;
+	onClose: () => void;
+	onDragStart: (e: React.DragEvent) => void;
+	onDragOver: (e: React.DragEvent) => void;
+	onDragLeave: () => void;
+	onDrop: (e: React.DragEvent) => void;
+}
+
+function BrowserTabInline({
+	tab,
+	isActive,
+	isDragging,
+	isDropTarget,
+	dropPosition,
+	onSelect,
+	onClose,
+	onDragStart,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: BrowserTabInlineProps): React.JSX.Element {
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
+	const browserTab = useBrowserSessionStore((state) => state.getTab(tab.browserTabId));
+	const label = (() => {
+		if (!browserTab) return "Browser";
+		if (browserTab.title.trim()) return browserTab.title.trim();
+		if (browserTab.url) {
+			try {
+				const parsed = new URL(browserTab.url);
+				return parsed.host || parsed.hostname || browserTab.url;
+			} catch {
+				return browserTab.url.replace(/^https?:\/\//, "").split("/")[0] || "Browser";
+			}
+		}
+		return "Browser";
+	})();
+
+	return (
+		<>
+			<div
+				draggable
+				onDragStart={onDragStart}
+				onDragOver={onDragOver}
+				onDragLeave={onDragLeave}
+				onDrop={onDrop}
+				onClick={onSelect}
+				onContextMenu={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					setContextMenu({ x: e.clientX, y: e.clientY });
+				}}
+				className={cn(
+					"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					isActive
+						? "bg-background border-b-primary"
+						: "hover:bg-secondary/50 text-muted-foreground",
+					isDragging && "opacity-50 scale-[0.98]",
+				)}
+			>
+				{/* Drop indicator line */}
+				{isDropTarget && dropPosition === "before" && (
+					<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+				)}
+				{isDropTarget && dropPosition === "after" && (
+					<div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+				)}
+
+				<Globe
+					size={12}
+					className={cn("mr-2", isActive ? "text-primary" : "")}
+				/>
+				<span className={cn("text-[11px] font-medium truncate", isActive && "text-foreground")}>
+					{label}
+				</span>
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onClose();
+					}}
+					className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+				>
+					<XIcon size={11} />
+				</button>
+			</div>
+
+			{contextMenu && (
+				<ContextMenu
+					items={[
+						{
+							label: "Close",
+							icon: <XIcon size={12} />,
+							onClick: onClose,
+						},
+					]}
+					x={contextMenu.x}
+					y={contextMenu.y}
+					onClose={() => setContextMenu(null)}
+				/>
+			)}
+		</>
+	);
+}
+
 interface WorkspaceTabBarProps {
 	paneId: string;
 	tabs: WorkspaceTab[];
 	activeTabId: string | null;
 	closingTerminalIds?: string[];
-	onNewTerminal?: () => void;
-	onNewTerminalWithShell?: (shell: ShellInfo) => void;
+	onAddTerminal?: (shell?: ShellInfo) => void;
+	onAddBrowserTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -313,8 +427,8 @@ export function WorkspaceTabBar({
 	tabs,
 	activeTabId,
 	closingTerminalIds = [],
-	onNewTerminal,
-	onNewTerminalWithShell,
+	onAddTerminal,
+	onAddBrowserTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -331,11 +445,11 @@ export function WorkspaceTabBar({
 		handleTabReorder,
 	} = usePaneDnd();
 
-	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+	const [isTerminalMenuOpen, setIsTerminalMenuOpen] = useState(false);
 	const [shells, setShells] = useState<DetectedShells | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [hasOverflow, setHasOverflow] = useState(false);
-	const dropdownRef = useRef<HTMLDivElement>(null);
+	const terminalMenuRef = useRef<HTMLDivElement>(null);
 	const tabsContainerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -357,19 +471,19 @@ export function WorkspaceTabBar({
 	useEffect(() => {
 		const handleClickOutside = (e: globalThis.MouseEvent): void => {
 			if (
-				dropdownRef.current &&
-				!dropdownRef.current.contains(e.target as Node)
+				terminalMenuRef.current &&
+				!terminalMenuRef.current.contains(e.target as Node)
 			) {
-				setIsDropdownOpen(false);
+				setIsTerminalMenuOpen(false);
 			}
 		};
-		if (isDropdownOpen) {
+		if (isTerminalMenuOpen) {
 			document.addEventListener("mousedown", handleClickOutside);
 		}
 		return () => {
 			document.removeEventListener("mousedown", handleClickOutside);
 		};
-	}, [isDropdownOpen]);
+	}, [isTerminalMenuOpen]);
 
 	useEffect(() => {
 		const checkOverflow = (): void => {
@@ -383,6 +497,36 @@ export function WorkspaceTabBar({
 		return () => window.removeEventListener("resize", checkOverflow);
 	}, [tabs.length]);
 
+	// Native child webviews paint above the DOM, so the terminal popover would be
+	// obscured unless we temporarily hide browser webviews while the menu is open.
+	useEffect(() => {
+		const browserTabs = tabs.filter(
+			(tab): tab is WorkspaceTab & { type: "browser"; browserTabId: string } =>
+				tab.type === "browser",
+		);
+		if (browserTabs.length === 0) return;
+
+		const hideAll = (tabsToHide: Array<{ browserTabId: string }>): void => {
+			for (const tab of tabsToHide) {
+				void browserTabHide(tab.browserTabId).catch(console.error);
+			}
+		};
+
+		const showActive = (activeBrowserTab?: { browserTabId: string }): void => {
+			if (activeBrowserTab) {
+				void browserTabShow(activeBrowserTab.browserTabId).catch(console.error);
+			}
+		};
+
+		if (isTerminalMenuOpen) {
+			hideAll(browserTabs);
+			return;
+		}
+
+		const activeBrowserTab = browserTabs.find((tab) => tab.id === activeTabId);
+		showActive(activeBrowserTab);
+	}, [isTerminalMenuOpen, tabs, activeTabId]);
+
 	const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
 		if (tabsContainerRef.current) {
 			e.preventDefault();
@@ -392,12 +536,12 @@ export function WorkspaceTabBar({
 
 	const handleSelectShell = useCallback(
 		(shell: ShellInfo) => {
-			if (onNewTerminalWithShell) {
-				onNewTerminalWithShell(shell);
+			if (onAddTerminal) {
+				onAddTerminal(shell);
 			}
-			setIsDropdownOpen(false);
+			setIsTerminalMenuOpen(false);
 		},
-		[onNewTerminalWithShell],
+		[onAddTerminal],
 	);
 
 	const handleCloseEditorTab = useCallback(
@@ -544,14 +688,14 @@ export function WorkspaceTabBar({
 				e.dataTransfer.dropEffect = "move";
 			}}
 		>
-			<div className="relative flex items-center h-full min-w-0 shrink">
+			<div className="relative flex items-center h-full min-w-0 flex-1 overflow-hidden">
 				<div
 					ref={tabsContainerRef}
 					onWheel={handleWheel}
 					onDragLeave={handleContainerDragLeave}
-					className="overflow-x-auto scrollbar-hide flex items-center h-full"
+					className="overflow-x-auto scrollbar-hide flex items-center h-full min-w-0 flex-1"
 				>
-					<div className="flex items-center h-full">
+					<div className="flex items-center h-full min-w-max">
 						{tabs.map((tab) => {
 							const dragging = isTabDragging(tab.id);
 							const { isTarget, position } = isTabDropTarget(tab.id);
@@ -593,7 +737,7 @@ export function WorkspaceTabBar({
 												/>
 											);
 										})()
-									) : (
+									) : tab.type === "editor" ? (
 										<EditorTabWrapper
 											tab={
 												tab as { type: "editor"; id: string; filePath: string }
@@ -619,6 +763,29 @@ export function WorkspaceTabBar({
 											onDragLeave={handleTabDragLeave}
 											onDrop={(e) => handleTabDrop(tab.id, e)}
 										/>
+									) : (
+										<BrowserTabInline
+											tab={
+												tab as { type: "browser"; id: string; browserTabId: string }
+											}
+											isActive={tab.id === activeTabId}
+											isDragging={dragging}
+											isDropTarget={isTarget}
+											dropPosition={position}
+											onSelect={() => {
+												setActiveTab(paneId, tab.id);
+												setActivePane(paneId);
+											}}
+											onClose={() => {
+												useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+												useAnnotationStore.getState().clearAnnotationsForTab(tab.browserTabId)
+												useWorkspaceStore.getState().closeTab(paneId, tab.id)
+											}}
+											onDragStart={(e) => handleTabDragStart(tab.id, e)}
+											onDragOver={(e) => handleTabDragOver(tab.id, e)}
+											onDragLeave={handleTabDragLeave}
+											onDrop={(e) => handleTabDrop(tab.id, e)}
+										/>
 									)}
 								</div>
 							);
@@ -631,72 +798,68 @@ export function WorkspaceTabBar({
 				)}
 			</div>
 
-			{/* Split Button: New Terminal */}
-			{onNewTerminal && (
-				<div
-					ref={dropdownRef}
-					className="relative flex items-center ml-1 shrink-0"
-				>
-					<button
-						onClick={onNewTerminal}
-						className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
-						title="New terminal (default shell)"
-					>
-						<Plus size={12} />
-					</button>
-					{onNewTerminalWithShell && (
-						<>
-							<button
-								onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-								className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-								title="Select shell"
-							>
-								<ChevronDown size={12} />
-							</button>
+			<div className="ml-auto flex items-center gap-1 px-2 shrink-0 h-full border-l border-border/60">
+				{onAddTerminal && (
+					<div ref={terminalMenuRef} className="relative flex items-center h-full">
+						<button
+							onClick={() => setIsTerminalMenuOpen((open) => !open)}
+							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+							title="Open terminal menu"
+						>
+							<TerminalIcon size={12} />
+						</button>
 
-							{isDropdownOpen && (
-								<div className="absolute top-full left-0 mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
-									{loading ? (
-										<div className="py-1 px-3 space-y-2">
-											<Skeleton className="h-8 w-full" />
-											<Skeleton className="h-8 w-full" />
-											<Skeleton className="h-8 w-full" />
-										</div>
-									) : sortedShells && sortedShells.length > 0 ? (
-										<div className="py-1">
-											{sortedShells.map((shell) => (
-												<button
-													key={shell.name}
-													onClick={() => handleSelectShell(shell)}
-													className={cn(
-														"w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2",
-														shell.name === defaultShell && "text-primary",
-													)}
-												>
-													<TerminalIcon size={12} />
-													<span>{shell.displayName}</span>
-													{shell.name === defaultShell && (
-														<span className="ml-auto text-xs text-muted-foreground">
-															(default)
-														</span>
-													)}
-												</button>
-											))}
-										</div>
-									) : (
-										<div className="px-3 py-2 text-sm text-muted-foreground">
-											No shells detected
-										</div>
-									)}
+						{isTerminalMenuOpen && (
+							<div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
+								<div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30">
+									Terminal
 								</div>
-							)}
-						</>
-					)}
-				</div>
-			)}
+								{loading ? (
+									<div className="py-1 px-2.5 space-y-1.5">
+										<Skeleton className="h-6 w-full" />
+										<Skeleton className="h-6 w-full" />
+									</div>
+								) : sortedShells && sortedShells.length > 0 ? (
+									<div className="py-1">
+										{sortedShells.map((shell) => (
+											<button
+												key={shell.name}
+												onClick={() => handleSelectShell(shell)}
+												className={cn(
+													"w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-secondary flex items-center gap-2 leading-none",
+													shell.name === defaultShell && "text-primary",
+												)}
+											>
+												<TerminalIcon size={11} />
+												<span className="truncate">{shell.displayName}</span>
+												{shell.name === defaultShell && (
+													<span className="ml-auto text-[10px] text-muted-foreground">
+														(default)
+													</span>
+												)}
+											</button>
+										))}
+									</div>
+								) : (
+									<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+										No shells detected
+									</div>
+								)}
+							</div>
+						)}
+					</div>
+				)}
 
-			{/* Spacer */}
-			<div className="flex-1" />
+				{onAddBrowserTab && (
+					<button
+						onClick={onAddBrowserTab}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title="New Browser Tab"
+					>
+						<Globe size={12} />
+					</button>
+				)}
+			</div>
 		</div>
 	);
 }

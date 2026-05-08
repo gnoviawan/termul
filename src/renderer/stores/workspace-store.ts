@@ -11,6 +11,7 @@ import type {
 export type WorkspaceTab =
   | { type: 'terminal'; id: string; terminalId: string }
   | { type: 'editor'; id: string; filePath: string }
+  | { type: 'browser'; id: string; browserTabId: string }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
 // This prevents duplicate tab creation during rapid state changes
@@ -167,8 +168,13 @@ export interface WorkspaceState {
   addTerminalTab: (terminalId: string, targetPaneId?: string) => void
   ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive?: boolean) => void
   addEditorTab: (filePath: string, targetPaneId?: string) => void
+  addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
   removeTab: (tabId: string) => void
   getNextTabId: (direction: 1 | -1) => string | null
+}
+
+function makeBrowserTabId(browserTabId: string): string {
+  return 'browser-' + browserTabId
 }
 
 function terminalTabId(terminalId: string): string {
@@ -573,6 +579,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
+    addBrowserTab: (browserTabId: string, targetPaneId?: string): void => {
+      const id = makeBrowserTabId(browserTabId)
+      const { root, activePaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      // Check if already exists in any pane — activate it
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
+          activePaneId: existing.id
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'browser', id, browserTabId }
+      get().addTabToPane(paneId, tab)
+    },
+
     removeTab: (tabId: string): void => {
       const { root } = get()
       const pane = findPaneContainingTab(root, tabId)
@@ -710,7 +735,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       newRoot = updateLeaf(newRoot, activePaneId, (leaf) => {
         const termTabs = leaf.tabs.filter((t) => t.type === 'terminal')
-        const newTabs = [...termTabs, ...editorTabs]
+        const existingNonEditorNonTerminal = leaf.tabs.filter(
+          (t) => t.type !== 'terminal' && t.type !== 'editor'
+        )
+        const dedupedEditorTabs = editorTabs.filter(
+          (editorTab, index, arr) => arr.findIndex((t) => t.id === editorTab.id) === index
+        )
+        const newTabs = [...termTabs, ...existingNonEditorNonTerminal, ...dedupedEditorTabs]
         let newActive = restoredActiveTabId ?? null
         if (!newActive || !newTabs.some((t) => t.id === newActive)) {
           newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
@@ -851,6 +882,7 @@ export function useWorkspaceActions(): Pick<
   WorkspaceState,
   | 'addTerminalTab'
   | 'addEditorTab'
+  | 'addBrowserTab'
   | 'removeTab'
   | 'setActiveTab'
   | 'reorderTabsInPane'
@@ -871,6 +903,7 @@ export function useWorkspaceActions(): Pick<
     useShallow((state) => ({
       addTerminalTab: state.addTerminalTab,
       addEditorTab: state.addEditorTab,
+      addBrowserTab: state.addBrowserTab,
       removeTab: state.removeTab,
       setActiveTab: state.setActiveTab,
       reorderTabsInPane: state.reorderTabsInPane,
@@ -890,7 +923,7 @@ export function useWorkspaceActions(): Pick<
   )
 }
 
-export { terminalTabId, editorTabId }
+export { terminalTabId, editorTabId, makeBrowserTabId as browserTabId }
 
 // Derive active terminal/editor from pane tree (source of truth)
 export function getActiveTerminalIdFromTree(state: WorkspaceState): string | null {

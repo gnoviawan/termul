@@ -6,6 +6,10 @@ import {
   syncScrollbackToStore,
   saveTerminalLayout
 } from './useTerminalAutoSave'
+
+const { mockRecordTerminalContinuityEvent } = vi.hoisted(() => ({
+  mockRecordTerminalContinuityEvent: vi.fn()
+}))
 import { extractScrollback } from '../utils/terminal-registry'
 import { useTerminalStore } from '../stores/terminal-store'
 import type { Terminal } from '@/types/project'
@@ -18,6 +22,10 @@ vi.mock('../utils/terminal-registry', () => ({
     if (terminalId === '1' || terminalId === 'pty-1') return ['line 1', 'line 2']
     return undefined
   })
+}))
+
+vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
+  recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
 }))
 
 // Mock window.api
@@ -39,6 +47,7 @@ vi.stubGlobal('window', {
 describe('useTerminalAutoSave', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRecordTerminalContinuityEvent.mockReset()
   })
 
   describe('setTerminalRestoreInProgress', () => {
@@ -260,6 +269,41 @@ describe('useTerminalAutoSave', () => {
         .getState()
         .terminals.find((t) => t.id === terminal.id)
       expect(updatedTerminal?.pendingScrollback).toEqual(['line 1', 'line 2'])
+    })
+
+    it('records transcript persistence diagnostics during project-switch saves', async () => {
+      const store = useTerminalStore.getState()
+      const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+      store.setTerminalPtyId(terminal.id, 'pty-1')
+      useTerminalStore.setState((state) => ({
+        terminals: state.terminals.map((currentTerminal) =>
+          currentTerminal.id === terminal.id
+            ? { ...currentTerminal, transcript: 'hello\nworld\n' }
+            : currentTerminal
+        )
+      }))
+
+      await saveTerminalLayout('proj-1', {
+        correlationId: 'corr-1',
+        reason: 'project-switch',
+        targetProjectId: 'proj-2'
+      })
+
+      expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith({
+        name: 'transcript-persistence-evaluated',
+        correlationId: 'corr-1',
+        projectId: 'proj-1',
+        terminalId: terminal.id,
+        ptyId: 'pty-1',
+        details: {
+          reason: 'project-switch',
+          targetProjectId: 'proj-2',
+          transcriptLength: 'hello\nworld\n'.length,
+          scrollbackExtractionAvailable: true,
+          extractedScrollbackLineCount: 2,
+          persistedScrollbackLineCount: 2
+        }
+      })
     })
   })
 })

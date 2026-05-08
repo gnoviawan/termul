@@ -1,4 +1,5 @@
 // Module declarations
+mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
@@ -596,6 +597,23 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // macOS: Enable overlay title bar for native traffic lights.
+            // Window starts hidden (visible: false), so we set this before show().
+            // On Windows/Linux: set_decorations(false) removes native frame
+            // so the custom HTML titlebar is used instead.
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = window.set_decorations(true) {
+                        log::warn!("[macOS] Failed to enable window decorations: {}", e);
+                    }
+                    if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
+                        log::warn!("[macOS] Failed to set overlay title bar style: {}", e);
+                    }
+                }
+            }
+
             app.manage(ViewMenuState::default());
 
             // Create CWD Tracker (takes app_handle directly)
@@ -618,6 +636,10 @@ pub fn run() {
                 exit_code_tracker,
             ));
             app.manage(pty_manager.clone());
+
+            // Create Browser Tab Manager
+            let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            app.manage(browser_tab_manager);
 
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
@@ -687,6 +709,27 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_set_visibility,
+            // Browser tab commands
+            commands::browser_tab_create,
+            commands::browser_tab_navigate,
+            commands::browser_tab_resize,
+            commands::browser_tab_show,
+            commands::browser_tab_hide,
+            commands::browser_tab_destroy,
+            commands::browser_tab_go_back,
+            commands::browser_tab_go_forward,
+            commands::browser_tab_reload,
+            commands::browser_tab_inject_annotation,
+            commands::browser_tab_remove_annotation_overlay,
+            commands::browser_tab_inject_annotation_markers,
+            commands::browser_tab_update_annotation_marker_selection,
+            // Browser tab URL sync commands (called by injected JS)
+            commands::browser_tab_report_url,
+            commands::browser_tab_report_loaded,
+            commands::browser_tab_report_region_captured,
+            commands::browser_tab_report_element_captured,
+            commands::browser_tab_report_title,
+            commands::browser_tab_report_annotation_marker_clicked,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,
@@ -703,17 +746,29 @@ pub fn run() {
             // Prevent the default exit behavior so we can cleanup first
             api.prevent_exit();
 
+            let browser_tab_manager = app_handle
+                .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
 
-                // Spawn async cleanup task
-                tokio::spawn(async move {
+                // Spawn async cleanup task via tauri::async_runtime
+                // (not tokio::spawn directly — the run callback may fire on
+                // a thread without a Tokio reactor, e.g. macOS WKWebView events)
+                tauri::async_runtime::spawn(async move {
                     pty_manager_clone.kill_all().await;
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
                     // After cleanup completes, allow the app to exit with code 0
                     app_handle_clone.exit(0);
                 });
             } else {
+                if let Some(browser_tab_manager) = browser_tab_manager {
+                    browser_tab_manager.destroy_all();
+                }
                 // No PTY manager, just exit
                 app_handle.exit(0);
             }

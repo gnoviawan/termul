@@ -8,24 +8,37 @@ const mockSetActiveTab = vi.fn()
 const mockSetActivePane = vi.fn()
 const mockReorderTabsInPane = vi.fn()
 const mockCloseTab = vi.fn()
+const mockCloseFileIfIdle = vi.fn(() => true)
+
+const mockWorkspaceStoreState = {
+  setActiveTab: mockSetActiveTab,
+  setActivePane: mockSetActivePane,
+  reorderTabsInPane: mockReorderTabsInPane,
+  closeTab: mockCloseTab
+}
+
+const mockEditorOpenFiles = new Map<string, { isDirty: boolean; operationStatus?: string }>()
+const mockEditorStoreState = {
+  openFiles: mockEditorOpenFiles,
+  closeFileIfIdle: mockCloseFileIfIdle
+}
 
 vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: vi.fn((selector: (state: unknown) => unknown) =>
-    selector({
-      setActiveTab: mockSetActiveTab,
-      setActivePane: mockSetActivePane,
-      reorderTabsInPane: mockReorderTabsInPane,
-      closeTab: mockCloseTab
-    })
+  useWorkspaceStore: Object.assign(
+    vi.fn((selector: (state: typeof mockWorkspaceStoreState) => unknown) => selector(mockWorkspaceStoreState)),
+    {
+      getState: () => mockWorkspaceStoreState
+    }
   ),
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
 
 vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: vi.fn((selector: (state: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
-    selector({
-      openFiles: new Map<string, { isDirty: boolean }>()
-    })
+  useEditorStore: Object.assign(
+    vi.fn((selector: (state: typeof mockEditorStoreState) => unknown) => selector(mockEditorStoreState)),
+    {
+      getState: () => mockEditorStoreState
+    }
   )
 }))
 
@@ -70,11 +83,37 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: mockUsePaneDnd
 }))
 
+const mockShellApiGetAvailableShells = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    success: true,
+    data: {
+      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
+      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
+    }
+  })
+)
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    shellApi: {
+      getAvailableShells: mockShellApiGetAvailableShells
+    },
+    clipboardApi: {
+      writeText: vi.fn()
+    }
+  }
+})
+
 beforeEach(() => {
   mockSetActiveTab.mockReset()
   mockSetActivePane.mockReset()
   mockReorderTabsInPane.mockReset()
   mockCloseTab.mockReset()
+  mockCloseFileIfIdle.mockReset()
+  mockCloseFileIfIdle.mockReturnValue(true)
+  mockEditorOpenFiles.clear()
   mockStartTabDrag.mockReset()
   mockSetReorderPreview.mockReset()
   mockClearReorderPreview.mockReset()
@@ -89,18 +128,11 @@ beforeEach(() => {
     handleTabReorder: mockHandleTabReorder
   })
 
-  vi.stubGlobal('api', {
-    shell: {
-      getAvailableShells: vi.fn().mockResolvedValue({
-        success: true,
-        data: {
-          default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
-          available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
-        }
-      })
-    },
-    clipboard: {
-      writeText: vi.fn()
+  mockShellApiGetAvailableShells.mockResolvedValue({
+    success: true,
+    data: {
+      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
+      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
     }
   })
 })
@@ -118,36 +150,59 @@ describe('WorkspaceTabBar', () => {
         paneId="pane-a"
         tabs={[]}
         activeTabId={null}
-        onNewTerminal={vi.fn()}
+        onAddTerminal={vi.fn()}
       />
     )
 
     await flushShellEffect()
 
-    expect(screen.getByTitle('New terminal (default shell)')).toBeInTheDocument()
+    expect(screen.getByTitle('Open terminal menu')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.queryByTitle('Close pane')).not.toBeInTheDocument()
     })
   })
 
-  it('calls pane-scoped onNewTerminal when plus is clicked', async () => {
-    const onNewTerminal = vi.fn()
+  it('calls pane-scoped onAddTerminal when a shell is selected from the terminal menu', async () => {
+    const onAddTerminal = vi.fn()
 
     render(
       <WorkspaceTabBar
         paneId="pane-a"
         tabs={[]}
         activeTabId={null}
-        onNewTerminal={onNewTerminal}
+        onAddTerminal={onAddTerminal}
       />
     )
 
     await flushShellEffect()
 
-    fireEvent.click(screen.getByTitle('New terminal (default shell)'))
+    fireEvent.click(screen.getByTitle('Open terminal menu'))
+    fireEvent.click(screen.getByText('Bash'))
 
-    expect(onNewTerminal).toHaveBeenCalledTimes(1)
+    expect(onAddTerminal).toHaveBeenCalledTimes(1)
+    expect(onAddTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'bash', displayName: 'Bash', path: '/bin/bash' })
+    )
+  })
+
+  it('calls pane-scoped onAddBrowserTab when browser action is clicked', async () => {
+    const onAddBrowserTab = vi.fn()
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[]}
+        activeTabId={null}
+        onAddBrowserTab={onAddBrowserTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('New Browser Tab'))
+
+    expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
   })
 
   it('renders editor tab with non-jitter active style class', async () => {
@@ -185,15 +240,75 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const closeButtons = screen.getAllByRole('button')
-    const tabCloseButton = closeButtons.find((button) =>
-      button.className.includes('opacity-0 group-hover:opacity-100')
-    )
+    const tabCloseButton = screen.getByTitle('Close tab')
 
-    expect(tabCloseButton).toBeTruthy()
-    fireEvent.click(tabCloseButton!)
+    fireEvent.click(tabCloseButton)
 
     expect(onCloseEditorTab).toHaveBeenCalledWith('/a.ts')
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('uses the fallback close path when no onCloseEditorTab callback is provided', async () => {
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('Close tab'))
+
+    expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
+    expect(mockCloseTab).toHaveBeenCalledWith('pane-a', 'edit-/a.ts')
+  })
+
+  it('does not close editor tabs while the file is saving', async () => {
+    mockEditorOpenFiles.set('/a.ts', { isDirty: true, operationStatus: 'saving' })
+    const onCloseEditorTab = vi.fn()
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+        onCloseEditorTab={onCloseEditorTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    const savingButton = screen.getByTitle('Saving file')
+    expect(savingButton).toBeDisabled()
+    fireEvent.click(savingButton)
+
+    expect(onCloseEditorTab).not.toHaveBeenCalled()
+    expect(mockCloseFileIfIdle).not.toHaveBeenCalled()
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('does not remove the workspace tab when fallback closeFileIfIdle returns false', async () => {
+    mockCloseFileIfIdle.mockReturnValue(false)
+    const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('Close tab'))
+
+    expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
     expect(mockCloseTab).not.toHaveBeenCalled()
   })
 
