@@ -160,11 +160,11 @@ export default function AppPreferences(): React.JSX.Element {
           </div>
           <button
             onClick={() => { navigate('/') }}
-            className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             title="Close"
             aria-label="Close preferences"
           >
-            <X size={18} className="text-muted-foreground hover:text-foreground" />
+            <X size={18} className="text-muted-foreground group-hover:text-foreground" />
           </button>
         </div>
 
