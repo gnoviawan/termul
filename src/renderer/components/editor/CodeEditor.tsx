@@ -107,6 +107,12 @@ export function CodeEditor({
   }, [content, setContent])
 
   useEffect(() => {
+    lastAppliedLineRef.current = null
+    pendingRevealLineRef.current = null
+    pendingRevealTermRef.current = undefined
+  }, [filePath])
+
+  useEffect(() => {
     const element = layoutRef.current
     if (!element) {
       return

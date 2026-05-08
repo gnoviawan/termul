@@ -329,7 +329,11 @@ export function useCodeMirror(
       const currentView = viewRef.current
       if (!currentView) return
       const lineBlock = currentView.lineBlockAt(line.from)
-      onScrollChangeRef.current(lineBlock.top)
+      const scrollDOM = currentView.scrollDOM
+      const viewportHeight = scrollDOM.clientHeight
+      const maxScrollTop = Math.max(0, scrollDOM.scrollHeight - viewportHeight)
+      const desiredScrollTop = Math.max(0, Math.min(maxScrollTop, lineBlock.top - viewportHeight / 2))
+      onScrollChangeRef.current(desiredScrollTop)
       onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
       currentView.focus()
     })

@@ -59,7 +59,6 @@
     "shell:allow-execute",
     "shell:allow-spawn",
     "shell:allow-kill",
-    "shell:allow-stdin-write",
     "opener:default",
     "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",

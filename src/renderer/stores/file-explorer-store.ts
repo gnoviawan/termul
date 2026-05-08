@@ -152,7 +152,10 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
   setRootPath: (path: string | null): void => {
     // Unwatch all previously expanded directories
-    const { expandedDirs } = get()
+    const { expandedDirs, searchRequestId } = get()
+    if (searchRequestId > 0) {
+      void filesystemApi.searchContentStreamCancel(`search-${searchRequestId}`)
+    }
     expandedDirs.forEach((dir) => {
       filesystemApi.unwatchDirectory(dir)
     })
@@ -548,6 +551,10 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
     const trimmed = query.trim()
     if (!trimmed || trimmed.length < 2) {
+      const activeRequestId = get().searchRequestId
+      if (activeRequestId > 0) {
+        void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
+      }
       set({
         searchLoading: false,
         searchError: null,
@@ -563,9 +570,9 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
     ensureSearchStreamSubscription(set, get)
 
-    const previousRequestId = Math.max(0, requestId - 1)
-    if (previousRequestId > 0) {
-      void filesystemApi.searchContentStreamCancel(`search-${previousRequestId}`)
+    const activeRequestId = get().searchRequestId
+    if (activeRequestId > 0) {
+      void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
     }
 
     const { searchLastCompletedQuery, searchResults } = get()
@@ -635,6 +642,10 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   resetSearch: (): void => {
+    const activeRequestId = get().searchRequestId
+    if (activeRequestId > 0) {
+      void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
+    }
     set({
       searchQuery: '',
       searchResults: [],

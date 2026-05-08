@@ -685,10 +685,10 @@ pub struct RgInfoResponse {
     pub exists: bool,
 }
 
-static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
-fn search_processes() -> &'static Mutex<HashMap<String, Child>> {
+fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -824,7 +824,10 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
         args.push("-g".to_string());
         args.push(format!("!**/{}/**", ignored));
     }
+    args.push("-g".to_string());
+    args.push("!**/.env".to_string());
 
+    args.push("--".to_string());
     args.push(query.to_string());
     args.push(root_path.to_string());
     args
@@ -871,7 +874,7 @@ pub async fn search_content_stream(
     let mut child = match Command::new(&rg_path)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
     {
         Ok(c) => c,
@@ -907,30 +910,40 @@ pub async fn search_content_stream(
         }
     };
 
+    let child_handle = Arc::new(Mutex::new(child));
     {
         let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
-        guard.insert(request.search_id.clone(), child);
+        guard.insert(request.search_id.clone(), Arc::clone(&child_handle));
     }
 
     let search_id = request.search_id.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut process = {
-            let mut guard = match search_processes().lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            guard.remove(&search_id)
-        };
-
-        let mut process = match process.take() {
-            Some(c) => c,
-            None => return,
-        };
-
+    tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
         let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
-        let mut batch: Vec<FileSearchResult> = Vec::new();
+        let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
+
+        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>, truncated: bool| {
+            if pending.is_empty() {
+                return;
+            }
+            let batch: Vec<FileSearchResult> = pending
+                .iter()
+                .map(|(file_path, matches)| FileSearchResult {
+                    file_path: file_path.clone(),
+                    matches: matches.clone(),
+                })
+                .collect();
+            let _ = app_handle.emit(
+                "search-content-batch",
+                SearchContentBatchEvent {
+                    search_id: search_id.clone(),
+                    results: batch,
+                    truncated,
+                },
+            );
+            pending.clear();
+        };
 
         for line in reader.lines() {
             let line = match line {
@@ -988,42 +1001,31 @@ pub async fn search_content_stream(
                     truncated = true;
                     continue;
                 }
-                matches.push(FileSearchMatch {
+                let new_match = FileSearchMatch {
                     line_number,
                     line_text,
-                });
-
-                batch.push(FileSearchResult {
-                    file_path: file_path.clone(),
-                    matches: matches.clone(),
-                });
+                };
+                matches.push(new_match.clone());
+                pending_matches
+                    .entry(file_path)
+                    .or_default()
+                    .push(new_match);
             }
 
-            if batch.len() >= 25 {
-                let _ = app_handle.emit(
-                    "search-content-batch",
-                    SearchContentBatchEvent {
-                        search_id: search_id.clone(),
-                        results: batch.clone(),
-                        truncated,
-                    },
-                );
-                batch.clear();
+            if pending_matches.values().map(Vec::len).sum::<usize>() >= 25 {
+                flush_batch(&mut pending_matches, truncated);
             }
         }
 
-        if !batch.is_empty() {
-            let _ = app_handle.emit(
-                "search-content-batch",
-                SearchContentBatchEvent {
-                    search_id: search_id.clone(),
-                    results: batch,
-                    truncated,
-                },
-            );
+        flush_batch(&mut pending_matches, truncated);
+
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+        if let Ok(mut guard) = search_processes().lock() {
+            guard.remove(&search_id);
         }
 
-        let _ = process.kill();
         let _ = app_handle.emit(
             "search-content-done",
             SearchContentDoneEvent {
@@ -1044,8 +1046,11 @@ pub async fn search_content_cancel(
     request: SearchContentCancelRequest,
 ) -> Result<IpcResult<()>, String> {
     let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = guard.remove(&request.search_id) {
-        let _ = child.kill();
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
     }
     Ok(IpcResult::success(()))
 }
@@ -1145,41 +1150,7 @@ pub async fn search_content(
     let max_files_with_matches: usize = 100;
     let max_matches_per_file: usize = 30;
 
-    let mut args = vec![
-        "--json".to_string(),
-        "-F".to_string(),
-        "-i".to_string(),
-        "-n".to_string(),
-        "--max-filesize".to_string(),
-        "1M".to_string(),
-        "--max-count".to_string(),
-        max_matches_per_file.to_string(),
-    ];
-
-    for ignored in [
-        "node_modules",
-        ".git",
-        ".next",
-        ".cache",
-        ".turbo",
-        "dist",
-        "build",
-        ".output",
-        ".nuxt",
-        ".svelte-kit",
-        "__pycache__",
-        ".pytest_cache",
-        "venv",
-        ".env",
-        "coverage",
-        ".nyc_output",
-    ] {
-        args.push("-g".to_string());
-        args.push(format!("!**/{}/**", ignored));
-    }
-
-    args.push(trimmed_query.to_string());
-    args.push(request.root_path);
+    let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
     let output = Command::new(&rg_path).args(args).output();
