@@ -174,6 +174,26 @@ npm run build:tauri:mac-x64    # macOS (Intel)
 npm run build:tauri:linux      # Linux (x64)
 ```
 
+## Release Management (Maintainers Only)
+
+### Creating a Release
+
+Releases are automated via GitHub Actions when a version tag is pushed:
+
+1. Ensure version numbers match in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`
+2. Push a version tag: `git tag v0.3.7 && git push origin v0.3.7`
+3. CI will build, sign, and publish a draft release
+4. Verify the release assets include `.sig` files and `latest.json`
+5. Publish the draft release
+
+### Signing Key Management
+
+Update signing is secured with a minisign keypair. The public key is embedded in the app at `src-tauri/tauri.conf.json` (line 39), and the private key is stored in the GitHub secret `TAURI_SIGNING_PRIVATE_KEY`.
+
+**Important**: If you need to rotate signing keys, follow the procedure documented in [docs/auto-update-release-verification.md](docs/auto-update-release-verification.md#key-rotation-procedure). The key rotation must ship the new public key in a release signed with the old key BEFORE rotating the private key in CI, otherwise existing users will fail to verify future updates.
+
+Current key ID: `6E47FAD95783D992`
+
 ## Questions?
 
 Feel free to open an issue for any questions or concerns.
