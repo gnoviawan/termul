@@ -12,7 +12,6 @@ import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
@@ -49,6 +48,11 @@ import {
 	buildTerminalPathLinks,
 	openFilePathFromTerminal,
 } from "@/lib/file-path-links";
+import {
+	buildTerminalUrlLinks,
+	isSupportedTerminalUrl,
+} from "@/lib/terminal-url-links";
+import { openTerminalUrlInDedicatedBrowser } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
@@ -548,9 +552,6 @@ function ConnectedTerminalComponent({
 		fitAddonRef.current = fitAddon;
 		terminal.loadAddon(fitAddon);
 
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
-
 		const handleFilePathActivate = async (
 			event: MouseEvent,
 			uri: string,
@@ -578,10 +579,35 @@ function ConnectedTerminalComponent({
 			}
 		};
 
+		const handleUrlActivate = async (
+			event: MouseEvent,
+			url: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			if (!isSupportedTerminalUrl(url)) {
+				toast.error("Only http/https URLs are supported from terminal output.");
+				return;
+			}
+
+			try {
+				await openTerminalUrlInDedicatedBrowser(url);
+			} catch (error) {
+				console.error("[Terminal URL Link Open Failed]", error);
+				toast.error("Failed to open URL from terminal output.");
+			}
+		};
+
 		fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
 			provideLinks(y, callback) {
 				const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-				callback(buildTerminalPathLinks(line, y, handleFilePathActivate));
+				const pathLinks = buildTerminalPathLinks(line, y, handleFilePathActivate);
+				const urlLinks = buildTerminalUrlLinks(line, y, handleUrlActivate);
+				callback([...urlLinks, ...pathLinks]);
 			},
 		});
 

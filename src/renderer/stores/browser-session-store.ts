@@ -25,6 +25,7 @@ export interface BrowserSessionState {
   setNavCapabilities: (id: string, canGoBack: boolean, canGoForward: boolean) => void
   setAnnotationMode: (id: string, enabled: boolean) => void
   setAnnotationSubMode: (id: string, mode: AnnotationSubMode) => void
+  ensureTab: (id: string, url: string) => BrowserTab
   getTab: (id: string) => BrowserTab | undefined
 }
 
@@ -118,6 +119,18 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       next.set(id, { ...tab, annotationSubMode: mode })
       return { tabs: next }
     })
+  },
+
+  ensureTab: (id: string, url: string) => {
+    const existing = get().tabs.get(id)
+    if (existing) {
+      if (existing.url !== url) {
+        get().updateUrl(id, url)
+      }
+      return get().tabs.get(id) ?? existing
+    }
+
+    return get().createTab(id, url)
   },
 
   getTab: (id: string) => {
