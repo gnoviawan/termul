@@ -4,7 +4,7 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
 export const TERMINAL_DEDICATED_BROWSER_TAB_ID = 'terminal-link-browser'
 
 function createTerminalBrowserTabId(): string {
-  return `${TERMINAL_DEDICATED_BROWSER_TAB_ID}-${Date.now().toString(36)}`
+  return `${TERMINAL_DEDICATED_BROWSER_TAB_ID}-${crypto.randomUUID()}`
 }
 
 export async function openTerminalUrlInDedicatedBrowser(url: string): Promise<void> {
