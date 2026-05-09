@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal, Layers, SplitSquareVertical, Save, Globe } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -110,9 +110,17 @@ export function CommandPalette({
     return { recentCommands: recent, otherCommands: others }
   }, [commands, recentCommandIds])
 
+  const inputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     if (isOpen) {
       setQuery('')
+      // Explicitly blur active element first so terminal doesn't hold focus,
+      // then focus the command palette input after the overlay renders.
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur()
+      }
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
   }, [isOpen])
 
@@ -174,6 +182,7 @@ export function CommandPalette({
               shouldFilter={true}
             >
               <CommandInput
+                ref={inputRef}
                 placeholder="Type a command or search..."
                 value={query}
                 onValueChange={setQuery}

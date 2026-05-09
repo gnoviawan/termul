@@ -1144,6 +1144,71 @@ describe('ConnectedTerminal', () => {
 
       expect(result).toBe(true)
     })
+
+    it('should bubble app-owned shortcuts so the workspace handler can process them', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'B',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+    })
+
+    it('should pass Ctrl+R through to PTY as a readline passthrough (reverse-i-search)', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Ctrl+R is a readline binding (reverse-i-search) and must reach the PTY
+      // on all platforms even though it may also match the commandHistory app shortcut.
+      const event = new KeyboardEvent('keydown', {
+        key: 'r',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+    })
+
+    it('should pass Ctrl+K through to PTY as a readline passthrough (kill to EOL)', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Ctrl+K is a readline binding (kill to end of line) and must reach the PTY
+      // on all platforms even though it may also match the commandPalette app shortcut.
+      const event = new KeyboardEvent('keydown', {
+        key: 'k',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+    })
   })
 
   describe('Context menu', () => {
