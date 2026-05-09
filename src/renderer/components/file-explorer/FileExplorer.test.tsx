@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { FileExplorer } from './FileExplorer'
 
@@ -253,13 +254,22 @@ describe('FileExplorer', () => {
 
     render(<FileExplorer />)
 
-    fireEvent.click(screen.getByText(/createExplorerSearch\(\)/))
+    await act(async () => {
+      fireEvent.click(screen.getByText(/createExplorerSearch\(\)/))
+      window.dispatchEvent(new Event('load'))
+      await Promise.resolve()
+    })
 
     await waitFor(() => {
       expect(mockSelectPath).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockOpenFile).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockAddEditorTab).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockUpdateCursorPosition).toHaveBeenCalledWith('/project/src/FileExplorer.tsx', 27, 1)
+      expect((window as unknown as { __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string } }).__termulPendingRevealLine).toEqual({
+        filePath: '/project/src/FileExplorer.tsx',
+        lineNumber: 27,
+        searchTerm: 'term'
+      })
     })
   })
 

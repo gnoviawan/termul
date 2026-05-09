@@ -13,7 +13,8 @@ interface CodeEditorProps {
   language: string
   readOnly?: boolean
   isVisible: boolean
-  initialLine?: number
+  initialCursorPosition?: { line: number; col: number }
+  initialScrollTop?: number
   onChange: (content: string) => void
   onCursorChange: (line: number, col: number) => void
   onScrollChange: (scrollTop: number) => void
@@ -35,7 +36,8 @@ export function CodeEditor({
   language,
   readOnly = false,
   isVisible,
-  initialLine,
+  initialCursorPosition,
+  initialScrollTop = 0,
   onChange,
   onCursorChange,
   onScrollChange
@@ -44,6 +46,7 @@ export function CodeEditor({
   const lastAppliedLineRef = useRef<number | null>(null)
   const pendingRevealLineRef = useRef<number | null>(null)
   const pendingRevealTermRef = useRef<string | undefined>(undefined)
+  const hasRestoredViewStateRef = useRef(false)
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
@@ -57,7 +60,7 @@ export function CodeEditor({
     }))
   )
 
-  const { view, setContent, scrollToLine } = useCodeMirror(containerRef, {
+  const { view, setContent, scrollToLine, restoreViewState } = useCodeMirror(containerRef, {
     content,
     language,
     readOnly,
@@ -110,6 +113,7 @@ export function CodeEditor({
     lastAppliedLineRef.current = null
     pendingRevealLineRef.current = null
     pendingRevealTermRef.current = undefined
+    hasRestoredViewStateRef.current = false
   }, [filePath])
 
   useEffect(() => {
@@ -141,24 +145,25 @@ export function CodeEditor({
   }, [isVisible, view])
 
   useEffect(() => {
+    if (hasRestoredViewStateRef.current) {
+      return
+    }
+
+    const initialLine = initialCursorPosition?.line
+    const initialCol = initialCursorPosition?.col ?? 1
+
     if (!initialLine) {
       return
     }
 
     if (!view || !isVisible) {
-      pendingRevealLineRef.current = initialLine
-      pendingRevealTermRef.current = undefined
       return
     }
 
-    if (lastAppliedLineRef.current === initialLine) {
-      return
-    }
-
-    scrollToLine(initialLine)
+    restoreViewState(initialLine, initialCol, initialScrollTop)
+    hasRestoredViewStateRef.current = true
     lastAppliedLineRef.current = initialLine
-    pendingRevealLineRef.current = null
-  }, [initialLine, isVisible, scrollToLine, view])
+  }, [initialCursorPosition, initialScrollTop, isVisible, restoreViewState, view])
 
   useEffect(() => {
     const pending = (window as unknown as {

@@ -101,6 +101,7 @@ interface UseCodeMirrorResult {
   view: EditorView | null
   setContent: (content: string) => void
   scrollToLine: (lineNumber: number, highlightTerm?: string) => void
+  restoreViewState: (lineNumber: number, column: number, scrollTop: number) => void
   getVisibleLineRange: () => VisibleLineRange | null
 }
 
@@ -129,6 +130,7 @@ export function useCodeMirror(
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
+  const pendingRestoreTokenRef = useRef<symbol | null>(null)
 
   // Keep refs up to date
   onChangeRef.current = options.onChange
@@ -254,6 +256,7 @@ export function useCodeMirror(
       if (visibleRangeDebounceRef.current) {
         clearTimeout(visibleRangeDebounceRef.current)
       }
+      pendingRestoreTokenRef.current = null
       if (viewRef.current) {
         viewRef.current.destroy()
         viewRef.current = null
@@ -339,6 +342,34 @@ export function useCodeMirror(
     })
   }, [])
 
+  const restoreViewState = useCallback((lineNumber: number, column: number, scrollTop: number) => {
+    const view = viewRef.current
+    if (!view) return
+    if (!Number.isFinite(lineNumber) || !Number.isFinite(column)) return
+
+    const safeLineNumber = Math.min(Math.max(1, Math.trunc(lineNumber)), view.state.doc.lines)
+    const line = view.state.doc.line(safeLineNumber)
+    const safeColumn = Math.max(1, Math.trunc(column))
+    const anchor = Math.min(line.to, line.from + safeColumn - 1)
+    const restoreToken = Symbol('restore-view-state')
+    pendingRestoreTokenRef.current = restoreToken
+
+    view.dispatch({
+      selection: { anchor, head: anchor }
+    })
+
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView || pendingRestoreTokenRef.current !== restoreToken) return
+      const nextScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0
+      currentView.scrollDOM.scrollTop = nextScrollTop
+      onScrollChangeRef.current(nextScrollTop)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
+      pendingRestoreTokenRef.current = null
+    })
+  }, [])
+
   const getVisibleLineRange = useCallback((): VisibleLineRange | null => {
     const view = viewRef.current
     if (!view) {
@@ -352,6 +383,7 @@ export function useCodeMirror(
     view: viewReady ? viewRef.current : null,
     setContent,
     scrollToLine,
+    restoreViewState,
     getVisibleLineRange
   }
 }
