@@ -53,20 +53,21 @@ Feature requests are welcome! Please:
 
 #### Development Workflow
 
-1. Make your changes
-2. Run tests:
+1. Before making architectural or implementation changes, review the AI agent project context at `docs/project-context.md` for repo-specific rules, boundaries, and anti-patterns.
+2. Make your changes
+3. Run tests:
    ```bash
    npm test
    ```
-3. Run type checking:
+4. Run type checking:
    ```bash
    npm run typecheck
    ```
-4. Run linting:
+5. Run linting:
    ```bash
    npm run lint
    ```
-5. Test the app manually:
+6. Test the app manually:
    ```bash
    npm run dev
    ```
