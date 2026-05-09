@@ -1,6 +1,6 @@
 ## Summary
 
-- 
+-
 
 ## Related Issue
 
@@ -22,7 +22,7 @@ Closes #
 
 ## What Changed
 
-- 
+-
 
 ## How It Was Tested
 
