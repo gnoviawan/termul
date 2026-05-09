@@ -79,7 +79,7 @@ npm test
 
 This documentation is intended to help AI tools understand and safely extend the codebase.
 
-**Start with:** `project-context.md`
+**Start with:** `./project-context.md`
 
 ### When Planning New Features
 
