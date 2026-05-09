@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and general discussions
+    url: https://github.com/gnoviawan/termul/discussions
+    about: Please use GitHub Discussions for questions, ideas, and general support.

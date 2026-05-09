@@ -1,0 +1,57 @@
+name: Bug Report
+description: Report a reproducible problem in Termul Manager
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please search existing issues first and include enough detail for someone else to reproduce the problem.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Bug Summary
+      description: What happened, and what did you expect instead?
+      placeholder: A short description of the problem and the expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: List the exact steps needed to reproduce the issue.
+      placeholder: |
+        1. Open...
+        2. Click...
+        3. Run...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Share the environment where the issue occurs.
+      placeholder: |
+        - OS:
+        - Termul version:
+        - Node.js version (if relevant):
+        - Install method:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, Errors, or Screenshots
+      description: Paste relevant logs or add screenshots/videos if helpful.
+      render: shell
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Anything else that may help diagnose the issue?

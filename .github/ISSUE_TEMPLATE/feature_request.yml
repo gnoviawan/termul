@@ -1,0 +1,46 @@
+name: Feature Request
+description: Suggest an improvement or new capability for Termul Manager
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please check for similar requests first and explain the user problem, not just the solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Opportunity
+      description: What user pain point, workflow gap, or opportunity does this address?
+      placeholder: I am trying to..., but...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the behavior or capability you want.
+      placeholder: It would help if Termul could...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you tried any workaround or alternative approach?
+
+  - type: textarea
+    id: success
+    attributes:
+      label: Success Criteria
+      description: How would we know this request is solved well?
+      placeholder: This would be successful if...
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add mockups, examples, references, or related issues if relevant.
