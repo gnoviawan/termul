@@ -32,10 +32,24 @@ import {
 } from "@/stores/app-settings-store";
 import {
 	useKeyboardShortcutsStore,
-	normalizeKeyEvent,
+	matchesShortcut,
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac, isPlatformModifier } from "@/lib/platform";
 import { useTerminalStore } from "@/stores/terminal-store";
+
+function isAppOwnedTerminalShortcut(
+	event: KeyboardEvent,
+	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
+): boolean {
+	for (const shortcut of Object.values(shortcuts)) {
+		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
+		if (matchesShortcut(event, activeKey)) {
+			return true;
+		}
+	}
+
+	return false;
+}
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -519,27 +533,23 @@ function ConnectedTerminalComponent({
 		terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 			if (event.type !== "keydown") return true;
 
-			const normalized = normalizeKeyEvent(event);
 			const shortcuts = shortcutsRef.current;
 
 			// Check if this key matches any app shortcut
 			// On macOS: Ctrl+key shortcuts should pass through to the shell (not intercepted by app)
 			// Only ⌘+key shortcuts are intercepted by the app on macOS
-			for (const shortcut of Object.values(shortcuts)) {
-				const activeKey = shortcut.customKey ?? shortcut.defaultKey;
-				if (normalized === activeKey) {
-					// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
-					// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
-					// The ⌘ equivalent is handled by the clipboardModifier block above.
-					if (isMac && event.ctrlKey && !event.metaKey) {
-						// Passthrough: let xterm send the raw ctrl sequence to the shell
-						return true;
-					}
-
-					// Don't call stopPropagation() - let event bubble to window handler
-					// Return false to prevent xterm from handling the event
-					return false;
+			if (isAppOwnedTerminalShortcut(event, shortcuts)) {
+				// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
+				// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
+				// The ⌘ equivalent is handled by the clipboardModifier block above.
+				if (isMac && event.ctrlKey && !event.metaKey) {
+					// Passthrough: let xterm send the raw ctrl sequence to the shell
+					return true;
 				}
+
+				// Don't call stopPropagation() - let event bubble to window handler
+				// Return false to prevent xterm from handling the event
+				return false;
 			}
 
 			// Handle copy/paste/select all keyboard shortcuts

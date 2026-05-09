@@ -256,6 +256,9 @@ vi.mock('@/lib/api', () => ({
 
 beforeEach(() => {
   vi.stubGlobal('api', mockApi)
+  if (!HTMLElement.prototype.scrollIntoView) {
+    HTMLElement.prototype.scrollIntoView = vi.fn()
+  }
   // Reset mocks
   mockUseProjectsLoaded.mockReturnValue(true)
   mockUseProjects.mockReturnValue([])
@@ -604,6 +607,76 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(mockUpdatePanelVisibility).not.toHaveBeenCalled()
 
       document.body.removeChild(input)
+    })
+
+    it('treats xterm textarea focus as terminal focus for sidebar shortcuts', () => {
+      renderWithRouter()
+
+      const terminalRoot = document.createElement('div')
+      terminalRoot.className = 'xterm'
+      const textarea = document.createElement('textarea')
+      terminalRoot.appendChild(textarea)
+      document.body.appendChild(terminalRoot)
+      textarea.focus()
+
+      fireEvent.keyDown(textarea, { key: 'B', ctrlKey: true, shiftKey: true })
+
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledTimes(1)
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
+
+      document.body.removeChild(terminalRoot)
+    })
+
+    it('does not treat xterm textarea focus as generic input for global shortcuts such as sidebar toggle', () => {
+      renderWithRouter()
+
+      const terminalRoot = document.createElement('div')
+      terminalRoot.className = 'xterm'
+      const textarea = document.createElement('textarea')
+      terminalRoot.appendChild(textarea)
+      document.body.appendChild(terminalRoot)
+      textarea.focus()
+
+      fireEvent.keyDown(textarea, { key: 'B', ctrlKey: true, shiftKey: true })
+
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledTimes(1)
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
+
+      document.body.removeChild(terminalRoot)
+    })
+
+    it('opens the command palette when Ctrl+K is pressed from terminal focus', () => {
+      renderWithRouter()
+
+      const terminalRoot = document.createElement('div')
+      terminalRoot.className = 'xterm'
+      const textarea = document.createElement('textarea')
+      terminalRoot.appendChild(textarea)
+      document.body.appendChild(terminalRoot)
+      textarea.focus()
+
+      fireEvent.keyDown(textarea, { key: 'k', ctrlKey: true })
+
+      expect(screen.getByPlaceholderText('Type a command or search...')).toBeInTheDocument()
+
+      document.body.removeChild(terminalRoot)
+    })
+
+    it('opens command history when Ctrl+R is pressed from terminal focus', () => {
+      renderWithRouter()
+
+      const terminalRoot = document.createElement('div')
+      terminalRoot.className = 'xterm'
+      const textarea = document.createElement('textarea')
+      terminalRoot.appendChild(textarea)
+      document.body.appendChild(terminalRoot)
+      textarea.focus()
+
+      fireEvent.keyDown(textarea, { key: 'r', ctrlKey: true })
+
+      expect(screen.getByText('Command History')).toBeInTheDocument()
+
+      document.body.removeChild(terminalRoot)
     })
   })
 

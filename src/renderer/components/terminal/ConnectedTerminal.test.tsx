@@ -1144,6 +1144,67 @@ describe('ConnectedTerminal', () => {
 
       expect(result).toBe(true)
     })
+
+    it('should bubble app-owned shortcuts so the workspace handler can process them', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'B',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+    })
+
+    it('should bubble Ctrl+R when it is configured as an app shortcut', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'r',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+    })
+
+    it('should bubble Ctrl+K when it is configured as an app shortcut', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'k',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+    })
   })
 
   describe('Context menu', () => {
