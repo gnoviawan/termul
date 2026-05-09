@@ -681,6 +681,7 @@ export function useFileExplorer(): Pick<
   | 'searchTruncated'
   | 'searchScannedFiles'
   | 'searchFailedFiles'
+  | 'searchLastCompletedQuery'
 > {
   return useFileExplorerStore(
     useShallow((state) => ({
@@ -700,7 +701,8 @@ export function useFileExplorer(): Pick<
       searchError: state.searchError,
       searchTruncated: state.searchTruncated,
       searchScannedFiles: state.searchScannedFiles,
-      searchFailedFiles: state.searchFailedFiles
+      searchFailedFiles: state.searchFailedFiles,
+      searchLastCompletedQuery: state.searchLastCompletedQuery
     }))
   )
 }
