@@ -642,12 +642,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
 				e.stopPropagation();
-				const paneId = useWorkspaceStore.getState().activePaneId;
-				if (paneId) {
-					const browserTabId = crypto.randomUUID();
-					useBrowserSessionStore.getState().createTab(browserTabId);
-					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
-				}
+				handleNewBrowserTab();
 				return;
 			}
 
@@ -690,7 +685,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			}
 
 			// Cmd/Ctrl + 1-9 for project switching
-			if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
 				e.preventDefault();
 				const index = parseInt(e.key) - 1;
 				if (projects[index]) selectProject(projects[index].id);
@@ -728,6 +723,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		cycleTab,
 		activeTab,
 		handleCreateTerminalInPane,
+		handleNewBrowserTab,
 		updatePanelVisibility,
 		isExplorerVisible,
 		isSidebarVisible,

@@ -36,20 +36,6 @@ import {
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac, isPlatformModifier } from "@/lib/platform";
 import { useTerminalStore } from "@/stores/terminal-store";
-
-function isAppOwnedTerminalShortcut(
-	event: KeyboardEvent,
-	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
-): boolean {
-	for (const shortcut of Object.values(shortcuts)) {
-		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
-		if (matchesShortcut(event, activeKey)) {
-			return true;
-		}
-	}
-
-	return false;
-}
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -70,6 +56,56 @@ import {
 	recordTerminalContinuityEvent,
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
+
+// Common readline/shell Ctrl sequences that should always pass through to the
+// PTY regardless of platform. On macOS these are already protected by the
+// isMac guard, but on Windows/Linux they would otherwise be swallowed when a
+// matching app shortcut exists (e.g. commandPalette=ctrl+k, commandHistory=ctrl+r).
+const READLINE_PASSTHROUGH_KEYS = new Set([
+	"a", // Ctrl+A  move to beginning of line
+	"e", // Ctrl+E  move to end of line
+	"k", // Ctrl+K  kill to end of line
+	"r", // Ctrl+R  reverse-i-search
+	"f", // Ctrl+F  move forward one char
+	"b", // Ctrl+B  move back one char
+	"w", // Ctrl+W  delete previous word
+	"u", // Ctrl+U  delete to beginning of line
+	"p", // Ctrl+P  previous history entry
+	"n", // Ctrl+N  next history entry
+	"l", // Ctrl+L  clear screen
+	"d", // Ctrl+D  EOF / delete char
+]);
+
+function isReadlinePassthrough(event: KeyboardEvent): boolean {
+	return (
+		event.ctrlKey &&
+		!event.metaKey &&
+		!event.shiftKey &&
+		!event.altKey &&
+		READLINE_PASSTHROUGH_KEYS.has(event.key.toLowerCase())
+	);
+}
+
+function isAppOwnedTerminalShortcut(
+	event: KeyboardEvent,
+	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
+): boolean {
+	// Ctrl+letter readline bindings must reach the PTY on every platform.
+	// On macOS the isMac guard below handles this, but on Windows/Linux the
+	// same Ctrl+key might be configured as an app shortcut — pass them through.
+	if (!isMac && isReadlinePassthrough(event)) {
+		return false;
+	}
+
+	for (const shortcut of Object.values(shortcuts)) {
+		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
+		if (matchesShortcut(event, activeKey)) {
+			return true;
+		}
+	}
+
+	return false;
+}
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
