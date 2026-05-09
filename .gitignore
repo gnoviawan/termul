@@ -51,7 +51,7 @@ tmpclaude-*/
 tmpclaude-*
 
 # Docs folder (local only, not tracked)
-docs/
+# docs/
 
 # ADR documentation
 docs/adr/
