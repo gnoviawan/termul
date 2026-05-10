@@ -770,6 +770,17 @@ function ConnectedTerminalComponent({
 		cleanupDataListenerRef.current = terminalApi.onData(
 			(id: string, data: string) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
+					// Skip xterm write when the whole app is hidden to prevent
+					// xterm.js internal character buffer from growing unboundedly.
+					// The global use-terminal-detached-output hook still captures
+					// bounded transcript data for continuity on restore.
+					const termRecord = useTerminalStore
+						.getState()
+						.findTerminalByPtyId(id);
+					if (termRecord?.isAppHidden) {
+						return;
+					}
+
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
 					if (!cachedTerminalId) {

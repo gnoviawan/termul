@@ -85,7 +85,7 @@ describe('useVisibilityState', () => {
     expect(mockSetVisibilityState).toHaveBeenCalledTimes(1)
   })
 
-  it('marks the app hidden and triggers truncation when document becomes hidden', async () => {
+  it('marks the app hidden and broadcasts when document becomes hidden', async () => {
     renderHook(() => useVisibilityState())
 
     Object.defineProperty(document, 'visibilityState', {
@@ -96,7 +96,6 @@ describe('useVisibilityState', () => {
 
     await waitFor(() => {
       expect(mockSetAppHidden).toHaveBeenCalledWith(true)
-      expect(mockTruncateHiddenTerminalBuffers).toHaveBeenCalled()
     })
 
     expect(
