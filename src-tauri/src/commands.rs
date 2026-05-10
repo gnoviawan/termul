@@ -193,13 +193,15 @@ pub async fn terminal_remove_renderer_ref(
     }
 }
 
-/// Set visibility state (affects polling behavior)
+/// Set visibility state (affects polling behavior and PTY kill deferral)
 #[tauri::command]
 pub async fn terminal_set_visibility(
     request: SetVisibilityRequest,
+    pty_manager: State<'_, Arc<PtyManager>>,
     cwd_tracker: State<'_, Arc<CwdTracker>>,
     git_tracker: State<'_, Arc<GitTracker>>,
 ) -> Result<IpcResult<()>, String> {
+    pty_manager.set_hidden(!request.is_visible);
     cwd_tracker.set_visibility(request.is_visible);
     git_tracker.set_visibility(request.is_visible);
     Ok(IpcResult::success(()))

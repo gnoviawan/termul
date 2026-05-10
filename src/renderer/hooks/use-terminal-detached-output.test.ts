@@ -2,9 +2,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useTerminalDetachedOutput } from './use-terminal-detached-output'
 
-const { mockOnData, mockAppendTranscript } = vi.hoisted(() => ({
+const { mockOnData, mockAppendTranscript, mockFindTerminalByPtyId } = vi.hoisted(() => ({
   mockOnData: vi.fn(),
-  mockAppendTranscript: vi.fn()
+  mockAppendTranscript: vi.fn(),
+  mockFindTerminalByPtyId: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -16,7 +17,8 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: {
     getState: vi.fn(() => ({
-      appendTranscript: mockAppendTranscript
+      appendTranscript: mockAppendTranscript,
+      findTerminalByPtyId: mockFindTerminalByPtyId
     }))
   }
 }))
@@ -24,6 +26,7 @@ vi.mock('@/stores/terminal-store', () => ({
 describe('useTerminalDetachedOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
   })
 
   it('captures PTY output into transcript when no renderer is mounted', () => {
@@ -43,6 +46,38 @@ describe('useTerminalDetachedOutput', () => {
 
     unmount()
     expect(unsubscribe).toHaveBeenCalled()
+  })
+
+  it('skips transcript capture for visible terminals with an attached renderer', () => {
+    let capturedCallback: ((ptyId: string, data: string) => void) | undefined
+
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 1, isAppHidden: false })
+    mockOnData.mockImplementation((callback: (ptyId: string, data: string) => void) => {
+      capturedCallback = callback
+      return vi.fn()
+    })
+
+    renderHook(() => useTerminalDetachedOutput())
+
+    capturedCallback?.('pty-a', 'visible output')
+
+    expect(mockAppendTranscript).not.toHaveBeenCalled()
+  })
+
+  it('captures PTY output while the app is hidden even if a renderer is attached', () => {
+    let capturedCallback: ((ptyId: string, data: string) => void) | undefined
+
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 1, isAppHidden: true })
+    mockOnData.mockImplementation((callback: (ptyId: string, data: string) => void) => {
+      capturedCallback = callback
+      return vi.fn()
+    })
+
+    renderHook(() => useTerminalDetachedOutput())
+
+    capturedCallback?.('pty-a', 'hidden output')
+
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'hidden output')
   })
 
   it('ignores empty terminal-data payloads', () => {

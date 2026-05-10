@@ -1051,6 +1051,15 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					},
 				);
+				// Mark as renderer-attached BEFORE addRendererRef to prevent transcript
+				// accumulation by use-terminal-detached-output.ts for active restored
+				// terminals. Set synchronously so the frontend count is correct immediately;
+				// the backend ref is registered asynchronously but the frontend count is
+				// what gates the transcript capture path. On rapid mount/unmount, the
+				// frontend count is reset by unmount before addRendererRef reaches the
+				// backend — this is benign: the worst case is a tiny window of duplicate
+				// transcript capture, bounded by MAX_TRANSCRIPT_CHARS.
+				useTerminalStore.getState().setRendererAttached(externalTerminalId, true);
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const terminalStoreState = useTerminalStore.getState();
@@ -1160,9 +1169,7 @@ function ConnectedTerminalComponent({
 			const terminalId = ptyIdRef.current || externalTerminalId;
 			if (terminalId && terminalRef.current) {
 				captureScrollPosition(terminalId);
-				if (!externalTerminalId) {
-					useTerminalStore.getState().setRendererAttached(terminalId, false);
-				}
+				useTerminalStore.getState().setRendererAttached(terminalId, false);
 				void removeRendererRef(terminalId, instanceId);
 			}
 

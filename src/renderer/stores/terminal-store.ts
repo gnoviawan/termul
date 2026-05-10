@@ -9,6 +9,20 @@ export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000
 const LINE_BREAK_PATTERN = /\r\n|\r|\n/
 
+function trimTranscriptToMaxChars(transcript: string): string {
+  if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
+    return transcript
+  }
+
+  const tail = transcript.slice(-MAX_TRANSCRIPT_CHARS)
+  const firstBreak = LINE_BREAK_PATTERN.exec(tail)
+  return firstBreak ? tail.slice(firstBreak.index + firstBreak[0].length) : tail
+}
+
+function trimTranscriptToRecentLines(transcript: string): string {
+  return transcript.split(LINE_BREAK_PATTERN).slice(-TRUNCATED_BUFFER_SIZE).join('\n')
+}
+
 export interface TerminalState {
   // State
   terminals: Terminal[]
@@ -44,6 +58,7 @@ export interface TerminalState {
   setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  setAppHidden: (isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
@@ -245,19 +260,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           }
 
           const combined = (t.transcript || '') + data
-          let nextTranscript = combined
-
-          if (combined.length > MAX_TRANSCRIPT_CHARS) {
-            const tail = combined.slice(-MAX_TRANSCRIPT_CHARS)
-            const firstBreak = LINE_BREAK_PATTERN.exec(tail)
-            nextTranscript = firstBreak
-              ? tail.slice(firstBreak.index + firstBreak[0].length)
-              : tail
-          }
 
           return {
             ...t,
-            transcript: nextTranscript
+            transcript: trimTranscriptToMaxChars(combined)
           }
         })
       }
@@ -314,7 +320,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           return {
             ...t,
-            detachedOutput: (t.detachedOutput || '') + data
+            detachedOutput: trimTranscriptToMaxChars((t.detachedOutput || '') + data)
           }
         })
       }
@@ -387,14 +393,35 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setTerminalHidden: (id: string, isHidden: boolean): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => {
-        if (t.id === id) {
-          return {
-            ...t,
-            isHidden,
-            hiddenSince: isHidden ? Date.now() : undefined
-          }
+        if (t.id !== id) {
+          return t
         }
-        return t
+
+        if (t.isHidden === isHidden) {
+          return t
+        }
+
+        return {
+          ...t,
+          isHidden,
+          hiddenSince: isHidden ? Date.now() : undefined
+        }
+      })
+    }))
+  },
+
+  setAppHidden: (isHidden: boolean): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) => {
+        if (t.isAppHidden === isHidden) {
+          return t
+        }
+
+        return {
+          ...t,
+          isAppHidden: isHidden,
+          appHiddenSince: isHidden ? Date.now() : undefined
+        }
       })
     }))
   },
@@ -438,30 +465,43 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const now = Date.now()
     set((state) => ({
       terminals: state.terminals.map((t) => {
-        // Only truncate hidden terminals that have been hidden for longer than the delay
-        if (
-          t.isHidden &&
-          t.hiddenSince &&
-          now - t.hiddenSince > HIDDEN_BUFFER_TRUNCATION_DELAY &&
-          t.pendingScrollback &&
-          t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
-        ) {
-          // Keep the last TRUNCATED_BUFFER_SIZE lines while preserving replay-grade transcript data.
-          const nextScrollback = t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
-          const nextTranscript = t.transcript
-            ? t.transcript
-                .split(/\r\n|\r|\n/)
-                .slice(-TRUNCATED_BUFFER_SIZE)
-                .join('\n')
-            : t.transcript
+        const hiddenSince = t.appHiddenSince ?? t.hiddenSince
+        const isEligibleForTruncation =
+          (t.isAppHidden || t.isHidden) &&
+          hiddenSince !== undefined &&
+          now - hiddenSince > HIDDEN_BUFFER_TRUNCATION_DELAY
 
-          return {
-            ...t,
-            pendingScrollback: nextScrollback,
-            transcript: nextTranscript
-          }
+        if (!isEligibleForTruncation) {
+          return t
         }
-        return t
+
+        const nextScrollback =
+          t.pendingScrollback && t.pendingScrollback.length > TRUNCATED_BUFFER_SIZE
+            ? t.pendingScrollback.slice(-TRUNCATED_BUFFER_SIZE)
+            : t.pendingScrollback
+
+        const nextTranscript = t.transcript
+          ? trimTranscriptToRecentLines(trimTranscriptToMaxChars(t.transcript))
+          : t.transcript
+
+        const nextDetachedOutput = t.detachedOutput
+          ? trimTranscriptToRecentLines(trimTranscriptToMaxChars(t.detachedOutput))
+          : t.detachedOutput
+
+        if (
+          nextScrollback === t.pendingScrollback &&
+          nextTranscript === t.transcript &&
+          nextDetachedOutput === t.detachedOutput
+        ) {
+          return t
+        }
+
+        return {
+          ...t,
+          pendingScrollback: nextScrollback,
+          transcript: nextTranscript,
+          detachedOutput: nextDetachedOutput
+        }
       })
     }))
   },

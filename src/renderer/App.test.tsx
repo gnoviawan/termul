@@ -14,8 +14,16 @@ vi.mock('./hooks/use-context-bar-settings', () => ({
   }
 }))
 
+const { mockUseVisibilityState } = vi.hoisted(() => ({
+  mockUseVisibilityState: vi.fn(() => undefined)
+}))
+
 vi.mock('./hooks/use-terminal-detached-output', () => ({
   useTerminalDetachedOutput: () => undefined
+}))
+
+vi.mock('./hooks/use-visibility-state', () => ({
+  useVisibilityState: mockUseVisibilityState
 }))
 
 const mockCheckForUpdates = vi.fn(async () => {})
@@ -132,6 +140,11 @@ describe('App Routes', () => {
     await waitFor(() => {
       expect(mockContextBarSettingsRead).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY)
     })
+  })
+
+  it('wires app visibility tracking at app scope', () => {
+    render(<App />)
+    expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)
   })
 })
 

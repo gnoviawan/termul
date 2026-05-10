@@ -1,47 +1,146 @@
 import { useEffect, useRef } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { visibilityApi } from '@/lib/visibility-api'
+import {
+  HIDDEN_BUFFER_TRUNCATION_DELAY,
+  useTerminalStore
+} from '@/stores/terminal-store'
+import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+
+function applyAppHiddenState(isVisible: boolean): void {
+  const store = useTerminalStore.getState()
+  store.setAppHidden(!isVisible)
+
+  // NOTE: Do NOT call truncateHiddenTerminalBuffers() here — the
+  // eligibility check requires appHiddenSince to be older than
+  // HIDDEN_BUFFER_TRUNCATION_DELAY, so an immediate call is always
+  // a no-op. Actual truncation happens in scheduleHiddenMaintenance().
+}
 
 /**
- * Hook to track document visibility state.
- * Uses the native DOM API for visibility state detection.
+ * Hook to track app visibility state.
+ * Uses DOM visibility and a Tauri window-state fallback for desktop minimize behavior.
  * Broadcasts visibility changes to backend for tracker polling optimization.
  */
 export function useVisibilityState(): void {
   const isFirstRun = useRef(true)
   const isBroadcastingRef = useRef(false)
+  const pendingVisibilityRef = useRef<boolean | null>(null)
+  const lastAppliedVisibilityRef = useRef<boolean | null>(null)
+  const hiddenMaintenanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hiddenMaintenanceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    const handleVisibilityChange = (): void => {
-      const isVisible = document.visibilityState === 'visible'
-      console.debug('[Visibility] App visibility changed:', isVisible)
+    const broadcastVisibility = (isVisible: boolean): void => {
+      if (isBroadcastingRef.current) {
+        pendingVisibilityRef.current = isVisible
+        return
+      }
 
-      // Broadcast to backend for visibility-aware polling
-      // Use fire-and-forget pattern - don't await to avoid blocking UI
-      if (!isBroadcastingRef.current) {
-        isBroadcastingRef.current = true
-        visibilityApi.setVisibilityState(isVisible).finally(() => {
-          isBroadcastingRef.current = false
+      isBroadcastingRef.current = true
+      visibilityApi
+        .setVisibilityState(isVisible)
+        .catch((err) => {
+          console.warn('[Visibility] Failed to broadcast visibility state:', err)
         })
+        .finally(() => {
+          isBroadcastingRef.current = false
+
+          if (pendingVisibilityRef.current === null || pendingVisibilityRef.current === isVisible) {
+            pendingVisibilityRef.current = null
+            return
+          }
+
+          const pendingVisibility = pendingVisibilityRef.current
+          pendingVisibilityRef.current = null
+          broadcastVisibility(pendingVisibility)
+        })
+    }
+
+    const clearHiddenMaintenance = (): void => {
+      if (hiddenMaintenanceTimeoutRef.current) {
+        clearTimeout(hiddenMaintenanceTimeoutRef.current)
+        hiddenMaintenanceTimeoutRef.current = null
+      }
+      if (hiddenMaintenanceIntervalRef.current) {
+        clearInterval(hiddenMaintenanceIntervalRef.current)
+        hiddenMaintenanceIntervalRef.current = null
       }
     }
 
-    // Log initial state and broadcast to backend
+    const scheduleHiddenMaintenance = (): void => {
+      if (hiddenMaintenanceTimeoutRef.current || hiddenMaintenanceIntervalRef.current) {
+        return
+      }
+
+      hiddenMaintenanceTimeoutRef.current = setTimeout(() => {
+        useTerminalStore.getState().truncateHiddenTerminalBuffers()
+        hiddenMaintenanceTimeoutRef.current = null
+        hiddenMaintenanceIntervalRef.current = setInterval(() => {
+          useTerminalStore.getState().truncateHiddenTerminalBuffers()
+        }, HIDDEN_BUFFER_TRUNCATION_DELAY)
+      }, HIDDEN_BUFFER_TRUNCATION_DELAY)
+    }
+
+    const applyVisibility = (isVisible: boolean): void => {
+      if (lastAppliedVisibilityRef.current === isVisible) {
+        return
+      }
+
+      lastAppliedVisibilityRef.current = isVisible
+      console.debug('[Visibility] App visibility changed:', isVisible)
+      applyAppHiddenState(isVisible)
+
+      if (isVisible) {
+        clearHiddenMaintenance()
+      } else {
+        scheduleHiddenMaintenance()
+      }
+
+      broadcastVisibility(isVisible)
+    }
+
+    const syncVisibilityState = async (): Promise<void> => {
+      const documentVisible = document.visibilityState === 'visible'
+
+      if (!isTauriContext()) {
+        applyVisibility(documentVisible)
+        return
+      }
+
+      try {
+        const isMinimized = await getCurrentWindow().isMinimized()
+        applyVisibility(documentVisible && !isMinimized)
+      } catch {
+        applyVisibility(documentVisible)
+      }
+    }
+
+    const handleVisibilityChange = (): void => {
+      void syncVisibilityState()
+    }
+
+    let focusChangeUnlisten: Promise<() => void> | undefined
+
     if (isFirstRun.current) {
       isFirstRun.current = false
-      const initialIsVisible = document.visibilityState === 'visible'
-      console.debug('[Visibility] Initial state:', initialIsVisible)
+      console.debug('[Visibility] Initial state:', document.visibilityState === 'visible')
+      void syncVisibilityState()
+    }
 
-      // Broadcast initial state to backend
-      visibilityApi.setVisibilityState(initialIsVisible).catch((err) => {
-        console.warn('[Visibility] Failed to broadcast initial state:', err)
+    if (isTauriContext()) {
+      const appWindow = getCurrentWindow()
+      focusChangeUnlisten = appWindow.onFocusChanged(() => {
+        void syncVisibilityState()
       })
     }
 
-    // Listen for visibility changes
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
+      clearHiddenMaintenance()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      cleanupTauriListener(focusChangeUnlisten)
     }
   }, [])
 }

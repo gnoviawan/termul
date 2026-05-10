@@ -284,6 +284,10 @@ pub struct PtyManager {
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
     exit_code_tracker: Arc<ExitCodeTracker>,
+    /// When true, orphan detection and kill operations are deferred.
+    /// Set when the app window is minimized/hidden to prevent
+    /// ConPTY lifecycle issues on Windows.
+    is_hidden: Arc<AtomicBool>,
 }
 
 impl PtyManager {
@@ -302,6 +306,7 @@ impl PtyManager {
             orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
             orphan_timeout_ms: Arc::new(AtomicU64::new(ORPHAN_TIMEOUT_MS)),
             orphan_detection_started: Arc::new(AtomicBool::new(false)),
+            is_hidden: Arc::new(AtomicBool::new(false)),
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
@@ -369,6 +374,7 @@ impl PtyManager {
         let active_slots = self.active_terminal_slots.clone();
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
+        let is_hidden = self.is_hidden.clone();
 
         tokio::spawn(async move {
             let mut interval =
@@ -379,6 +385,12 @@ impl PtyManager {
 
                 // Check if detection is enabled
                 if !enabled.load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                // SKIP orphan cleanup when app is hidden to prevent
+                // ConPTY lifecycle issues on Windows
+                if is_hidden.load(Ordering::Relaxed) {
                     continue;
                 }
 
@@ -807,7 +819,22 @@ impl PtyManager {
     /// Kill a terminal
     /// This is async because cleanup_terminal_resources_sync uses blocking_lock()
     /// on AsyncMutex fields, which is forbidden inside tokio async runtime.
+    ///
+    /// When app window is hidden, kill is deferred to prevent ConPTY lifecycle
+    /// issues on Windows where minimize can cause terminal processes to die.
+    /// The terminal remains tracked and will be cleaned up on next visible cycle
+    /// or when explicitly killed from the visible state.
     pub async fn kill(&self, id: &str) -> Result<(), String> {
+        // When app is hidden, defer the kill — the PTY process should survive hide.
+        // ConPTY on Windows can kill processes when the window is minimized.
+        if self.is_hidden.load(Ordering::Relaxed) {
+            log::info!(
+                "[PtyManager] Deferring kill of terminal {} (app window hidden)",
+                id
+            );
+            return Ok(());
+        }
+
         let instance = self
             .terminals
             .write()
@@ -927,6 +954,24 @@ impl PtyManager {
             self.orphan_timeout_ms
                 .store(timeout * 60 * 1000, Ordering::Relaxed);
         }
+    }
+
+    /// Set the app window hidden state.
+    /// When hidden=true, orphan detection will not kill orphaned terminals
+    /// and kill() operations are deferred. Prevents ConPTY lifecycle issues
+    /// on Windows where window minimize can cause PTY processes to die.
+    pub fn set_hidden(&self, hidden: bool) {
+        self.is_hidden.store(hidden, Ordering::Relaxed);
+        if hidden {
+            log::info!("[PtyManager] App window hidden — killing and orphan cleanup deferred");
+        } else {
+            log::info!("[PtyManager] App window visible — killing and orphan cleanup resumed");
+        }
+    }
+
+    /// Check if the app window is currently hidden
+    pub fn is_hidden(&self) -> bool {
+        self.is_hidden.load(Ordering::Relaxed)
     }
 
     /// Get the default shell path

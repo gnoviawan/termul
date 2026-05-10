@@ -37,14 +37,14 @@ function transcriptToScrollback(transcript?: string): string[] | undefined {
 }
 
 function mergeScrollback(snapshot?: string[], transcript?: string): string[] | undefined {
+  if (snapshot && snapshot.length > 0) {
+    return snapshot
+  }
+
   const transcriptLines = transcriptToScrollback(transcript)
 
   if (transcriptLines && transcriptLines.length > 0) {
     return transcriptLines
-  }
-
-  if (snapshot && snapshot.length > 0) {
-    return snapshot
   }
 
   return undefined
@@ -181,7 +181,9 @@ export function useTerminalAutoSave(): void {
               t.name !== prev.name ||
               t.shell !== prev.shell ||
               t.cwd !== prev.cwd ||
-              t.projectId !== prev.projectId
+              t.projectId !== prev.projectId ||
+              t.isAppHidden !== prev.isAppHidden ||
+              t.appHiddenSince !== prev.appHiddenSince
             )
           }) || state.terminals.length !== prevState.terminals.length
 
