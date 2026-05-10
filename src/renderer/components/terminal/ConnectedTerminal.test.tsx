@@ -281,9 +281,13 @@ const mockTerminalStoreState = {
 }
 
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: {
-    getState: () => mockTerminalStoreState
-  }
+  useTerminalStore: Object.assign(
+    vi.fn(() => ({})),
+    {
+      getState: () => mockTerminalStoreState,
+      subscribe: vi.fn(() => vi.fn())  // returns unsubscribe function
+    }
+  )
 }))
 
 vi.mock('@/lib/tauri-terminal-api', () => ({

@@ -1422,6 +1422,39 @@ function ConnectedTerminalComponent({
 		};
 	}, [performTerminalRecovery]);
 
+	// Replay bounded transcript when the app transitions from hidden to visible.
+	// While hidden, xterm.write() is skipped to prevent xterm's internal buffer
+	// from growing, but the global use-terminal-detached-output hook continues
+	// capturing bounded transcript data. This effect replays that data so the
+	// user sees recent continuity instead of a blank gap on restore.
+	const wasAppHiddenRef = useRef<boolean | undefined>(undefined);
+
+	useEffect(() => {
+		const unsub = useTerminalStore.subscribe((state) => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+
+			const terminal = state.findTerminalByPtyId(ptyId);
+			if (!terminal) return;
+
+			const isNowHidden = terminal.isAppHidden ?? false;
+			const wasHidden = wasAppHiddenRef.current;
+
+			// Detect transition from hidden → visible
+			if (wasHidden === true && !isNowHidden) {
+				const transcript = state.peekTranscript(ptyId);
+				if (transcript && terminalRef.current) {
+					terminalRef.current.write(transcript);
+					state.consumeTranscript(ptyId);
+				}
+			}
+
+			wasAppHiddenRef.current = isNowHidden;
+		});
+
+		return unsub;
+	}, []);
+
 	// Handle Select All
 	const handleSelectAll = useCallback((): void => {
 		if (terminalRef.current) {
