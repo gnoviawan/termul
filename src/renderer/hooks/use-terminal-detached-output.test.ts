@@ -64,7 +64,7 @@ describe('useTerminalDetachedOutput', () => {
     expect(mockAppendTranscript).not.toHaveBeenCalled()
   })
 
-  it('captures PTY output while the app is hidden even if a renderer is attached', () => {
+  it('does not capture PTY output when app is hidden but a renderer is still attached', () => {
     let capturedCallback: ((ptyId: string, data: string) => void) | undefined
 
     mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 1, isAppHidden: true })
@@ -77,7 +77,10 @@ describe('useTerminalDetachedOutput', () => {
 
     capturedCallback?.('pty-a', 'hidden output')
 
-    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'hidden output')
+    // Transcript is only for detached terminals (project switch).
+    // When a renderer IS attached, data flows through xterm naturally
+    // and will resume when the app becomes visible again.
+    expect(mockAppendTranscript).not.toHaveBeenCalled()
   })
 
   it('ignores empty terminal-data payloads', () => {

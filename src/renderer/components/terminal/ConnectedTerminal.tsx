@@ -1422,38 +1422,15 @@ function ConnectedTerminalComponent({
 		};
 	}, [performTerminalRecovery]);
 
-	// Replay bounded transcript when the app transitions from hidden to visible.
-	// While hidden, xterm.write() is skipped to prevent xterm's internal buffer
-	// from growing, but the global use-terminal-detached-output hook continues
-	// capturing bounded transcript data. This effect replays that data so the
-	// user sees recent continuity instead of a blank gap on restore.
-	const wasAppHiddenRef = useRef<boolean | undefined>(undefined);
-
-	useEffect(() => {
-		const unsub = useTerminalStore.subscribe((state) => {
-			const ptyId = ptyIdRef.current;
-			if (!ptyId) return;
-
-			const terminal = state.findTerminalByPtyId(ptyId);
-			if (!terminal) return;
-
-			const isNowHidden = terminal.isAppHidden ?? false;
-			const wasHidden = wasAppHiddenRef.current;
-
-			// Detect transition from hidden → visible
-			if (wasHidden === true && !isNowHidden) {
-				const transcript = state.peekTranscript(ptyId);
-				if (transcript && terminalRef.current) {
-					terminalRef.current.write(transcript);
-					state.consumeTranscript(ptyId);
-				}
-			}
-
-			wasAppHiddenRef.current = isNowHidden;
-		});
-
-		return unsub;
-	}, []);
+	// NOTE: No transcript replay needed on visibility restore.
+	// When the app was minimized, xterm.write() was paused but xterm.js's
+	// internal buffer preserved the pre-hide terminal state. On restore,
+	// live terminal-data events resume flowing to xterm naturally.
+	// The bounded transcript is only for the detached-terminal case
+	// (project switch) where no ConnectedTerminal renderer exists.
+	// Replaying the transcript synchronously on restore with up to
+	// MAX_TRANSCRIPT_CHARS (1.5M) would block the main thread and
+	// cause the app to freeze / show a blank page.
 
 	// Handle Select All
 	const handleSelectAll = useCallback((): void => {

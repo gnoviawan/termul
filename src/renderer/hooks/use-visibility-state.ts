@@ -7,9 +7,41 @@ import {
 } from '@/stores/terminal-store'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
 
+function debugLogMemoryStats(): void {
+  if (!import.meta.env.DEV) return
+
+  const store = useTerminalStore.getState()
+  const terminals = store.terminals
+  if (!terminals || terminals.length === 0) return
+
+  let totalTranscriptChars = 0
+  let totalDetachedChars = 0
+  let totalScrollbackLines = 0
+
+  for (const t of terminals) {
+    totalTranscriptChars += t.transcript?.length ?? 0
+    totalDetachedChars += t.detachedOutput?.length ?? 0
+    totalScrollbackLines += t.pendingScrollback?.length ?? 0
+  }
+
+  console.debug(
+    `[MemTrack] terminals=${terminals.length} ` +
+    `transcript=${(totalTranscriptChars / 1024).toFixed(0)}KB ` +
+    `detachedOutput=${(totalDetachedChars / 1024).toFixed(0)}KB ` +
+    `scrollbackLines=${totalScrollbackLines}`
+  )
+}
+
 function applyAppHiddenState(isVisible: boolean): void {
   const store = useTerminalStore.getState()
   store.setAppHidden(!isVisible)
+
+  if (import.meta.env.DEV) {
+    console.debug(
+      `[Visibility] App ${isVisible ? 'visible' : 'hidden'} — logging memory stats before transition`
+    )
+    debugLogMemoryStats()
+  }
 
   // NOTE: Do NOT call truncateHiddenTerminalBuffers() here — the
   // eligibility check requires appHiddenSince to be older than
