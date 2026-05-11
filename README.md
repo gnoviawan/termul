@@ -250,7 +250,7 @@ Build output: `src-tauri/target/release/bundle/`
 
 #### Project Structure
 
-```
+```text
 src/
 ├── renderer/           # React frontend
 │   ├── components/     # UI components
@@ -267,7 +267,7 @@ docs/electron-old/      # Archived Electron docs & migration history
 
 The renderer uses an adapter/service layer to keep desktop integrations isolated from UI code:
 
-```
+```text
 src/renderer/lib/
 ├── tauri-*.ts        # Tauri-native integrations
 ├── *.ts              # Runtime-safe facades & helpers
@@ -287,7 +287,7 @@ npm run tauri <command>  # Direct Tauri CLI access
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=gnoviawan/termul&type=Date)](https://star-history.com/#gnoviawan/termul&Date)
+[![Star History Chart](img/star-history.svg)](https://star-history.com/#gnoviawan/termul&Date)
 
 ## 🤝 Contributing
 
