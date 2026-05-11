@@ -116,8 +116,8 @@ const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per sec
 const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
 
 const shouldUseWebglRenderer = (
-	rendererPreference: "auto" | "webgl" | "canvas",
-): boolean => rendererPreference !== "canvas";
+	rendererPreference: "auto" | "webgl" | "dom",
+): boolean => rendererPreference !== "dom";
 
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
@@ -277,12 +277,24 @@ function ConnectedTerminalComponent({
 			return false; // No change — skip fit to reduce churn
 		}
 
+		// Save scroll position before fit to preserve it across the v6 viewport rewrite.
+		// xterm 6 changed the scroll bar/viewport behavior and fit() can reset scrollTop to 0.
+		const terminal = terminalRef.current;
+		const scrollTop = terminal.buffer.active.viewportY;
+		const baseY = terminal.buffer.active.baseY;
+
 		try {
 			fitAddonRef.current.fit();
 			if (width > 0 && height > 0) {
 				lastContainerWidthRef.current = width;
 				lastContainerHeightRef.current = height;
 			}
+
+			// Restore scroll position if user was scrolled up, clamping to valid range.
+			if (scrollTop > 0 && scrollTop < baseY) {
+				terminal.scrollToLine(scrollTop);
+			}
+
 			return true;
 		} catch {
 			return false;
@@ -649,7 +661,7 @@ function ConnectedTerminalComponent({
 			}
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
-					"WebGL recovery attempts exhausted, falling back to canvas renderer",
+					"WebGL recovery attempts exhausted, falling back to DOM renderer",
 				);
 				recordTerminalContinuityEvent({
 					name: "renderer-recovery-exhausted",
@@ -714,7 +726,7 @@ function ConnectedTerminalComponent({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
-					"WebGL addon failed to load, falling back to canvas renderer:",
+					"WebGL addon failed to load, falling back to DOM renderer:",
 					error,
 				);
 				webglAddonRef.current = null;
@@ -770,17 +782,6 @@ function ConnectedTerminalComponent({
 		cleanupDataListenerRef.current = terminalApi.onData(
 			(id: string, data: string) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
-					// Skip xterm write when the whole app is hidden to prevent
-					// xterm.js internal character buffer from growing unboundedly.
-					// The global use-terminal-detached-output hook still captures
-					// bounded transcript data for continuity on restore.
-					const termRecord = useTerminalStore
-						.getState()
-						.findTerminalByPtyId(id);
-					if (termRecord?.isAppHidden) {
-						return;
-					}
-
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
 					if (!cachedTerminalId) {
@@ -1422,15 +1423,13 @@ function ConnectedTerminalComponent({
 		};
 	}, [performTerminalRecovery]);
 
-	// NOTE: No transcript replay needed on visibility restore.
-	// When the app was minimized, xterm.write() was paused but xterm.js's
-	// internal buffer preserved the pre-hide terminal state. On restore,
-	// live terminal-data events resume flowing to xterm naturally.
-	// The bounded transcript is only for the detached-terminal case
+	// NOTE: xterm.write() is NOT paused during minimize anymore. With xterm 6.1
+	// the scrollback limit (10,000 lines) bounds the internal character buffer,
+	// and the GH-133 retention policy bounds the app's renderer-side buffers
+	// (transcript, detachedOutput, pendingScrollback). Removing the write-skip
+	// preserves TUI alt-buffer state and scrollback history across minimize/restore.
+	// The bounded transcript in terminal-store is still used for the detached case
 	// (project switch) where no ConnectedTerminal renderer exists.
-	// Replaying the transcript synchronously on restore with up to
-	// MAX_TRANSCRIPT_CHARS (1.5M) would block the main thread and
-	// cause the app to freeze / show a blank page.
 
 	// Handle Select All
 	const handleSelectAll = useCallback((): void => {

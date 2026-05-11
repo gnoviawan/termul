@@ -53,7 +53,7 @@ function XTerminalComponent({
 			terminal.loadAddon(webglAddon);
 		} catch {
 			console.warn(
-				"WebGL addon failed to load, falling back to canvas renderer",
+				"WebGL addon failed to load, falling back to DOM renderer",
 			);
 		}
 

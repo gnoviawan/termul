@@ -40,7 +40,7 @@ export interface AppSettings {
 	terminalFontFamily: string;
 	terminalFontSize: number;
 	terminalBufferSize: number; // Scrollback buffer size in lines
-	terminalRenderer: "auto" | "webgl" | "canvas";
+	terminalRenderer: "auto" | "webgl" | "dom";
 	defaultShell: string;
 	defaultProjectColor: string; // Default color for new projects (from PROJECT_COLORS)
 	maxTerminalsPerProject: number; // Maximum terminals allowed per project
@@ -91,9 +91,9 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
 
 // Terminal renderer strategy options
 export const TERMINAL_RENDERER_OPTIONS = [
-	{ value: "auto", label: "Auto (WebGL with Canvas fallback)" },
+	{ value: "auto", label: "Auto (WebGL with DOM fallback)" },
 	{ value: "webgl", label: "WebGL" },
-	{ value: "canvas", label: "Canvas" },
+	{ value: "dom", label: "DOM" },
 ];
 
 // Default application settings
