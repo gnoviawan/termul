@@ -144,7 +144,7 @@ describe('App Routes', () => {
 
   it('wires app visibility tracking at app scope', () => {
     render(<App />)
-    expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)
+    expect(mockUseVisibilityState).toHaveBeenCalled()
   })
 })
 

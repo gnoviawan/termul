@@ -120,7 +120,9 @@ export function useVisibilityState(): void {
       }
 
       lastAppliedVisibilityRef.current = isVisible
-      console.debug('[Visibility] App visibility changed:', isVisible)
+      if (import.meta.env.DEV) {
+        console.debug('[Visibility] App visibility changed:', isVisible)
+      }
       applyAppHiddenState(isVisible)
 
       if (isVisible) {
@@ -156,7 +158,9 @@ export function useVisibilityState(): void {
 
     if (isFirstRun.current) {
       isFirstRun.current = false
-      console.debug('[Visibility] Initial state:', document.visibilityState === 'visible')
+      if (import.meta.env.DEV) {
+        console.debug('[Visibility] Initial state:', document.visibilityState === 'visible')
+      }
       void syncVisibilityState()
     }
 

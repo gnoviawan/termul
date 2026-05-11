@@ -97,4 +97,20 @@ describe('useTerminalDetachedOutput', () => {
 
     expect(mockAppendTranscript).not.toHaveBeenCalled()
   })
+
+  it('ignores data for unknown PTY (store record missing)', () => {
+    let capturedCallback: ((ptyId: string, data: string) => void) | undefined
+
+    mockFindTerminalByPtyId.mockReturnValue(undefined)
+    mockOnData.mockImplementation((callback: (ptyId: string, data: string) => void) => {
+      capturedCallback = callback
+      return vi.fn()
+    })
+
+    renderHook(() => useTerminalDetachedOutput())
+
+    capturedCallback?.('pty-x', 'late data')
+
+    expect(mockAppendTranscript).not.toHaveBeenCalled()
+  })
 })

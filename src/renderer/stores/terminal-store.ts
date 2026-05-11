@@ -411,19 +411,26 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   setAppHidden: (isHidden: boolean): void => {
-    set((state) => ({
-      terminals: state.terminals.map((t) => {
-        if (t.isAppHidden === isHidden) {
-          return t
-        }
+    set((state) => {
+      // Avoid allocating a new array if every terminal already has the correct state
+      if (state.terminals.every((t) => t.isAppHidden === isHidden)) {
+        return state
+      }
 
-        return {
-          ...t,
-          isAppHidden: isHidden,
-          appHiddenSince: isHidden ? Date.now() : undefined
-        }
-      })
-    }))
+      return {
+        terminals: state.terminals.map((t) => {
+          if (t.isAppHidden === isHidden) {
+            return t
+          }
+
+          return {
+            ...t,
+            isAppHidden: isHidden,
+            appHiddenSince: isHidden ? Date.now() : undefined
+          }
+        })
+      }
+    })
   },
 
   /** @deprecated Use updateTerminalActivityBatch instead */
@@ -481,11 +488,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             : t.pendingScrollback
 
         const nextTranscript = t.transcript
-          ? trimTranscriptToRecentLines(trimTranscriptToMaxChars(t.transcript))
+          ? (() => {
+              const trimmedMax = trimTranscriptToMaxChars(t.transcript!)
+              return trimmedMax === t.transcript && t.transcript!.length <= TRUNCATED_BUFFER_SIZE
+                ? t.transcript
+                : trimTranscriptToRecentLines(trimmedMax)
+            })()
           : t.transcript
 
         const nextDetachedOutput = t.detachedOutput
-          ? trimTranscriptToRecentLines(trimTranscriptToMaxChars(t.detachedOutput))
+          ? (() => {
+              const trimmedMax = trimTranscriptToMaxChars(t.detachedOutput!)
+              return trimmedMax === t.detachedOutput && t.detachedOutput!.length <= TRUNCATED_BUFFER_SIZE
+                ? t.detachedOutput
+                : trimTranscriptToRecentLines(trimmedMax)
+            })()
           : t.detachedOutput
 
         if (

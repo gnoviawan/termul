@@ -1098,15 +1098,11 @@ function ConnectedTerminalComponent({
 				// work for external terminals just like spawned ones. Without this, the TUI app
 				// never receives SIGWINCH on project-switch restore and can't redraw.
 				ptyIdRef.current = externalTerminalId;
-				// Mark as renderer-attached BEFORE addRendererRef to prevent transcript
-				// accumulation by use-terminal-detached-output.ts for active restored
-				// terminals. Set synchronously so the frontend count is correct immediately;
-				// the backend ref is registered asynchronously but the frontend count is
-				// what gates the transcript capture path. On rapid mount/unmount, the
-				// frontend count is reset by unmount before addRendererRef reaches the
-				// backend — this is benign: the worst case is a tiny window of duplicate
-				// transcript capture, bounded by MAX_TRANSCRIPT_CHARS.
-				useTerminalStore.getState().setRendererAttached(externalTerminalId, true);
+				// Renderer-attached tracking is handled by the externalTerminalId effect
+				// above (with proper lifecycle cleanup). The effect also calls
+				// setRendererAttached, so we avoid duplicating it here. The backend ref
+				// (addRendererRef) is still registered here since it is async and not
+				// managed by the effect's lifecycle.
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const terminalStoreState = useTerminalStore.getState();

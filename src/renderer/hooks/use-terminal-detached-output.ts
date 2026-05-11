@@ -11,10 +11,10 @@ const IS_DEV = import.meta.env.DEV
 function logTranscriptStats(ptyId: string, dataLen: number, totalTranscriptLen: number): void {
   if (!IS_DEV) return
 
-  // Log at 100KB increments to avoid spam
+  // Log at every crossed 100KB increment to avoid missing milestones
   const kb = Math.floor(totalTranscriptLen / 1024)
   const prevKb = Math.floor((totalTranscriptLen - dataLen) / 1024)
-  if (kb > 0 && kb !== prevKb && kb % 100 === 0) {
+  if (kb > 0 && Math.floor(kb / 100) !== Math.floor(prevKb / 100)) {
     console.debug(
       `[MemTrack] transcript pty=${ptyId.slice(0, 12)} size=${kb}KB ` +
       `(${(totalTranscriptLen / MAX_TRANSCRIPT_CHARS * 100).toFixed(1)}% of cap)`
@@ -36,14 +36,47 @@ function logTranscriptStats(ptyId: string, dataLen: number, totalTranscriptLen: 
  */
 export function useTerminalDetachedOutput(): void {
   useEffect(() => {
+    // Buffer for PTY data that arrives before the store has the terminal record
+    // (e.g. between spawn and setTerminalPtyId populating the ptyIdIndex).
+    const pendingDetachedBuffer = new Map<string, string[]>()
+
     const unsubscribe = terminalApi.onData((ptyId: string, data: string) => {
       if (!data) {
         return
       }
 
+      // Flush any previously buffered data for this PTY
+      const buffered = pendingDetachedBuffer.get(ptyId)
+      if (buffered) {
+        pendingDetachedBuffer.delete(ptyId)
+        const store = useTerminalStore.getState()
+        const terminal = store.findTerminalByPtyId(ptyId)
+        if (terminal && (terminal.rendererAttachmentCount ?? 0) === 0) {
+          const allData = buffered.join('') + data
+          store.appendTranscript(ptyId, allData)
+          if (IS_DEV && terminal.transcript !== undefined) {
+            logTranscriptStats(ptyId, allData.length, terminal.transcript.length + allData.length)
+          }
+          return
+        }
+        // Terminal exists but has renderer attached — drop buffered data
+      }
+
       const store = useTerminalStore.getState()
       const terminal = store.findTerminalByPtyId(ptyId)
       if (!terminal) {
+        // Store record not yet available — buffer data until it is
+        if (IS_DEV) {
+          console.debug(
+            `[DetachedOutput] Buffering data for unknown PTY pty=${ptyId.slice(0, 12)} len=${data.length}`
+          )
+        }
+        const existing = pendingDetachedBuffer.get(ptyId)
+        if (existing) {
+          existing.push(data)
+        } else {
+          pendingDetachedBuffer.set(ptyId, [data])
+        }
         return
       }
 
@@ -57,18 +90,15 @@ export function useTerminalDetachedOutput(): void {
 
       store.appendTranscript(ptyId, data)
 
-      if (IS_DEV) {
-        const storeState = useTerminalStore.getState()
-        const updatedTerminal = storeState.findTerminalByPtyId(ptyId)
-        if (updatedTerminal?.transcript) {
-          logTranscriptStats(ptyId, data.length, updatedTerminal.transcript.length)
-        }
+      if (IS_DEV && terminal.transcript !== undefined) {
+        // Compute new length directly from terminal object instead of re-querying store
+        logTranscriptStats(ptyId, data.length, terminal.transcript.length + data.length)
       }
     })
 
     return () => {
       unsubscribe()
+      pendingDetachedBuffer.clear()
     }
   }, [])
 }
-
