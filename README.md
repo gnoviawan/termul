@@ -1,93 +1,161 @@
-# Termul Manager
+<div align="center">
 
-A modern, project-aware terminal manager built with Tauri. Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+# 🖥️ Termul Manager
 
-Original project by `gnoviawan`. This repository also includes Tauri port and migration contributions by `mannnrachman`.
+**A modern, project-aware terminal manager built with Tauri**
 
-> **Note:** This is an experimental project developed using long-running autonomous AI agents. It took a total of 15 hours for the first iteration and 8 hours for the 2nd UI iteration, with minimal human intervention, plus 6 iterations for bug fixes with HITL (Human-in-the-Loop).
+Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
 
-![Termul Manager](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri)
-![React](https://img.shields.io/badge/React-18-blue)
+[![GitHub Stars](https://img.shields.io/github/stars/gnoviawan/termul?style=social)](https://github.com/gnoviawan/termul/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/gnoviawan/termul)](https://github.com/gnoviawan/termul/issues)
+[![License](https://img.shields.io/github/license/gnoviawan/termul)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/gnoviawan/termul?include_prereleases)](https://github.com/gnoviawan/termul/releases)
 
-## Features
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/gnoviawan/termul)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri&logoColor=white)](https://tauri.app)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-- **Project-Based Workspaces** - Organize terminals by project with dedicated workspace directories
-- **Tabbed Interface** - Windows Terminal-style tab bar with drag-and-drop reordering
-- **Multiple Shell Support** - Automatically detects and supports PowerShell, CMD, Git Bash, WSL, and more
-- **Session Persistence** - Terminal sessions persist across app restarts
-- **Workspace Snapshots** - Save and restore workspace states
-- **Git Integration** - Shows current branch and status in the status bar
-- **Command History** - Track and search through command history
-- **Keyboard Shortcuts** - Customizable keyboard shortcuts for power users
-- **Cross-Platform** - Works on Windows, macOS, and Linux
+[Getting Started](#-getting-started) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](CONTRIBUTING.md) · [Report Bug](https://github.com/gnoviawan/termul/issues/new?template=bug_report.md) · [Request Feature](https://github.com/gnoviawan/termul/issues/new?template=feature_request.md)
 
-## Screenshots
+</div>
+
+---
+
+## ✨ Features
+
+### 🪟 Workspace & Terminal Management
+
+| Feature | Description |
+|---------|-------------|
+| **Project-Based Workspaces** | Organize terminals by project with dedicated workspace directories, separate state, and per-project configuration |
+| **Pane-Based Split Layout** | Split your workspace into resizable panes and arrange terminals, editors, and browser tabs side by side |
+| **Tabbed Interface** | Windows Terminal-style tab bar with drag-and-drop reordering, rename, and context menu |
+| **Multiple Shell Support** | Auto-detects PowerShell, CMD, Git Bash, WSL, fish, zsh, and more; switch shells per tab |
+
+### 📝 Editor & File Management
+
+| Feature | Description |
+|---------|-------------|
+| **Code Editor** | Built-in code editor with syntax highlighting, file buffers, dirty-state tracking, and save/reload |
+| **Markdown Editor** | Rich markdown editing powered by BlockNote with live preview, table of contents, and heading navigation |
+| **Mermaid Diagrams** | Render Mermaid diagrams inline within your markdown documents |
+| **File Explorer** | Full file tree with create, rename, delete, clipboard operations, drag-and-drop, and context menus |
+| **File Watching** | Live file watching for real-time updates as files change on disk |
+
+### 🌐 Browser & Annotation
+
+| Feature | Description |
+|---------|-------------|
+| **Embedded Browser Tabs** | Browse the web directly inside your workspace using child webview tabs — no app switching |
+| **Annotation Workflow** | Capture browser states, annotate with severity and intent labels, review, and export |
+| **Annotation Export** | Package annotations with metadata into structured export formats |
+
+### ⚡ Power User Tools
+
+| Feature | Description |
+|---------|-------------|
+| **Command Palette** | Global command launcher (`Ctrl+K` / `Ctrl+Shift+P`) for project switching, workspace actions, and more |
+| **Command History** | Per-project and aggregate command history viewer with search |
+| **Keyboard Shortcuts** | Fully customizable shortcut bindings for every action |
+| **Git Integration** | Status bar shows current branch, working directory, git status, and exit code |
+| **Custom Title Bar** | Desktop-native title bar with window controls, sidebar toggles, and settings navigation |
+
+### 🔧 System & Reliability
+
+| Feature | Description |
+|---------|-------------|
+| **Auto-Updater** | Built-in update infrastructure with signed artifacts — get notified and update without leaving the app |
+| **State Management** | Zustand-powered reactive stores for projects, terminals, workspace layout, editor buffers, browser sessions, and settings |
+| **Configurable Settings** | Terminal and UI preferences, color picker, theme customization, and shell configuration |
+| **Cross-Platform** | Works on Windows, macOS, and Linux with native platform packaging |
+| **Error Boundaries** | Graceful error handling with runtime error boundaries and user-friendly fallback UI |
+
+<details>
+<summary>🗺️ Feature Map — Component Overview</summary>
+
+| Domain | Key Components | Zustand Store |
+|--------|---------------|---------------|
+| **Workspace** | `WorkspaceLayout`, `PaneRenderer`, `PaneContent`, `WorkspaceTabBar` | `workspace-store` |
+| **Terminal** | `ConnectedTerminal`, `XTerminal`, `TerminalSearchBar`, `ActivityIndicator` | `terminal-store` |
+| **Editor** | `EditorPanel`, `CodeEditor`, `MarkdownEditor`, `EditorToolbar`, `MermaidBlock` | `editor-store` |
+| **Browser** | `BrowserPanel`, `BrowserControls`, `AnnotationPanel`, `AnnotationExportModal` | `browser-session-store`, `annotation-store` |
+| **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu` | — |
+| **Snapshots** | `CreateSnapshotModal`, `RestoreSnapshotModal`, `DeleteSnapshotModal` | `snapshot-store` |
+| **Projects** | `ProjectSidebar`, `NewProjectModal` | `project-store` |
+| **Settings** | `ShortcutRecorder`, `ColorPickerPopover`, `ContextBarSettingsPopover` | `app-settings-store`, `context-bar-settings-store` |
+| **Updates** | `UpdateAvailableToast`, `UpdateReadyModal` | `updater-store` |
+| **Shared** | `CommandPalette`, `ContextMenu`, `ConfirmDialog`, `ShellSelector`, `ErrorBoundary` | — |
+
+</details>
+
+## 📸 Screenshots
 
 ![Termul Manager Screenshot](img/termul.png)
 
-## Installation
+## 🚀 Getting Started
 
 ### Prerequisites
 
-#### Common Prerequisites
+| Dependency | Version | Notes |
+| ---------- | ------- | ----- |
+| [Node.js](https://nodejs.org) | 18+ | Recommended: use [nvm](https://github.com/nvm-sh/nvm) |
+| [Rust](https://www.rust-lang.org/tools/install) | Latest stable | Required for Tauri builds |
+| npm / bun | Any | Package manager |
 
-- Node.js 18+ (recommended: use [nvm](https://github.com/nvm-sh/nvm))
-- npm or bun
+#### Platform-Specific Requirements
 
-#### For Tauri Build
-
-Tauri requires additional system dependencies:
-
-**Windows:**
+<details>
+<summary>Windows</summary>
 
 - Microsoft Visual C++ Build Tools (included in Visual Studio 2022)
-- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (usually pre-installed on Windows 10+)
+- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (pre-installed on Windows 10+)
 
-**macOS:**
+</details>
 
-- Xcode Command Line Tools: `xcode-select --install`
-- Rust toolchain (see below)
-
-**Linux:**
+<details>
+<summary>macOS</summary>
 
 ```bash
-# Debian/Ubuntu
+xcode-select --install
+```
+
+</details>
+
+<details>
+<summary>Linux (Debian/Ubuntu)</summary>
+
+```bash
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev \
-    build-essential \
-    curl \
-    wget \
-    file \
-    libxdo-dev \
-    libssl-dev \
+    build-essential curl wget file \
+    libxdo-dev libssl-dev \
     libayatana-appindicator3-dev \
-    librsvg2-dev \
-    patchelf
-
-# Fedora
-sudo dnf install webkit2gtk4.1-devel \
-    gcc \
-    gcc-c++ \
-    libopenssl-devel \
-    appindicator-devel \
-    librsvg2-devel \
-    patchelf
+    librsvg2-dev patchelf
 ```
 
-**Rust Toolchain (all platforms):**
+</details>
+
+<details>
+<summary>Linux (Fedora)</summary>
 
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Verify installation
-rustc --version
-cargo --version
+sudo dnf install webkit2gtk4.1-devel \
+    gcc gcc-c++ libopenssl-devel \
+    appindicator-devel librsvg2-devel \
+    patchelf
 ```
 
-### From Source
+</details>
+
+### Install Rust Toolchain
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustc --version && cargo --version
+```
+
+### Quick Start
 
 ```bash
 # Clone the repository
@@ -96,11 +164,8 @@ cd termul
 
 # Install dependencies
 npm install
-```
 
-### Running in Development Mode
-
-```bash
+# Launch in development mode
 npm run dev
 ```
 
@@ -110,147 +175,138 @@ npm run dev
 # Build for your current platform
 npm run build
 
-# Debug build (faster compilation, larger binary)
-npm run build:tauri:debug
-
 # Platform-specific builds
 npm run build:tauri:win        # Windows (x64)
 npm run build:tauri:mac-arm    # macOS (Apple Silicon)
 npm run build:tauri:mac-x64    # macOS (Intel)
 npm run build:tauri:linux      # Linux (x64)
+
+# Debug build (faster compilation, larger binary)
+npm run build:tauri:debug
 ```
 
-**Build Output Location:** `src-tauri/target/release/bundle/`
+Build output: `src-tauri/target/release/bundle/`
 
-## Usage
+## 📖 Documentation
 
-### Creating a Project
+### Usage
+
+#### Creating a Project
 
 1. Click the **+** button in the sidebar to create a new project
 2. Select a workspace directory
 3. Configure your default shell (optional)
 
-### Terminal Tabs
+#### Terminal Tabs
 
-- Click **+** next to tabs to open a new terminal with the default shell
-- Click the dropdown arrow to select a specific shell
-- Drag tabs to reorder them
-- Double-click a tab to rename it
-- Right-click for context menu (rename, close, kill process)
-- Scroll with mouse wheel when tabs overflow
+| Action | How |
+| ------ | --- |
+| New terminal | Click **+** next to tabs |
+| Select specific shell | Click the dropdown arrow |
+| Reorder tabs | Drag and drop |
+| Rename tab | Double-click the tab |
+| Context menu | Right-click (rename, close, kill process) |
 
-### Keyboard Shortcuts
+#### Keyboard Shortcuts
 
-| Action          | Default Shortcut           |
-| --------------- | -------------------------- |
-| New Terminal    | `Ctrl+T`                   |
-| Next Tab        | `Ctrl+PageDown`            |
-| Previous Tab    | `Ctrl+PageUp`              |
-| Command Palette | `Ctrl+K` or `Ctrl+Shift+P` |
+| Action | Default Shortcut |
+| ------ | ---------------- |
+| New Terminal | `Ctrl+T` |
+| Next Tab | `Ctrl+PageDown` |
+| Previous Tab | `Ctrl+PageUp` |
+| Command Palette | `Ctrl+K` / `Ctrl+Shift+P` |
 
-Shortcuts are customizable in Settings. On Tauri/WebView2, browser-reserved shortcuts such as `Ctrl+Tab` are not used as defaults because they are not reliably interceptable.
+> Shortcuts are customizable in Settings. On Tauri/WebView2, browser-reserved shortcuts such as `Ctrl+Tab` are not used as defaults because they are not reliably interceptable.
 
-## Migration Status
+### Architecture
 
-Termul has migrated its desktop runtime to Tauri 2.0 for better performance, smaller bundle sizes, and improved security. The remaining migration artifacts are now mostly archived documentation and cleanup notes.
+#### Tech Stack
 
-- **Current Phase:** Cleanup + parity hardening
-- **Status:** Core runtime on Tauri, repository cleanup still in progress
+| Layer | Technology |
+| ----- | ---------- |
+| Desktop Runtime | [Tauri 2.0](https://tauri.app) |
+| Backend | [Rust](https://www.rust-lang.org) |
+| UI Framework | [React 18](https://react.dev) |
+| Type System | [TypeScript](https://www.typescriptlang.org) |
+| Build Tool | [Vite](https://vitejs.dev) |
+| Styling | [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) |
+| State Management | [Zustand](https://zustand-demo.pmnd.rs) |
+| Terminal Emulation | [tauri-pty](https://github.com/nicegram/tauri-pty) + [xterm.js](https://xtermjs.org) |
+| Animations | [Framer Motion](https://www.framer.com/motion) |
 
-For archived migration history, see [Electron to Tauri Migration Status](docs/electron-old/electron-to-tauri-migration-status.md). For the current cleanup snapshot, use [Tauri Cleanup Status (2026-03-06)](docs/handoffs/tauri-cleanup-status-2026-03-06.md).
+#### Tauri Plugins
 
-## Tech Stack
+| Plugin | Purpose |
+| ------ | ------- |
+| `@tauri-apps/plugin-fs` | Filesystem access |
+| `@tauri-apps/plugin-store` | Configuration persistence |
+| `@tauri-apps/plugin-os` | OS information |
+| `@tauri-apps/plugin-dialog` | Native dialogs |
+| `@tauri-apps/plugin-clipboard-manager` | Clipboard operations |
+| `@tauri-apps/plugin-updater` | Automatic updates |
+| `@tauri-apps/plugin-process` | Process management |
 
-### Application
-
-- **Tauri 2.0** - Cross-platform desktop app framework
-- **Rust** - Backend logic
-- **React 18** - UI framework
-- **TypeScript** - Type safety
-- **Vite** - Build tool
-- **Tailwind CSS** - Styling
-- **shadcn/ui** - UI components
-- **Zustand** - State management
-- **tauri-pty** - Terminal emulation
-- **xterm.js** - Terminal rendering
-- **Framer Motion** - Animations
-
-#### Tauri Plugins Used
-
-- `@tauri-apps/plugin-fs` - Filesystem access
-- `@tauri-apps/plugin-store` - Configuration persistence
-- `@tauri-apps/plugin-os` - OS information
-- `@tauri-apps/plugin-dialog` - Native dialogs
-- `@tauri-apps/plugin-clipboard-manager` - Clipboard operations
-- `@tauri-apps/plugin-updater` - Automatic updates
-- `@tauri-apps/plugin-process` - Process management
-
-## Development
-
-```bash
-# Run in development mode with hot reload
-npm run dev
-
-# Run tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Type checking
-npm run typecheck
-
-# Linting
-npm run lint
-
-# Tauri CLI (direct access)
-npm run tauri <command>
-
-# Build Tauri app
-npm run build
-
-# Build with debug info
-npm run build:tauri:debug
-```
-
-### Project Structure
+#### Project Structure
 
 ```text
 src/
-├── renderer/       # React frontend used by the Tauri app
-│   ├── components/ # UI components
-│   ├── hooks/      # Custom React hooks
-│   ├── lib/        # Runtime adapters and desktop integration helpers
-│   ├── pages/      # Page components
-│   └── stores/     # Zustand stores
-├── shared/         # Shared types between main/renderer
-src-tauri/          # Tauri Rust code, configuration, and bundling
-docs/electron-old/  # Archived Electron docs and migration history
+├── renderer/           # React frontend
+│   ├── components/     # UI components
+│   ├── hooks/          # Custom React hooks
+│   ├── lib/            # Runtime adapters & desktop integration
+│   ├── pages/          # Page components
+│   └── stores/         # Zustand stores
+├── shared/             # Shared types (main/renderer)
+src-tauri/              # Rust backend, config & bundling
+docs/electron-old/      # Archived Electron docs & migration history
 ```
 
-### Platform Adapters
+#### Platform Adapters
 
-The renderer keeps an adapter/service layer so desktop integrations stay isolated from UI code:
+The renderer uses an adapter/service layer to keep desktop integrations isolated from UI code:
 
 ```text
 src/renderer/lib/
-├── tauri-*.ts    # Tauri-native integrations
-├── *.ts          # Runtime-safe facades and helpers
-└── __tests__/    # Regression and parity coverage
+├── tauri-*.ts        # Tauri-native integrations
+├── *.ts              # Runtime-safe facades & helpers
+└── __tests__/        # Regression & parity coverage
 ```
 
-## Contributing
+## 🛠️ Development
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+```bash
+npm run dev              # Development mode with hot reload
+npm test                 # Run tests
+npm run test:watch       # Tests in watch mode
+npm run typecheck        # Type checking
+npm run lint             # Linting
+npm run tauri <command>  # Direct Tauri CLI access
+```
 
-## License
+## ⭐ Star History
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[![Star History Chart](img/star-history.svg)](https://star-history.com/#gnoviawan/termul&Date)
 
-## Acknowledgments
+## 🤝 Contributing
 
-- [Windows Terminal](https://github.com/microsoft/terminal) - Inspiration for the tab bar UX
-- [Hyper](https://github.com/vercel/hyper) - Inspiration for extensible terminal design
-- [xterm.js](https://github.com/xtermjs/xterm.js) - Terminal rendering
-- [shadcn/ui](https://ui.shadcn.com/) - Beautiful UI components
-- [Tauri](https://tauri.app/) - Modern desktop app framework
+Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+
+## 📄 License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [Windows Terminal](https://github.com/microsoft/terminal) — Tab bar UX inspiration
+- [Hyper](https://github.com/vercel/hyper) — Extensible terminal design inspiration
+- [xterm.js](https://github.com/xtermjs/xterm.js) — Terminal rendering
+- [shadcn/ui](https://ui.shadcn.com/) — UI components
+- [Tauri](https://tauri.app/) — Desktop app framework
+
+---
+
+<div align="center">
+
+Built with ❤️ by [gnoviawan](https://github.com/gnoviawan)
+
+</div>
