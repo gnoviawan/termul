@@ -34,6 +34,7 @@ vi.mock('@/stores/toc-settings-store', () => ({
 describe('CodeEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    delete (global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
   })
 
   it('restores initial cursor/scroll state once without re-triggering on later cursor updates', () => {
@@ -99,5 +100,7 @@ describe('CodeEditor', () => {
     )
 
     expect(mockScrollToLine).toHaveBeenCalledWith(7, 'needle')
+    expect(mockScrollToLine).toHaveBeenCalledTimes(1)
+    expect((global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine).toBeUndefined()
   })
 })

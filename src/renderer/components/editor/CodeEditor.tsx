@@ -156,6 +156,9 @@ export function CodeEditor({
       return
     }
 
+    // Intentionally wait until the editor is visible before restoring view state.
+    // Hidden mounts don't have stable layout metrics yet; restoring too early can
+    // misplace cursor/scroll. Keep `isVisible` in dependencies to retry when shown.
     if (!view || !isVisible) {
       return
     }

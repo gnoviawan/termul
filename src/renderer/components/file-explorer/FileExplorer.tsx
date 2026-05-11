@@ -78,12 +78,24 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 	);
 	const [searchResultTab, setSearchResultTab] = useState<"content" | "files">("content");
 	const [expandedSearchResultPaths, setExpandedSearchResultPaths] = useState<Set<string>>(new Set());
-	const [explorerWidth, setExplorerWidth] = useState(256);
+	const [explorerWidth, setExplorerWidth] = useState(() => {
+		try {
+			const savedWidth = window.localStorage?.getItem("termul:file-explorer-width");
+			if (!savedWidth) return 256;
+			const parsed = Number.parseInt(savedWidth, 10);
+			if (Number.isNaN(parsed)) return 256;
+			return Math.max(220, Math.min(560, parsed));
+		} catch {
+			return 256;
+		}
+	});
 	const inputRef = useRef<HTMLInputElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const searchDebounceRef = useRef<number | null>(null);
 	const searchRequestIdRef = useRef(0);
 	const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+	const resizeCleanupRef = useRef<(() => void) | null>(null);
+	const userSelectedTabRef = useRef(false);
 
 	const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined;
 	const normalizedSearchQuery = searchQuery ?? "";
@@ -110,6 +122,13 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 		!hasAnySearchResults;
 
 	useEffect(() => {
+		userSelectedTabRef.current = false;
+	}, [searchLastCompletedQuery]);
+
+	useEffect(() => {
+		if (userSelectedTabRef.current) {
+			return;
+		}
 		if (searchResultTab === "content" && safeSearchResults.length === 0 && safeSearchFileNameMatches.length > 0 && !searchLoading) {
 			setSearchResultTab("files");
 			return;
@@ -117,19 +136,7 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 		if (searchResultTab === "files" && safeSearchFileNameMatches.length === 0 && safeSearchResults.length > 0 && !searchLoading) {
 			setSearchResultTab("content");
 		}
-	}, [safeSearchFileNameMatches.length, searchResultTab, safeSearchResults.length, searchLoading]);
-
-	useEffect(() => {
-		try {
-			const savedWidth = window.localStorage?.getItem("termul:file-explorer-width");
-			if (!savedWidth) return;
-			const parsed = Number.parseInt(savedWidth, 10);
-			if (Number.isNaN(parsed)) return;
-			setExplorerWidth(Math.max(220, Math.min(560, parsed)));
-		} catch {
-			// Ignore localStorage access failures in restricted environments.
-		}
-	}, []);
+	}, [safeSearchFileNameMatches.length, searchResultTab, safeSearchResults.length, searchLoading, searchLastCompletedQuery]);
 
 	useEffect(() => {
 		try {
@@ -139,8 +146,23 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 		}
 	}, [explorerWidth]);
 
-	const handleResizeMouseDown = useCallback((event: React.MouseEvent) => {
+	const finalizeResizeDrag = useCallback(() => {
+		resizeStateRef.current = null;
+		document.body.style.userSelect = "";
+		if (resizeCleanupRef.current) {
+			resizeCleanupRef.current();
+			resizeCleanupRef.current = null;
+		}
+	}, []);
+
+	const applyResizedWidth = useCallback((rawWidth: number) => {
+		const nextWidth = Math.max(220, Math.min(560, rawWidth));
+		setExplorerWidth(nextWidth);
+	}, []);
+
+	const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
 		event.preventDefault();
+		document.body.style.userSelect = "none";
 		resizeStateRef.current = { startX: event.clientX, startWidth: explorerWidth };
 
 		const onMouseMove = (moveEvent: MouseEvent) => {
@@ -148,19 +170,45 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 			if (!state) return;
 			const delta = moveEvent.clientX - state.startX;
 			const rawWidth = side === "right" ? state.startWidth - delta : state.startWidth + delta;
-			const nextWidth = Math.max(220, Math.min(560, rawWidth));
-			setExplorerWidth(nextWidth);
+			applyResizedWidth(rawWidth);
 		};
 
 		const onMouseUp = () => {
-			resizeStateRef.current = null;
-			window.removeEventListener("mousemove", onMouseMove);
-			window.removeEventListener("mouseup", onMouseUp);
+			finalizeResizeDrag();
 		};
 
-		window.addEventListener("mousemove", onMouseMove);
-		window.addEventListener("mouseup", onMouseUp);
-	}, [explorerWidth, side]);
+		const onWindowBlur = () => {
+			finalizeResizeDrag();
+		};
+
+		document.addEventListener("mousemove", onMouseMove);
+		document.addEventListener("mouseup", onMouseUp);
+		window.addEventListener("blur", onWindowBlur);
+		resizeCleanupRef.current = () => {
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+			window.removeEventListener("blur", onWindowBlur);
+		};
+	}, [applyResizedWidth, explorerWidth, finalizeResizeDrag, side]);
+
+	const handleResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") {
+			return;
+		}
+		event.preventDefault();
+		const step = 16;
+		if (event.key === "Home") {
+			applyResizedWidth(220);
+			return;
+		}
+		if (event.key === "End") {
+			applyResizedWidth(560);
+			return;
+		}
+		const directionalDelta = event.key === "ArrowLeft" ? -step : step;
+		const signedDelta = side === "right" ? -directionalDelta : directionalDelta;
+		applyResizedWidth(explorerWidth + signedDelta);
+	}, [applyResizedWidth, explorerWidth, side]);
 
 	// Auto-expand root directory on mount
 	useEffect(() => {
@@ -190,14 +238,20 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 		searchDebounceRef.current = window.setTimeout(() => {
 			searchRequestIdRef.current += 1;
 			void searchInRoot(normalizedSearchQuery, searchRequestIdRef.current);
-		}, normalizedSearchQuery.trim().length >= 3 ? 90 : 180);
+		}, trimmedSearchQuery.length >= 3 ? 90 : 180);
 
 		return () => {
 			if (searchDebounceRef.current !== null) {
 				window.clearTimeout(searchDebounceRef.current);
 			}
 		};
-	}, [rootPath, normalizedSearchQuery, searchInRoot]);
+	}, [rootPath, normalizedSearchQuery, searchInRoot, trimmedSearchQuery.length]);
+
+	useEffect(() => {
+		return () => {
+			finalizeResizeDrag();
+		};
+	}, [finalizeResizeDrag]);
 
 	// Focus inline input when it appears
 	useEffect(() => {
@@ -602,7 +656,7 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 
 	const handleSearchMatchClick = useCallback(
 		async (filePath: string, lineNumber: number) => {
-			const searchTerm = normalizedSearchQuery.trim();
+			const searchTerm = searchLastCompletedQuery.trim();
 			selectPath(filePath);
 			try {
 				await useEditorStore.getState().openFile(filePath);
@@ -630,7 +684,7 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 				toast.warning("File opened, but failed to focus target line");
 			}
 		},
-		[normalizedSearchQuery, selectPath],
+		[searchLastCompletedQuery, selectPath],
 	);
 
 	const handleRootRetry = useCallback(() => {
@@ -779,6 +833,7 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 
 	return (
 		<div
+			id="file-explorer-panel"
 			ref={containerRef}
 			className="relative flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
 			style={{ width: explorerWidth }}
@@ -856,7 +911,7 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 					</div>
 				)}
 
-				{rootPath && rootEntries && !rootLoadError && (!isSearchActive || isSearchTooShort) && (
+				{rootPath && rootEntries && !rootLoadError && (!isSearchActive || isSearchTooShort || (searchLoading && searchLastCompletedQuery !== trimmedSearchQuery)) && (
 					<>
 						{rootEntries.map((entry) => (
 							<FileTreeNodeWrapper
@@ -919,7 +974,10 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 							<div className="rounded-lg border border-border/70 bg-card/25 p-1 shadow-sm">
 								<div className="grid grid-cols-2 gap-1" role="tablist" aria-label="Search result types">
 									<button
-										onClick={() => setSearchResultTab("content")}
+										onClick={() => {
+											userSelectedTabRef.current = true;
+											setSearchResultTab("content");
+										}}
 										className={cn(
 											"flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
 											searchResultTab === "content"
@@ -934,7 +992,10 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 										Content <span className="text-muted-foreground">{safeSearchResults.length}</span>
 									</button>
 									<button
-										onClick={() => setSearchResultTab("files")}
+										onClick={() => {
+											userSelectedTabRef.current = true;
+											setSearchResultTab("files");
+										}}
 										className={cn(
 											"flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
 											searchResultTab === "files"
@@ -1003,9 +1064,9 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 												</div>
 											</button>
 											<div className="space-y-0.5 pb-1">
-												{visibleMatches.map((match) => (
+												{visibleMatches.map((match, idx) => (
 													<button
-														key={`${fileResult.filePath}:${match.lineNumber}:${match.lineText}`}
+														key={`${fileResult.filePath}:${match.lineNumber}:${idx}`}
 														onClick={() =>
 															void handleSearchMatchClick(
 																fileResult.filePath,
@@ -1083,9 +1144,15 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 			<button
 				type="button"
 				onMouseDown={handleResizeMouseDown}
+				onKeyDown={handleResizeKeyDown}
 				className={`absolute ${side === "right" ? "left-0" : "right-0"} top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/20`}
 				title="Drag to resize explorer"
 				aria-label="Resize file explorer"
+				role="separator"
+				aria-controls="file-explorer-panel"
+				aria-valuenow={explorerWidth}
+				aria-valuemin={220}
+				aria-valuemax={560}
 			/>
 
 			{/* Context Menu */}

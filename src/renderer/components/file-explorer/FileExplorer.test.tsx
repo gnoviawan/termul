@@ -33,7 +33,7 @@ const mockExplorerState = {
   isVisible: true,
   rootLoadError: null as null | { message: string; code?: string },
   selectedPaths: new Set<string>(),
-  clipboard: null,
+  clipboard: null as null | { action: 'copy' | 'cut'; paths: string[] },
   searchQuery: '',
   searchResults: [] as Array<{
     filePath: string
@@ -131,6 +131,7 @@ beforeEach(() => {
   mockExplorerState.searchScannedFiles = 0
   mockExplorerState.searchFailedFiles = 0
   mockExplorerState.searchLastCompletedQuery = ''
+  delete (window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
 })
 
 describe('FileExplorer', () => {
@@ -256,7 +257,6 @@ describe('FileExplorer', () => {
 
     await act(async () => {
       fireEvent.click(screen.getByText(/createExplorerSearch\(\)/))
-      window.dispatchEvent(new Event('load'))
       await Promise.resolve()
     })
 
@@ -346,6 +346,26 @@ describe('FileExplorer', () => {
     expect(screen.getByText('Partial results for “term”')).toBeInTheDocument()
     expect(screen.getByText('Some files timed out Showing the matches that were found before the search stopped.')).toBeInTheDocument()
     expect(screen.getByText('FileExplorer.tsx')).toBeInTheDocument()
+  })
+
+  it('does not show expand/collapse controls when a file has exactly three matches', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [{
+      filePath: '/project/src/ThreeMatches.tsx',
+      matches: [
+        { lineNumber: 10, lineText: 'term first' },
+        { lineNumber: 11, lineText: 'term second' },
+        { lineNumber: 12, lineText: 'term third' }
+      ]
+    }]
+
+    render(<FileExplorer />)
+
+    expect(screen.queryByRole('button', { name: /Show \d+ more/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show less' })).not.toBeInTheDocument()
   })
 
   it('shows only the first three content hits until expanded', () => {
