@@ -92,18 +92,41 @@
     );
   }
 
+  var SENSITIVE_ARIA_ROLES = {
+    'textbox': true,
+    'combobox': true,
+    'listbox': true,
+    'spinbutton': true,
+    'slider': true,
+    'searchbox': true
+  };
+
   function isSensitiveElement(element) {
     if (!element || !(element instanceof Element)) return true;
 
     var tagName = element.tagName.toLowerCase();
+
+    // Password check first — uses live IDL property so dynamically-changed types are caught
+    if (tagName === 'input' && element.type === 'password') return true;
+
+    // All other input elements + textarea
     if (tagName === 'input' || tagName === 'textarea') return true;
 
-    if (tagName === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'password') {
-      return true;
+    // Form-associated elements that contain structured data or live values
+    if (tagName === 'select' || tagName === 'datalist' || tagName === 'output') return true;
+
+    // ARIA widget role heuristics — custom form controls that hold user-entered values
+    // role attribute is a space-separated token list; check each token
+    var roleAttr = element.getAttribute('role');
+    if (roleAttr) {
+      var roleTokens = roleAttr.toLowerCase().split(/\s+/);
+      for (var ri = 0; ri < roleTokens.length; ri += 1) {
+        if (SENSITIVE_ARIA_ROLES[roleTokens[ri]]) return true;
+      }
     }
+    if (element.hasAttribute('aria-valuetext') || element.hasAttribute('aria-valuenow')) return true;
 
     if (element.closest('[contenteditable]')) return true;
-    if (element.closest('form')) return true;
 
     return false;
   }
@@ -299,10 +322,42 @@
     return attributes;
   }
 
+  function getSafeTextContent(element) {
+    // TreeWalker that rejects form-control, datalist, output, and contenteditable
+    // subtrees so descendant values don't leak into the captured text.
+    var result = '';
+    var walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_ALL,
+      {
+        acceptNode: function(node) {
+          if (node.nodeType === 1) {
+            var tag = node.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'datalist' || tag === 'output') {
+              return NodeFilter.FILTER_REJECT;
+            }
+            // Skip contenteditable subtrees
+            if (node.isContentEditable) {
+              return NodeFilter.FILTER_REJECT;
+            }
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+    var node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        result += node.textContent;
+      }
+    }
+    return result;
+  }
+
   function captureElementPayload(element) {
     var rect = element.getBoundingClientRect();
     var selectorInfo = generateSelector(element);
-    var textResult = sanitizeAndTruncate(element.textContent || '', MAX_TEXT_CONTENT_LENGTH);
+    var textResult = sanitizeAndTruncate(getSafeTextContent(element), MAX_TEXT_CONTENT_LENGTH);
 
     return {
       tabId: window.__termul_annotation_tab_id || '',
