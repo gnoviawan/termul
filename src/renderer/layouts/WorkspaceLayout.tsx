@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
@@ -1109,55 +1109,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							) : (
 								<>
 									{isWorkspaceRoute ? (
-											<AnimatePresence mode="popLayout">
-												{fullscreenPane ? (
-													<motion.div
-														key="fullscreen"
-														layout
-														initial={{ opacity: 0, x: 40 }}
-														animate={{ opacity: 1, x: 0 }}
-														exit={{ opacity: 0, x: -40 }}
-														transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-														className="flex-1 min-h-0 h-full overflow-hidden"
-													>
-														<PaneRenderer
-															node={fullscreenPane}
-															onAddTerminal={handleAddTerminal}
-															onAddBrowserTab={handleNewBrowserTab}
-															onCloseTerminal={handleCloseTerminal}
-															onRenameTerminal={renameTerminal}
-															onCloseEditorTab={handleCloseEditorTab}
-																closingTerminalIds={closingTerminalIds}
-																defaultShell={
-																	activeProject?.defaultShell || appDefaultShell
-																}
-														/>
-													</motion.div>
-												) : (
-													<motion.div
-														key="normal"
-														layout
-														initial={{ opacity: 0, x: -40 }}
-														animate={{ opacity: 1, x: 0 }}
-														exit={{ opacity: 0, x: 40 }}
-														transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-														className="flex-1 min-h-0 h-full overflow-hidden"
-													>
-														<PaneRenderer
-															node={paneRoot}
-															onAddTerminal={handleAddTerminal}
-															onAddBrowserTab={handleNewBrowserTab}
-															onCloseTerminal={handleCloseTerminal}
-															onRenameTerminal={renameTerminal}
-															onCloseEditorTab={handleCloseEditorTab}
-																closingTerminalIds={closingTerminalIds}
-																defaultShell={
-																	activeProject?.defaultShell || appDefaultShell
-																}
-														/>
-													</motion.div>
-												)}
-											</AnimatePresence>
+										<motion.div
+											key={fullscreenPaneId ? "fullscreen" : "normal"}
+											initial={{ opacity: 0.85, scale: 0.97 }}
+											animate={{ opacity: 1, scale: 1 }}
+											transition={{ duration: 0.2, ease: "easeOut" }}
+											className="flex-1 min-h-0 h-full overflow-hidden"
+										>
+											<PaneRenderer
+												node={fullscreenPane ?? paneRoot}
+												onAddTerminal={handleAddTerminal}
+												onAddBrowserTab={handleNewBrowserTab}
+												onCloseTerminal={handleCloseTerminal}
+												onRenameTerminal={renameTerminal}
+												onCloseEditorTab={handleCloseEditorTab}
+												closingTerminalIds={closingTerminalIds}
+												defaultShell={
+													activeProject?.defaultShell || appDefaultShell
+												}
+											/>
+										</motion.div>
 									) : (
 										<div className="flex-1 overflow-hidden bg-background relative rounded-xl">
 											<div className="w-full h-full">
