@@ -535,8 +535,9 @@ describe('WorkspaceLayout - Empty States', () => {
         </TooltipProvider>
       )
 
-      expect(screen.getByText('a.ts')).toBeInTheDocument()
-      expect(screen.getByText('b.ts')).toBeInTheDocument()
+      // Both panes should be present (may be duplicated during exit animation)
+      expect(screen.getAllByText('a.ts').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('b.ts').length).toBeGreaterThanOrEqual(1)
       expect(screen.queryByTitle('Restore pane layout')).not.toBeInTheDocument()
     })
   })
