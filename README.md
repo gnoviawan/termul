@@ -31,9 +31,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | **Project-Based Workspaces** | Organize terminals by project with dedicated workspace directories, separate state, and per-project configuration |
 | **Pane-Based Split Layout** | Split your workspace into resizable panes and arrange terminals, editors, and browser tabs side by side |
 | **Tabbed Interface** | Windows Terminal-style tab bar with drag-and-drop reordering, rename, and context menu |
-| **Session Persistence** | Terminal sessions automatically persist across app restarts — pick up where you left off |
 | **Multiple Shell Support** | Auto-detects PowerShell, CMD, Git Bash, WSL, fish, zsh, and more; switch shells per tab |
-| **Workspace Snapshots** | Save, restore, and delete named snapshots of your entire workspace layout and terminal state |
 
 ### 📝 Editor & File Management
 
@@ -309,6 +307,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 <div align="center">
 
-Built with ❤️ by [gnoviawan](https://github.com/gnoviawan) · Tauri port by [mannnrachman](https://github.com/mannnrachman)
+Built with ❤️ by [gnoviawan](https://github.com/gnoviawan)
 
 </div>
