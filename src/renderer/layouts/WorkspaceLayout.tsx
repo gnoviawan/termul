@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -43,6 +43,8 @@ import {
 	useWorkspaceStore,
 	useActiveTab,
 	usePaneRoot,
+	useFullscreenPaneId,
+	findPaneById,
 	editorTabId,
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
@@ -153,7 +155,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const isExplorerVisible = useFileExplorerVisible();
 	const isSidebarVisible = useSidebarVisible();
 	const activeTab = useActiveTab();
+	const fullscreenPaneId = useFullscreenPaneId();
 	const paneRoot = usePaneRoot();
+	const fullscreenPane = useMemo(
+		() => {
+			if (!fullscreenPaneId) return null;
+			const pane = findPaneById(paneRoot, fullscreenPaneId);
+			return pane?.type === "leaf" ? pane : null;
+		},
+		[fullscreenPaneId, paneRoot],
+	);
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
@@ -1082,7 +1093,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 									{isWorkspaceRoute ? (
 										<div className="flex-1 min-h-0 h-full overflow-hidden">
 											<PaneRenderer
-												node={paneRoot}
+												node={fullscreenPane ?? paneRoot}
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
 												onCloseTerminal={handleCloseTerminal}

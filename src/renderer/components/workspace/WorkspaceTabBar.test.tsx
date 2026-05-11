@@ -8,11 +8,14 @@ const mockSetActiveTab = vi.fn()
 const mockSetActivePane = vi.fn()
 const mockReorderTabsInPane = vi.fn()
 const mockCloseTab = vi.fn()
+const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
 
 const mockWorkspaceStoreState = {
+  fullscreenPaneId: null as string | null,
   setActiveTab: mockSetActiveTab,
   setActivePane: mockSetActivePane,
+  togglePaneFullscreen: mockTogglePaneFullscreen,
   reorderTabsInPane: mockReorderTabsInPane,
   closeTab: mockCloseTab
 }
@@ -111,7 +114,9 @@ beforeEach(() => {
   mockSetActivePane.mockReset()
   mockReorderTabsInPane.mockReset()
   mockCloseTab.mockReset()
+  mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
+  mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
   mockStartTabDrag.mockReset()
@@ -203,6 +208,39 @@ describe('WorkspaceTabBar', () => {
     fireEvent.click(screen.getByTitle('New Browser Tab'))
 
     expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a focus control for non-fullscreen panes and toggles fullscreen for the current pane', async () => {
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[]}
+        activeTabId={null}
+      />
+    )
+
+    await flushShellEffect()
+
+    fireEvent.click(screen.getByTitle('Focus pane'))
+
+    expect(mockTogglePaneFullscreen).toHaveBeenCalledWith('pane-a')
+  })
+
+  it('shows a restore control for the fullscreen pane', async () => {
+    mockWorkspaceStoreState.fullscreenPaneId = 'pane-a'
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={[]}
+        activeTabId={null}
+      />
+    )
+
+    await flushShellEffect()
+
+    expect(screen.getByTitle('Restore pane layout')).toBeInTheDocument()
+    expect(screen.queryByTitle('Focus pane')).not.toBeInTheDocument()
   })
 
   it('renders editor tab with non-jitter active style class', async () => {

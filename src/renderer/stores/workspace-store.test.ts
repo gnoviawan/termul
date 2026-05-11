@@ -35,7 +35,8 @@ describe('workspace-store split/move invariants', () => {
       const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
       return {
         root,
-        activePaneId: 'pane-root'
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null
       }
     })
   })
@@ -230,5 +231,124 @@ describe('workspace-store split/move invariants', () => {
 
     expect(left.tabs).toEqual([{ type: 'terminal', id: 'term-a', terminalId: 'a' }])
     expect(right.tabs).toEqual([])
+  })
+
+  it('toggles fullscreen state for a valid leaf pane and restores on second toggle', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPane = split.children[1] as LeafNode
+
+    store.togglePaneFullscreen(rightPane.id)
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBe(rightPane.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(rightPane.id)
+
+    store.togglePaneFullscreen(rightPane.id)
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+    expect((useWorkspaceStore.getState().root as SplitNode).children).toHaveLength(2)
+  })
+
+  it('clears fullscreen state when the fullscreened pane is collapsed away', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPane = split.children[0] as LeafNode
+    const rightPane = split.children[1] as LeafNode
+
+    store.togglePaneFullscreen(rightPane.id)
+    store.moveTabToPane(tabB.id, rightPane.id, leftPane.id)
+
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+    expect(getLeavesFromNode(useWorkspaceStore.getState().root)).toHaveLength(1)
+  })
+
+  it('clears stale fullscreen state during reset and invalid workspace loads', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPane = split.children[1] as LeafNode
+    store.togglePaneFullscreen(rightPane.id)
+
+    store.loadProjectWorkspace({ type: 'leaf', id: 'replacement-pane', tabs: [], activeTabId: null })
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+
+    // After loading a single-pane workspace, fullscreen is a no-op
+    store.togglePaneFullscreen('replacement-pane')
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+
+    store.resetLayout()
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+  })
+
+  it('guards togglePaneFullscreen to no-op when only one leaf pane exists', () => {
+    const store = useWorkspaceStore.getState()
+    const paneId = useWorkspaceStore.getState().activePaneId
+
+    store.togglePaneFullscreen(paneId)
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
+  })
+
+  it('redirects setActivePane to the fullscreen pane during fullscreen', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPane = split.children[0] as LeafNode
+    const rightPane = split.children[1] as LeafNode
+
+    store.togglePaneFullscreen(leftPane.id)
+    store.setActivePane(rightPane.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(leftPane.id)
+  })
+
+  it('redirects setActiveTab to the fullscreen pane during fullscreen', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPane = split.children[0] as LeafNode
+    const rightPane = split.children[1] as LeafNode
+
+    store.togglePaneFullscreen(leftPane.id)
+    store.setActiveTab(leftPane.id, tabA.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(leftPane.id)
+  })
+
+  it('allows setActivePane/setActiveTab to work normally when fullscreen is not active', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    const tabB = createEditorTab('edit-/b.ts')
+
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', tabB, 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPane = split.children[1] as LeafNode
+
+    store.setActivePane(rightPane.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(rightPane.id)
   })
 })
