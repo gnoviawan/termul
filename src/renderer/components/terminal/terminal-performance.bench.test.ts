@@ -107,7 +107,12 @@ async function runBenchmark(name: string, lineCount: number, content: string): P
   }
 }
 
-describe('Terminal performance baseline (xterm 5.5)', () => {
+// xterm 6.1 requires a real DOM canvas for WidthCache; skip in JSDOM/CI
+const hasCanvas = typeof HTMLCanvasElement !== 'undefined' &&
+  typeof HTMLCanvasElement.prototype.getContext === 'function' &&
+  typeof OffscreenCanvas !== 'undefined'
+
+describe.skipIf(!hasCanvas)('Terminal performance baseline (xterm 5.5)', () => {
   const results: BenchmarkResult[] = []
 
   afterAll(() => {
