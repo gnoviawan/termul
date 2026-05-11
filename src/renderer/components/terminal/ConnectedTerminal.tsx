@@ -962,9 +962,14 @@ function ConnectedTerminalComponent({
 						);
 						try {
 							if (transcript) {
-								terminal.write(transcript);
 								if (transcriptLooksPartial) {
+									if (!transcript.startsWith("\u001b[?1049h")) {
+										terminal.write("\u001b[?1049h");
+									}
+									terminal.write(transcript);
 									terminal.write(PARTIAL_RESTORE_NOTE);
+								} else {
+									terminal.write(transcript);
 								}
 								terminalStoreState.consumeTranscript(result.data.id);
 								recordReplayEvent(
@@ -1092,9 +1097,14 @@ function ConnectedTerminalComponent({
 				);
 				try {
 					if (transcript) {
-						terminal.write(transcript);
 						if (transcriptLooksPartial) {
+							if (!transcript.startsWith("\u001b[?1049h")) {
+								terminal.write("\u001b[?1049h");
+							}
+							terminal.write(transcript);
 							terminal.write(PARTIAL_RESTORE_NOTE);
+						} else {
+							terminal.write(transcript);
 						}
 						terminalStoreState.consumeTranscript(externalTerminalId);
 						recordReplayEvent(
