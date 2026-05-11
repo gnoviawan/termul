@@ -285,7 +285,7 @@ npm run tauri <command>  # Direct Tauri CLI access
 
 ## ⭐ Star History
 
-[![Star History Chart](img/star-history.svg)](https://star-history.com/#gnoviawan/termul&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=gnoviawan/termul&type=date&legend=top-left)](https://www.star-history.com/?type=date&repos=gnoviawan%2Ftermul)
 
 ## 🤝 Contributing
 
