@@ -568,8 +568,12 @@ describe('terminal-store', () => {
       try {
         vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
 
-        const { updateTerminalScrollback, setTerminalHidden, truncateHiddenTerminalBuffers } =
-          useTerminalStore.getState()
+        const {
+          updateTerminalScrollback,
+          setTerminalHidden,
+          setAppHidden,
+          truncateHiddenTerminalBuffers
+        } = useTerminalStore.getState()
 
         const largeScrollback = Array.from({ length: TRUNCATED_BUFFER_SIZE + 25 }, (_, index) =>
           `line-${index + 1}`
@@ -587,6 +591,7 @@ describe('terminal-store', () => {
         }))
 
         setTerminalHidden('t1', true)
+        setAppHidden(true)
         vi.advanceTimersByTime(HIDDEN_BUFFER_TRUNCATION_DELAY + 1)
         truncateHiddenTerminalBuffers()
 
@@ -596,6 +601,49 @@ describe('terminal-store', () => {
         expect(terminal?.pendingScrollback?.at(-1)).toBe(`line-${TRUNCATED_BUFFER_SIZE + 25}`)
         expect(terminal?.transcript).toContain('\u001b[')
         expect(terminal?.transcript).not.toBe(terminal?.pendingScrollback?.join('\n'))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('truncates transcript-only hidden terminals after the configured delay', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
+
+        const { setTerminalPtyId, appendTranscript, setAppHidden, truncateHiddenTerminalBuffers } =
+          useTerminalStore.getState()
+        setTerminalPtyId('t1', 'pty-hidden-transcript-only')
+        appendTranscript(
+          'pty-hidden-transcript-only',
+          Array.from({ length: TRUNCATED_BUFFER_SIZE + 10 }, (_, index) => `line-${index + 1}`).join('\n')
+        )
+
+        setAppHidden(true)
+        vi.advanceTimersByTime(HIDDEN_BUFFER_TRUNCATION_DELAY + 1)
+        truncateHiddenTerminalBuffers()
+
+        const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+        expect(terminal?.transcript?.split(/\r\n|\r|\n/)).toHaveLength(TRUNCATED_BUFFER_SIZE)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not reset hidden timers on repeated hidden notifications', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-05-02T00:00:00.000Z'))
+
+        const { setAppHidden } = useTerminalStore.getState()
+        setAppHidden(true)
+        const firstHiddenSince = useTerminalStore.getState().terminals[0]?.appHiddenSince
+
+        vi.advanceTimersByTime(1000)
+        setAppHidden(true)
+        const secondHiddenSince = useTerminalStore.getState().terminals[0]?.appHiddenSince
+
+        expect(secondHiddenSince).toBe(firstHiddenSince)
       } finally {
         vi.useRealTimers()
       }

@@ -220,6 +220,7 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
+import { clearTerminalCache } from './terminal-cache'
 
 const {
   mockRecordTerminalContinuityEvent,
@@ -281,9 +282,13 @@ const mockTerminalStoreState = {
 }
 
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: {
-    getState: () => mockTerminalStoreState
-  }
+  useTerminalStore: Object.assign(
+    vi.fn(() => ({})),
+    {
+      getState: () => mockTerminalStoreState,
+      subscribe: vi.fn(() => vi.fn())  // returns unsubscribe function
+    }
+  )
 }))
 
 vi.mock('@/lib/tauri-terminal-api', () => ({
@@ -296,6 +301,7 @@ describe('ConnectedTerminal', () => {
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    clearTerminalCache()
     vi.clearAllMocks()
     mockRecordTerminalContinuityEvent.mockReset()
     mockGetOrCreateProjectContinuityCorrelation.mockReset()
@@ -1412,14 +1418,14 @@ describe('ConnectedTerminal', () => {
 
         // Should have logged warning about exhausted attempts
         expect(warnSpy).toHaveBeenCalledWith(
-          'WebGL recovery attempts exhausted, falling back to canvas renderer'
+          'WebGL recovery attempts exhausted, falling back to DOM renderer'
         )
       } finally {
         warnSpy.mockRestore()
       }
     })
 
-    it('should dispose WebGL and skip recovery after switching renderer preference to canvas', async () => {
+    it('should dispose WebGL and skip recovery after switching renderer preference to dom', async () => {
       vi.useFakeTimers()
       const { rerender } = render(<ConnectedTerminal className="renderer-auto" />)
 
@@ -1430,8 +1436,8 @@ describe('ConnectedTerminal', () => {
       expect(webglAddonCreateCount).toBe(1)
       expect(lastCreatedWebglInstance?.dispose).not.toHaveBeenCalled()
 
-      rendererPreferenceSpy.mockReturnValue('canvas')
-      rerender(<ConnectedTerminal className="renderer-canvas" />)
+      rendererPreferenceSpy.mockReturnValue('dom')
+      rerender(<ConnectedTerminal className="renderer-dom" />)
 
       await vi.waitFor(() => {
         expect(lastCreatedWebglInstance?.dispose).toHaveBeenCalled()
@@ -1510,9 +1516,9 @@ describe('ConnectedTerminal', () => {
       vi.useRealTimers()
     })
 
-    it('should skip WebGL when renderer preference is canvas', async () => {
-      // Override the mock to return canvas
-      vi.mocked(useTerminalRenderer).mockReturnValue('canvas')
+    it('should skip WebGL when renderer preference is dom', async () => {
+      // Override the mock to return dom
+      vi.mocked(useTerminalRenderer).mockReturnValue('dom')
 
       render(<ConnectedTerminal />)
 
@@ -1948,7 +1954,9 @@ describe('ConnectedTerminal', () => {
         await vi.advanceTimersByTimeAsync(200)
 
         // No errors should have been thrown
-        expect(mockTerminalInstance.dispose).toHaveBeenCalled()
+        // Terminal is cached (not disposed) because findTerminalByPtyId
+        // returns a truthy value — the terminal is still alive in the store.
+        expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
 
         vi.useRealTimers()
       })

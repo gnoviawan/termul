@@ -51,6 +51,7 @@ import {
 } from "@/lib/file-path-links";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
+import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	getOrCreateProjectContinuityCorrelation,
 	recordTerminalContinuityEvent,
@@ -116,8 +117,8 @@ const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per sec
 const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
 
 const shouldUseWebglRenderer = (
-	rendererPreference: "auto" | "webgl" | "canvas",
-): boolean => rendererPreference !== "canvas";
+	rendererPreference: "auto" | "webgl" | "dom",
+): boolean => rendererPreference !== "dom";
 
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
@@ -277,12 +278,24 @@ function ConnectedTerminalComponent({
 			return false; // No change — skip fit to reduce churn
 		}
 
+		// Save scroll position before fit to preserve it across the v6 viewport rewrite.
+		// xterm 6 changed the scroll bar/viewport behavior and fit() can reset scrollTop to 0.
+		const terminal = terminalRef.current;
+		const scrollTop = terminal.buffer.active.viewportY;
+		const baseY = terminal.buffer.active.baseY;
+
 		try {
 			fitAddonRef.current.fit();
 			if (width > 0 && height > 0) {
 				lastContainerWidthRef.current = width;
 				lastContainerHeightRef.current = height;
 			}
+
+			// Restore scroll position if user was scrolled up, clamping to valid range.
+			if (scrollTop > 0 && scrollTop < baseY) {
+				terminal.scrollToLine(scrollTop);
+			}
+
 			return true;
 		} catch {
 			return false;
@@ -512,7 +525,22 @@ function ConnectedTerminalComponent({
 			fontSize,
 			scrollback: bufferSize,
 		};
-		const terminal = new Terminal(terminalOptions);
+
+		// Check for a cached terminal preserved across project switches.
+		// If found, reuse it (preserves scrollback, alt buffer, cursor, etc.)
+		// and skip both terminal.open() and transcript replay.
+		const cacheKey = externalTerminalId || undefined;
+		const cachedTerminal = cacheKey ? takeCachedTerminal(cacheKey) : undefined;
+
+		let terminal: Terminal;
+		if (cachedTerminal) {
+			devLog(`[ConnectedTerminal] RESTORED cached terminal`, {
+				cacheKey,
+			});
+			terminal = cachedTerminal;
+		} else {
+			terminal = new Terminal(terminalOptions);
+		}
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
 
@@ -562,7 +590,17 @@ function ConnectedTerminalComponent({
 		searchAddonRef.current = searchAddon;
 		terminal.loadAddon(searchAddon);
 
-		terminal.open(containerRef.current);
+		if (cachedTerminal) {
+			// Reattach the preserved xterm element to the new container.
+			// This avoids losing scrollback, alt-buffer, and cursor state.
+			if (containerRef.current && terminal.element) {
+				containerRef.current.appendChild(terminal.element);
+			}
+			// Force a full refresh so the renderer repaints after DOM reattachment.
+			terminal.refresh(0, terminal.rows - 1);
+		} else {
+			terminal.open(containerRef.current);
+		}
 
 		// Intercept keyboard shortcuts before xterm processes them
 		// Return false to prevent xterm from handling, true to let xterm handle
@@ -649,7 +687,7 @@ function ConnectedTerminalComponent({
 			}
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
-					"WebGL recovery attempts exhausted, falling back to canvas renderer",
+					"WebGL recovery attempts exhausted, falling back to DOM renderer",
 				);
 				recordTerminalContinuityEvent({
 					name: "renderer-recovery-exhausted",
@@ -714,7 +752,7 @@ function ConnectedTerminalComponent({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
-					"WebGL addon failed to load, falling back to canvas renderer:",
+					"WebGL addon failed to load, falling back to DOM renderer:",
 					error,
 				);
 				webglAddonRef.current = null;
@@ -950,9 +988,14 @@ function ConnectedTerminalComponent({
 						);
 						try {
 							if (transcript) {
-								terminal.write(transcript);
 								if (transcriptLooksPartial) {
+									if (!transcript.startsWith("\u001b[?1049h")) {
+										terminal.write("\u001b[?1049h");
+									}
+									terminal.write(transcript);
 									terminal.write(PARTIAL_RESTORE_NOTE);
+								} else {
+									terminal.write(transcript);
 								}
 								terminalStoreState.consumeTranscript(result.data.id);
 								recordReplayEvent(
@@ -1051,6 +1094,15 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					},
 				);
+				// Set ptyIdRef so that resize/recovery operations (performFit, terminalApi.resize)
+				// work for external terminals just like spawned ones. Without this, the TUI app
+				// never receives SIGWINCH on project-switch restore and can't redraw.
+				ptyIdRef.current = externalTerminalId;
+				// Renderer-attached tracking is handled by the externalTerminalId effect
+				// above (with proper lifecycle cleanup). The effect also calls
+				// setRendererAttached, so we avoid duplicating it here. The backend ref
+				// (addRendererRef) is still registered here since it is async and not
+				// managed by the effect's lifecycle.
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const terminalStoreState = useTerminalStore.getState();
@@ -1070,10 +1122,30 @@ function ConnectedTerminalComponent({
 					externalTerminalId,
 				);
 				try {
-					if (transcript) {
-						terminal.write(transcript);
+					if (cachedTerminal) {
+						// Cached terminal already has full state — skip transcript/scrollback replay.
+						// Still consume the transcript to prevent unbounded growth.
+						if (transcript) {
+							terminalStoreState.consumeTranscript(externalTerminalId);
+						}
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "cached-terminal",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (transcript) {
 						if (transcriptLooksPartial) {
+							if (!transcript.startsWith("\u001b[?1049h")) {
+								terminal.write("\u001b[?1049h");
+							}
+							terminal.write(transcript);
 							terminal.write(PARTIAL_RESTORE_NOTE);
+						} else {
+							terminal.write(transcript);
 						}
 						terminalStoreState.consumeTranscript(externalTerminalId);
 						recordReplayEvent(
@@ -1160,9 +1232,7 @@ function ConnectedTerminalComponent({
 			const terminalId = ptyIdRef.current || externalTerminalId;
 			if (terminalId && terminalRef.current) {
 				captureScrollPosition(terminalId);
-				if (!externalTerminalId) {
-					useTerminalStore.getState().setRendererAttached(terminalId, false);
-				}
+				useTerminalStore.getState().setRendererAttached(terminalId, false);
 				void removeRendererRef(terminalId, instanceId);
 			}
 
@@ -1216,7 +1286,18 @@ function ConnectedTerminalComponent({
 				fileLinkProviderDisposableRef.current = null;
 			}
 
-			terminal.dispose();
+			// Cache the terminal for reuse on project-switch-back instead of
+			// disposing it. This preserves all xterm internal state (scrollback,
+			// alt buffer, cursor position). Only cache if the terminal is still
+			// alive in the store (not closed/exited) — otherwise dispose.
+			const cacheKey = terminalId;
+			const terminalStillInStore = cacheKey &&
+				useTerminalStore.getState().findTerminalByPtyId(cacheKey);
+			if (terminalStillInStore) {
+				cacheTerminal(cacheKey, terminal);
+			} else {
+				terminal.dispose();
+			}
 			terminalRef.current = null;
 			setTerminalInstance(null);
 			fitAddonRef.current = null;
@@ -1403,6 +1484,14 @@ function ConnectedTerminalComponent({
 			cleanup();
 		};
 	}, [performTerminalRecovery]);
+
+	// NOTE: xterm.write() is NOT paused during minimize anymore. With xterm 6.1
+	// the scrollback limit (10,000 lines) bounds the internal character buffer,
+	// and the GH-133 retention policy bounds the app's renderer-side buffers
+	// (transcript, detachedOutput, pendingScrollback). Removing the write-skip
+	// preserves TUI alt-buffer state and scrollback history across minimize/restore.
+	// The bounded transcript in terminal-store is still used for the detached case
+	// (project switch) where no ConnectedTerminal renderer exists.
 
 	// Handle Select All
 	const handleSelectAll = useCallback((): void => {

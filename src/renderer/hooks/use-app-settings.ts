@@ -124,6 +124,13 @@ export function useAppSettingsLoader(): void {
       if (result.success && result.data) {
         // Merge with defaults to handle any missing keys from older versions
         settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
+
+        // Migrate persisted "canvas" renderer preference to "dom"
+        // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
+        if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
+          settings = { ...settings, terminalRenderer: 'dom' as const }
+        }
+
         setSettings(settings)
       } else {
         settings = DEFAULT_APP_SETTINGS

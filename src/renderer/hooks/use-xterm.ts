@@ -116,7 +116,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       })
       terminal.loadAddon(webglAddon)
     } catch {
-      console.warn('WebGL addon failed to load, falling back to canvas renderer')
+      console.warn('WebGL addon failed to load, falling back to DOM renderer')
     }
 
     fitAddon.fit()

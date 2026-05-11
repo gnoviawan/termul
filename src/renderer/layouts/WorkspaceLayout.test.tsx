@@ -55,14 +55,21 @@ vi.mock('@/stores/project-store', () => ({
   useProjectActions: () => mockUseProjectActions()
 }))
 
-vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: vi.fn((selector) => selector({ terminals: [] })),
-  useTerminals: () => mockUseTerminals(),
-  useAllTerminals: () => mockUseAllTerminals(),
-  useActiveTerminal: () => mockUseActiveTerminal(),
-  useActiveTerminalId: () => mockUseActiveTerminalId(),
-  useTerminalActions: () => mockUseTerminalActions()
-}))
+vi.mock('@/stores/terminal-store', () => {
+  const mockState = { terminals: [] }
+  const useTerminalStore = Object.assign(
+    vi.fn((selector) => selector(mockState)),
+    { getState: vi.fn(() => mockState) }
+  )
+  return {
+    useTerminalStore,
+    useTerminals: () => mockUseTerminals(),
+    useAllTerminals: () => mockUseAllTerminals(),
+    useActiveTerminal: () => mockUseActiveTerminal(),
+    useActiveTerminalId: () => mockUseActiveTerminalId(),
+    useTerminalActions: () => mockUseTerminalActions()
+  }
+})
 
 vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: vi.fn(() => 14),

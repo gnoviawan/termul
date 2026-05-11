@@ -114,7 +114,7 @@ describe("app-settings-store", () => {
 					terminalFontSize: 20,
 					defaultShell: "zsh",
 					terminalBufferSize: 5000,
-					terminalRenderer: "canvas" as const,
+					terminalRenderer: "dom" as const,
 					defaultProjectColor: "red",
 					maxTerminalsPerProject: 5,
 					orphanDetectionEnabled: false,

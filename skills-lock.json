@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "tauri-mcp-cli": {
+      "source": "hypothesi/mcp-server-tauri",
+      "sourceType": "github",
+      "skillPath": "packages/cli/skills/tauri-mcp-cli/SKILL.md",
+      "computedHash": "6cab14dbb973c1f4cdeb2739841ddd9c5db5d7d546743fd9771082e252e7fde3"
+    }
+  }
+}

@@ -279,12 +279,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 		const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
 
-		console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
-			terminalCount: terminalIds.length,
-			terminalIds,
-			prevCount: prevIds.length,
-			callCount: ensureCallCountRef.current,
-		});
+		if (import.meta.env.DEV) {
+			console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
+				terminalCount: terminalIds.length,
+				terminalIds,
+				prevCount: prevIds.length,
+				callCount: ensureCallCountRef.current,
+			});
+		}
+
+		// SKIP when app is hidden to prevent respawn loop when terminals
+		// die during minimize (ConPTY lifecycle issue on Windows).
+		// Terminals will be restored when the app becomes visible again.
+		if (terminals.some((t) => t.isAppHidden)) {
+			if (import.meta.env.DEV) {
+				console.log(
+					`[WorkspaceLayout] ensureTerminalTabs SKIP [${ensureId}]: app is hidden, deferring tab creation`,
+				);
+			}
+			return;
+		}
 
 		lastEnsuredTerminalIdsRef.current = terminalIds;
 		const workspaceStore = useWorkspaceStore.getState();
