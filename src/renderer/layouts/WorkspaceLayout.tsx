@@ -1097,7 +1097,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						{/* File Explorer - separate floating panel */}
 						{isExplorerVisible && activeProject?.path && (
 							<div className="flex-shrink-0 ml-2">
-								<FileExplorer />
+								<FileExplorer side="right" />
 							</div>
 						)}
 					</div>

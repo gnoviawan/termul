@@ -48,6 +48,9 @@
 	"bundle": {
 		"active": true,
 		"targets": "all",
+		"externalBin": [
+			"bin/rg"
+		],
 		"createUpdaterArtifacts": true,
 		"icon": [
 			"icons/32x32.png",

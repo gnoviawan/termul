@@ -5,7 +5,11 @@ use crate::migrations::{
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State, Webview};
 
 /// IPC Result pattern
@@ -593,6 +597,655 @@ pub async fn browser_tab_report_annotation_marker_clicked(
 #[serde(rename_all = "camelCase")]
 pub struct RollbackRequest {
     pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchMatch {
+    pub line_number: usize,
+    pub line_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResult {
+    pub file_path: String,
+    pub matches: Vec<FileSearchMatch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResponse {
+    pub results: Vec<FileSearchResult>,
+    pub truncated: bool,
+    pub scanned_files: usize,
+    pub failed_files: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentRequest {
+    pub root_path: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentStreamRequest {
+    pub root_path: String,
+    pub query: String,
+    pub search_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentCancelRequest {
+    pub search_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentBatchEvent {
+    pub search_id: String,
+    pub results: Vec<FileSearchResult>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchContentDoneEvent {
+    pub search_id: String,
+    pub truncated: bool,
+    pub scanned_files: usize,
+    pub failed_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesRequest {
+    pub root_path: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesResponse {
+    pub files: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RgInfoResponse {
+    pub sidecar_binary_name: String,
+    pub resolved_path: String,
+    pub source: String,
+    pub exists: bool,
+}
+
+static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
+static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
+
+fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+    SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn rg_sidecar_name() -> &'static str {
+    "rg-x86_64-pc-windows-msvc.exe"
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn rg_sidecar_name() -> &'static str {
+    "rg-aarch64-apple-darwin"
+}
+
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+fn rg_sidecar_name() -> &'static str {
+    "rg-x86_64-apple-darwin"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn rg_sidecar_name() -> &'static str {
+    "rg-aarch64-unknown-linux-gnu"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn rg_sidecar_name() -> &'static str {
+    "rg-armv7-unknown-linux-gnueabihf"
+}
+
+#[cfg(all(target_os = "linux", not(any(target_arch = "aarch64", target_arch = "arm"))))]
+fn rg_sidecar_name() -> &'static str {
+    "rg-x86_64-unknown-linux-musl"
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn rg_sidecar_name() -> &'static str {
+    "rg"
+}
+
+fn resolve_rg_path() -> (String, String) {
+    let from_env = std::env::var("TERMUL_RG_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    if let Some(path) = from_env {
+        let env_path = PathBuf::from(&path);
+        if env_path.is_absolute() {
+            return (path, "env".to_string());
+        }
+
+        if let Ok(cwd) = std::env::current_dir() {
+            let direct = cwd.join(&env_path);
+            if direct.exists() && direct.is_file() {
+                return (direct.to_string_lossy().to_string(), "env".to_string());
+            }
+
+            let from_src_tauri = cwd.join("src-tauri").join(&env_path);
+            if from_src_tauri.exists() && from_src_tauri.is_file() {
+                return (
+                    from_src_tauri.to_string_lossy().to_string(),
+                    "env".to_string(),
+                );
+            }
+        }
+
+        return (path, "env".to_string());
+    }
+
+    let binary = rg_sidecar_name();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("bin").join(binary));
+        candidates.push(cwd.join("bin").join(binary));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join(binary));
+            candidates.push(exe_dir.join("../Resources").join(binary));
+            candidates.push(exe_dir.join("../lib").join(binary));
+        }
+    }
+
+    if let Some(found) = candidates
+        .into_iter()
+        .find(|path| path.exists() && path.is_file())
+    {
+        return (found.to_string_lossy().to_string(), "sidecar".to_string());
+    }
+
+    ("rg".to_string(), "path".to_string())
+}
+
+fn detect_rg_path() -> String {
+    if let Some(cached) = RG_PATH_CACHE.get() {
+        return cached.clone();
+    }
+
+    let (detected, _source) = resolve_rg_path();
+    let _ = RG_PATH_CACHE.set(detected.clone());
+    detected
+}
+
+fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
+    let mut args = vec![
+        "--json".to_string(),
+        "-F".to_string(),
+        "-i".to_string(),
+        "-n".to_string(),
+        "--max-filesize".to_string(),
+        "1M".to_string(),
+        "--max-count".to_string(),
+        max_matches_per_file.to_string(),
+    ];
+
+    for ignored in [
+        "node_modules",
+        ".git",
+        ".next",
+        ".cache",
+        ".turbo",
+        "dist",
+        "build",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        "venv",
+        ".env",
+        "coverage",
+        ".nyc_output",
+    ] {
+        args.push("-g".to_string());
+        args.push(format!("!**/{}/**", ignored));
+    }
+    args.push("-g".to_string());
+    args.push("!**/.env".to_string());
+
+    args.push("--".to_string());
+    args.push(query.to_string());
+    args.push(root_path.to_string());
+    args
+}
+
+#[tauri::command]
+pub async fn search_get_rg_info() -> Result<IpcResult<RgInfoResponse>, String> {
+    let (resolved_path, source) = resolve_rg_path();
+    let exists = PathBuf::from(&resolved_path).exists();
+
+    Ok(IpcResult::success(RgInfoResponse {
+        sidecar_binary_name: rg_sidecar_name().to_string(),
+        resolved_path,
+        source,
+        exists,
+    }))
+}
+
+#[tauri::command]
+pub async fn search_content_stream(
+    request: SearchContentStreamRequest,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    let trimmed_query = request.query.trim().to_string();
+    if trimmed_query.is_empty() {
+        let _ = app_handle.emit(
+            "search-content-done",
+            SearchContentDoneEvent {
+                search_id: request.search_id,
+                truncated: false,
+                scanned_files: 0,
+                failed_files: 0,
+                error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    let max_files_with_matches: usize = 100;
+    let max_matches_per_file: usize = 30;
+    let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
+
+    let rg_path = detect_rg_path();
+    let mut child = match Command::new(&rg_path)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app_handle.emit(
+                "search-content-done",
+                SearchContentDoneEvent {
+                    search_id: request.search_id,
+                    truncated: false,
+                    scanned_files: 0,
+                    failed_files: 0,
+                    error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
+        }
+    };
+
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = app_handle.emit(
+                "search-content-done",
+                SearchContentDoneEvent {
+                    search_id: request.search_id,
+                    truncated: false,
+                    scanned_files: 0,
+                    failed_files: 1,
+                    error: Some("failed to capture rg stdout".to_string()),
+                },
+            );
+            return Ok(IpcResult::success(()));
+        }
+    };
+
+    let child_handle = Arc::new(Mutex::new(child));
+    {
+        let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+        guard.insert(request.search_id.clone(), Arc::clone(&child_handle));
+    }
+
+    let search_id = request.search_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = BufReader::new(stdout);
+        let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
+        let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
+        let mut truncated = false;
+
+        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>, truncated: bool| {
+            if pending.is_empty() {
+                return;
+            }
+            let batch: Vec<FileSearchResult> = pending
+                .iter()
+                .map(|(file_path, matches)| FileSearchResult {
+                    file_path: file_path.clone(),
+                    matches: matches.clone(),
+                })
+                .collect();
+            let _ = app_handle.emit(
+                "search-content-batch",
+                SearchContentBatchEvent {
+                    search_id: search_id.clone(),
+                    results: batch,
+                    truncated,
+                },
+            );
+            pending.clear();
+        };
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if parsed.get("type").and_then(|v| v.as_str()) != Some("match") {
+                continue;
+            }
+
+            let file_path = match parsed
+                .get("data")
+                .and_then(|d| d.get("path"))
+                .and_then(|p| p.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                Some(p) => p.replace('\\', "/"),
+                None => continue,
+            };
+
+            let line_number = match parsed
+                .get("data")
+                .and_then(|d| d.get("line_number"))
+                .and_then(|n| n.as_u64())
+            {
+                Some(n) => n as usize,
+                None => continue,
+            };
+
+            let line_text = parsed
+                .get("data")
+                .and_then(|d| d.get("lines"))
+                .and_then(|l| l.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim_end_matches(['\r', '\n'])
+                .to_string();
+
+            if !grouped.contains_key(&file_path) {
+                if grouped.len() >= max_files_with_matches {
+                    truncated = true;
+                    break;
+                }
+                grouped.insert(file_path.clone(), Vec::new());
+            }
+
+            if let Some(matches) = grouped.get_mut(&file_path) {
+                if matches.len() >= max_matches_per_file {
+                    truncated = true;
+                    continue;
+                }
+                let new_match = FileSearchMatch {
+                    line_number,
+                    line_text,
+                };
+                matches.push(new_match.clone());
+                pending_matches
+                    .entry(file_path)
+                    .or_default()
+                    .push(new_match);
+            }
+
+            if pending_matches.values().map(Vec::len).sum::<usize>() >= 25 {
+                flush_batch(&mut pending_matches, truncated);
+            }
+        }
+
+        flush_batch(&mut pending_matches, truncated);
+
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+        if let Ok(mut guard) = search_processes().lock() {
+            guard.remove(&search_id);
+        }
+
+        let _ = app_handle.emit(
+            "search-content-done",
+            SearchContentDoneEvent {
+                search_id,
+                truncated,
+                scanned_files: 0,
+                failed_files: 0,
+                error: None,
+            },
+        );
+    });
+
+    Ok(IpcResult::success(()))
+}
+
+#[tauri::command]
+pub async fn search_content_cancel(
+    request: SearchContentCancelRequest,
+) -> Result<IpcResult<()>, String> {
+    let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+    }
+    Ok(IpcResult::success(()))
+}
+
+#[tauri::command]
+pub async fn search_file_names(
+    request: SearchFileNamesRequest,
+) -> Result<IpcResult<SearchFileNamesResponse>, String> {
+    let trimmed_query = request.query.trim().to_lowercase();
+    if trimmed_query.is_empty() {
+        return Ok(IpcResult::success(SearchFileNamesResponse {
+            files: vec![],
+            truncated: false,
+        }));
+    }
+
+    let mut stack = vec![request.root_path];
+    let mut matches: Vec<String> = Vec::new();
+    let mut truncated = false;
+    let max_files = 100;
+
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            if [
+                "node_modules",
+                ".git",
+                ".next",
+                ".cache",
+                ".turbo",
+                "dist",
+                "build",
+                ".output",
+                ".nuxt",
+                ".svelte-kit",
+                "__pycache__",
+                ".pytest_cache",
+                "venv",
+                ".env",
+                "coverage",
+                ".nyc_output",
+            ]
+            .contains(&file_name)
+            {
+                continue;
+            }
+
+            if path.is_dir() {
+                stack.push(path.to_string_lossy().to_string());
+                continue;
+            }
+
+            if file_name.to_lowercase().contains(&trimmed_query) {
+                matches.push(path.to_string_lossy().replace('\\', "/"));
+                if matches.len() >= max_files {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+
+        if truncated {
+            break;
+        }
+    }
+
+    Ok(IpcResult::success(SearchFileNamesResponse {
+        files: matches,
+        truncated,
+    }))
+}
+
+#[tauri::command]
+pub async fn search_content(
+    request: SearchContentRequest,
+) -> Result<IpcResult<FileSearchResponse>, String> {
+    let trimmed_query = request.query.trim();
+    if trimmed_query.is_empty() {
+        return Ok(IpcResult::success(FileSearchResponse {
+            results: vec![],
+            truncated: false,
+            scanned_files: 0,
+            failed_files: 0,
+        }));
+    }
+
+    let max_files_with_matches: usize = 100;
+    let max_matches_per_file: usize = 30;
+
+    let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
+
+    let rg_path = detect_rg_path();
+    let output = Command::new(&rg_path).args(args).output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("rg spawn failed (path: {}): {}", rg_path, e),
+                "SEARCH_ERROR",
+            ))
+        }
+    };
+
+    let code = output.status.code().unwrap_or(0);
+    if code > 1 {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Ok(IpcResult::error(
+            format!("rg failed ({}): {}", code, stderr),
+            "SEARCH_ERROR",
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
+    let mut truncated = false;
+
+    for line in stdout.lines() {
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if parsed.get("type").and_then(|v| v.as_str()) != Some("match") {
+            continue;
+        }
+
+        let file_path = match parsed
+            .get("data")
+            .and_then(|d| d.get("path"))
+            .and_then(|p| p.get("text"))
+            .and_then(|t| t.as_str())
+        {
+            Some(p) => p.replace('\\', "/"),
+            None => continue,
+        };
+
+        let line_number = match parsed
+            .get("data")
+            .and_then(|d| d.get("line_number"))
+            .and_then(|n| n.as_u64())
+        {
+            Some(n) => n as usize,
+            None => continue,
+        };
+
+        let line_text = parsed
+            .get("data")
+            .and_then(|d| d.get("lines"))
+            .and_then(|l| l.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+
+        if !grouped.contains_key(&file_path) {
+            if grouped.len() >= max_files_with_matches {
+                truncated = true;
+                break;
+            }
+            grouped.insert(file_path.clone(), Vec::new());
+        }
+
+        if let Some(matches) = grouped.get_mut(&file_path) {
+            if matches.len() >= max_matches_per_file {
+                truncated = true;
+                continue;
+            }
+            matches.push(FileSearchMatch {
+                line_number,
+                line_text,
+            });
+        }
+    }
+
+    let results = grouped
+        .into_iter()
+        .map(|(file_path, matches)| FileSearchResult { file_path, matches })
+        .collect();
+
+    Ok(IpcResult::success(FileSearchResponse {
+        results,
+        truncated,
+        scanned_files: 0,
+        failed_files: 0,
+    }))
 }
 
 /// Get current schema version

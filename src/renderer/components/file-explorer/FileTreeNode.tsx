@@ -2,6 +2,7 @@ import { ChevronRight, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileIcon } from './file-icon-map'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { useEffect, useRef, useState } from 'react'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 
 interface FileTreeNodeProps {
@@ -32,6 +33,16 @@ export function FileTreeNode({
   const isDir = entry.type === 'directory'
   const Icon = getFileIcon(entry.extension, isDir, isExpanded)
   const { startFileDrag } = usePaneDnd()
+  const [showTooltip, setShowTooltip] = useState(false)
+  const tooltipTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (tooltipTimerRef.current !== null) {
+        window.clearTimeout(tooltipTimerRef.current)
+      }
+    }
+  }, [])
 
   const handleClick = (e: React.MouseEvent): void => {
     // Pass click event if handler provided (for multi-select handling)
@@ -55,16 +66,36 @@ export function FileTreeNode({
     startFileDrag(entry.path, e)
   }
 
+  const handleMouseEnter = (): void => {
+    if (tooltipTimerRef.current !== null) {
+      window.clearTimeout(tooltipTimerRef.current)
+    }
+
+    tooltipTimerRef.current = window.setTimeout(() => {
+      setShowTooltip(true)
+    }, 900)
+  }
+
+  const handleMouseLeave = (): void => {
+    if (tooltipTimerRef.current !== null) {
+      window.clearTimeout(tooltipTimerRef.current)
+      tooltipTimerRef.current = null
+    }
+    setShowTooltip(false)
+  }
+
   return (
     <>
       <div
         className={cn(
-          'flex items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
+          'group relative flex items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
           isSelected && 'bg-accent text-accent-foreground'
         )}
         style={{ paddingLeft: depth * 16 + 4 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, entry)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         draggable={!isDir}
         onDragStart={handleDragStart}
       >
@@ -92,6 +123,12 @@ export function FileTreeNode({
           )}
         />
         <span className="truncate">{entry.name}</span>
+
+        {showTooltip && (
+          <div className="pointer-events-none absolute left-2 top-[calc(100%+2px)] z-50 max-w-[420px] rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">
+            {entry.name}
+          </div>
+        )}
       </div>
 
       {isDir && isExpanded && children && (

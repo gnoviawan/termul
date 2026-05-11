@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { ChevronsDownUp } from "lucide-react";
+import { AlertCircle, ChevronsDownUp, LoaderCircle, Search, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { FileTreeNodeWrapper } from "./FileTreeNode";
 import { FileTreeContextMenu } from "./FileTreeContextMenu";
 import {
@@ -28,7 +29,11 @@ interface InlineInputState {
 	existingEntry?: DirectoryEntry;
 }
 
-export function FileExplorer(): React.JSX.Element {
+interface FileExplorerProps {
+	side?: "left" | "right";
+}
+
+export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.Element {
 	const {
 		rootPath,
 		directoryContents,
@@ -36,6 +41,15 @@ export function FileExplorer(): React.JSX.Element {
 		rootLoadError,
 		selectedPaths,
 		clipboard,
+		searchQuery,
+		searchResults,
+		searchFileNameMatches,
+		searchLoading,
+		searchError,
+		searchTruncated,
+		searchScannedFiles,
+		searchFailedFiles,
+		searchLastCompletedQuery,
 	} = useFileExplorer();
 	const {
 		toggleDirectory,
@@ -51,6 +65,9 @@ export function FileExplorer(): React.JSX.Element {
 		collapseAll,
 		refreshDirectory,
 		setRootLoadError,
+		setSearchQuery,
+		searchInRoot,
+		resetSearch,
 	} = useFileExplorerActions();
 
 	const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -59,10 +76,139 @@ export function FileExplorer(): React.JSX.Element {
 	const [deleteConfirm, setDeleteConfirm] = useState<DirectoryEntry | null>(
 		null,
 	);
+	const [searchResultTab, setSearchResultTab] = useState<"content" | "files">("content");
+	const [expandedSearchResultPaths, setExpandedSearchResultPaths] = useState<Set<string>>(new Set());
+	const [explorerWidth, setExplorerWidth] = useState(() => {
+		try {
+			const savedWidth = window.localStorage?.getItem("termul:file-explorer-width");
+			if (!savedWidth) return 256;
+			const parsed = Number.parseInt(savedWidth, 10);
+			if (Number.isNaN(parsed)) return 256;
+			return Math.max(220, Math.min(560, parsed));
+		} catch {
+			return 256;
+		}
+	});
 	const inputRef = useRef<HTMLInputElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const searchDebounceRef = useRef<number | null>(null);
+	const searchRequestIdRef = useRef(0);
+	const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+	const resizeCleanupRef = useRef<(() => void) | null>(null);
+	const userSelectedTabRef = useRef(false);
 
 	const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined;
+	const normalizedSearchQuery = searchQuery ?? "";
+	const safeSearchResults = searchResults ?? [];
+	const safeSearchFileNameMatches = searchFileNameMatches ?? [];
+	const hasSearchInput = normalizedSearchQuery.length > 0;
+	const trimmedSearchQuery = normalizedSearchQuery.trim();
+	const isSearchActive = trimmedSearchQuery.length > 0;
+	const isSearchTooShort = isSearchActive && trimmedSearchQuery.length < 2;
+	const hasContentResults = safeSearchResults.length > 0;
+	const hasFileResults = safeSearchFileNameMatches.length > 0;
+	const hasAnySearchResults = hasContentResults || hasFileResults;
+	const hasPartialSearchError = Boolean(searchError) && hasAnySearchResults;
+	const totalContentMatches = safeSearchResults.reduce(
+		(total, fileResult) => total + fileResult.matches.length,
+		0,
+	);
+	const resultsAreCurrent = searchLastCompletedQuery === trimmedSearchQuery;
+	const showSearchEmptyState =
+		trimmedSearchQuery.length >= 2 &&
+		resultsAreCurrent &&
+		!searchLoading &&
+		!searchError &&
+		!hasAnySearchResults;
+
+	useEffect(() => {
+		userSelectedTabRef.current = false;
+	}, [searchLastCompletedQuery]);
+
+	useEffect(() => {
+		if (userSelectedTabRef.current) {
+			return;
+		}
+		if (searchResultTab === "content" && safeSearchResults.length === 0 && safeSearchFileNameMatches.length > 0 && !searchLoading) {
+			setSearchResultTab("files");
+			return;
+		}
+		if (searchResultTab === "files" && safeSearchFileNameMatches.length === 0 && safeSearchResults.length > 0 && !searchLoading) {
+			setSearchResultTab("content");
+		}
+	}, [safeSearchFileNameMatches.length, searchResultTab, safeSearchResults.length, searchLoading, searchLastCompletedQuery]);
+
+	useEffect(() => {
+		try {
+			window.localStorage?.setItem("termul:file-explorer-width", String(explorerWidth));
+		} catch {
+			// Ignore localStorage access failures in restricted environments.
+		}
+	}, [explorerWidth]);
+
+	const finalizeResizeDrag = useCallback(() => {
+		resizeStateRef.current = null;
+		document.body.style.userSelect = "";
+		if (resizeCleanupRef.current) {
+			resizeCleanupRef.current();
+			resizeCleanupRef.current = null;
+		}
+	}, []);
+
+	const applyResizedWidth = useCallback((rawWidth: number) => {
+		const nextWidth = Math.max(220, Math.min(560, rawWidth));
+		setExplorerWidth(nextWidth);
+	}, []);
+
+	const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+		event.preventDefault();
+		document.body.style.userSelect = "none";
+		resizeStateRef.current = { startX: event.clientX, startWidth: explorerWidth };
+
+		const onMouseMove = (moveEvent: MouseEvent) => {
+			const state = resizeStateRef.current;
+			if (!state) return;
+			const delta = moveEvent.clientX - state.startX;
+			const rawWidth = side === "right" ? state.startWidth - delta : state.startWidth + delta;
+			applyResizedWidth(rawWidth);
+		};
+
+		const onMouseUp = () => {
+			finalizeResizeDrag();
+		};
+
+		const onWindowBlur = () => {
+			finalizeResizeDrag();
+		};
+
+		document.addEventListener("mousemove", onMouseMove);
+		document.addEventListener("mouseup", onMouseUp);
+		window.addEventListener("blur", onWindowBlur);
+		resizeCleanupRef.current = () => {
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+			window.removeEventListener("blur", onWindowBlur);
+		};
+	}, [applyResizedWidth, explorerWidth, finalizeResizeDrag, side]);
+
+	const handleResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") {
+			return;
+		}
+		event.preventDefault();
+		const step = 16;
+		if (event.key === "Home") {
+			applyResizedWidth(220);
+			return;
+		}
+		if (event.key === "End") {
+			applyResizedWidth(560);
+			return;
+		}
+		const directionalDelta = event.key === "ArrowLeft" ? -step : step;
+		const signedDelta = side === "right" ? -directionalDelta : directionalDelta;
+		applyResizedWidth(explorerWidth + signedDelta);
+	}, [applyResizedWidth, explorerWidth, side]);
 
 	// Auto-expand root directory on mount
 	useEffect(() => {
@@ -70,6 +216,42 @@ export function FileExplorer(): React.JSX.Element {
 			toggleDirectory(rootPath);
 		}
 	}, [rootPath, directoryContents, rootLoadError, toggleDirectory]);
+
+	useEffect(() => {
+		resetSearch();
+		setExpandedSearchResultPaths(new Set());
+	}, [rootPath, resetSearch]);
+
+	useEffect(() => {
+		setExpandedSearchResultPaths(new Set());
+	}, [trimmedSearchQuery]);
+
+	useEffect(() => {
+		if (searchDebounceRef.current !== null) {
+			window.clearTimeout(searchDebounceRef.current);
+		}
+
+		if (!rootPath) {
+			return;
+		}
+
+		searchDebounceRef.current = window.setTimeout(() => {
+			searchRequestIdRef.current += 1;
+			void searchInRoot(normalizedSearchQuery, searchRequestIdRef.current);
+		}, trimmedSearchQuery.length >= 3 ? 90 : 180);
+
+		return () => {
+			if (searchDebounceRef.current !== null) {
+				window.clearTimeout(searchDebounceRef.current);
+			}
+		};
+	}, [rootPath, normalizedSearchQuery, searchInRoot, trimmedSearchQuery.length]);
+
+	useEffect(() => {
+		return () => {
+			finalizeResizeDrag();
+		};
+	}, [finalizeResizeDrag]);
 
 	// Focus inline input when it appears
 	useEffect(() => {
@@ -287,6 +469,7 @@ export function FileExplorer(): React.JSX.Element {
 		directoryContents,
 		contextMenu,
 		clearSelection,
+		rootPath,
 	]);
 
 	const handleNewFile = useCallback((dirPath: string) => {
@@ -471,11 +654,111 @@ export function FileExplorer(): React.JSX.Element {
 		setDeleteConfirm(null);
 	}, [deleteConfirm, refreshDirectory]);
 
+	const handleSearchMatchClick = useCallback(
+		async (filePath: string, lineNumber: number) => {
+			const searchTerm = searchLastCompletedQuery.trim();
+			selectPath(filePath);
+			try {
+				await useEditorStore.getState().openFile(filePath);
+				useWorkspaceStore.getState().addEditorTab(filePath);
+				const isMarkdown = /\.md$/i.test(filePath);
+				if (isMarkdown) {
+					useEditorStore.getState().setViewMode(filePath, "code");
+				}
+				useEditorStore.getState().updateCursorPosition(filePath, lineNumber, 1);
+				const revealDetail = { filePath, lineNumber, searchTerm };
+				(window as unknown as { __termulPendingRevealLine?: typeof revealDetail }).__termulPendingRevealLine = revealDetail;
+				window.dispatchEvent(
+					new CustomEvent("termul:reveal-line", {
+						detail: revealDetail,
+					}),
+				);
+				requestAnimationFrame(() => {
+					window.dispatchEvent(
+						new CustomEvent("termul:reveal-line", {
+							detail: revealDetail,
+						}),
+					);
+				});
+			} catch {
+				toast.warning("File opened, but failed to focus target line");
+			}
+		},
+		[searchLastCompletedQuery, selectPath],
+	);
+
 	const handleRootRetry = useCallback(() => {
 		if (!rootPath) return;
 		setRootLoadError(null);
 		void toggleDirectory(rootPath);
 	}, [rootPath, setRootLoadError, toggleDirectory]);
+
+	const toggleExpandedSearchResult = useCallback((filePath: string) => {
+		setExpandedSearchResultPaths((current) => {
+			const next = new Set(current);
+			if (next.has(filePath)) {
+				next.delete(filePath);
+			} else {
+				next.add(filePath);
+			}
+			return next;
+		});
+	}, []);
+
+	const getFileLabel = useCallback(
+		(filePath: string) => {
+			const normalizedFilePath = filePath.replace(/\\/g, "/");
+			const normalizedRootPath = (rootPath ?? "").replace(/\\/g, "/");
+			const fileName = normalizedFilePath.split("/").pop() ?? normalizedFilePath;
+			const relativePath = normalizedRootPath
+				? normalizedFilePath.replace(`${normalizedRootPath}/`, "")
+				: normalizedFilePath;
+			const folderPath = relativePath.includes("/")
+				? relativePath.slice(0, relativePath.lastIndexOf("/"))
+				: "";
+
+			return { fileName, folderPath, relativePath };
+		},
+		[rootPath],
+	);
+
+	const renderHighlightedLine = useCallback(
+		(lineText: string) => {
+			const query = normalizedSearchQuery.trim();
+			if (!query) return lineText;
+
+			const lowerLine = lineText.toLowerCase();
+			const lowerQuery = query.toLowerCase();
+			const parts: React.ReactNode[] = [];
+			let startIndex = 0;
+			let matchIndex = lowerLine.indexOf(lowerQuery, startIndex);
+
+			while (matchIndex !== -1) {
+				if (matchIndex > startIndex) {
+					parts.push(lineText.slice(startIndex, matchIndex));
+				}
+
+				parts.push(
+					<span
+						key={`${matchIndex}-${matchIndex + query.length}`}
+						className="rounded-sm border border-primary/35 bg-primary/20 px-0.5 text-foreground transition-colors group-hover:bg-primary/25 group-focus-visible:bg-primary/30"
+					>
+						{lineText.slice(matchIndex, matchIndex + query.length)}
+					</span>,
+				);
+
+				startIndex = matchIndex + query.length;
+				matchIndex = lowerLine.indexOf(lowerQuery, startIndex);
+			}
+
+			if (startIndex < lineText.length) {
+				parts.push(lineText.slice(startIndex));
+			}
+
+			return parts.length > 0 ? parts : lineText;
+		},
+		[normalizedSearchQuery],
+	);
 
 	// Open terminal in directory
 	const handleOpenInTerminal = useCallback((dirPath: string) => {
@@ -550,8 +833,10 @@ export function FileExplorer(): React.JSX.Element {
 
 	return (
 		<div
+			id="file-explorer-panel"
 			ref={containerRef}
-			className="w-64 flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
+			className="relative flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
+			style={{ width: explorerWidth }}
 			tabIndex={0}
 		>
 			{/* Header */}
@@ -568,7 +853,34 @@ export function FileExplorer(): React.JSX.Element {
 				</button>
 			</div>
 
-			{/* Tree */}
+			<div className="px-3 py-1.5 border-b border-border">
+				<div className="relative">
+					<Search
+						size={13}
+						className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+					/>
+					<input
+						type="text"
+						value={normalizedSearchQuery}
+						onChange={(event) => setSearchQuery(event.target.value)}
+						placeholder="Search files and content…"
+						className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0"
+						aria-label="Search files and content"
+					/>
+					{hasSearchInput && (
+						<button
+							onClick={() => resetSearch()}
+							className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+							title="Clear search"
+							aria-label="Clear search"
+						>
+							<X size={11} />
+						</button>
+					)}
+				</div>
+			</div>
+
+			{/* Tree / Search Results */}
 			<div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
 				{!rootPath && (
 					<div className="px-3 py-4 text-sm text-muted-foreground">
@@ -599,7 +911,7 @@ export function FileExplorer(): React.JSX.Element {
 					</div>
 				)}
 
-				{rootPath && rootEntries && !rootLoadError && (
+				{rootPath && rootEntries && !rootLoadError && (!isSearchActive || isSearchTooShort || (searchLoading && searchLastCompletedQuery !== trimmedSearchQuery)) && (
 					<>
 						{rootEntries.map((entry) => (
 							<FileTreeNodeWrapper
@@ -613,6 +925,185 @@ export function FileExplorer(): React.JSX.Element {
 							/>
 						))}
 					</>
+				)}
+
+				{rootPath && !rootLoadError && isSearchActive && (
+					<div className="space-y-1.5 px-2 py-1.5">
+						{(searchLoading || searchError || isSearchTooShort || showSearchEmptyState || !resultsAreCurrent) && (
+							<div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+								<p className="text-[10px] font-medium text-foreground">
+									{searchLoading
+										? `Searching for “${trimmedSearchQuery}”…`
+										: hasPartialSearchError
+											? `Partial results for “${trimmedSearchQuery}”`
+											: searchError
+												? "Search unavailable"
+												: isSearchTooShort
+													? "Keep typing to start searching"
+													: showSearchEmptyState
+														? `No matches for “${trimmedSearchQuery}”`
+														: `Updating results for “${trimmedSearchQuery}”…`}
+								</p>
+								<p className="mt-0.5">
+									{hasPartialSearchError
+										? `${searchError} Showing the matches that were found before the search stopped.`
+										: searchError
+											? searchError
+											: isSearchTooShort
+												? "Type at least 2 characters to search file names and content."
+												: showSearchEmptyState
+													? "Try a different term or a shorter phrase to broaden the search."
+													: "Finishing the latest search before showing refreshed matches."}
+								</p>
+							</div>
+						)}
+
+						{(searchTruncated || searchFailedFiles > 0) && (
+							<div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+								{searchTruncated ? "Results were truncated for performance." : "Some files could not be fully searched."}
+								{searchFailedFiles > 0
+									? ` ${searchFailedFiles} file${searchFailedFiles === 1 ? " was" : "s were"} skipped.`
+									: ""}
+								{searchScannedFiles > 0
+									? ` Scanned ${searchScannedFiles} file${searchScannedFiles === 1 ? "" : "s"}.`
+									: ""}
+							</div>
+						)}
+
+						{hasAnySearchResults && (
+							<div className="rounded-lg border border-border/70 bg-card/25 p-1 shadow-sm">
+								<div className="grid grid-cols-2 gap-1" role="tablist" aria-label="Search result types">
+									<button
+										onClick={() => {
+											userSelectedTabRef.current = true;
+											setSearchResultTab("content");
+										}}
+										className={cn(
+											"flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+											searchResultTab === "content"
+												? "bg-secondary text-foreground shadow-sm"
+												: "text-muted-foreground hover:bg-background/70 hover:text-foreground",
+										)}
+										type="button"
+										role="tab"
+										aria-selected={searchResultTab === "content"}
+									>
+										{searchLoading && <LoaderCircle size={10} className="animate-spin" />}
+										Content <span className="text-muted-foreground">{safeSearchResults.length}</span>
+									</button>
+									<button
+										onClick={() => {
+											userSelectedTabRef.current = true;
+											setSearchResultTab("files");
+										}}
+										className={cn(
+											"flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+											searchResultTab === "files"
+												? "bg-secondary text-foreground shadow-sm"
+												: "text-muted-foreground hover:bg-background/70 hover:text-foreground",
+										)}
+										type="button"
+										role="tab"
+										aria-selected={searchResultTab === "files"}
+									>
+										{searchLoading && <LoaderCircle size={10} className="animate-spin" />}
+										Files <span className="text-muted-foreground">{safeSearchFileNameMatches.length}</span>
+									</button>
+								</div>
+							</div>
+						)}
+
+						{searchResultTab === "files" && hasFileResults && (
+							<div className="space-y-1">
+								{safeSearchFileNameMatches.map((filePath) => {
+									const { fileName, relativePath } = getFileLabel(filePath);
+									return (
+										<button
+											key={`fname:${filePath}`}
+											onClick={() => void handleSearchMatchClick(filePath, 1)}
+											className="w-full px-2 py-1.5 text-left transition-colors hover:bg-secondary/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+											title={filePath}
+										>
+											<div className="flex min-w-0 items-center justify-between gap-2">
+												<div className="min-w-0 flex-1">
+													<span className="truncate text-[11px] font-medium text-foreground">{fileName}</span>
+													<span className="ml-1.5 truncate text-[10px] text-muted-foreground">{relativePath}</span>
+												</div>
+											</div>
+										</button>
+									);
+								})}
+							</div>
+						)}
+
+						{searchResultTab === "content" && hasContentResults && (
+							<div className="space-y-1">
+								{safeSearchResults.map((fileResult) => {
+									const { fileName, relativePath } = getFileLabel(fileResult.filePath);
+									const isExpanded = expandedSearchResultPaths.has(fileResult.filePath);
+									const visibleMatches = isExpanded ? fileResult.matches : fileResult.matches.slice(0, 3);
+									const hiddenCount = Math.max(fileResult.matches.length - visibleMatches.length, 0);
+									return (
+										<div key={fileResult.filePath}>
+											<button
+												onClick={() =>
+													void handleSearchMatchClick(
+														fileResult.filePath,
+														fileResult.matches[0]?.lineNumber ?? 1,
+													)
+												}
+												className="w-full px-2 py-1.5 text-left transition-colors hover:bg-secondary/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+												title={fileResult.filePath}
+											>
+												<div className="flex min-w-0 items-center justify-between gap-2">
+													<div className="min-w-0 flex-1">
+														<span className="truncate text-[11px] font-medium text-foreground">{fileName}</span>
+														<span className="ml-1.5 truncate text-[10px] text-muted-foreground">{relativePath}</span>
+													</div>
+													<span className="shrink-0 text-[9px] text-muted-foreground">{fileResult.matches.length} hit{fileResult.matches.length === 1 ? "" : "s"}</span>
+												</div>
+											</button>
+											<div className="space-y-0.5 pb-1">
+												{visibleMatches.map((match, idx) => (
+													<button
+														key={`${fileResult.filePath}:${match.lineNumber}:${idx}`}
+														onClick={() =>
+															void handleSearchMatchClick(
+																fileResult.filePath,
+																match.lineNumber,
+															)
+														}
+														className="group flex w-full items-center gap-2 overflow-hidden px-2 py-0.5 text-left text-[10px] text-foreground transition-colors hover:bg-secondary/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+													>
+														<span className="shrink-0 min-w-[22px] text-right text-[9px] text-muted-foreground">{match.lineNumber}</span>
+														<span className="block min-w-0 flex-1 truncate text-foreground/90">{renderHighlightedLine(match.lineText)}</span>
+													</button>
+												))}
+												{hiddenCount > 0 && (
+													<button
+														type="button"
+														onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
+														className="px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+													>
+														Show {hiddenCount} more
+													</button>
+												)}
+												{isExpanded && fileResult.matches.length > 3 && (
+													<button
+														type="button"
+														onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
+														className="px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+													>
+														Show less
+													</button>
+												)}
+											</div>
+										</div>
+									);
+								})}
+							</div>
+						)}
+					</div>
 				)}
 
 				{/* Inline input for new file/folder/rename */}
@@ -649,6 +1140,20 @@ export function FileExplorer(): React.JSX.Element {
 					</div>
 				)}
 			</div>
+
+			<button
+				type="button"
+				onMouseDown={handleResizeMouseDown}
+				onKeyDown={handleResizeKeyDown}
+				className={`absolute ${side === "right" ? "left-0" : "right-0"} top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/20`}
+				title="Drag to resize explorer"
+				aria-label="Resize file explorer"
+				role="separator"
+				aria-controls="file-explorer-panel"
+				aria-valuenow={explorerWidth}
+				aria-valuemin={220}
+				aria-valuemax={560}
+			/>
 
 			{/* Context Menu */}
 			{contextMenu && (

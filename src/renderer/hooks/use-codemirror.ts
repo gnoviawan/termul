@@ -100,7 +100,8 @@ interface UseCodeMirrorOptions {
 interface UseCodeMirrorResult {
   view: EditorView | null
   setContent: (content: string) => void
-  scrollToLine: (lineNumber: number) => void
+  scrollToLine: (lineNumber: number, highlightTerm?: string) => void
+  restoreViewState: (lineNumber: number, column: number, scrollTop: number) => void
   getVisibleLineRange: () => VisibleLineRange | null
 }
 
@@ -129,6 +130,7 @@ export function useCodeMirror(
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
+  const pendingRestoreTokenRef = useRef<symbol | null>(null)
 
   // Keep refs up to date
   onChangeRef.current = options.onChange
@@ -254,6 +256,7 @@ export function useCodeMirror(
       if (visibleRangeDebounceRef.current) {
         clearTimeout(visibleRangeDebounceRef.current)
       }
+      pendingRestoreTokenRef.current = null
       if (viewRef.current) {
         viewRef.current.destroy()
         viewRef.current = null
@@ -295,27 +298,76 @@ export function useCodeMirror(
     isExternalUpdate.current = false
   }, [])
 
-  const scrollToLine = useCallback((lineNumber: number) => {
+  const scrollToLine = useCallback((lineNumber: number, highlightTerm?: string) => {
     const view = viewRef.current
     if (!view) return
 
     const safeLineNumber = Math.min(Math.max(1, lineNumber), view.state.doc.lines)
     const line = view.state.doc.line(safeLineNumber)
-    const lineBlock = view.lineBlockAt(line.from)
-    const targetScrollTop = lineBlock.top
+
+    const lineText = line.text
+    const normalizedHighlight = highlightTerm?.trim().toLowerCase()
+    const matchIndex = normalizedHighlight
+      ? lineText.toLowerCase().indexOf(normalizedHighlight)
+      : -1
+
+    const selection =
+      matchIndex >= 0 && normalizedHighlight
+        ? {
+            anchor: line.from + matchIndex,
+            head: line.from + matchIndex + normalizedHighlight.length
+          }
+        : { anchor: line.from }
 
     view.dispatch({
-      selection: { anchor: line.from }
+      selection,
+      effects: EditorView.scrollIntoView(line.from, {
+        y: 'center',
+        yMargin: 48
+      })
     })
 
-    view.scrollDOM.scrollTo({
-      top: targetScrollTop,
-      behavior: 'smooth'
+    // Ensure final position after layout/paint in hidden->visible tab transitions.
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView) return
+      const lineBlock = currentView.lineBlockAt(line.from)
+      const scrollDOM = currentView.scrollDOM
+      const viewportHeight = scrollDOM.clientHeight
+      const maxScrollTop = Math.max(0, scrollDOM.scrollHeight - viewportHeight)
+      const desiredScrollTop = Math.max(0, Math.min(maxScrollTop, lineBlock.top - viewportHeight / 2))
+      onScrollChangeRef.current(desiredScrollTop)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
+    })
+  }, [])
+
+  const restoreViewState = useCallback((lineNumber: number, column: number, scrollTop: number) => {
+    const view = viewRef.current
+    if (!view) return
+    if (!Number.isFinite(lineNumber) || !Number.isFinite(column)) return
+
+    const safeLineNumber = Math.min(Math.max(1, Math.trunc(lineNumber)), view.state.doc.lines)
+    const line = view.state.doc.line(safeLineNumber)
+    const safeColumn = Math.max(1, Math.trunc(column))
+    const anchor = Math.min(line.to, line.from + safeColumn - 1)
+    const restoreToken = Symbol('restore-view-state')
+    pendingRestoreTokenRef.current = restoreToken
+
+    view.dispatch({
+      selection: { anchor, head: anchor }
     })
 
-    onScrollChangeRef.current(targetScrollTop)
-    onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(view))
-    view.focus()
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current
+      if (!currentView || pendingRestoreTokenRef.current !== restoreToken) return
+      const nextScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0
+      currentView.scrollDOM.scrollTop = nextScrollTop
+      onScrollChangeRef.current(nextScrollTop)
+      onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
+      currentView.focus()
+      pendingRestoreTokenRef.current = null
+    })
   }, [])
 
   const getVisibleLineRange = useCallback((): VisibleLineRange | null => {
@@ -331,6 +383,7 @@ export function useCodeMirror(
     view: viewReady ? viewRef.current : null,
     setContent,
     scrollToLine,
+    restoreViewState,
     getVisibleLineRange
   }
 }

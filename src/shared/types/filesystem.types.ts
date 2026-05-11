@@ -28,6 +28,22 @@ export interface FileChangeEvent {
   path: string
 }
 
+export interface FileSearchMatch {
+  lineNumber: number
+  lineText: string
+}
+
+export interface FileSearchResult {
+  filePath: string
+  matches: FileSearchMatch[]
+}
+
+export interface FileSearchResponse {
+  results: FileSearchResult[]
+  truncated: boolean
+  scannedFiles: number
+  failedFiles: number
+}
 
 export const FilesystemErrorCodes = {
   FILE_NOT_FOUND: 'FILE_NOT_FOUND',
