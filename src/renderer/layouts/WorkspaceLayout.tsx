@@ -157,21 +157,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const activeTab = useActiveTab();
 	const fullscreenPaneId = useFullscreenPaneId();
 	const paneRoot = usePaneRoot();
-	const fullscreenPane = useMemo(
-		() => {
-			if (!fullscreenPaneId) return null;
-			const pane = findPaneById(paneRoot, fullscreenPaneId);
-			return pane?.type === "leaf" ? pane : null;
-		},
-		[fullscreenPaneId, paneRoot],
-	);
+	const fullscreenPane = useMemo(() => {
+		if (!fullscreenPaneId) return null;
+		const pane = findPaneById(paneRoot, fullscreenPaneId);
+		return pane?.type === "leaf" ? pane : null;
+	}, [fullscreenPaneId, paneRoot]);
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
 
 	// Ref for terminal close handler — used inside keydown effect to avoid
 	// declaration-order dependency. The ref is updated each render.
-	const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null);
+	const handleCloseTerminalRef = useRef<
+		((id: string, tabId: string) => void) | null
+	>(null);
 
 	// File watcher hook
 	useFileWatcher();
@@ -513,15 +512,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
-	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
-		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
-		if (!targetPaneId) return;
-		if (shell) {
-			handleCreateTerminalInPane(targetPaneId, shell.path);
-		} else {
-			handleCreateTerminalInPane(targetPaneId);
-		}
-	}, [handleCreateTerminalInPane]);
+	const handleAddTerminal = useCallback(
+		(paneId: string | undefined, shell?: ShellInfo) => {
+			const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+			if (!targetPaneId) return;
+			if (shell) {
+				handleCreateTerminalInPane(targetPaneId, shell.path);
+			} else {
+				handleCreateTerminalInPane(targetPaneId);
+			}
+		},
+		[handleCreateTerminalInPane],
+	);
 
 	const handleNewBrowserTab = useCallback((paneId?: string) => {
 		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
@@ -534,8 +536,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
-			const { isInEditor, isInTerminal, isInInput } =
-				getShortcutTargetContext(e.target);
+			const { isInEditor, isInTerminal, isInInput } = getShortcutTargetContext(
+				e.target,
+			);
 
 			// Save File (Ctrl+S / ⌘+S) — should work even in editors
 			if (matchesShortcut(e, getActiveKey("saveFile"))) {
@@ -550,7 +553,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
 			// On Windows/Linux: Ctrl+W closes tab
 			if (matchesShortcut(e, getActiveKey("closeTab"))) {
-
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					const fileState = useEditorStore
@@ -559,7 +561,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					if (fileState?.isDirty) {
 						setDirtyCloseFilePath(activeTab.filePath);
 					} else {
-						const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath);
+						const didClose = useEditorStore
+							.getState()
+							.closeFileIfIdle(activeTab.filePath);
 						if (didClose) {
 							useWorkspaceStore.getState().removeTab(activeTab.id);
 						}
@@ -614,7 +618,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			// reachable while typing in the editor, browser, or terminal.
 
 			// Command palette (Ctrl+K / Ctrl+Shift+P)
-			if (matchesShortcut(e, getActiveKey("commandPalette")) || matchesShortcut(e, getActiveKey("commandPaletteAlt"))) {
+			if (
+				matchesShortcut(e, getActiveKey("commandPalette")) ||
+				matchesShortcut(e, getActiveKey("commandPaletteAlt"))
+			) {
 				e.preventDefault();
 				e.stopPropagation();
 				if (document.activeElement instanceof HTMLElement) {
@@ -704,13 +711,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				e.preventDefault();
 				e.stopPropagation();
 				if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
-					updateAppSetting("terminalFontSize", DEFAULT_APP_SETTINGS.terminalFontSize);
+					updateAppSetting(
+						"terminalFontSize",
+						DEFAULT_APP_SETTINGS.terminalFontSize,
+					);
 				}
 				return;
 			}
 
 			// Cmd/Ctrl + 1-9 for project switching
-			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+			if (
+				(e.metaKey || e.ctrlKey) &&
+				!e.shiftKey &&
+				!e.altKey &&
+				/^[1-9]$/.test(e.key)
+			) {
 				e.preventDefault();
 				const index = parseInt(e.key) - 1;
 				if (projects[index]) selectProject(projects[index].id);
@@ -930,7 +945,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Dirty file close handlers
 	const handleCloseEditorTab = useCallback((filePath: string) => {
 		const fileState = useEditorStore.getState().openFiles.get(filePath);
-		if (fileState?.operationStatus === "saving" || fileState?.operationStatus === "reloading") {
+		if (
+			fileState?.operationStatus === "saving" ||
+			fileState?.operationStatus === "reloading"
+		) {
 			return;
 		}
 		if (fileState?.isDirty) {
@@ -1091,7 +1109,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							) : (
 								<>
 									{isWorkspaceRoute ? (
-										<div className="flex-1 min-h-0 h-full overflow-hidden">
+										<motion.div
+											key={fullscreenPaneId ? "fullscreen" : "normal"}
+											initial={{ opacity: 0.85, scale: 0.97 }}
+											animate={{ opacity: 1, scale: 1 }}
+											transition={{ duration: 0.2, ease: "easeOut" }}
+											className="flex-1 min-h-0 h-full overflow-hidden"
+										>
 											<PaneRenderer
 												node={fullscreenPane ?? paneRoot}
 												onAddTerminal={handleAddTerminal}
@@ -1104,7 +1128,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 													activeProject?.defaultShell || appDefaultShell
 												}
 											/>
-										</div>
+										</motion.div>
 									) : (
 										<div className="flex-1 overflow-hidden bg-background relative rounded-xl">
 											<div className="w-full h-full">
