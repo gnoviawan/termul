@@ -1068,6 +1068,10 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					},
 				);
+				// Set ptyIdRef so that resize/recovery operations (performFit, terminalApi.resize)
+				// work for external terminals just like spawned ones. Without this, the TUI app
+				// never receives SIGWINCH on project-switch restore and can't redraw.
+				ptyIdRef.current = externalTerminalId;
 				// Mark as renderer-attached BEFORE addRendererRef to prevent transcript
 				// accumulation by use-terminal-detached-output.ts for active restored
 				// terminals. Set synchronously so the frontend count is correct immediately;
