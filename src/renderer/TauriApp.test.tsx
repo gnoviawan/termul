@@ -105,6 +105,15 @@ vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
 }))
 
+vi.mock('./hooks/use-terminal-exit-notification', () => ({
+  useTerminalExitNotification: () => undefined
+}))
+
+vi.mock('@/lib/tauri-notification-api', () => ({
+  initNotificationPermissions: () => Promise.resolve(),
+  sendDesktopNotification: () => Promise.resolve()
+}))
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockPersistenceRead.mockResolvedValue({

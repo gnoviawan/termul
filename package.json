@@ -86,6 +86,7 @@
 		"@tauri-apps/plugin-clipboard-manager": "^2",
 		"@tauri-apps/plugin-dialog": "^2",
 		"@tauri-apps/plugin-fs": "^2",
+		"@tauri-apps/plugin-notification": "^2.3.3",
 		"@tauri-apps/plugin-opener": "^2.5.3",
 		"@tauri-apps/plugin-os": "^2",
 		"@tauri-apps/plugin-process": "^2",
