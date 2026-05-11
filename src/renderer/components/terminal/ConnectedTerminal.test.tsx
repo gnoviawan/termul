@@ -220,6 +220,7 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
+import { clearTerminalCache } from './terminal-cache'
 
 const {
   mockRecordTerminalContinuityEvent,
@@ -300,6 +301,7 @@ describe('ConnectedTerminal', () => {
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    clearTerminalCache()
     vi.clearAllMocks()
     mockRecordTerminalContinuityEvent.mockReset()
     mockGetOrCreateProjectContinuityCorrelation.mockReset()
@@ -1952,7 +1954,9 @@ describe('ConnectedTerminal', () => {
         await vi.advanceTimersByTimeAsync(200)
 
         // No errors should have been thrown
-        expect(mockTerminalInstance.dispose).toHaveBeenCalled()
+        // Terminal is cached (not disposed) because findTerminalByPtyId
+        // returns a truthy value — the terminal is still alive in the store.
+        expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
 
         vi.useRealTimers()
       })

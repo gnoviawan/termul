@@ -51,6 +51,7 @@ import {
 } from "@/lib/file-path-links";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
+import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	getOrCreateProjectContinuityCorrelation,
 	recordTerminalContinuityEvent,
@@ -524,7 +525,22 @@ function ConnectedTerminalComponent({
 			fontSize,
 			scrollback: bufferSize,
 		};
-		const terminal = new Terminal(terminalOptions);
+
+		// Check for a cached terminal preserved across project switches.
+		// If found, reuse it (preserves scrollback, alt buffer, cursor, etc.)
+		// and skip both terminal.open() and transcript replay.
+		const cacheKey = externalTerminalId || undefined;
+		const cachedTerminal = cacheKey ? takeCachedTerminal(cacheKey) : undefined;
+
+		let terminal: Terminal;
+		if (cachedTerminal) {
+			devLog(`[ConnectedTerminal] RESTORED cached terminal`, {
+				cacheKey,
+			});
+			terminal = cachedTerminal;
+		} else {
+			terminal = new Terminal(terminalOptions);
+		}
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
 
@@ -574,7 +590,17 @@ function ConnectedTerminalComponent({
 		searchAddonRef.current = searchAddon;
 		terminal.loadAddon(searchAddon);
 
-		terminal.open(containerRef.current);
+		if (cachedTerminal) {
+			// Reattach the preserved xterm element to the new container.
+			// This avoids losing scrollback, alt-buffer, and cursor state.
+			if (containerRef.current && terminal.element) {
+				containerRef.current.appendChild(terminal.element);
+			}
+			// Force a full refresh so the renderer repaints after DOM reattachment.
+			terminal.refresh(0, terminal.rows - 1);
+		} else {
+			terminal.open(containerRef.current);
+		}
 
 		// Intercept keyboard shortcuts before xterm processes them
 		// Return false to prevent xterm from handling, true to let xterm handle
@@ -1100,7 +1126,22 @@ function ConnectedTerminalComponent({
 					externalTerminalId,
 				);
 				try {
-					if (transcript) {
+					if (cachedTerminal) {
+						// Cached terminal already has full state — skip transcript/scrollback replay.
+						// Still consume the transcript to prevent unbounded growth.
+						if (transcript) {
+							terminalStoreState.consumeTranscript(externalTerminalId);
+						}
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "cached-terminal",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (transcript) {
 						if (transcriptLooksPartial) {
 							if (!transcript.startsWith("\u001b[?1049h")) {
 								terminal.write("\u001b[?1049h");
@@ -1249,7 +1290,18 @@ function ConnectedTerminalComponent({
 				fileLinkProviderDisposableRef.current = null;
 			}
 
-			terminal.dispose();
+			// Cache the terminal for reuse on project-switch-back instead of
+			// disposing it. This preserves all xterm internal state (scrollback,
+			// alt buffer, cursor position). Only cache if the terminal is still
+			// alive in the store (not closed/exited) — otherwise dispose.
+			const cacheKey = terminalId;
+			const terminalStillInStore = cacheKey &&
+				useTerminalStore.getState().findTerminalByPtyId(cacheKey);
+			if (terminalStillInStore) {
+				cacheTerminal(cacheKey, terminal);
+			} else {
+				terminal.dispose();
+			}
 			terminalRef.current = null;
 			setTerminalInstance(null);
 			fitAddonRef.current = null;
