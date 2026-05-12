@@ -743,6 +743,9 @@ pub fn run() {
             commands::data_migration_get_schema_info,
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
+            // Git commands
+            commands::git_get_status,
+            commands::git_get_diff,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

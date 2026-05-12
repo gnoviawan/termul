@@ -3,7 +3,7 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -1297,6 +1297,27 @@ pub async fn data_migration_rollback(
     migration_manager: State<'_, Arc<MigrationManager>>,
 ) -> Result<IpcResult<()>, String> {
     Ok(migration_manager.rollback_migration(request.version))
+}
+
+// ==================== Git Commands ====================
+
+/// Get git status for a repository
+#[tauri::command]
+pub async fn git_get_status(
+    cwd: String,
+) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd)
+        .map_err(|e: String| e)
+}
+
+/// Get git diff for a file
+#[tauri::command]
+pub async fn git_get_diff(
+    cwd: String,
+    path: String,
+) -> Result<String, String> {
+    crate::trackers::git_tracker::git_get_diff(&cwd, &path)
+        .map_err(|e: String| e)
 }
 
 /// Get available shells

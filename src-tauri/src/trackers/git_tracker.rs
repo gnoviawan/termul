@@ -101,7 +101,7 @@ static GIT_BINARY: OnceLock<String> = OnceLock::new();
 /// On Unix, runs `which -a git`.
 /// Skips any path that contains "laragon" (case-insensitive).
 /// Falls back to plain `"git"` if no suitable path is found.
-fn resolve_git_binary() -> &'static str {
+pub fn resolve_git_binary() -> &'static str {
     GIT_BINARY.get_or_init(|| {
         #[cfg(target_os = "windows")]
         {
@@ -164,6 +164,14 @@ pub struct GitStatus {
     pub staged: u32,
     pub untracked: u32,
     pub has_changes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusDetail {
+    pub path: String,
+    pub status: String,
+    pub staged: bool,
 }
 
 impl GitStatus {
@@ -588,7 +596,7 @@ impl GitTracker {
         .unwrap_or((None, None))
     }
 
-    fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
+    pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
         let mut child = backend_command(resolve_git_binary())
             .args(args)
             .current_dir(cwd)
@@ -621,7 +629,6 @@ impl GitTracker {
         }
     }
 
-    /// Shutdown the tracker and stop polling
     pub fn shutdown(&self) {
         // Abort the polling task if running
         let mut poll_handle_guard = self.poll_handle.write();
@@ -634,6 +641,91 @@ impl GitTracker {
         #[cfg(target_os = "windows")]
         self.cwd_poll_states.write().clear();
     }
+}
+
+pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> {
+    let output = GitTracker::run_git_command(cwd, &["status", "--porcelain"])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut details = Vec::new();
+
+    for line in stdout.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+
+        let index_status = line.chars().next().unwrap_or(' ');
+        let work_tree_status = line.chars().nth(1).unwrap_or(' ');
+        let path = line[3..].to_string();
+
+        // Staged changes
+        if index_status != ' ' && index_status != '?' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match index_status {
+                    'A' => "added",
+                    'M' => "modified",
+                    'D' => "deleted",
+                    'R' => "renamed",
+                    _ => "modified",
+                }.to_string(),
+                staged: true,
+            });
+        }
+
+        // Unstaged changes
+        if work_tree_status != ' ' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match work_tree_status {
+                    'M' => "modified",
+                    'D' => "deleted",
+                    '?' => "untracked",
+                    _ => "modified",
+                }.to_string(),
+                staged: false,
+            });
+        }
+    }
+
+    Ok(details)
+}
+
+pub fn git_get_diff(cwd: &str, path: &str) -> Result<String, String> {
+    // First check if file is untracked
+    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", path])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+    
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    let is_untracked = status_str.starts_with("??");
+
+    let args = if is_untracked {
+        vec!["diff", "--no-index", "--", "/dev/null", path]
+    } else {
+        vec!["diff", "HEAD", "--", path]
+    };
+
+    let output = GitTracker::run_git_command(cwd, &args)
+        .ok_or_else(|| "Failed to run git diff".to_string())?;
+
+    // git diff returns 1 if there are differences, which is "success" for us
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    
+    if stdout.is_empty() && is_untracked {
+        // Fallback for untracked files if diff --no-index fails or returns empty
+        return std::fs::read_to_string(std::path::Path::new(cwd).join(path))
+            .map_err(|e| e.to_string());
+    }
+
+    Ok(stdout)
+}
+
+impl GitTracker {
 
     /// Start the polling task
     ///

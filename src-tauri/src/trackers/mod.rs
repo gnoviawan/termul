@@ -11,4 +11,4 @@ pub mod git_tracker;
 
 pub use cwd_tracker::CwdTracker;
 pub use exit_code_tracker::ExitCodeTracker;
-pub use git_tracker::{GitStatus, GitTracker};
+pub use git_tracker::{GitStatus, GitTracker, GitStatusDetail};
