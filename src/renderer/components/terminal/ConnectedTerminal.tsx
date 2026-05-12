@@ -58,10 +58,12 @@ import {
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
 
-// Common readline/shell Ctrl sequences that should always pass through to the
-// PTY regardless of platform. On macOS these are already protected by the
-// isMac guard, but on Windows/Linux they would otherwise be swallowed when a
-// matching app shortcut exists (e.g. commandPalette=ctrl+k, commandHistory=ctrl+r).
+// Common readline/shell Ctrl sequences that pass through to the PTY only when
+// no configured app shortcut claims them. Checking these LAST (after app
+// shortcuts) ensures that app bindings like commandPalette=ctrl+k,
+// commandHistory=ctrl+r, newProject=ctrl+n work from terminal focus.
+// On macOS readline Ctrl sequences are already protected by matchesShortcut's
+// isMac guard (Ctrl+key never triggers app shortcuts on macOS).
 const READLINE_PASSTHROUGH_KEYS = new Set([
 	"a", // Ctrl+A  move to beginning of line
 	"e", // Ctrl+E  move to end of line
@@ -91,18 +93,22 @@ function isAppOwnedTerminalShortcut(
 	event: KeyboardEvent,
 	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
 ): boolean {
-	// Ctrl+letter readline bindings must reach the PTY on every platform.
-	// On macOS the isMac guard below handles this, but on Windows/Linux the
-	// same Ctrl+key might be configured as an app shortcut — pass them through.
-	if (!isMac && isReadlinePassthrough(event)) {
-		return false;
-	}
-
+	// 1. App shortcuts take priority over readline passthrough.
+	// This ensures commandPalette, commandHistory, etc. work from terminal
+	// focus even though their Ctrl+key also matches a readline binding.
 	for (const shortcut of Object.values(shortcuts)) {
 		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
 		if (matchesShortcut(event, activeKey)) {
 			return true;
 		}
+	}
+
+	// 2. No app shortcut matched — check readline passthrough.
+	// Ctrl+letter readline bindings must reach the PTY on every platform.
+	// On macOS the isMac guard in matchesShortcut already prevents Ctrl+key
+	// from matching app shortcuts, so the readline behavior is preserved.
+	if (isReadlinePassthrough(event)) {
+		return false;
 	}
 
 	return false;

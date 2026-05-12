@@ -536,6 +536,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			// Safety net: skip workspace handling when an earlier handler has already
+			// processed this event by calling preventDefault() — e.g. xterm clipboard
+			// ops or ConnectedTerminal's customKeyEventHandler for terminal-owned keys.
+			if (e.defaultPrevented) return;
+
 			const { isInEditor, isInTerminal, isInInput } = getShortcutTargetContext(
 				e.target,
 			);
