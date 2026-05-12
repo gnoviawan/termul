@@ -40,6 +40,13 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     onOpenProjectSettings: vi.fn(),
     onOpenAppPreferences: vi.fn(),
     onOpenCommandHistory: vi.fn(),
+    getShortcutLabel: (id) =>
+      ({
+        newTerminal: 'Ctrl+T',
+        newBrowserTab: 'Ctrl+Shift+N',
+        commandHistory: 'Ctrl+R'
+      })[id],
+    getProjectShortcutLabel: (index) => `Ctrl+${index + 1}`,
     ...overrides
   }
 
@@ -69,6 +76,26 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Navigate')).toBeInTheDocument()
     expect(screen.getByText('Select')).toBeInTheDocument()
     expect(screen.getByText('Close')).toBeInTheDocument()
+  })
+
+  it('uses resolved shortcut labels supplied by the shell', () => {
+    renderPalette({
+      getShortcutLabel: (id) =>
+        ({
+          newTerminal: 'Alt+T',
+          newBrowserTab: 'Alt+B',
+          commandHistory: 'Alt+H'
+        })[id],
+      getProjectShortcutLabel: (index) => `Alt+${index + 1}`
+    })
+
+    expect(screen.getByText('Alt+T')).toBeInTheDocument()
+    expect(screen.getByText('Alt+B')).toBeInTheDocument()
+    expect(screen.getByText('Alt+H')).toBeInTheDocument()
+    expect(screen.getByText('Alt+1')).toBeInTheDocument()
+    expect(screen.queryByText('Ctrl+T')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ctrl+Shift+N')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ctrl+R')).not.toBeInTheDocument()
   })
 
   it('searches settings, prefs, and history keywords', async () => {

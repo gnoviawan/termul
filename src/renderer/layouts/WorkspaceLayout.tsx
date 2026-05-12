@@ -70,6 +70,7 @@ import {
 import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
+	formatKeyForDisplay,
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac } from "@/lib/platform";
 import {
@@ -446,6 +447,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		},
 		[shortcuts],
 	);
+
+	const getShortcutLabel = useCallback(
+		(id: string): string | undefined => {
+			const key = getActiveKey(id);
+			return key ? formatKeyForDisplay(key) : undefined;
+		},
+		[getActiveKey],
+	);
+
+	const getProjectShortcutLabel = useCallback((index: number): string | undefined => {
+		if (index < 0 || index > 8) return undefined;
+		return formatKeyForDisplay(`ctrl+${index + 1}`);
+	}, []);
 
 	// Determine if we should show the terminal area (only on workspace dashboard)
 	const isWorkspaceRoute = location.pathname === "/";
@@ -1187,6 +1201,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onOpenProjectSettings={handleOpenProjectSettings}
 				onOpenAppPreferences={handleOpenAppPreferences}
 				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+				getShortcutLabel={getShortcutLabel}
+				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
 
 			<CreateSnapshotModal

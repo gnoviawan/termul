@@ -24,6 +24,8 @@ import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 
+type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory'
+
 interface CommandPaletteProps {
   isOpen: boolean
   onClose: () => void
@@ -35,6 +37,8 @@ interface CommandPaletteProps {
   onOpenProjectSettings?: () => void
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
+  getShortcutLabel?: (id: CommandShortcutId) => string | undefined
+  getProjectShortcutLabel?: (index: number) => string | undefined
 }
 
 type CommandCategory = 'workspace' | 'navigation' | 'projects' | 'tools'
@@ -87,7 +91,9 @@ export function CommandPalette({
   onNewBrowserTab,
   onOpenProjectSettings,
   onOpenAppPreferences,
-  onOpenCommandHistory
+  onOpenCommandHistory,
+  getShortcutLabel,
+  getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
@@ -104,7 +110,7 @@ export function CommandPalette({
               label: 'New Terminal',
               description: 'Open a terminal in the active pane',
               keywords: ['shell', 'console', 'pty', 'workspace'],
-              shortcut: 'Ctrl+T',
+              shortcut: getShortcutLabel?.('newTerminal'),
               execute: onAddTerminal
             }
           ]
@@ -118,7 +124,7 @@ export function CommandPalette({
               label: 'New Browser Tab',
               description: 'Open a browser tab in the active pane',
               keywords: ['web', 'url', 'workspace'],
-              shortcut: 'Ctrl+Shift+N',
+              shortcut: getShortcutLabel?.('newBrowserTab'),
               execute: onNewBrowserTab
             }
           ]
@@ -177,7 +183,7 @@ export function CommandPalette({
         keywords: ['project', 'switch', project.name, project.path].filter(
           (keyword): keyword is string => Boolean(keyword)
         ),
-        shortcut: index < 9 ? `Ctrl+${index + 1}` : undefined,
+        shortcut: index < 9 ? getProjectShortcutLabel?.(index) : undefined,
         execute: () => onSwitchProject(project.id),
         projectColor: project.color
       })),
@@ -190,7 +196,7 @@ export function CommandPalette({
               label: 'Command History',
               description: 'Review and reuse recent terminal commands',
               keywords: ['history', 'recent', 'terminal', 'commands', 'shell'],
-              shortcut: 'Ctrl+R',
+              shortcut: getShortcutLabel?.('commandHistory'),
               execute: onOpenCommandHistory
             }
           ]
@@ -204,7 +210,9 @@ export function CommandPalette({
       onNewBrowserTab,
       onOpenProjectSettings,
       onOpenAppPreferences,
-      onOpenCommandHistory
+      onOpenCommandHistory,
+      getShortcutLabel,
+      getProjectShortcutLabel
     ]
   )
 
