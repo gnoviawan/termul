@@ -131,6 +131,7 @@ function updateLeaf(
 export interface WorkspaceState {
   root: PaneNode
   activePaneId: string
+  fullscreenPaneId: string | null
 
   // Pane tree actions
   splitPane: (
@@ -150,6 +151,8 @@ export interface WorkspaceState {
   closeTab: (paneId: string, tabId: string) => WorkspaceTab | null
   setActiveTab: (paneId: string, tabId: string) => void
   setActivePane: (paneId: string) => void
+  togglePaneFullscreen: (paneId: string) => void
+  clearFullscreenPane: () => void
   updatePaneSizes: (splitId: string, sizes: number[]) => void
   collapsePane: (paneId: string) => void
   reorderTabsInPane: (paneId: string, orderedIds: string[]) => void
@@ -183,6 +186,21 @@ function terminalTabId(terminalId: string): string {
 
 function editorTabId(filePath: string): string {
   return 'edit-' + filePath
+}
+
+function resolveFullscreenPaneId(root: PaneNode, fullscreenPaneId: string | null): string | null {
+  if (!fullscreenPaneId) return null
+  const pane = findPaneById(root, fullscreenPaneId)
+  return pane && pane.type === 'leaf' ? fullscreenPaneId : null
+}
+
+function resolveActivePaneId(
+  fullscreenPaneId: string | null,
+  requestedPaneId: string
+): string {
+  return fullscreenPaneId && fullscreenPaneId !== requestedPaneId
+    ? fullscreenPaneId
+    : requestedPaneId
 }
 
 function normalizePaneTree(root: PaneNode): PaneNode {
@@ -232,6 +250,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
   return {
     root: initialLeaf,
     activePaneId: initialLeaf.id,
+    fullscreenPaneId: null,
 
     splitPane: (
       paneId: string,
@@ -254,7 +273,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       const newRoot = replaceNode(root, paneId, split)
-      set({ root: newRoot, activePaneId: newLeaf.id })
+      set({ root: newRoot, activePaneId: newLeaf.id, fullscreenPaneId: null })
     },
 
     addTabToPane: (paneId: string, tab: WorkspaceTab): void => {
@@ -273,7 +292,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         tabs: [...leaf.tabs, tab],
         activeTabId: tab.id
       }))
-      set({ root: newRoot, activePaneId: paneId })
+      set((state) => ({
+        root: newRoot,
+        activePaneId: resolveActivePaneId(state.fullscreenPaneId, paneId)
+      }))
     },
 
     moveTabToPane: (tabId: string, sourcePaneId: string, targetPaneId: string): void => {
@@ -309,7 +331,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         newRoot = removeNode(newRoot, sourcePaneId) ?? createLeaf()
       }
 
-      set({ root: newRoot, activePaneId: targetPaneId })
+      set((state) => ({
+        root: newRoot,
+        activePaneId: targetPaneId,
+        fullscreenPaneId: resolveFullscreenPaneId(newRoot, state.fullscreenPaneId)
+      }))
     },
 
     moveTabToNewSplit: (
@@ -351,7 +377,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       if (!target || target.type !== 'leaf') {
         // If target was the same pane that got removed, just create a single leaf
         const newLeaf = createLeaf([tab], tab.id)
-        set({ root: newLeaf, activePaneId: newLeaf.id })
+        set({ root: newLeaf, activePaneId: newLeaf.id, fullscreenPaneId: null })
         return
       }
 
@@ -372,7 +398,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       newRoot = replaceNode(newRoot, targetPaneId, split)
-      set({ root: newRoot, activePaneId: newLeaf.id })
+      set((state) => ({
+        root: newRoot,
+        activePaneId: newLeaf.id,
+        fullscreenPaneId: resolveFullscreenPaneId(newRoot, state.fullscreenPaneId)
+      }))
     },
 
     closeTab: (paneId: string, tabId: string): WorkspaceTab | null => {
@@ -417,7 +447,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             }
           }
           newRoot = removeNode(newRoot, paneId) ?? createLeaf()
-          set({ root: newRoot, activePaneId: newActivePaneId })
+          set((state) => ({
+            root: newRoot,
+            activePaneId: newActivePaneId,
+            fullscreenPaneId: resolveFullscreenPaneId(newRoot, state.fullscreenPaneId)
+          }))
           return removedTab
         }
       }
@@ -427,16 +461,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     setActiveTab: (paneId: string, tabId: string): void => {
-      const { root } = get()
+      const { root, fullscreenPaneId } = get()
       const newRoot = updateLeaf(root, paneId, (leaf) => ({
         ...leaf,
         activeTabId: tabId
       }))
-      set({ root: newRoot, activePaneId: paneId })
+      set({
+        root: newRoot,
+        activePaneId: resolveActivePaneId(fullscreenPaneId, paneId)
+      })
     },
 
     setActivePane: (paneId: string): void => {
-      set({ activePaneId: paneId })
+      const { fullscreenPaneId } = get()
+      set({ activePaneId: resolveActivePaneId(fullscreenPaneId, paneId) })
+    },
+
+    togglePaneFullscreen: (paneId: string): void => {
+      const { root, fullscreenPaneId } = get()
+      const pane = findPaneById(root, paneId)
+      if (!pane || pane.type !== 'leaf') return
+
+      // If only one leaf pane exists, toggling fullscreen is a no-op
+      if (getAllLeafPanes(root).length <= 1 && fullscreenPaneId !== paneId) return
+
+      set({
+        activePaneId: paneId,
+        fullscreenPaneId: fullscreenPaneId === paneId ? null : paneId
+      })
+    },
+
+    clearFullscreenPane: (): void => {
+      set({ fullscreenPaneId: null })
     },
 
     updatePaneSizes: (splitId: string, sizes: number[]): void => {
@@ -476,7 +532,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       const newRoot = removeNode(root, paneId) ?? createLeaf()
-      set({ root: newRoot, activePaneId: newActivePaneId })
+      set((state) => ({
+        root: newRoot,
+        activePaneId: newActivePaneId,
+        fullscreenPaneId: resolveFullscreenPaneId(newRoot, state.fullscreenPaneId)
+      }))
     },
 
     reorderTabsInPane: (paneId: string, orderedIds: string[]): void => {
@@ -521,9 +581,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const existing = findPaneContainingTab(root, id)
       if (existing) {
         // Just activate it
+        const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: existing.id
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
         })
         return
       }
@@ -568,9 +629,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       // Check if already exists in target pane — activate it
       const targetPane = findPaneById(root, paneId)
       if (targetPane && targetPane.type === 'leaf' && targetPane.tabs.some((t) => t.id === id)) {
+        const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, paneId, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: paneId
+          activePaneId: resolveActivePaneId(fullscreenPaneId, paneId)
         })
         return
       }
@@ -587,9 +649,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       // Check if already exists in any pane — activate it
       const existing = findPaneContainingTab(root, id)
       if (existing) {
+        const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: existing.id
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
         })
         return
       }
@@ -662,7 +725,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           }
         }
 
-        set({ root: normalizePaneTree(newRoot) })
+        const normalizedRoot = normalizePaneTree(newRoot)
+        set((state) => ({
+          root: normalizedRoot,
+          fullscreenPaneId: resolveFullscreenPaneId(normalizedRoot, state.fullscreenPaneId)
+        }))
       } finally {
         // CRITICAL: Always release the lock
         SYNC_TERMINAL_TABS_LOCK = false
@@ -693,7 +760,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     resetLayout: (): void => {
       const leaf = createLeaf()
-      set({ root: leaf, activePaneId: leaf.id })
+      set({ root: leaf, activePaneId: leaf.id, fullscreenPaneId: null })
     },
 
     loadProjectWorkspace: (root: PaneNode, activePaneId?: string | null): void => {
@@ -704,7 +771,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           ? activePaneId
           : leaves[0]?.id ?? normalizedRoot.id
 
-      set({ root: normalizedRoot, activePaneId: resolvedActivePaneId })
+      set((state) => ({
+        root: normalizedRoot,
+        activePaneId: resolvedActivePaneId,
+        fullscreenPaneId: resolveFullscreenPaneId(normalizedRoot, state.fullscreenPaneId)
+      }))
     },
 
     syncEditorTabs: (filePaths: string[], restoredActiveTabId?: string | null): void => {
@@ -749,7 +820,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
 
-      set({ root: normalizePaneTree(newRoot) })
+      const normalizedRoot = normalizePaneTree(newRoot)
+      set((state) => ({
+        root: normalizedRoot,
+        fullscreenPaneId: resolveFullscreenPaneId(normalizedRoot, state.fullscreenPaneId)
+      }))
     },
 
     remapTerminalTabs: (idMap: Record<string, string>): void => {
@@ -824,7 +899,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         ? activePaneId
         : leaves[0]?.id ?? remappedRoot.id
 
-      set({ root: remappedRoot, activePaneId: nextActivePaneId })
+      set((state) => ({
+        root: remappedRoot,
+        activePaneId: nextActivePaneId,
+        fullscreenPaneId: resolveFullscreenPaneId(remappedRoot, state.fullscreenPaneId)
+      }))
     },
 
     getNextTabId: (direction: 1 | -1): string | null => {
@@ -874,6 +953,14 @@ export function useActivePaneId(): string {
   return useWorkspaceStore((state) => state.activePaneId)
 }
 
+export function useFullscreenPaneId(): string | null {
+  return useWorkspaceStore((state) => state.fullscreenPaneId)
+}
+
+export function useLeafCount(): number {
+	return useWorkspaceStore((state) => getAllLeafPanes(state.root).length)
+}
+
 export function usePaneRoot(): PaneNode {
   return useWorkspaceStore((state) => state.root)
 }
@@ -896,6 +983,8 @@ export function useWorkspaceActions(): Pick<
   | 'moveTabToNewSplit'
   | 'closeTab'
   | 'setActivePane'
+  | 'togglePaneFullscreen'
+  | 'clearFullscreenPane'
   | 'collapsePane'
   | 'updatePaneSizes'
 > {
@@ -917,6 +1006,8 @@ export function useWorkspaceActions(): Pick<
       moveTabToNewSplit: state.moveTabToNewSplit,
       closeTab: state.closeTab,
       setActivePane: state.setActivePane,
+      togglePaneFullscreen: state.togglePaneFullscreen,
+      clearFullscreenPane: state.clearFullscreenPane,
       collapsePane: state.collapsePane,
       updatePaneSizes: state.updatePaneSizes
     }))

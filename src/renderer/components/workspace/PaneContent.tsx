@@ -56,9 +56,10 @@ export function PaneContent({
 	);
 
 	// FIX: Batch workspace store subscriptions with useShallow to prevent cascading re-renders
-	const { activePaneId, setActivePane } = useWorkspaceStore(
+	const { activePaneId, fullscreenPaneId, setActivePane } = useWorkspaceStore(
 		useShallow((state) => ({
 			activePaneId: state.activePaneId,
+			fullscreenPaneId: state.fullscreenPaneId,
 			setActivePane: state.setActivePane,
 		})),
 	);
@@ -70,10 +71,13 @@ export function PaneContent({
 	const { setTerminalPtyId } = useTerminalActions();
 	const { isDragging, previewTarget } = usePaneDnd();
 
+	const isFullscreenPane = fullscreenPaneId === pane.id;
 	const isActivePane = activePaneId === pane.id;
 	const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
 	const panePreviewPosition =
-		previewTarget?.paneId === pane.id ? previewTarget.position : null;
+		previewTarget?.paneId === pane.id && !isFullscreenPane
+			? previewTarget.position
+			: null;
 
 	const handleFocus = useCallback(() => {
 		if (!isActivePane) {
@@ -107,7 +111,8 @@ export function PaneContent({
 		<div
 			className={cn(
 				"flex flex-col h-full relative",
-				isActivePane && hasMultiplePanes && "ring-1 ring-primary/30",
+				isActivePane && hasMultiplePanes && !isFullscreenPane && "ring-1 ring-primary/30",
+				isFullscreenPane && "ring-1 ring-primary/30 rounded-xl overflow-hidden",
 			)}
 			onMouseDown={handleFocus}
 		>
@@ -281,7 +286,7 @@ export function PaneContent({
 					</div>
 				</div>
 
-				{isDragging && <DropZoneOverlay paneId={pane.id} />}
+				{isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}
 			</div>
 		</div>
 	);
