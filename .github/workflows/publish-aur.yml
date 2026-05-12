@@ -11,6 +11,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: publish-aur-${{ github.ref_name || inputs.version }}
   cancel-in-progress: false
