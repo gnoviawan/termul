@@ -62,6 +62,8 @@ export interface GitStatus {
 	modified: number;
 	staged: number;
 	untracked: number;
+	ahead: number;
+	behind: number;
 	hasChanges: boolean;
 }
 

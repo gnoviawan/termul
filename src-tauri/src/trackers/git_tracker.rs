@@ -163,6 +163,8 @@ pub struct GitStatus {
     pub modified: u32,
     pub staged: u32,
     pub untracked: u32,
+    pub ahead: u32,
+    pub behind: u32,
     pub has_changes: bool,
 }
 
@@ -181,6 +183,8 @@ impl GitStatus {
             modified: 0,
             staged: 0,
             untracked: 0,
+            ahead: 0,
+            behind: 0,
             has_changes: false,
         }
     }
@@ -930,7 +934,8 @@ impl GitTracker {
 
     /// Check the git status for a directory
     ///
-    /// Runs `git status --porcelain` and returns parsed status.
+    /// Runs `git status --porcelain` and `git rev-list --left-right --count HEAD...@{u}`
+    /// and returns parsed status.
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
         log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
@@ -940,9 +945,35 @@ impl GitTracker {
             return None;
         }
 
-        Some(Self::parse_git_status(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let mut status = Self::parse_git_status(&String::from_utf8_lossy(&output.stdout));
+
+        log::debug!("[GitTracker] Fetching ahead/behind for cwd: {}", cwd);
+        // Get ahead/behind count
+        if let Some(rev_output) =
+            Self::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
+            if rev_output.status.success() {
+                let counts = String::from_utf8_lossy(&rev_output.stdout);
+                let parts: Vec<&str> = counts.trim().split_whitespace().collect();
+                if parts.len() == 2 {
+                    status.ahead = parts[0].parse().unwrap_or(0);
+                    status.behind = parts[1].parse().unwrap_or(0);
+                    log::debug!(
+                        "[GitTracker] CWD: {}, ahead: {}, behind: {}",
+                        cwd,
+                        status.ahead,
+                        status.behind
+                    );
+                }
+            } else {
+                log::debug!(
+                    "[GitTracker] rev-list failed (possibly no upstream): {}",
+                    String::from_utf8_lossy(&rev_output.stderr)
+                );
+            }
+        }
+
+        Some(status)
     }
 
     /// Parse git status --porcelain output
