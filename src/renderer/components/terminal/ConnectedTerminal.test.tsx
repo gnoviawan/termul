@@ -749,6 +749,23 @@ describe('ConnectedTerminal', () => {
     expect(vi.mocked(terminalApi).kill).not.toHaveBeenCalled()
   })
 
+  it('should persist terminal layout on unload handlers', async () => {
+    const saveSpy = vi.spyOn(await import('@/hooks/useTerminalAutoSave'), 'saveTerminalLayout')
+    render(<ConnectedTerminal />)
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+    })
+
+    window.dispatchEvent(new Event('beforeunload'))
+
+    await vi.waitFor(() => {
+      expect(saveSpy).toHaveBeenCalled()
+    })
+
+    saveSpy.mockRestore()
+  })
+
   describe('Windows ConPTY support', () => {
     const originalPlatform = navigator.platform
 

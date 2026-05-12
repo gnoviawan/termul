@@ -58,6 +58,7 @@ import {
 	useCommandHistory,
 	useAllCommandHistory,
 } from "@/hooks/use-command-history";
+import { saveTerminalLayout } from "@/hooks/useTerminalAutoSave";
 import {
 	filesystemApi,
 	windowApi,
@@ -164,6 +165,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// File watcher hook
 	useFileWatcher();
+
+	useEffect(() => {
+		const persistBeforeUnload = () => {
+			if (!activeProjectId) return;
+			void saveTerminalLayout(activeProjectId).catch((error) => {
+				console.warn("Failed to persist terminal layout before reload:", error);
+			});
+		};
+
+		window.addEventListener("beforeunload", persistBeforeUnload);
+		window.addEventListener("pagehide", persistBeforeUnload);
+
+		return () => {
+			window.removeEventListener("beforeunload", persistBeforeUnload);
+			window.removeEventListener("pagehide", persistBeforeUnload);
+		};
+	}, [activeProjectId]);
+
 
 	// Sync file explorer root path and register project root watcher when project changes
 	useEffect(() => {

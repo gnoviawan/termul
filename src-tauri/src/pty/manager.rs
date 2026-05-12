@@ -178,6 +178,7 @@ pub struct TerminalInstance {
     pub cwd: String,
     pub pid: u32,
     pub last_activity: Arc<RwLock<Instant>>,
+    pub orphan_since: Arc<RwLock<Option<Instant>>>,
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
@@ -199,11 +200,16 @@ impl TerminalInstance {
     /// Add a renderer reference
     pub fn add_renderer_ref(&self, renderer_id: String) {
         self.renderer_refs.write().insert(renderer_id);
+        *self.orphan_since.write() = None;
     }
 
     /// Remove a renderer reference
     pub fn remove_renderer_ref(&self, renderer_id: &str) {
-        self.renderer_refs.write().remove(renderer_id);
+        let mut refs = self.renderer_refs.write();
+        refs.remove(renderer_id);
+        if refs.is_empty() {
+            *self.orphan_since.write() = Some(Instant::now());
+        }
     }
 
     /// Get count of renderer references
@@ -214,6 +220,11 @@ impl TerminalInstance {
     /// Check if terminal has no renderer references
     pub fn is_orphan(&self) -> bool {
         self.renderer_refs.read().is_empty()
+    }
+
+    /// Returns when the terminal became orphaned, if ever.
+    pub fn orphan_since(&self) -> Option<Instant> {
+        *self.orphan_since.read()
     }
 }
 
@@ -401,7 +412,11 @@ impl PtyManager {
                     .read()
                     .iter()
                     .filter(|(_, instance)| {
-                        instance.is_orphan() && instance.inactive_duration() > timeout
+                        instance.is_orphan()
+                            && instance
+                                .orphan_since()
+                                .map(|since| since.elapsed() > timeout)
+                                .unwrap_or_else(|| instance.inactive_duration() > timeout)
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
@@ -411,9 +426,8 @@ impl PtyManager {
                     log::info!("Cleaning up orphaned terminal: {}", id);
 
                     if let Some(instance) = terminals.write().remove(&id) {
-                        let active_slots = active_slots.clone();
+                        active_slots.fetch_sub(1, Ordering::SeqCst);
                         tokio::task::spawn_blocking(move || {
-                            active_slots.fetch_sub(1, Ordering::SeqCst);
                             Self::cleanup_terminal_resources_sync(instance, true);
                         });
 
@@ -514,6 +528,7 @@ impl PtyManager {
                 cwd: cwd.clone(),
                 pid,
                 last_activity: Arc::new(RwLock::new(Instant::now())),
+                orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
@@ -613,6 +628,7 @@ impl PtyManager {
                 cwd: cwd.clone(),
                 pid,
                 last_activity: Arc::new(RwLock::new(Instant::now())),
+                orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
