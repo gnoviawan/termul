@@ -33,6 +33,8 @@ vi.mock('@/stores/workspace-store', () => ({
       getState: () => mockWorkspaceStoreState
     }
   ),
+  useFullscreenPaneId: () => null,
+  useLeafCount: () => 3,
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
 

@@ -957,6 +957,10 @@ export function useFullscreenPaneId(): string | null {
   return useWorkspaceStore((state) => state.fullscreenPaneId)
 }
 
+export function useLeafCount(): number {
+	return useWorkspaceStore((state) => getAllLeafPanes(state.root).length)
+}
+
 export function usePaneRoot(): PaneNode {
   return useWorkspaceStore((state) => state.root)
 }

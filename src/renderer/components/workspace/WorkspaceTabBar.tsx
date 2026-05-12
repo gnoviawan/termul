@@ -13,7 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useWorkspaceStore, editorTabId } from "@/stores/workspace-store";
+import { useWorkspaceStore, useLeafCount, editorTabId } from "@/stores/workspace-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTerminalStore } from "@/stores/terminal-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
@@ -445,6 +445,7 @@ export function WorkspaceTabBar({
 				togglePaneFullscreen: state.togglePaneFullscreen,
 			}))
 		);
+	const leafCount = useLeafCount();
 	const {
 		startTabDrag,
 		dragPayload,
@@ -809,14 +810,16 @@ export function WorkspaceTabBar({
 			</div>
 
 			<div className="ml-auto flex items-center gap-1 px-2 shrink-0 h-full border-l border-border/60">
-				<button
-					onClick={() => togglePaneFullscreen(paneId)}
-					className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-					title={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
-					aria-label={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
-				>
-					{isFullscreenPane ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-				</button>
+				{leafCount > 1 && (
+					<button
+						onClick={() => togglePaneFullscreen(paneId)}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
+						aria-label={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
+					>
+						{isFullscreenPane ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+					</button>
+				)}
 				{onAddTerminal && (
 					<div ref={terminalMenuRef} className="relative flex items-center h-full">
 						<button

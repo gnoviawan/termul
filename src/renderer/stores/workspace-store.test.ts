@@ -333,7 +333,7 @@ describe('workspace-store split/move invariants', () => {
     const rightPane = split.children[1] as LeafNode
 
     store.togglePaneFullscreen(leftPane.id)
-    store.setActiveTab(leftPane.id, tabA.id)
+    store.setActiveTab(rightPane.id, tabB.id)
     expect(useWorkspaceStore.getState().activePaneId).toBe(leftPane.id)
   })
 

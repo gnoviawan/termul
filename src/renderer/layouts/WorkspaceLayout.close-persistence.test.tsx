@@ -125,6 +125,7 @@ vi.mock('@/stores/workspace-store', () => ({
   },
   useActiveTab: () => undefined,
   useFullscreenPaneId: () => null,
+  useLeafCount: () => 1,
   usePaneRoot: () => ({ type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }),
   editorTabId: (filePath: string) => `editor:${filePath}`,
   getActiveTerminalIdFromTree: () => null,
