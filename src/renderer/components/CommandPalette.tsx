@@ -1,5 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Terminal, Layers, SplitSquareVertical, Save, Globe } from 'lucide-react'
+import {
+  Clock,
+  Globe,
+  History,
+  Layers,
+  Save,
+  Settings,
+  SlidersHorizontal,
+  Terminal
+} from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Command,
@@ -10,8 +19,9 @@ import {
   CommandItem,
   CommandShortcut
 } from '@/components/ui/command'
-import type { Project } from '@/types/project'
+import type { Project, ProjectColor } from '@/types/project'
 import { getColorClasses } from '@/lib/colors'
+import { cn } from '@/lib/utils'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 
 interface CommandPaletteProps {
@@ -22,16 +32,49 @@ interface CommandPaletteProps {
   onAddTerminal?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
+  onOpenProjectSettings?: () => void
+  onOpenAppPreferences?: () => void
+  onOpenCommandHistory?: () => void
 }
+
+type CommandCategory = 'workspace' | 'navigation' | 'projects' | 'tools'
+
+const COMMAND_CATEGORY_LABELS: Record<CommandCategory, string> = {
+  workspace: 'Workspace',
+  navigation: 'Navigation',
+  projects: 'Projects',
+  tools: 'Tools'
+}
+
+const COMMAND_CATEGORY_ORDER: CommandCategory[] = [
+  'workspace',
+  'navigation',
+  'projects',
+  'tools'
+]
 
 interface CommandDef {
   id: string
+  category: CommandCategory
   icon: React.ReactNode
   label: string
+  description?: string
+  keywords?: string[]
   shortcut?: string
-  type: 'action' | 'project'
-  projectId?: string
-  projectColor?: string
+  execute: () => void
+  projectColor?: ProjectColor
+}
+
+function getSearchableValue(cmd: CommandDef): string {
+  return [
+    cmd.label,
+    cmd.description,
+    cmd.category,
+    COMMAND_CATEGORY_LABELS[cmd.category],
+    ...(cmd.keywords ?? [])
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 export function CommandPalette({
@@ -41,7 +84,10 @@ export function CommandPalette({
   onSwitchProject,
   onAddTerminal,
   onSaveSnapshot,
-  onNewBrowserTab
+  onNewBrowserTab,
+  onOpenProjectSettings,
+  onOpenAppPreferences,
+  onOpenCommandHistory
 }: CommandPaletteProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
@@ -49,65 +95,139 @@ export function CommandPalette({
 
   const commands: CommandDef[] = useMemo(
     () => [
-      ...projects.map((p, i) => ({
-        id: `project-${p.id}`,
-        icon: <Layers size={18} className={getColorClasses(p.color).text} />,
-        label: `Switch to Project: ${p.name}`,
-        shortcut: `Ctrl+${i + 1}`,
-        type: 'project' as const,
-        projectId: p.id,
-        projectColor: p.color
+      ...(onAddTerminal
+        ? [
+            {
+              id: 'new-terminal',
+              category: 'workspace' as const,
+              icon: <Terminal aria-hidden="true" size={16} />,
+              label: 'New Terminal',
+              description: 'Open a terminal in the active pane',
+              keywords: ['shell', 'console', 'pty', 'workspace'],
+              shortcut: 'Ctrl+T',
+              execute: onAddTerminal
+            }
+          ]
+        : []),
+      ...(onNewBrowserTab
+        ? [
+            {
+              id: 'new-browser-tab',
+              category: 'workspace' as const,
+              icon: <Globe aria-hidden="true" size={16} />,
+              label: 'New Browser Tab',
+              description: 'Open a browser tab in the active pane',
+              keywords: ['web', 'url', 'workspace'],
+              shortcut: 'Ctrl+Shift+N',
+              execute: onNewBrowserTab
+            }
+          ]
+        : []),
+      ...(onSaveSnapshot
+        ? [
+            {
+              id: 'save-snapshot',
+              category: 'workspace' as const,
+              icon: <Save aria-hidden="true" size={16} />,
+              label: 'Save Workspace Snapshot',
+              description: 'Capture the current workspace layout',
+              keywords: ['snapshot', 'checkpoint', 'layout', 'save'],
+              execute: onSaveSnapshot
+            }
+          ]
+        : []),
+      ...(onOpenProjectSettings
+        ? [
+            {
+              id: 'open-project-settings',
+              category: 'navigation' as const,
+              icon: <Settings aria-hidden="true" size={16} />,
+              label: 'Project Settings',
+              description: 'Configure the active project workspace',
+              keywords: ['settings', 'project', 'configure', 'config'],
+              execute: onOpenProjectSettings
+            }
+          ]
+        : []),
+      ...(onOpenAppPreferences
+        ? [
+            {
+              id: 'open-app-preferences',
+              category: 'navigation' as const,
+              icon: <SlidersHorizontal aria-hidden="true" size={16} />,
+              label: 'App Preferences',
+              description: 'Open global application preferences',
+              keywords: ['preferences', 'prefs', 'settings', 'app', 'global'],
+              execute: onOpenAppPreferences
+            }
+          ]
+        : []),
+      ...projects.map((project, index) => ({
+        id: `project-${project.id}`,
+        category: 'projects' as const,
+        icon: (
+          <Layers
+            aria-hidden="true"
+            size={16}
+            className={getColorClasses(project.color).text}
+          />
+        ),
+        label: `Switch to Project: ${project.name}`,
+        description: project.path ?? 'Switch active workspace project',
+        keywords: ['project', 'switch', project.name, project.path].filter(
+          (keyword): keyword is string => Boolean(keyword)
+        ),
+        shortcut: index < 9 ? `Ctrl+${index + 1}` : undefined,
+        execute: () => onSwitchProject(project.id),
+        projectColor: project.color
       })),
-      {
-        id: 'new-terminal',
-        icon: <Terminal size={18} />,
-        label: 'New Terminal',
-        shortcut: 'Ctrl+T',
-        type: 'action'
-      },
-      {
-        id: 'split-v',
-        icon: <SplitSquareVertical size={18} />,
-        label: 'Split Terminal Vertically',
-        shortcut: 'Ctrl+Shift+D',
-        type: 'action'
-      },
-      {
-        id: 'new-browser-tab',
-        icon: <Globe size={18} />,
-        label: 'New Browser Tab',
-        shortcut: 'Ctrl+Shift+N',
-        type: 'action'
-      },
-      {
-        id: 'save-snapshot',
-        icon: <Save size={18} />,
-        label: 'Save Workspace Snapshot',
-        type: 'action'
-      }
+      ...(onOpenCommandHistory
+        ? [
+            {
+              id: 'open-command-history',
+              category: 'tools' as const,
+              icon: <History aria-hidden="true" size={16} />,
+              label: 'Command History',
+              description: 'Review and reuse recent terminal commands',
+              keywords: ['history', 'recent', 'terminal', 'commands', 'shell'],
+              shortcut: 'Ctrl+R',
+              execute: onOpenCommandHistory
+            }
+          ]
+        : [])
     ],
-    [projects]
+    [
+      projects,
+      onSwitchProject,
+      onAddTerminal,
+      onSaveSnapshot,
+      onNewBrowserTab,
+      onOpenProjectSettings,
+      onOpenAppPreferences,
+      onOpenCommandHistory
+    ]
   )
 
-  // Separate recent commands from others
-  const { recentCommands, otherCommands } = useMemo(() => {
+  const { recentCommands, commandsByCategory } = useMemo(() => {
     const recent: CommandDef[] = []
-    const others: CommandDef[] = []
+    const recentIds = new Set(recentCommandIds)
 
     for (const cmd of commands) {
-      if (recentCommandIds.includes(cmd.id)) {
+      if (recentIds.has(cmd.id)) {
         recent.push(cmd)
-      } else {
-        others.push(cmd)
       }
     }
 
-    // Sort recent by their order in recentCommandIds
     recent.sort(
       (a, b) => recentCommandIds.indexOf(a.id) - recentCommandIds.indexOf(b.id)
     )
 
-    return { recentCommands: recent, otherCommands: others }
+    const grouped = COMMAND_CATEGORY_ORDER.map((category) => ({
+      category,
+      commands: commands.filter((cmd) => cmd.category === category)
+    })).filter((group) => group.commands.length > 0)
+
+    return { recentCommands: recent, commandsByCategory: grouped }
   }, [commands, recentCommandIds])
 
   const inputRef = useRef<HTMLInputElement>(null)
@@ -126,21 +246,16 @@ export function CommandPalette({
 
   const executeCommand = useCallback(
     async (cmd: CommandDef) => {
-      await saveRecentCommand(cmd.id)
-
-      if (cmd.type === 'project' && cmd.projectId) {
-        onSwitchProject(cmd.projectId)
-      } else if (cmd.id === 'new-terminal') {
-        onAddTerminal?.()
-      } else if (cmd.id === 'new-browser-tab' && onNewBrowserTab) {
-        onNewBrowserTab()
-      } else if (cmd.id === 'save-snapshot' && onSaveSnapshot) {
-        onSaveSnapshot()
+      try {
+        await saveRecentCommand(cmd.id)
+      } catch (error) {
+        console.warn('Failed to save recent command', error)
       }
 
       onClose()
+      cmd.execute()
     },
-    [saveRecentCommand, onSwitchProject, onAddTerminal, onNewBrowserTab, onSaveSnapshot, onClose]
+    [saveRecentCommand, onClose]
   )
 
   // Handle Escape key - use capture phase to intercept before cmdk handles it
@@ -159,6 +274,39 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
   }, [isOpen, onClose])
 
+  const renderCommandItem = (cmd: CommandDef): React.JSX.Element => (
+    <CommandItem
+      key={cmd.id}
+      value={getSearchableValue(cmd)}
+      onSelect={() => executeCommand(cmd)}
+      className="group flex items-center justify-between gap-3 px-2.5 py-2 cursor-pointer rounded-md"
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span
+          className={cn(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary/70 text-muted-foreground group-data-[selected=true]:text-foreground',
+            cmd.projectColor && getColorClasses(cmd.projectColor).bg
+          )}
+        >
+          {cmd.icon}
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate text-sm font-medium leading-5">{cmd.label}</span>
+          {cmd.description && (
+            <span className="truncate text-xs leading-4 text-muted-foreground">
+              {cmd.description}
+            </span>
+          )}
+        </span>
+      </div>
+      {cmd.shortcut && (
+        <CommandShortcut className="shrink-0 rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-[10px] tracking-normal text-muted-foreground">
+          {cmd.shortcut}
+        </CommandShortcut>
+      )}
+    </CommandItem>
+  )
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -166,88 +314,65 @@ export function CommandPalette({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[60] flex flex-col items-center pt-[10vh] bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex flex-col items-center pt-[7vh] bg-black/40 backdrop-blur-sm"
           onClick={onClose}
         >
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: -10 }}
+            initial={{ opacity: 0, scale: 0.97, y: -8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: -10 }}
+            exit={{ opacity: 0, scale: 0.97, y: -8 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-2xl bg-card rounded-xl shadow-2xl border border-border overflow-hidden"
+            className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Command
-              className="[&_[cmdk-group-heading]]:text-muted-foreground"
+              className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
               shouldFilter={true}
             >
               <CommandInput
                 ref={inputRef}
-                placeholder="Type a command or search..."
+                placeholder="Search commands, projects, settings..."
                 value={query}
                 onValueChange={setQuery}
-                className="text-lg"
+                className="h-10 py-2 text-sm"
               />
-              <CommandList className="max-h-[60vh]">
+              <CommandList className="max-h-[52vh] px-1 py-1">
                 <CommandEmpty>No commands found.</CommandEmpty>
 
-                {/* Recent Commands - only show when no query */}
                 {recentCommands.length > 0 && query === '' && (
                   <CommandGroup heading="Recent">
-                    {recentCommands.map((cmd) => (
-                      <CommandItem
-                        key={cmd.id}
-                        value={cmd.label}
-                        onSelect={() => executeCommand(cmd)}
-                        className="flex items-center justify-between px-4 py-3 cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3">
-                          {cmd.icon}
-                          <span className="text-sm font-medium">{cmd.label}</span>
-                        </div>
-                        {cmd.shortcut && (
-                          <CommandShortcut className="text-xs font-mono bg-secondary px-2 py-1 rounded border border-border">
-                            {cmd.shortcut}
-                          </CommandShortcut>
-                        )}
-                      </CommandItem>
-                    ))}
+                    {recentCommands.map(renderCommandItem)}
                   </CommandGroup>
                 )}
 
-                {/* All Commands */}
-                <CommandGroup heading={query === '' && recentCommands.length > 0 ? 'All Commands' : undefined}>
-                  {(query === '' ? otherCommands : commands).map((cmd) => (
-                    <CommandItem
-                      key={cmd.id}
-                      value={cmd.label}
-                      onSelect={() => executeCommand(cmd)}
-                      className="flex items-center justify-between px-4 py-3 cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3">
-                        {cmd.icon}
-                        <span className="text-sm font-medium">{cmd.label}</span>
-                      </div>
-                      {cmd.shortcut && (
-                        <CommandShortcut className="text-xs font-mono bg-secondary px-2 py-1 rounded border border-border">
-                          {cmd.shortcut}
-                        </CommandShortcut>
-                      )}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
+                {commandsByCategory.map(({ category, commands: categoryCommands }) => (
+                  <CommandGroup
+                    key={category}
+                    heading={COMMAND_CATEGORY_LABELS[category]}
+                  >
+                    {categoryCommands.map(renderCommandItem)}
+                  </CommandGroup>
+                ))}
               </CommandList>
 
-              {/* Footer */}
-              <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-end space-x-4 text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
-                <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to navigate
+              <div className="flex items-center justify-between gap-3 border-t border-border bg-background px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Clock aria-hidden="true" size={12} />
+                  Recent commands saved
                 </span>
-                <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd> to select
-                </span>
-                <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">Esc</kbd> to close
+                <span className="flex items-center gap-3">
+                  <span className="flex items-center">
+                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
+                    Navigate
+                  </span>
+                  <span className="flex items-center">
+                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↵</kbd>
+                    Select
+                  </span>
+                  <span className="flex items-center">
+                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">Esc</kbd>
+                    Close
+                  </span>
                 </span>
               </div>
             </Command>

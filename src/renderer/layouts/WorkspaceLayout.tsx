@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
@@ -112,6 +112,7 @@ function getShortcutTargetContext(target: EventTarget | null): {
 
 export default function WorkspaceLayout(): React.JSX.Element {
 	const location = useLocation();
+	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
@@ -412,6 +413,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const handleOpenSnapshotModal = useCallback(() => {
 		setIsCommandPaletteOpen(false);
 		setIsCreateSnapshotModalOpen(true);
+	}, []);
+
+	const handleOpenProjectSettings = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/settings");
+	}, [navigate]);
+
+	const handleOpenAppPreferences = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/preferences");
+	}, [navigate]);
+
+	const handleOpenCommandHistory = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsCommandHistoryOpen(true);
 	}, []);
 
 	// Keyboard shortcuts
@@ -1168,6 +1184,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
+				onOpenProjectSettings={handleOpenProjectSettings}
+				onOpenAppPreferences={handleOpenAppPreferences}
+				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
 			/>
 
 			<CreateSnapshotModal

@@ -740,7 +740,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       fireEvent.keyDown(textarea, { key: 'k', ctrlKey: true })
 
-      expect(screen.getByPlaceholderText('Type a command or search...')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('Search commands, projects, settings...')).toBeInTheDocument()
 
       document.body.removeChild(terminalRoot)
     })
