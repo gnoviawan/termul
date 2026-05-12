@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, KeyboardEvent, useMemo } from "react";
-import { Reorder } from "framer-motion";
+import type { ChangeEvent, MouseEvent } from "react";
+import { motion, Reorder } from "framer-motion";
 import {
 	Plus,
 	Archive,
@@ -12,6 +13,9 @@ import {
 	ChevronRight,
 	Loader2,
 	AlertTriangle,
+	Settings,
+	Folder,
+	FolderOpen,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
@@ -22,7 +26,7 @@ import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ColorPickerPopover } from "./ColorPickerPopover";
-import { shellApi } from "@/lib/api";
+import { shellApi, dialogApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 
 function getFirstLetter(name: string): string {
@@ -50,6 +54,11 @@ interface DeleteConfirmState {
 	isOpen: boolean;
 	projectId: string;
 	projectName: string;
+}
+
+interface SettingsDialogState {
+	isOpen: boolean;
+	projectId: string;
 }
 
 interface ProjectSidebarProps {
@@ -106,6 +115,18 @@ export function ProjectSidebar({
 		projectId: "",
 		projectName: "",
 	});
+
+	// Settings dialog state
+	const [settingsDialog, setSettingsDialog] = useState<SettingsDialogState>({
+		isOpen: false,
+		projectId: "",
+	});
+
+	// Settings form state
+	const [settingsName, setSettingsName] = useState("");
+	const [settingsPath, setSettingsPath] = useState("");
+	const [settingsShell, setSettingsShell] = useState("");
+	const [settingsPathLoading, setSettingsPathLoading] = useState(false);
 
 	// Available shells state
 	const [availableShells, setAvailableShells] = useState<DetectedShells | null>(
@@ -225,6 +246,51 @@ export function ProjectSidebar({
 		setDeleteConfirm({ isOpen: false, projectId: "", projectName: "" });
 	}, []);
 
+	const handleOpenSettings = useCallback((projectId: string): void => {
+		setSettingsDialog({ isOpen: true, projectId });
+	}, []);
+
+	const handleCloseSettings = useCallback((): void => {
+		setSettingsDialog({ isOpen: false, projectId: "" });
+	}, []);
+
+	// Populate form when dialog opens
+	useEffect(() => {
+		if (settingsDialog.isOpen && settingsDialog.projectId) {
+			const project = projects.find((p) => p.id === settingsDialog.projectId);
+			if (project) {
+				setSettingsName(project.name);
+				setSettingsPath(project.path || "");
+				setSettingsShell(project.defaultShell || "");
+			}
+		}
+	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
+
+	const handleSaveSettings = useCallback((): void => {
+		if (settingsDialog.projectId) {
+			onUpdateProject(settingsDialog.projectId, {
+				name: settingsName.trim(),
+				path: settingsPath.trim() || undefined,
+				defaultShell: settingsShell || undefined,
+			});
+		}
+		handleCloseSettings();
+	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, onUpdateProject, handleCloseSettings]);
+
+	const handleBrowsePath = useCallback(async (): Promise<void> => {
+		try {
+			setSettingsPathLoading(true);
+			const result = await dialogApi.selectDirectory();
+			if (result.success && result.data) {
+				setSettingsPath(result.data);
+			}
+		} catch (err) {
+			console.error("Failed to select directory:", err);
+		} finally {
+			setSettingsPathLoading(false);
+		}
+	}, []);
+
 	const getContextMenuItems = useCallback(
 		(projectId: string): ContextMenuItem[] => {
 			const project = projects.find((p) => p.id === projectId);
@@ -250,6 +316,11 @@ export function ProjectSidebar({
 					label: "Rename",
 					icon: <Edit2 size={14} />,
 					onClick: () => handleStartRename(projectId),
+				},
+				{
+					label: "Project Settings",
+					icon: <Settings size={14} />,
+					onClick: () => handleOpenSettings(projectId),
 				},
 				{
 					label: "Change Color",
@@ -292,6 +363,7 @@ export function ProjectSidebar({
 			contextMenu.x,
 			contextMenu.y,
 			handleStartRename,
+			handleOpenSettings,
 			handleOpenColorPicker,
 			onUpdateProject,
 			onArchiveProject,
@@ -480,6 +552,114 @@ export function ProjectSidebar({
 				/>
 			)}
 
+			{/* Project Settings Dialog */}
+			{settingsDialog.isOpen && (
+				<motion.div
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
+					exit={{ opacity: 0 }}
+					className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+					onClick={handleCloseSettings}
+				>
+					<motion.div
+						initial={{ opacity: 0, scale: 0.95, y: 10 }}
+						animate={{ opacity: 1, scale: 1, y: 0 }}
+						exit={{ opacity: 0, scale: 0.95, y: 10 }}
+						transition={{ duration: 0.15 }}
+						className="bg-card rounded-lg shadow-2xl w-[500px] border border-border overflow-hidden"
+						onClick={(e: any) => e.stopPropagation()}
+					>
+						{/* Header */}
+						<div className="px-6 py-4 border-b border-border flex items-center justify-between">
+							<div className="flex items-center gap-3">
+								<div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+									<Settings className="w-4 h-4 text-primary" />
+								</div>
+								<h2 className="text-sm font-semibold text-foreground">Project Settings</h2>
+							</div>
+						</div>
+
+						{/* Form */}
+						<div className="p-6 space-y-4">
+							{/* Name Field */}
+							<div className="space-y-2">
+								<label className="text-xs font-medium text-muted-foreground">Project Name</label>
+								<input
+									type="text"
+									value={settingsName}
+									onChange={(e: any) => setSettingsName(e.target.value)}
+									className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+									placeholder="My Project"
+								/>
+							</div>
+
+							{/* Path Field */}
+							<div className="space-y-2">
+								<label className="text-xs font-medium text-muted-foreground">Project Path</label>
+								<div className="flex gap-2">
+									<input
+										type="text"
+										value={settingsPath}
+										onChange={(e: any) => setSettingsPath(e.target.value)}
+										className="flex-1 px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+										placeholder="/path/to/project"
+									/>
+									<button
+										onClick={handleBrowsePath}
+										disabled={settingsPathLoading}
+										className="px-3 py-2 bg-secondary hover:bg-secondary/80 border border-border rounded-md text-muted-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										title="Browse folder"
+									>
+										{settingsPathLoading ? (
+											<Loader2 size={14} className="animate-spin" />
+										) : (
+											<FolderOpen size={14} />
+										)}
+									</button>
+								</div>
+								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
+							</div>
+
+							{/* Shell Field */}
+							<div className="space-y-2">
+								<label className="text-xs font-medium text-muted-foreground">Default Shell</label>
+								<select
+									value={settingsShell}
+									onChange={(e: any) => setSettingsShell(e.target.value)}
+									className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent appearance-none"
+								>
+									{availableShells?.available.map((shell) => (
+										<option key={shell.path} value={shell.path}>
+											{shell.displayName}
+										</option>
+									)) || (
+										<option value="">No shells detected</option>
+									)}
+								</select>
+								<p className="text-xs text-muted-foreground">Shell used when opening terminal in this project</p>
+							</div>
+
+						</div>
+
+						{/* Footer */}
+						<div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
+							<button
+								onClick={handleCloseSettings}
+								className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleSaveSettings}
+								className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+							>
+								Save Changes
+							</button>
+						</div>
+					</motion.div>
+				</motion.div>
+			)}
+
 			{/* Delete Confirmation Dialog */}
 			<ConfirmDialog
 				isOpen={deleteConfirm.isOpen}
@@ -585,7 +765,7 @@ function ProjectItem({
 					onKeyDown={handleKeyDown}
 					onBlur={onSaveRename}
 					className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
-					onClick={(e) => e.stopPropagation()}
+					onClick={(e: any) => e.stopPropagation()}
 				/>
 			) : (
 				<span
