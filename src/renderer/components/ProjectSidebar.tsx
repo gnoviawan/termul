@@ -21,7 +21,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
 import type { DetectedShells } from "@shared/types/ipc.types";
-import { getColorClasses } from "@/lib/colors";
+import { getColorClasses, availableColors } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
@@ -128,6 +128,7 @@ export function ProjectSidebar({
 	const [settingsName, setSettingsName] = useState("");
 	const [settingsPath, setSettingsPath] = useState("");
 	const [settingsShell, setSettingsShell] = useState("");
+	const [settingsColor, setSettingsColor] = useState<ProjectColor>("blue");
 	const [settingsPathLoading, setSettingsPathLoading] = useState(false);
 
 	// Available shells state
@@ -264,20 +265,22 @@ export function ProjectSidebar({
 				setSettingsName(project.name);
 				setSettingsPath(project.path || "");
 				setSettingsShell(project.defaultShell || "");
+				setSettingsColor(project.color || "blue");
 			}
 		}
 	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
 
-	const handleSaveSettings = useCallback((): void => {
+	const handleSaveSettings = useCallback(() => {
 		if (settingsDialog.projectId) {
 			onUpdateProject(settingsDialog.projectId, {
 				name: settingsName.trim(),
 				path: settingsPath.trim() || undefined,
 				defaultShell: settingsShell || undefined,
+				color: settingsColor,
 			});
 		}
 		handleCloseSettings();
-	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, onUpdateProject, handleCloseSettings]);
+	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
 
 	const handleBrowsePath = useCallback(async (): Promise<void> => {
 		try {
@@ -615,6 +618,31 @@ export function ProjectSidebar({
 										Browse
 								</button>
 								</div>
+
+							{/* Color Picker */}
+							<div className="space-y-2 mt-4">
+								<label className="block text-xs font-medium text-muted-foreground mb-1">Color</label>
+								<div className="flex gap-2">
+									{availableColors.map((color) => (
+										<button
+											key={color}
+											type="button"
+											onClick={() => setSettingsColor(color)}
+											className={cn(
+												"w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+												color === settingsColor ? "border-primary" : "border-transparent",
+											)}
+											style={{ backgroundColor: getColorClasses(color).bg }}
+										>
+											{color === settingsColor && (
+												<div className="absolute inset-0 flex items-center justify-center">
+													<div className="w-2 h-2 rounded-full bg-primary-foreground" />
+												</div>
+											)}
+										</button>
+									))}
+								</div>
+							</div>
 								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
 							</div>
 
