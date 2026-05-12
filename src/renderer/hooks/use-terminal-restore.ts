@@ -611,10 +611,10 @@ export function useTerminalRestore(): void {
         debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK on cleanup [${restoreOwnerId}]`)
       }
 
-      // FIX #7: Cleanup project terminals from store on project switch
-      if (projectIdForCleanup) {
-        cleanupProjectTerminals(projectIdForCleanup)
-      }
+      // FIX #7: Removed automatic cleanup on project switch.
+      // Keeping terminals in memory allows "live-pty" restoration when switching back,
+      // and prevents a race condition where terminals are wiped before being saved to disk.
+      // PTYs are managed by the backend and their lifecycle is independent of the renderer store.
     }
   }, [activeProjectId])
 }
