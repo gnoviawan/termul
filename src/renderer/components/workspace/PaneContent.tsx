@@ -5,6 +5,7 @@ import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
+import { GitPanel } from "@/components/git/GitPanel";
 import { useWorkspaceStore, getAllLeafPanes } from "@/stores/workspace-store";
 import { useTerminalStore, useTerminalActions } from "@/stores/terminal-store";
 import { useProjectStore } from "@/stores/project-store";
@@ -23,6 +24,7 @@ interface PaneContentProps {
 	pane: LeafNode;
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
+	onAddGitTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -34,6 +36,7 @@ export function PaneContent({
 	pane,
 	onAddTerminal,
 	onAddBrowserTab,
+	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -161,6 +164,10 @@ export function PaneContent({
 				onAddBrowserTab={useMemo(
 					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
 					[onAddBrowserTab, pane.id],
+				)}
+				onAddGitTab={useMemo(
+					() => (onAddGitTab ? () => onAddGitTab(pane.id) : undefined),
+					[onAddGitTab, pane.id],
 				)}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
@@ -305,6 +312,27 @@ export function PaneContent({
 											browserTabId={tab.browserTabId}
 											isVisible={isVisible}
 										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "git" } =>
+									t.type === "git",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<GitPanel cwd={tab.cwd} isVisible={isVisible} />
 									</div>
 								);
 							})}

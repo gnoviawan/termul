@@ -517,6 +517,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		}
 	}, []);
 
+	const handleAddGitTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId && activeProject?.path) {
+			useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
+				type: "git",
+				id: `git-${crypto.randomUUID()}`,
+				cwd: activeProject.path,
+			});
+		}
+	}, [activeProject?.path]);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const { isInEditor, isInTerminal, isInInput } =
@@ -1081,6 +1092,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 												node={paneRoot}
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
+												onAddGitTab={handleAddGitTab}
 												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
