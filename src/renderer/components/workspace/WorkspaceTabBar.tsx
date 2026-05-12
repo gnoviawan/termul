@@ -444,8 +444,7 @@ function GitTabInline({
 		y: number;
 	} | null>(null);
 
-	const gitStatuses = useGitStatusStore((state: GitStatusState) => state.statuses[tab.cwd] || []);
-	const totalChanges = gitStatuses.length;
+	const totalChanges = useGitStatusStore((state: GitStatusState) => (state.statuses[tab.cwd] || []).length);
 
 	return (
 		<>

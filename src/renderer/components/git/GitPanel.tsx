@@ -26,15 +26,13 @@ interface GitPanelProps {
 }
 
 export function GitPanel({ cwd, isVisible }: GitPanelProps) {
-  const { 
-    statuses, 
-    diffs, 
-    selectedFile, 
-    setSelectedFile, 
-    refreshStatus,
-    fetchDiff,
-    isFetchingStatus
-  } = useGitStatusStore();
+  const statuses = useGitStatusStore((state) => state.statuses);
+  const diffs = useGitStatusStore((state) => state.diffs);
+  const selectedFile = useGitStatusStore((state) => state.selectedFile);
+  const setSelectedFile = useGitStatusStore((state) => state.setSelectedFile);
+  const refreshStatus = useGitStatusStore((state) => state.refreshStatus);
+  const fetchDiff = useGitStatusStore((state) => state.fetchDiff);
+  const isFetchingStatus = useGitStatusStore((state) => state.isFetchingStatus);
 
   const [searchQuery, setSearchQuery] = useState("");
   
