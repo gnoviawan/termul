@@ -572,7 +572,7 @@ export function ProjectSidebar({
 						exit={{ opacity: 0, scale: 0.95, y: 10 }}
 						transition={{ duration: 0.15 }}
 						className="bg-card rounded-lg shadow-2xl w-[500px] border border-border overflow-hidden"
-						onClick={(e: any) => e.stopPropagation()}
+						onClick={(e) => e.stopPropagation()}
 					>
 						{/* Header */}
 						<div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
@@ -593,7 +593,7 @@ export function ProjectSidebar({
 								<input
 									type="text"
 									value={settingsName}
-									onChange={(e: any) => setSettingsName(e.target.value)}
+									onChange={(e) => setSettingsName(e.target.value)}
 										className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
 									placeholder="My Project"
 								/>
@@ -606,7 +606,7 @@ export function ProjectSidebar({
 									<input
 										type="text"
 										value={settingsPath}
-										onChange={(e: any) => setSettingsPath(e.target.value)}
+										onChange={(e) => setSettingsPath(e.target.value)}
 										className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
 										placeholder="No directory selected"
 									/>
@@ -652,7 +652,7 @@ export function ProjectSidebar({
 									<div className="relative">
 										<select
 											value={settingsShell}
-											onChange={(e: any) => setSettingsShell(e.target.value)}
+											onChange={(e) => setSettingsShell(e.target.value)}
 											className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
 										>
 											{availableShells.available.map((shell) => (
@@ -796,7 +796,7 @@ function ProjectItem({
 					onKeyDown={handleKeyDown}
 					onBlur={onSaveRename}
 					className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
-					onClick={(e: any) => e.stopPropagation()}
+					onClick={(e) => e.stopPropagation()}
 				/>
 			) : (
 				<span

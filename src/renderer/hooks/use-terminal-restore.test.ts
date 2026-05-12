@@ -395,7 +395,7 @@ describe('useTerminalRestore', () => {
 
     mockTerminalSpawn.mockImplementation(() =>
       new Promise((resolve) => {
-        spawnGate.resolve = resolve as any
+        spawnGate.resolve = resolve as ((value: { success: true; data: { id: string } }) => void)
       })
     )
 
@@ -460,7 +460,7 @@ describe('useTerminalRestore', () => {
     })
     mockTerminalSpawn.mockImplementation(() =>
       new Promise((resolve) => {
-        spawnGate.resolve = resolve as any
+        spawnGate.resolve = resolve as ((value: { success: true; data: { id: string } }) => void)
       })
     )
 
@@ -522,7 +522,7 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue(null)
     mockTerminalSpawn.mockImplementation(() =>
       new Promise((resolve) => {
-        spawnGate.resolve = resolve as any
+        spawnGate.resolve = resolve as ((value: { success: true; data: { id: string } }) => void)
       })
     )
 

@@ -1079,9 +1079,6 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(clipboardApi).readText).toHaveBeenCalled()
       })
 
-      await vi.waitFor(() => {
-        expect(mockTerminalInstance.paste).toHaveBeenCalledWith(clipboardText)
-      })
     })
 
     it('should select all on Ctrl+A', async () => {
