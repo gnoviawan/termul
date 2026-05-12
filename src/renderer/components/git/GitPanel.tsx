@@ -169,7 +169,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               </div>
             </div>
             <ScrollArea className="flex-1 font-mono text-xs">
-              {currentDiff ? (
+              {currentDiff === undefined || currentDiff === null ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  <RefreshCw className="animate-spin mr-2" size={16} />
+                  Loading diff...
+                </div>
+              ) : currentDiff.trim().length > 0 ? (
                 <div className="p-4 whitespace-pre">
                   {currentDiff.split('\n').map((line: string, i: number) => {
                     const isAddition = line.startsWith('+');
@@ -192,9 +197,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   })}
                 </div>
               ) : (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  <RefreshCw className="animate-spin mr-2" size={16} />
-                  Loading diff...
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
+                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
+                    <FileText size={18} />
+                  </div>
+                  <h3 className="text-sm font-medium text-foreground mb-1">No diff available</h3>
+                  <p className="text-xs max-w-[260px]">
+                    This file may be ignored by Git, unchanged relative to the selected base, or unavailable for diff preview.
+                  </p>
                 </div>
               )}
             </ScrollArea>

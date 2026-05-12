@@ -656,9 +656,13 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(git_get_status_detail_from_output(&stdout))
+}
+
+fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDetail> {
     let mut details = Vec::new();
 
-    for line in stdout.lines() {
+    for line in output.lines() {
         if line.len() < 4 {
             continue;
         }
@@ -667,7 +671,6 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
         let work_tree_status = line.chars().nth(1).unwrap_or(' ');
         let path = line[3..].to_string();
 
-        // Staged changes
         if index_status != ' ' && index_status != '?' {
             details.push(GitStatusDetail {
                 path: path.clone(),
@@ -677,12 +680,12 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
                     'D' => "deleted",
                     'R' => "renamed",
                     _ => "modified",
-                }.to_string(),
+                }
+                .to_string(),
                 staged: true,
             });
         }
 
-        // Unstaged changes
         if work_tree_status != ' ' {
             details.push(GitStatusDetail {
                 path: path.clone(),
@@ -691,20 +694,25 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
                     'D' => "deleted",
                     '?' => "untracked",
                     _ => "modified",
-                }.to_string(),
+                }
+                .to_string(),
                 staged: false,
             });
         }
     }
 
-    Ok(details)
+    details
 }
 
 pub fn git_get_diff(cwd: &str, path: &str) -> Result<String, String> {
-    // First check if file is untracked
-    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", path])
+    if is_git_ignored(cwd, path)? {
+        return Ok(String::new());
+    }
+
+    // First check if file is untracked (but not ignored)
+    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", "--", path])
         .ok_or_else(|| "Failed to run git status".to_string())?;
-    
+
     let status_str = String::from_utf8_lossy(&status_output.stdout);
     let is_untracked = status_str.starts_with("??");
 
@@ -719,7 +727,7 @@ pub fn git_get_diff(cwd: &str, path: &str) -> Result<String, String> {
 
     // git diff returns 1 if there are differences, which is "success" for us
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    
+
     if stdout.is_empty() && is_untracked {
         // Fallback for untracked files if diff --no-index fails or returns empty
         return std::fs::read_to_string(std::path::Path::new(cwd).join(path))
@@ -727,6 +735,17 @@ pub fn git_get_diff(cwd: &str, path: &str) -> Result<String, String> {
     }
 
     Ok(stdout)
+}
+
+fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
+    let output = GitTracker::run_git_command(cwd, &["check-ignore", "--quiet", "--", path])
+        .ok_or_else(|| "Failed to run git check-ignore".to_string())?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+    }
 }
 
 impl GitTracker {
@@ -1175,6 +1194,37 @@ mod tests {
         assert_eq!(status.untracked, 1);
         assert_eq!(status.modified, 0);
         assert!(status.has_changes);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_skips_short_lines() {
+        let details = git_get_status_detail_from_output("M\n\n?? file.txt\n");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].path, "file.txt");
+        assert_eq!(details[0].status, "untracked");
+        assert!(!details[0].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_parses_staged_and_unstaged_entries() {
+        let details = git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
+        assert_eq!(details.len(), 4);
+
+        assert_eq!(details[0].path, "both.txt");
+        assert_eq!(details[0].status, "modified");
+        assert!(details[0].staged);
+
+        assert_eq!(details[1].path, "both.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
+
+        assert_eq!(details[2].path, "added.txt");
+        assert_eq!(details[2].status, "added");
+        assert!(details[2].staged);
+
+        assert_eq!(details[3].path, "deleted.txt");
+        assert_eq!(details[3].status, "deleted");
+        assert!(!details[3].staged);
     }
 
     // ========== Windows-specific tests for CWD dedupe and throttling ==========
