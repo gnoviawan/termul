@@ -117,8 +117,8 @@ const ACTIVITY_DEBOUNCE_MS = 1000;
 const CLIPBOARD_RATE_LIMIT_MS = 100;
 
 const shouldUseWebglRenderer = (
-	rendererPreference: "auto" | "webgl" | "canvas",
-): boolean => rendererPreference !== "canvas";
+	rendererPreference: "auto" | "webgl" | "dom",
+): boolean => rendererPreference !== "dom";
 
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
@@ -283,7 +283,7 @@ function ConnectedTerminalComponent({
 		return () => { useTerminalStore.getState().setRendererAttached(externalTerminalId, false); };
 	}, [externalTerminalId]);
 
-	const memoizedSpawnOptions = useMemo(() => spawnOptions, [spawnOptions?.shell, spawnOptions?.cwd, spawnOptions?.cols, spawnOptions?.rows, spawnOptions?.env]);
+	const memoizedSpawnOptions = useMemo(() => spawnOptions, [spawnOptions]);
 
 	const handleTerminalData = useCallback(async (data: string): Promise<void> => {
 		const ptyId = ptyIdRef.current;
@@ -316,7 +316,11 @@ function ConnectedTerminalComponent({
 		resizeTimeoutRef.current = setTimeout(async () => {
 			const currentPtyId = ptyIdRef.current;
 			if (!currentPtyId) return;
-			try { await terminalApi.resize(currentPtyId, cols, rows); } catch { }
+			try {
+				await terminalApi.resize(currentPtyId, cols, rows);
+			} catch (error) {
+				if (import.meta.env.DEV) console.error("Failed to resize terminal", error);
+			}
 		}, RESIZE_DEBOUNCE_MS);
 	}, []);
 
@@ -328,19 +332,21 @@ function ConnectedTerminalComponent({
 		terminalRef.current?.selectAll();
 	}, []);
 
-	const searchDecorations = {
-		matchBackground: "#444444",
-		activeMatchBackground: "#FFFF00",
-		matchOverviewRuler: "#444444",
-		activeMatchColorOverviewRuler: "#FFFF00",
-	};
+	useImperativeHandle(searchRef, () => {
+		const searchDecorations = {
+			matchBackground: "#444444",
+			activeMatchBackground: "#FFFF00",
+			matchOverviewRuler: "#444444",
+			activeMatchColorOverviewRuler: "#FFFF00",
+		};
 
-	useImperativeHandle(searchRef, () => ({
-		findNext: (term: string) => searchAddonRef.current?.findNext(term, { decorations: searchDecorations }) ?? false,
-		findPrevious: (term: string) => searchAddonRef.current?.findPrevious(term, { decorations: searchDecorations }) ?? false,
-		clearDecorations: () => searchAddonRef.current?.clearDecorations(),
-		writeText: (text: string) => { if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text); }
-	}), []);
+		return {
+			findNext: (term: string) => searchAddonRef.current?.findNext(term, { decorations: searchDecorations }) ?? false,
+			findPrevious: (term: string) => searchAddonRef.current?.findPrevious(term, { decorations: searchDecorations }) ?? false,
+			clearDecorations: () => searchAddonRef.current?.clearDecorations(),
+			writeText: (text: string) => { if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text); }
+		};
+	}, []);
 
 	const shouldDebugLog = import.meta.env.DEV;
 	const devLog = (...args: unknown[]): void => { if (shouldDebugLog) console.log(...args); };
@@ -471,7 +477,7 @@ function ConnectedTerminalComponent({
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus]);
+	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 

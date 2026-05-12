@@ -719,6 +719,7 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            commands::browser_tab_open_devtools,
             commands::browser_tab_inject_annotation,
             commands::browser_tab_remove_annotation_overlay,
             commands::browser_tab_inject_annotation_markers,

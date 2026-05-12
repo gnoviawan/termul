@@ -1552,9 +1552,9 @@ describe('ConnectedTerminal', () => {
       vi.useRealTimers()
     })
 
-    it('should skip WebGL when renderer preference is canvas', async () => {
-      // Override the mock to return canvas
-      vi.mocked(useTerminalRenderer).mockReturnValue('canvas')
+    it('should skip WebGL when renderer preference is dom', async () => {
+      // Override the mock to return dom
+      vi.mocked(useTerminalRenderer).mockReturnValue('dom')
 
       render(<ConnectedTerminal />)
 

@@ -9,6 +9,7 @@ vi.mock('@/lib/browser-api', () => ({
   browserTabGoBack: vi.fn().mockResolvedValue({ success: true }),
   browserTabGoForward: vi.fn().mockResolvedValue({ success: true }),
   browserTabReload: vi.fn().mockResolvedValue({ success: true }),
+  browserTabOpenDevtools: vi.fn().mockResolvedValue({ success: true }),
 }))
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -96,13 +97,14 @@ describe('BrowserControls', () => {
     expect(toggleBtn.className).toContain('ring-primary/30')
   })
 
-  it('renders browser navigation buttons', () => {
+  it('renders browser navigation and debug button', () => {
     useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
     renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
     expect(screen.getByTitle('Back')).toBeInTheDocument()
     expect(screen.getByTitle('Forward')).toBeInTheDocument()
     expect(screen.getByTitle('Reload')).toBeInTheDocument()
+    expect(screen.getByTitle('Debug Console')).toBeInTheDocument()
   })
 
   it('renders URL input with current tab URL', () => {

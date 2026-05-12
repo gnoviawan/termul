@@ -325,6 +325,19 @@ pub async fn browser_tab_reload(
     }
 }
 
+/// Open DevTools for a browser tab
+#[tauri::command]
+pub async fn browser_tab_open_devtools(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.open_devtools(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
+    }
+}
+
+
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
 pub async fn browser_tab_inject_annotation(
