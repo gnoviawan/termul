@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, KeyboardEvent } from "react";
+import { useState, useCallback, useRef, useEffect, KeyboardEvent, useMemo } from "react";
 import { Reorder } from "framer-motion";
 import {
 	Plus,
@@ -10,6 +10,8 @@ import {
 	RotateCcw,
 	ChevronDown,
 	ChevronRight,
+	Loader2,
+	AlertTriangle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
@@ -21,6 +23,7 @@ import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { shellApi } from "@/lib/api";
+import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -123,6 +126,10 @@ export function ProjectSidebar({
 		};
 		void fetchShells();
 	}, []);
+
+	// Optimized subscription: only re-render sidebar if which projects have activity changes.
+	// This prevents re-renders when terminal text output changes.
+	const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()];
 
 	const handleContextMenu = useCallback(
 		(e: React.MouseEvent, projectId: string): void => {
@@ -372,33 +379,38 @@ export function ProjectSidebar({
 							className="flex flex-col"
 							data-testid="active-projects-container"
 						>
-							{activeProjects.map((project, index) => (
-								<Reorder.Item
-									key={project.id}
-									value={project}
-									className="list-none"
-									whileDrag={{
-										scale: 1.02,
-										boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-									}}
-								>
-									<ProjectItem
-										project={project}
-										isActive={project.id === activeProjectId}
-										isEditing={editingId === project.id}
-										editName={editName}
-										shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
-										onClick={() => {
-											onSelectProject(project.id);
-											navigate("/");
+							{activeProjects.map((project, index) => {
+								const hasActivity = projectActivityIds.includes(project.id);
+								return (
+									<Reorder.Item
+										key={project.id}
+										value={project}
+										className="list-none"
+										whileDrag={{
+											scale: 1.02,
+											boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
 										}}
-										onContextMenu={(e) => handleContextMenu(e, project.id)}
-										onEditNameChange={setEditName}
-										onSaveRename={() => handleSaveRename(project.id)}
-										onCancelRename={handleCancelRename}
-									/>
-								</Reorder.Item>
-							))}
+									>
+										<ProjectItem
+											project={project}
+											isActive={project.id === activeProjectId}
+											isEditing={editingId === project.id}
+											editName={editName}
+											shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
+											hasActivity={hasActivity}
+											hasError={projectErrorIds.has(project.id)}
+											onClick={() => {
+												onSelectProject(project.id);
+												navigate("/");
+											}}
+											onContextMenu={(e) => handleContextMenu(e, project.id)}
+											onEditNameChange={setEditName}
+											onSaveRename={() => handleSaveRename(project.id)}
+											onCancelRename={handleCancelRename}
+										/>
+									</Reorder.Item>
+								);
+							})}
 						</Reorder.Group>
 
 						{/* Archived Projects Section */}
@@ -418,17 +430,22 @@ export function ProjectSidebar({
 									Archived ({archivedProjects.length})
 								</button>
 								{showArchived &&
-									archivedProjects.map((project) => (
-										<ArchivedProjectItem
-											key={project.id}
-											project={project}
-											onClick={() => {
-												onSelectProject(project.id);
-												navigate("/");
-											}}
-											onContextMenu={(e) => handleContextMenu(e, project.id)}
-										/>
-									))}
+									archivedProjects.map((project) => {
+										const hasActivity = projectActivityIds.includes(project.id);
+										return (
+											<ArchivedProjectItem
+												key={project.id}
+												project={project}
+												hasActivity={hasActivity}
+												hasError={projectErrorIds.has(project.id)}
+												onClick={() => {
+													onSelectProject(project.id);
+													navigate("/");
+												}}
+												onContextMenu={(e) => handleContextMenu(e, project.id)}
+											/>
+										);
+									})}
 							</div>
 						)}
 					</>
@@ -484,6 +501,8 @@ interface ProjectItemProps {
 	isEditing: boolean;
 	editName: string;
 	shortcut?: string;
+	hasActivity: boolean;
+	hasError?: boolean;
 	onClick: () => void;
 	onContextMenu: (e: React.MouseEvent) => void;
 	onEditNameChange: (name: string) => void;
@@ -497,6 +516,8 @@ function ProjectItem({
 	isEditing,
 	editName,
 	shortcut,
+	hasActivity,
+	hasError,
 	onClick,
 	onContextMenu,
 	onEditNameChange,
@@ -578,6 +599,11 @@ function ProjectItem({
 					{project.name}
 				</span>
 			)}
+			{hasError && (
+				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+					<AlertTriangle size={12} />
+				</span>
+			)}
 			{!isEditing && shortcut && (
 				<span
 					className={cn(
@@ -588,11 +614,21 @@ function ProjectItem({
 					{shortcut}
 				</span>
 			)}
+			{!isEditing && hasActivity && (
+				<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>
+					<Loader2
+						size={12}
+						className={"animate-spin text-primary opacity-100"}
+					/>
+				</span>
+			)}
 		</button>
 	);
 }
 
 interface ArchivedProjectItemProps {
+	hasActivity: boolean;
+	hasError?: boolean;
 	project: Project;
 	onClick: () => void;
 	onContextMenu: (e: React.MouseEvent) => void;
@@ -600,6 +636,8 @@ interface ArchivedProjectItemProps {
 
 function ArchivedProjectItem({
 	project,
+	hasActivity,
+	hasError,
 	onClick,
 	onContextMenu,
 }: ArchivedProjectItemProps): React.JSX.Element {
@@ -635,6 +673,16 @@ function ArchivedProjectItem({
 			<span className="text-sm text-muted-foreground group-hover:text-foreground flex-1">
 				{project.name}
 			</span>
+			{hasActivity && (
+				<span className="flex items-center mr-2" title="Terminal activity" style={{ isolation: "isolate" }}>
+					<Loader2 size={10} className="animate-spin text-primary opacity-60" />
+				</span>
+			)}
+			{hasError && (
+				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+					<AlertTriangle size={10} />
+				</span>
+			)}
 			<Archive size={12} className="text-muted-foreground mr-3" />
 		</button>
 	);

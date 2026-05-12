@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { Terminal as TerminalRecord } from '@/types/project'
 import { useProjectStore } from '../stores/project-store'
-import { useTerminalStore } from '../stores/terminal-store'
+import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
 import { terminalApi } from '@/lib/api'
@@ -20,6 +20,8 @@ import {
 
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
+// Safety timeout: prevent spawn from blocking lock forever
+const SPAWN_TIMEOUT_MS = 30000
 
 type RestoreAttemptStatus = 'completed' | 'blocked' | 'failed'
 
@@ -30,21 +32,59 @@ export function isTerminalPendingPtyAssignment(terminalStoreId: string): boolean
   return TERMINALS_PENDING_PTY_ASSIGNMENT.has(terminalStoreId)
 }
 
-// DEBUG: Track spawn calls globally
-const SPAWN_TRACKER = new Map<string, number>()
-const RESTORE_CALL_STACK: string[] = []
+// DEBUG: Track spawn calls globally (exported for testing)
+export const SPAWN_TRACKER = new Map<string, number>()
+export const RESTORE_CALL_STACK: string[] = []
 
 // CRITICAL: Global spawn lock with owner tracking to prevent race conditions
 let GLOBAL_SPAWN_LOCK_OWNER: string | null = null
 let SPAWN_CALL_COUNT = 0
 const MAX_SPAWN_LIMIT = 50 // Safety limit
 
+/** @internal - For testing only */
+export function __TEST_RESET_LOCKS__(): void {
+  GLOBAL_SPAWN_LOCK_OWNER = null
+  SPAWN_CALL_COUNT = 0
+  PROJECT_RESTORE_LOCKS.clear()
+  TERMINALS_PENDING_PTY_ASSIGNMENT.clear()
+  SPAWN_TRACKER.clear()
+  RESTORE_CALL_STACK.length = 0
+}
+
+/**
+ * CLEANUP: Clear global debug state to prevent memory leaks
+ */
+function cleanupGlobalState(ownerId: string): void {
+  for (const [key] of SPAWN_TRACKER) {
+    if (key.startsWith(ownerId)) {
+      SPAWN_TRACKER.delete(key)
+    }
+  }
+  const idx = RESTORE_CALL_STACK.indexOf(ownerId)
+  if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
+}
+
+/**
+ * Kill orphan PTY process spawned by timeout race
+ */
+async function killOrphanPty(ptyId: string, label: string): Promise<void> {
+  try {
+    debugLog('SPAWN_TIMEOUT', `Killing orphan PTY [${label}]`, { ptyId })
+    const result = await terminalApi.kill(ptyId)
+    if (!result.success) {
+      console.warn(`Failed to kill orphan PTY ${ptyId}:`, result.error)
+    }
+  } catch (err) {
+    console.warn(`Error killing orphan PTY ${ptyId}:`, err)
+  }
+}
+
 /**
  * Acquire the global spawn lock
  * @returns true if lock was acquired, false if already held by another caller
  */
 function acquireGlobalSpawnLock(ownerId: string): boolean {
-  if (GLOBAL_SPAWN_LOCK_OWNER !== null) {
+  if (GLOBAL_SPAWN_LOCK_OWNER !== null && GLOBAL_SPAWN_LOCK_OWNER !== ownerId) {
     debugLog('SPAWN_LOCK', `LOCK ACQUIRE FAILED [${ownerId}]`, {
       owner: GLOBAL_SPAWN_LOCK_OWNER
     })
@@ -351,6 +391,8 @@ export function useTerminalRestore(): void {
             }
           })
 
+          // FIX #1: Release lock before disk I/O so other projects aren't blocked
+          releaseGlobalSpawnLock(restoreOwnerId)
           const layout = await loadPersistedTerminals(projectIdToRestore)
           if (isCancelled()) {
             debugLog('useTerminalRestore', `CANCELLED [${callId}] after live layout load`)
@@ -407,6 +449,8 @@ export function useTerminalRestore(): void {
         }
 
         // No terminals in memory - load from disk or create default
+        // FIX #1: Release lock before disk I/O so other projects aren't blocked
+        releaseGlobalSpawnLock(restoreOwnerId)
         const layout = await loadPersistedTerminals(projectIdToRestore)
         if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] after persisted layout load`)
@@ -427,12 +471,23 @@ export function useTerminalRestore(): void {
         let attempt = 0
 
         while (!isCancelled()) {
+          // FIX #1: Re-acquire lock before each spawn attempt
+          if (!acquireGlobalSpawnLock(restoreOwnerId)) {
+            debugLog('useTerminalRestore', `RE-ACQUIRE LOCK FAILED [${callId}] attempt ${attempt}, waiting...`)
+            await new Promise((resolve) => setTimeout(resolve, RESTORE_RETRY_DELAY_MS * (attempt + 1)))
+            attempt++
+            if (attempt >= MAX_RESTORE_RETRIES) break
+            continue
+          }
+
           const restoreResult =
             restoreMode === 'layout'
               ? await restoreFromLayout(projectIdToRestore, layout!, isCancelled)
               : await createDefaultTerminal(projectIdToRestore, isCancelled)
 
           if (restoreResult.status === 'completed') {
+            // FIX #1: Release lock after successful completion
+            releaseGlobalSpawnLock(restoreOwnerId)
             if (!isCancelled()) {
               emitTerminalContinuityEvent({
                 name: 'restore-complete',
@@ -451,8 +506,12 @@ export function useTerminalRestore(): void {
           }
 
           if (restoreResult.status === 'cancelled') {
+            releaseGlobalSpawnLock(restoreOwnerId)
             break
           }
+
+          // FIX #1: Release lock between retries so other projects can proceed
+          releaseGlobalSpawnLock(restoreOwnerId)
 
           if (restoreResult.status === 'failed') {
             emitTerminalContinuityEvent({
@@ -512,28 +571,18 @@ export function useTerminalRestore(): void {
         // Fall back to default terminal
         await createDefaultTerminal(projectIdToRestore, isCancelled)
       } finally {
-        // Only clean up if this restore was not cancelled
-        if (
-          !cancelled &&
-          isRestoringRef.current.has(projectIdToRestore) &&
-          PROJECT_RESTORE_LOCKS.has(projectIdToRestore)
-        ) {
-          debugLog('useTerminalRestore', `RESTORE COMPLETE [${callId}]`, {
-            projectId: projectIdToRestore
-          })
-          isRestoringRef.current.delete(projectIdToRestore)
-          PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
-          const idx = RESTORE_CALL_STACK.indexOf(callId)
-          if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
-        } else if (cancelled) {
-          debugLog('useTerminalRestore', `CLEANUP CANCELLED [${callId}]`, {
-            projectId: projectIdToRestore
-          })
-          isRestoringRef.current.delete(projectIdToRestore)
-          PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
-          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
+        // FIX #2: Always release & force-clear lock on cleanup to prevent deadlock
+        releaseGlobalSpawnLock(restoreOwnerId)
+        // Force-clear in case lock was held by this owner but release didn't catch it
+        if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId) {
+          GLOBAL_SPAWN_LOCK_OWNER = null
+          debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK [${restoreOwnerId}]`)
         }
+        debugLog('useTerminalRestore', `RESTORE COMPLETE [${callId}]`, {
+          projectId: projectIdToRestore
+        })
+        const idx = RESTORE_CALL_STACK.indexOf(callId)
+        if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
       }
     }
 
@@ -555,6 +604,17 @@ export function useTerminalRestore(): void {
       isRestoringRef.current.delete(projectIdForCleanup)
       PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
       setTerminalRestoreInProgress(projectIdForCleanup, false, restoreOwnerId)
+
+      // FIX #1: Force-release global spawn lock on cleanup to prevent deadlock
+      if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId || GLOBAL_SPAWN_LOCK_OWNER?.startsWith(projectIdForCleanup)) {
+        GLOBAL_SPAWN_LOCK_OWNER = null
+        debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK on cleanup [${restoreOwnerId}]`)
+      }
+
+      // FIX #7: Cleanup project terminals from store on project switch
+      if (projectIdForCleanup) {
+        cleanupProjectTerminals(projectIdForCleanup)
+      }
     }
   }, [activeProjectId])
 }
@@ -720,6 +780,7 @@ async function restoreFromLayout(
 
       const terminalCallId = `${restoreId}-${persistedTerminal.name}-${Math.random().toString(36).slice(2, 5)}`
       SPAWN_TRACKER.set(terminalCallId, (SPAWN_TRACKER.get(terminalCallId) || 0) + 1)
+      let spawnTimeout: ReturnType<typeof setTimeout> | null = null
 
       debugLog('restoreFromLayout', `Spawning terminal [${terminalCallId}]`, {
         name: persistedTerminal.name,
@@ -740,11 +801,30 @@ async function restoreFromLayout(
         }
 
         const normalizedShell = normalizeShellForStartup(resolvedShell)
-        const spawnResult = await terminalApi.spawn({
-          shell: normalizedShell,
-          cwd: persistedTerminal.cwd,
-          ...(hasProjectEnv ? { env } : {})
-        })
+        // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
+        // FIX #1b: Kill orphan PTY if timeout fires after spawn resolves
+        let spawnPtyId: string | null = null
+        const spawnResult = await Promise.race([
+          (async () => {
+            const result = await terminalApi.spawn({
+              shell: normalizedShell,
+              cwd: persistedTerminal.cwd,
+              ...(hasProjectEnv ? { env } : {})
+            })
+            spawnPtyId = result.success ? result.data.id : null
+            if (spawnTimeout) clearTimeout(spawnTimeout)
+            return result
+          })(),
+          (async () => {
+            return new Promise<{ success: false; error: string; data: null }>((resolve) => {
+              spawnTimeout = setTimeout(() => {
+                debugLog('restoreFromLayout', `SPAWN TIMEOUT for terminal [${terminalCallId}]`)
+                if (spawnPtyId) void killOrphanPty(spawnPtyId, terminalCallId)
+                resolve({ success: false, error: 'Spawn timeout exceeded', data: null })
+              }, SPAWN_TIMEOUT_MS)
+            })
+          })()
+        ])
 
         debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
           success: spawnResult.success,
@@ -785,6 +865,7 @@ async function restoreFromLayout(
           ptyId: spawnResult.data.id
         })
       } finally {
+        if (spawnTimeout) clearTimeout(spawnTimeout)
         TERMINALS_PENDING_PTY_ASSIGNMENT.delete(newId)
       }
     }
@@ -804,6 +885,8 @@ async function restoreFromLayout(
           persistedCount: layout.terminals.length
         }
       )
+      // FIX #1: Release lock before fallback (createDefaultTerminal acquires its own)
+      releaseGlobalSpawnLock(restoreId)
       const fallbackResult = await createDefaultTerminal(projectId, isCancelled)
       return {
         ...fallbackResult,
@@ -872,6 +955,7 @@ async function createDefaultTerminal(
   }
 
   resetSpawnCallCount(defaultId)
+  let spawnTimeout: ReturnType<typeof setTimeout> | null = null
 
   try {
     if (isCancelled()) {
@@ -939,11 +1023,29 @@ async function createDefaultTerminal(
       cwd: project?.path
     })
 
-    const spawnResult = await terminalApi.spawn({
-      shell,
-      cwd: project?.path,
-      ...(hasProjectEnv ? { env } : {})
-    })
+    // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
+    let spawnPtyId: string | null = null
+    const spawnResult = await Promise.race([
+      (async () => {
+        const result = await terminalApi.spawn({
+          shell,
+          cwd: project?.path,
+          ...(hasProjectEnv ? { env } : {})
+        })
+        spawnPtyId = result.success ? result.data.id : null
+        if (spawnTimeout) clearTimeout(spawnTimeout)
+        return result
+      })(),
+      (async () => {
+        return new Promise<{ success: false; error: string; data: null }>((resolve) => {
+          spawnTimeout = setTimeout(() => {
+            debugLog('createDefaultTerminal', `SPAWN TIMEOUT [${defaultId}]`)
+            if (spawnPtyId) void killOrphanPty(spawnPtyId, defaultId)
+            resolve({ success: false, error: 'Spawn timeout exceeded', data: null })
+          }, SPAWN_TIMEOUT_MS)
+        })
+      })()
+    ])
 
     debugLog('createDefaultTerminal', `Spawn result [${defaultId}]`, {
       success: spawnResult.success,
@@ -998,8 +1100,11 @@ async function createDefaultTerminal(
       restoredTerminalCount: 1
     }
   } finally {
+    if (spawnTimeout) clearTimeout(spawnTimeout)
     // FIX #2: Always release the global spawn lock
     releaseGlobalSpawnLock(defaultId)
+    // FIX #7: Cleanup global debug state
+    cleanupGlobalState(defaultId)
     debugLog('createDefaultTerminal', `RELEASED LOCK [${defaultId}]`, {
       totalSpawnCalls: SPAWN_CALL_COUNT
     })

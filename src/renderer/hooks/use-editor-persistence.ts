@@ -327,7 +327,7 @@ function reconcileTerminalTabs(
 }
 
 // Deserialize pane tree with full tab mapping
-function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
+export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
   if (persisted.type === 'leaf') {
     const tabs: WorkspaceTab[] = ('tabs' in persisted ? persisted.tabs : []).flatMap(
       (tab): WorkspaceTab[] => {

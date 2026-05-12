@@ -56,7 +56,9 @@ vi.mock('@/stores/terminal-store', () => ({
         { id: 'term-3', name: 'Terminal 3', shell: 'bash' }
       ]
     })
-  )
+  ),
+  useProjectsWithActivity: () => [],
+  useProjectsWithErrors: () => new Set()
 }))
 
 const mockStartTabDrag = vi.hoisted(() => vi.fn())

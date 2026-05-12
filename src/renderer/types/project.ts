@@ -29,7 +29,7 @@ export interface Project {
   envVars?: EnvVariable[]
 }
 
-export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'
+export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated' | 'disconnected'
 
 export interface Terminal {
   id: string

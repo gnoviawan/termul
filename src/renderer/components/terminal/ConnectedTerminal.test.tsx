@@ -220,7 +220,6 @@ import { ConnectedTerminal } from './ConnectedTerminal'
 import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
-import { clearTerminalCache } from './terminal-cache'
 
 const {
   mockRecordTerminalContinuityEvent,
@@ -271,23 +270,44 @@ vi.mock('@/stores/app-settings-store', () => ({
 import { useTerminalRenderer } from '@/stores/app-settings-store'
 
 const mockTerminalStoreState = {
+  terminals: [] as Array<{ id: string; ptyId?: string; healthStatus?: string }>,
+  activeTerminalId: '',
+  selectTerminal: vi.fn(),
+  addTerminal: vi.fn(),
+  closeTerminal: vi.fn(),
+  renameTerminal: vi.fn(),
+  reorderTerminals: vi.fn(),
+  setTerminals: vi.fn(),
+  setTerminalPtyId: vi.fn(),
   findTerminalByPtyId: vi.fn(),
+  updateTerminalCwd: vi.fn(),
+  updateTerminalGitBranch: vi.fn(),
+  updateTerminalGitStatus: vi.fn(),
+  updateTerminalExitCode: vi.fn(),
+  updateTerminalScrollback: vi.fn(),
+  appendTranscript: vi.fn(),
+  peekTranscript: vi.fn(() => ''),
+  consumeTranscript: vi.fn(() => ''),
+  appendDetachedOutput: vi.fn(),
+  consumeDetachedOutput: vi.fn(() => ''),
+  setRendererAttached: vi.fn(),
+  setTerminalHealthStatus: vi.fn(),
+  setTerminalHidden: vi.fn(),
   updateTerminalActivity: vi.fn(),
   updateTerminalLastActivityTimestamp: vi.fn(),
   updateTerminalActivityBatch: vi.fn(),
-  setRendererAttached: vi.fn(),
-  peekTranscript: vi.fn(() => ''),
-  consumeTranscript: vi.fn(() => ''),
-  consumeDetachedOutput: vi.fn(() => '')
+  restartTerminal: vi.fn(),
+  clearTerminalPtyId: vi.fn(),
+  truncateHiddenTerminalBuffers: vi.fn(),
+  getTerminalCount: vi.fn(() => 0),
+  isTerminalLimitReached: vi.fn(() => false),
+  cleanupProjectTerminals: vi.fn()
 }
 
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: Object.assign(
-    vi.fn(() => ({})),
-    {
-      getState: () => mockTerminalStoreState,
-      subscribe: vi.fn(() => vi.fn())  // returns unsubscribe function
-    }
+    vi.fn((selector) => selector(mockTerminalStoreState)),
+    { getState: () => mockTerminalStoreState }
   )
 }))
 
@@ -301,7 +321,6 @@ describe('ConnectedTerminal', () => {
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    clearTerminalCache()
     vi.clearAllMocks()
     mockRecordTerminalContinuityEvent.mockReset()
     mockGetOrCreateProjectContinuityCorrelation.mockReset()
@@ -1172,7 +1191,7 @@ describe('ConnectedTerminal', () => {
       expect(result).toBe(false)
     })
 
-    it('should treat Ctrl+R as app-owned when it matches an app shortcut', async () => {
+    it('should pass Ctrl+R through to PTY as a readline passthrough (reverse-i-search)', async () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
@@ -1181,8 +1200,8 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Ctrl+R matches commandHistory app shortcut — should be app-owned so the
-      // workspace handler can open the command history panel from terminal focus.
+      // Ctrl+R is a readline binding (reverse-i-search) and must reach the PTY
+      // on all platforms even though it may also match the commandHistory app shortcut.
       const event = new KeyboardEvent('keydown', {
         key: 'r',
         ctrlKey: true,
@@ -1191,10 +1210,10 @@ describe('ConnectedTerminal', () => {
 
       const result = handler(event)
 
-      expect(result).toBe(false)
+      expect(result).toBe(true)
     })
 
-    it('should treat Ctrl+K as app-owned when it matches an app shortcut', async () => {
+    it('should pass Ctrl+K through to PTY as a readline passthrough (kill to EOL)', async () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
@@ -1203,32 +1222,10 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Ctrl+K matches commandPalette app shortcut — should be app-owned so the
-      // workspace handler can open the command palette from terminal focus.
+      // Ctrl+K is a readline binding (kill to end of line) and must reach the PTY
+      // on all platforms even though it may also match the commandPalette app shortcut.
       const event = new KeyboardEvent('keydown', {
         key: 'k',
-        ctrlKey: true,
-        bubbles: true
-      })
-
-      const result = handler(event)
-
-      expect(result).toBe(false)
-    })
-
-    it('should pass pure readline passthrough Ctrl+E when it matches no app shortcut', async () => {
-      render(<ConnectedTerminal />)
-
-      await vi.waitFor(() => {
-        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
-      })
-
-      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
-
-      // Ctrl+E is a readline binding (end of line) and does NOT match any app
-      // shortcut — must reach the PTY.
-      const event = new KeyboardEvent('keydown', {
-        key: 'e',
         ctrlKey: true,
         bubbles: true
       })
@@ -1440,14 +1437,14 @@ describe('ConnectedTerminal', () => {
 
         // Should have logged warning about exhausted attempts
         expect(warnSpy).toHaveBeenCalledWith(
-          'WebGL recovery attempts exhausted, falling back to DOM renderer'
+          'WebGL recovery attempts exhausted, falling back to canvas renderer'
         )
       } finally {
         warnSpy.mockRestore()
       }
     })
 
-    it('should dispose WebGL and skip recovery after switching renderer preference to dom', async () => {
+    it('should dispose WebGL and skip recovery after switching renderer preference to canvas', async () => {
       vi.useFakeTimers()
       const { rerender } = render(<ConnectedTerminal className="renderer-auto" />)
 
@@ -1458,8 +1455,8 @@ describe('ConnectedTerminal', () => {
       expect(webglAddonCreateCount).toBe(1)
       expect(lastCreatedWebglInstance?.dispose).not.toHaveBeenCalled()
 
-      rendererPreferenceSpy.mockReturnValue('dom')
-      rerender(<ConnectedTerminal className="renderer-dom" />)
+      rendererPreferenceSpy.mockReturnValue('canvas')
+      rerender(<ConnectedTerminal className="renderer-canvas" />)
 
       await vi.waitFor(() => {
         expect(lastCreatedWebglInstance?.dispose).toHaveBeenCalled()
@@ -1538,9 +1535,9 @@ describe('ConnectedTerminal', () => {
       vi.useRealTimers()
     })
 
-    it('should skip WebGL when renderer preference is dom', async () => {
-      // Override the mock to return dom
-      vi.mocked(useTerminalRenderer).mockReturnValue('dom')
+    it('should skip WebGL when renderer preference is canvas', async () => {
+      // Override the mock to return canvas
+      vi.mocked(useTerminalRenderer).mockReturnValue('canvas')
 
       render(<ConnectedTerminal />)
 
@@ -1976,9 +1973,7 @@ describe('ConnectedTerminal', () => {
         await vi.advanceTimersByTimeAsync(200)
 
         // No errors should have been thrown
-        // Terminal is cached (not disposed) because findTerminalByPtyId
-        // returns a truthy value — the terminal is still alive in the store.
-        expect(mockTerminalInstance.dispose).not.toHaveBeenCalled()
+        expect(mockTerminalInstance.dispose).toHaveBeenCalled()
 
         vi.useRealTimers()
       })
