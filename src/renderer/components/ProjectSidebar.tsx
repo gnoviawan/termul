@@ -618,32 +618,31 @@ export function ProjectSidebar({
 										Browse
 								</button>
 								</div>
+								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
+							</div>
 
 							{/* Color Picker */}
 							<div className="space-y-2 mt-4">
 								<label className="block text-xs font-medium text-muted-foreground mb-1">Color</label>
 								<div className="flex gap-2">
-									{availableColors.map((color) => (
-										<button
-											key={color}
-											type="button"
-											onClick={() => setSettingsColor(color)}
-											className={cn(
-												"w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-												color === settingsColor ? "border-primary" : "border-transparent",
-											)}
-											style={{ backgroundColor: getColorClasses(color).bg }}
-										>
-											{color === settingsColor && (
-												<div className="absolute inset-0 flex items-center justify-center">
-													<div className="w-2 h-2 rounded-full bg-primary-foreground" />
-												</div>
-											)}
-										</button>
-									))}
-								</div>
-							</div>
-								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
+									{availableColors.map((color) => {
+										const colors = getColorClasses(color)
+										return (
+											<button
+												key={color}
+												type="button"
+												onClick={() => setSettingsColor(color)}
+												className={cn(
+													"w-6 h-6 rounded-full transition-all",
+													colors.bg,
+													settingsColor === color
+														? "ring-2 ring-offset-2 ring-offset-card ring-current"
+														: "hover:opacity-80",
+												)}
+											/>
+										)
+									})}
+									</div>
 							</div>
 
 							{/* Shell Field */}
