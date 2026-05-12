@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
@@ -70,6 +70,7 @@ import {
 import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
+	formatKeyForDisplay,
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac } from "@/lib/platform";
 import {
@@ -112,6 +113,7 @@ function getShortcutTargetContext(target: EventTarget | null): {
 
 export default function WorkspaceLayout(): React.JSX.Element {
 	const location = useLocation();
+	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
@@ -414,6 +416,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		setIsCreateSnapshotModalOpen(true);
 	}, []);
 
+	const handleOpenProjectSettings = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/settings");
+	}, [navigate]);
+
+	const handleOpenAppPreferences = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/preferences");
+	}, [navigate]);
+
+	const handleOpenCommandHistory = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsCommandHistoryOpen(true);
+	}, []);
+
 	// Keyboard shortcuts
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
 	const fontSize = useTerminalFontSize();
@@ -430,6 +447,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		},
 		[shortcuts],
 	);
+
+	const getShortcutLabel = useCallback(
+		(id: string): string | undefined => {
+			const key = getActiveKey(id);
+			return key ? formatKeyForDisplay(key) : undefined;
+		},
+		[getActiveKey],
+	);
+
+	const getProjectShortcutLabel = useCallback((index: number): string | undefined => {
+		if (index < 0 || index > 8) return undefined;
+		return formatKeyForDisplay(`ctrl+${index + 1}`);
+	}, []);
 
 	// Determine if we should show the terminal area (only on workspace dashboard)
 	const isWorkspaceRoute = location.pathname === "/";
@@ -1173,6 +1203,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
+				onOpenProjectSettings={handleOpenProjectSettings}
+				onOpenAppPreferences={handleOpenAppPreferences}
+				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+				getShortcutLabel={getShortcutLabel}
+				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
 
 			<CreateSnapshotModal
