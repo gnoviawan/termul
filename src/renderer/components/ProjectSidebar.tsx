@@ -16,6 +16,7 @@ import {
 	Settings,
 	Folder,
 	FolderOpen,
+	X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
@@ -26,6 +27,7 @@ import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ColorPickerPopover } from "./ColorPickerPopover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 
@@ -570,13 +572,14 @@ export function ProjectSidebar({
 						onClick={(e: any) => e.stopPropagation()}
 					>
 						{/* Header */}
-						<div className="px-6 py-4 border-b border-border flex items-center justify-between">
-							<div className="flex items-center gap-3">
-								<div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-									<Settings className="w-4 h-4 text-primary" />
-								</div>
-								<h2 className="text-sm font-semibold text-foreground">Project Settings</h2>
-							</div>
+						<div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
+							<h3 className="text-sm font-semibold text-foreground">Project Settings</h3>
+							<button
+								onClick={handleCloseSettings}
+								className="text-muted-foreground hover:text-foreground transition-colors"
+							>
+								<X size={14} />
+							</button>
 						</div>
 
 						{/* Form */}
@@ -588,7 +591,7 @@ export function ProjectSidebar({
 									type="text"
 									value={settingsName}
 									onChange={(e: any) => setSettingsName(e.target.value)}
-									className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+										className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
 									placeholder="My Project"
 								/>
 							</div>
@@ -601,42 +604,43 @@ export function ProjectSidebar({
 										type="text"
 										value={settingsPath}
 										onChange={(e: any) => setSettingsPath(e.target.value)}
-										className="flex-1 px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-										placeholder="/path/to/project"
+										className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+										placeholder="No directory selected"
 									/>
 									<button
 										onClick={handleBrowsePath}
 										disabled={settingsPathLoading}
-										className="px-3 py-2 bg-secondary hover:bg-secondary/80 border border-border rounded-md text-muted-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-										title="Browse folder"
+										className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 									>
-										{settingsPathLoading ? (
-											<Loader2 size={14} className="animate-spin" />
-										) : (
-											<FolderOpen size={14} />
-										)}
-									</button>
+										Browse
+								</button>
 								</div>
 								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
 							</div>
 
 							{/* Shell Field */}
 							<div className="space-y-2">
-								<label className="text-xs font-medium text-muted-foreground">Default Shell</label>
-								<select
-									value={settingsShell}
-									onChange={(e: any) => setSettingsShell(e.target.value)}
-									className="w-full px-3 py-2 bg-secondary/50 border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent appearance-none"
-								>
-									{availableShells?.available.map((shell) => (
-										<option key={shell.path} value={shell.path}>
-											{shell.displayName}
-										</option>
-									)) || (
-										<option value="">No shells detected</option>
-									)}
-								</select>
-								<p className="text-xs text-muted-foreground">Shell used when opening terminal in this project</p>
+								<label className="block text-xs font-medium text-muted-foreground mb-1">Default Terminal</label>
+								{availableShells ? (
+									<div className="relative">
+										<select
+											value={settingsShell}
+											onChange={(e: any) => setSettingsShell(e.target.value)}
+											className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+										>
+											{availableShells.available.map((shell) => (
+												<option key={shell.path} value={shell.path}>
+													{shell.displayName}
+												</option>
+											))}
+										</select>
+										<div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+											<ChevronDown size={14} />
+										</div>
+								</div>
+							) : (
+									<Skeleton className="w-full h-9 rounded" />
+								)}
 							</div>
 
 						</div>
@@ -651,7 +655,7 @@ export function ProjectSidebar({
 							</button>
 							<button
 								onClick={handleSaveSettings}
-								className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+								className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-colors"
 							>
 								Save Changes
 							</button>
