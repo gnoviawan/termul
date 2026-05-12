@@ -147,6 +147,7 @@ export function ShortcutRecorder({
             ref={inputRef}
             tabIndex={0}
             role="button"
+            data-shortcut-recorder="true"
             aria-label={`Record ${shortcut.label} shortcut`}
             onClick={handleClick}
             onBlur={handleBlur}
@@ -209,6 +210,7 @@ export function ShortcutRecorder({
         <div
           ref={inputRef}
           tabIndex={0}
+          data-shortcut-recorder="true"
           onClick={handleClick}
           onBlur={handleBlur}
           onKeyDown={handleKeyboardActivate}
