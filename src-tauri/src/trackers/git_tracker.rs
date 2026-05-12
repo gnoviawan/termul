@@ -954,7 +954,7 @@ impl GitTracker {
         {
             if rev_output.status.success() {
                 let counts = String::from_utf8_lossy(&rev_output.stdout);
-                let parts: Vec<&str> = counts.trim().split_whitespace().collect();
+                let parts: Vec<&str> = counts.split_whitespace().collect();
                 if parts.len() == 2 {
                     status.ahead = parts[0].parse().unwrap_or(0);
                     status.behind = parts[1].parse().unwrap_or(0);
