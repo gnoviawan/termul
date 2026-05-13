@@ -1,4 +1,5 @@
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
+use crate::tunnel::{TunnelConfig, TunnelSession};
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
@@ -66,6 +67,36 @@ pub struct OrphanDetectionSettings {
 pub struct RendererRefRequest {
     pub terminal_id: String,
     pub renderer_id: String,
+}
+
+// ==================== Tunnel Commands ====================
+
+#[tauri::command]
+pub async fn tunnel_start(
+    config: TunnelConfig,
+    app_handle: AppHandle,
+) -> Result<IpcResult<TunnelSession>, String> {
+    crate::tunnel::tunnel_start(config, app_handle).await
+}
+
+#[tauri::command]
+pub async fn tunnel_stop(
+    tunnel_id: String,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    crate::tunnel::tunnel_stop(tunnel_id, app_handle).await
+}
+
+#[tauri::command]
+pub async fn tunnel_get_status(
+    tunnel_id: String,
+) -> Result<IpcResult<Option<TunnelSession>>, String> {
+    crate::tunnel::tunnel_get_status(tunnel_id).await
+}
+
+#[tauri::command]
+pub async fn tunnel_list() -> Result<IpcResult<Vec<TunnelSession>>, String> {
+    crate::tunnel::tunnel_list().await
 }
 
 // ==================== Terminal Commands ====================

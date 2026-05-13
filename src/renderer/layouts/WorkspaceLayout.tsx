@@ -32,6 +32,7 @@ import {
 	useTerminalActions,
 	useTerminalStore,
 } from "@/stores/terminal-store";
+import { useTunnelStore } from "@/stores/tunnel-store";
 import {
 	useFileExplorerStore,
 	useFileExplorerVisible,
@@ -546,6 +547,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			});
 		}
 	}, [activeProject?.path]);
+
+	const handleAddTunnelTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId) {
+			const activeTunnel = useTunnelStore.getState().sessions.find(s => s.status === 'running' || s.status === 'starting');
+			const tunnelId = activeTunnel?.id || `new-tunnel-${Date.now()}`;
+			useWorkspaceStore.getState().addTunnelTab(tunnelId, resolvedPaneId);
+		}
+	}, []);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -1112,6 +1122,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
 												onAddGitTab={handleAddGitTab}
+												onAddTunnelTab={handleAddTunnelTab}
 												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
@@ -1160,6 +1171,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
+				onStartTunnel={() => {
+					const preset = activeProject?.tunnelPresets?.[0]
+					if (!preset) return
+					void useTunnelStore.getState().startTunnel({
+						...preset,
+						id: `tunnel-${Date.now()}`
+					})
+				}}
 			/>
 
 			<CreateSnapshotModal

@@ -21,6 +21,15 @@ function toPersistedProject(project: Project): PersistedProject {
       key: envVar.key,
       value: envVar.value,
       isSecret: envVar.isSecret
+    })),
+    tunnelPresets: project.tunnelPresets?.map((preset) => ({
+      id: preset.id,
+      name: preset.name,
+      localPort: preset.localPort,
+      hostname: preset.hostname,
+      cloudflareToken: preset.cloudflareToken,
+      projectId: preset.projectId,
+      autoStart: preset.autoStart
     }))
   }
 }
@@ -38,6 +47,15 @@ function fromPersistedProject(persisted: PersistedProject): Project {
       key: envVar.key,
       value: envVar.value,
       isSecret: envVar.isSecret
+    })),
+    tunnelPresets: persisted.tunnelPresets?.map((preset) => ({
+      id: preset.id,
+      name: preset.name,
+      localPort: preset.localPort,
+      hostname: preset.hostname,
+      cloudflareToken: preset.cloudflareToken,
+      projectId: preset.projectId,
+      autoStart: preset.autoStart
     }))
   }
 }

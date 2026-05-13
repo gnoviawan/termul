@@ -9,6 +9,7 @@ import {
 	Globe,
 	GitBranch,
 	GitPullRequest,
+	Network,
 } from "lucide-react";
 import { useGitStatusStore, type GitStatusState } from "@/stores/git-status-store";
 import type { GitStatusDetail } from "@shared/types/ipc.types";
@@ -18,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore, editorTabId } from "@/stores/workspace-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTerminalStore } from "@/stores/terminal-store";
+import { useTunnelStore } from "@/stores/tunnel-store";
 import { useProjectStore } from "@/stores/project-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
 import type { WorkspaceTab } from "@/stores/workspace-store";
@@ -522,6 +524,91 @@ function GitTabInline({
 	);
 }
 
+interface TunnelTabInlineProps {
+	tab: { type: "tunnel"; id: string; tunnelId: string };
+	isActive: boolean;
+	isDragging: boolean;
+	isDropTarget: boolean;
+	dropPosition: TabReorderPosition | null;
+	onSelect: () => void;
+	onClose: () => void;
+	onDragStart: (e: React.DragEvent) => void;
+	onDragOver: (e: React.DragEvent) => void;
+	onDragLeave: () => void;
+	onDrop: (e: React.DragEvent) => void;
+}
+
+function TunnelTabInline({
+	tab,
+	isActive,
+	isDragging,
+	isDropTarget,
+	dropPosition,
+	onSelect,
+	onClose,
+	onDragStart,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: TunnelTabInlineProps): React.JSX.Element {
+	const session = useTunnelStore((state) =>
+		state.sessions.find((s) => s.id === tab.tunnelId),
+	);
+	const status = session?.status ?? "idle";
+
+	return (
+		<div
+			draggable
+			onDragStart={onDragStart}
+			onDragOver={onDragOver}
+			onDragLeave={onDragLeave}
+			onDrop={onDrop}
+			onClick={onSelect}
+			className={cn(
+				"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+				isActive
+					? "bg-background border-b-primary"
+					: "hover:bg-secondary/50 text-muted-foreground",
+				isDragging && "opacity-50 scale-[0.98]",
+			)}
+		>
+			{isDropTarget && dropPosition === "before" && (
+				<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+			)}
+			{isDropTarget && dropPosition === "after" && (
+				<div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+			)}
+
+			<div className="relative mr-2 flex items-center">
+				<Network size={12} className={cn(isActive ? "text-primary" : "")} />
+				{status === "running" && (
+					<div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border-2 border-background" />
+				)}
+				{status === "error" && (
+					<div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-background" />
+				)}
+				{status === "starting" && (
+					<div className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-500 rounded-full border-2 border-background animate-pulse" />
+				)}
+			</div>
+
+			<span className={cn("text-[11px] font-medium", isActive && "text-foreground")}>
+				Tunnel
+			</span>
+
+			<button
+				onClick={(e) => {
+					e.stopPropagation();
+					onClose();
+				}}
+				className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+			>
+				<XIcon size={11} />
+			</button>
+		</div>
+	);
+}
+
 interface WorkspaceTabBarProps {
 	paneId: string;
 	tabs: WorkspaceTab[];
@@ -530,6 +617,7 @@ interface WorkspaceTabBarProps {
 	onAddTerminal?: (shell?: ShellInfo) => void;
 	onAddBrowserTab?: () => void;
 	onAddGitTab?: () => void;
+	onAddTunnelTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -544,6 +632,7 @@ export function WorkspaceTabBar({
 	onAddTerminal,
 	onAddBrowserTab,
 	onAddGitTab,
+	onAddTunnelTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -859,6 +948,25 @@ export function WorkspaceTabBar({
 												/>
 											);
 										})()
+									) : tab.type === "tunnel" ? (
+										<TunnelTabInline
+											tab={tab as { type: "tunnel"; id: string; tunnelId: string }}
+											isActive={tab.id === activeTabId}
+											isDragging={dragging}
+											isDropTarget={isTarget}
+											dropPosition={position}
+											onSelect={() => {
+												setActiveTab(paneId, tab.id);
+												setActivePane(paneId);
+											}}
+											onClose={() => {
+												useWorkspaceStore.getState().removeTab(tab.id);
+											}}
+											onDragStart={(e) => handleTabDragStart(tab.id, e)}
+											onDragOver={(e) => handleTabDragOver(tab.id, e)}
+											onDragLeave={handleTabDragLeave}
+											onDrop={(e) => handleTabDrop(tab.id, e)}
+										/>
 									) : tab.type === "editor" ? (
 										<EditorTabWrapper
 											tab={
@@ -1008,6 +1116,16 @@ export function WorkspaceTabBar({
 						title="Git Changes"
 					>
 						<GitBranch size={12} />
+					</button>
+				)}
+
+				{onAddTunnelTab && (
+					<button
+						onClick={onAddTunnelTab}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title="Tunnel"
+					>
+						<Network size={12} />
 					</button>
 				)}
 			</div>

@@ -15,6 +15,7 @@ interface PaneRendererProps {
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
 	onAddGitTab?: (paneId: string) => void;
+	onAddTunnelTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -27,6 +28,7 @@ export function PaneRenderer({
 	onAddTerminal,
 	onAddBrowserTab,
 	onAddGitTab,
+	onAddTunnelTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -40,6 +42,7 @@ export function PaneRenderer({
 				onAddTerminal={onAddTerminal}
 				onAddBrowserTab={onAddBrowserTab}
 				onAddGitTab={onAddGitTab}
+				onAddTunnelTab={onAddTunnelTab}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
@@ -54,6 +57,7 @@ export function PaneRenderer({
 			onAddTerminal={onAddTerminal}
 			onAddBrowserTab={onAddBrowserTab}
 			onAddGitTab={onAddGitTab}
+			onAddTunnelTab={onAddTunnelTab}
 			onCloseTerminal={onCloseTerminal}
 			onRenameTerminal={onRenameTerminal}
 			onCloseEditorTab={onCloseEditorTab}
@@ -68,6 +72,7 @@ interface PaneLeafRendererProps {
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
 	onAddGitTab?: (paneId: string) => void;
+	onAddTunnelTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -81,6 +86,7 @@ const PaneLeafRenderer = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
+		onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -94,6 +100,7 @@ const PaneLeafRenderer = memo(
 					onAddTerminal={onAddTerminal}
 					onAddBrowserTab={onAddBrowserTab}
 					onAddGitTab={onAddGitTab}
+					onAddTunnelTab={onAddTunnelTab}
 					onCloseTerminal={onCloseTerminal}
 					onRenameTerminal={onRenameTerminal}
 					onCloseEditorTab={onCloseEditorTab}
@@ -110,6 +117,7 @@ interface PaneSplitRendererProps {
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
 	onAddGitTab?: (paneId: string) => void;
+	onAddTunnelTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -123,6 +131,7 @@ const PaneSplitRenderer = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
+		onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -136,8 +145,6 @@ const PaneSplitRenderer = memo(
 		const handleLayout = useCallback(
 			(sizes: number[]) => {
 				pendingSizesRef.current = sizes;
-				// Only commit to store when not actively dragging to prevent
-				// re-render feedback loop that fights with the drag direction
 				if (!isDraggingRef.current) {
 					updatePaneSizes(node.id, sizes);
 					pendingSizesRef.current = null;
@@ -150,7 +157,6 @@ const PaneSplitRenderer = memo(
 			(dragging: boolean) => {
 				isDraggingRef.current = dragging;
 				if (!dragging && pendingSizesRef.current) {
-					// Drag ended — flush pending sizes to the store
 					updatePaneSizes(node.id, pendingSizesRef.current);
 					pendingSizesRef.current = null;
 				}
@@ -160,7 +166,6 @@ const PaneSplitRenderer = memo(
 
 		useEffect(() => {
 			return () => {
-				// If this split unmounts while a drag is active, do not leak drag state
 				isDraggingRef.current = false;
 				pendingSizesRef.current = null;
 			};
@@ -183,6 +188,7 @@ const PaneSplitRenderer = memo(
 						onAddTerminal={onAddTerminal}
 						onAddBrowserTab={onAddBrowserTab}
 						onAddGitTab={onAddGitTab}
+						onAddTunnelTab={onAddTunnelTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}
@@ -200,10 +206,11 @@ interface PaneRendererPanelProps {
 	panelOrder: number;
 	defaultSize: number;
 	isLast: boolean;
-	onDragging: (isDragging: boolean) => void;
+	onDragging: (dragging: boolean) => void;
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
 	onAddGitTab?: (paneId: string) => void;
+	onAddTunnelTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -221,6 +228,7 @@ const PaneRendererPanel = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
+		onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -233,13 +241,14 @@ const PaneRendererPanel = memo(
 					id={child.id}
 					order={panelOrder}
 					defaultSize={defaultSize}
-					minSize={10}
+					minSize={15}
 				>
 					<PaneRenderer
 						node={child}
 						onAddTerminal={onAddTerminal}
 						onAddBrowserTab={onAddBrowserTab}
 						onAddGitTab={onAddGitTab}
+						onAddTunnelTab={onAddTunnelTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}
@@ -247,7 +256,13 @@ const PaneRendererPanel = memo(
 						defaultShell={defaultShell}
 					/>
 				</ResizablePanel>
-				{!isLast && <ResizableHandle onDragging={onDragging} />}
+				{!isLast && (
+					<ResizableHandle
+						withHandle
+						onDragging={onDragging}
+						className="bg-border/60 hover:bg-primary/40 transition-colors"
+					/>
+				)}
 			</>
 		);
 	},

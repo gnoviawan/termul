@@ -80,6 +80,50 @@ export interface GitApi {
 	getDiff: (cwd: string, path: string) => Promise<string>;
 }
 
+export interface TunnelConfig {
+	id: string;
+	name: string;
+	localPort: number;
+	hostname?: string | null;
+	cloudflareToken?: string | null;
+	projectId?: string | null;
+	autoStart?: boolean;
+	[key: string]: unknown;
+}
+
+export type TunnelStatus = 'idle' | 'starting' | 'running' | 'stopped' | 'error';
+
+export interface TunnelSession {
+	id: string;
+	configId: string;
+	status: TunnelStatus;
+	publicUrl?: string | null;
+	pid?: number | null;
+	lastError?: string | null;
+	[key: string]: unknown;
+}
+
+export interface TunnelLogEvent {
+	tunnelId: string;
+	line: string;
+}
+
+export interface TunnelStatusEvent {
+	tunnelId: string;
+	status: TunnelStatus;
+	publicUrl?: string | null;
+	lastError?: string | null;
+}
+
+export interface TunnelApi {
+	start: (config: TunnelConfig) => Promise<IpcResult<TunnelSession>>;
+	stop: (tunnelId: string) => Promise<IpcResult<void>>;
+	getStatus: (tunnelId: string) => Promise<IpcResult<TunnelSession | null>>;
+	list: () => Promise<IpcResult<TunnelSession[]>>;
+	onStatusChanged: (callback: (event: TunnelStatusEvent) => void) => () => void;
+	onLog: (callback: (event: TunnelLogEvent) => void) => () => void;
+}
+
 // Terminal API exposed via preload
 export interface TerminalApi {
 	spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<TerminalInfo>>;
@@ -129,6 +173,8 @@ export const IpcErrorCodes = {
 	FILE_EXISTS: "FILE_EXISTS",
 	DELETE_FAILED: "DELETE_FAILED",
 	RENAME_FAILED: "RENAME_FAILED",
+	CLOUDFLARED_NOT_FOUND: "CLOUDFLARED_NOT_FOUND",
+	TUNNEL_ALREADY_RUNNING: "TUNNEL_ALREADY_RUNNING",
 	// Session persistence error codes
 	SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
 	SESSION_INVALID: "SESSION_INVALID",

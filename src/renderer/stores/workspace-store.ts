@@ -13,6 +13,7 @@ export type WorkspaceTab =
   | { type: 'editor'; id: string; filePath: string }
   | { type: 'browser'; id: string; browserTabId: string }
   | { type: 'git'; id: string; cwd: string }
+  | { type: 'tunnel'; id: string; tunnelId: string }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
 // This prevents duplicate tab creation during rapid state changes
@@ -173,12 +174,17 @@ export interface WorkspaceState {
   ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive?: boolean) => void
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
+  addTunnelTab: (tunnelId: string, targetPaneId?: string) => void
   removeTab: (tabId: string) => void
   getNextTabId: (direction: 1 | -1) => string | null
 }
 
 function makeBrowserTabId(browserTabId: string): string {
   return 'browser-' + browserTabId
+}
+
+function makeTunnelTabId(tunnelId: string): string {
+  return 'tunnel-' + tunnelId
 }
 
 function terminalTabId(terminalId: string): string {
@@ -659,6 +665,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       const tab: WorkspaceTab = { type: 'browser', id, browserTabId }
+      get().addTabToPane(paneId, tab)
+    },
+
+    addTunnelTab: (tunnelId: string, targetPaneId?: string): void => {
+      const id = makeTunnelTabId(tunnelId)
+      const { root, activePaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        const { fullscreenPaneId } = get()
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'tunnel', id, tunnelId }
       get().addTabToPane(paneId, tab)
     },
 

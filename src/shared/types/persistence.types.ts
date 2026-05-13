@@ -67,6 +67,16 @@ export interface PersistedEnvVariable {
   isSecret?: boolean
 }
 
+export interface PersistedTunnelPreset {
+  id: string
+  name: string
+  localPort: number
+  hostname?: string | null
+  cloudflareToken?: string | null
+  projectId?: string | null
+  autoStart?: boolean
+}
+
 // Minimal project data for persistence (matches Project from renderer)
 export interface PersistedProject {
   id: string
@@ -77,4 +87,5 @@ export interface PersistedProject {
   gitBranch?: string
   defaultShell?: string
   envVars?: PersistedEnvVariable[]
+  tunnelPresets?: PersistedTunnelPreset[]
 }

@@ -1,6 +1,6 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
-import type { GitStatus } from '@shared/types/ipc.types'
+import type { GitStatus, TunnelConfig } from '@shared/types/ipc.types'
 
 // Re-export for convenience
 export type { GitStatus }
@@ -27,6 +27,7 @@ export interface Project {
   lastOpened?: Date
   defaultShell?: string
   envVars?: EnvVariable[]
+  tunnelPresets?: TunnelConfig[]
 }
 
 export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated' | 'disconnected'

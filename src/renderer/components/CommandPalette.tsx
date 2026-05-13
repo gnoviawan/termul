@@ -24,7 +24,7 @@ import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 
-type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory'
+type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory' | 'startTunnel'
 
 interface CommandPaletteProps {
   isOpen: boolean
@@ -37,6 +37,7 @@ interface CommandPaletteProps {
   onOpenProjectSettings?: () => void
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
+  onStartTunnel?: () => void
   getShortcutLabel?: (id: CommandShortcutId) => string | undefined
   getProjectShortcutLabel?: (index: number) => string | undefined
 }
@@ -92,6 +93,7 @@ export function CommandPalette({
   onOpenProjectSettings,
   onOpenAppPreferences,
   onOpenCommandHistory,
+  onStartTunnel,
   getShortcutLabel,
   getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
@@ -200,6 +202,20 @@ export function CommandPalette({
               execute: onOpenCommandHistory
             }
           ]
+        : []),
+      ...(onStartTunnel
+        ? [
+            {
+              id: 'start-tunnel',
+              category: 'tools' as const,
+              icon: <Globe aria-hidden="true" size={16} />,
+              label: 'Start Tunnel',
+              description: 'Expose the active project using Cloudflare Tunnel',
+              keywords: ['tunnel', 'cloudflare', 'share', 'local', 'preview', 'expose'],
+              shortcut: getShortcutLabel?.('startTunnel'),
+              execute: onStartTunnel
+            }
+          ]
         : [])
     ],
     [
@@ -211,6 +227,7 @@ export function CommandPalette({
       onOpenProjectSettings,
       onOpenAppPreferences,
       onOpenCommandHistory,
+      onStartTunnel,
       getShortcutLabel,
       getProjectShortcutLabel
     ]

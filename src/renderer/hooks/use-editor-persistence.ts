@@ -52,7 +52,17 @@ interface PersistedGitTabRef {
   cwd: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef
+interface PersistedTunnelTabRef {
+  type: 'tunnel'
+  tunnelId: string
+}
+
+type PersistedTabRef =
+  | PersistedEditorTabRef
+  | PersistedTerminalTabRef
+  | PersistedBrowserTabRef
+  | PersistedGitTabRef
+  | PersistedTunnelTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -128,6 +138,10 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
 
       if (tab.type === 'git') {
         return [{ type: 'git', cwd: tab.cwd }]
+      }
+
+      if (tab.type === 'tunnel') {
+        return [{ type: 'tunnel', tunnelId: tab.tunnelId }]
       }
 
       return []
@@ -294,6 +308,10 @@ function reconcileTerminalTabs(
           return [tab]
         }
 
+        if (tab.type === 'tunnel') {
+          return [tab]
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -373,6 +391,16 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
               type: 'git',
               id: `git-${crypto.randomUUID()}`,
               cwd: tab.cwd
+            }
+          ]
+        }
+
+        if (tab.type === 'tunnel') {
+          return [
+            {
+              type: 'tunnel',
+              id: `tunnel-${tab.tunnelId}`,
+              tunnelId: tab.tunnelId
             }
           ]
         }

@@ -36,3 +36,6 @@ export {
 } from './updater-store'
 
 export type { UpdaterStoreState } from './updater-store'
+
+export { useTunnelStore } from './tunnel-store'
+export type { TunnelState } from './tunnel-store'

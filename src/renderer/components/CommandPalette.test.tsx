@@ -40,11 +40,13 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     onOpenProjectSettings: vi.fn(),
     onOpenAppPreferences: vi.fn(),
     onOpenCommandHistory: vi.fn(),
+    onStartTunnel: vi.fn(),
     getShortcutLabel: (id) =>
       ({
         newTerminal: 'Ctrl+T',
         newBrowserTab: 'Ctrl+Shift+N',
-        commandHistory: 'Ctrl+R'
+        commandHistory: 'Ctrl+R',
+        startTunnel: 'Ctrl+Alt+T'
       })[id],
     getProjectShortcutLabel: (index) => `Ctrl+${index + 1}`,
     ...overrides
@@ -84,7 +86,8 @@ describe('CommandPalette', () => {
         ({
           newTerminal: 'Alt+T',
           newBrowserTab: 'Alt+B',
-          commandHistory: 'Alt+H'
+          commandHistory: 'Alt+H',
+          startTunnel: 'Alt+Shift+T'
         })[id],
       getProjectShortcutLabel: (index) => `Alt+${index + 1}`
     })
@@ -143,14 +146,15 @@ describe('CommandPalette', () => {
       { label: 'Save Workspace Snapshot', commandId: 'save-snapshot', callback: 'onSaveSnapshot' },
       { label: 'Project Settings', commandId: 'open-project-settings', callback: 'onOpenProjectSettings' },
       { label: 'App Preferences', commandId: 'open-app-preferences', callback: 'onOpenAppPreferences' },
-      { label: 'Command History', commandId: 'open-command-history', callback: 'onOpenCommandHistory' }
+      { label: 'Command History', commandId: 'open-command-history', callback: 'onOpenCommandHistory' },
+      { label: 'Start Tunnel', commandId: 'start-tunnel', callback: 'onStartTunnel' }
     ]
 
     for (const testCase of cases) {
       saveRecentCommand.mockClear()
       const { props, unmount } = renderPalette()
 
-      fireEvent.click(screen.getByText(testCase.label))
+      fireEvent.click(screen.getByText(testCase.label, { exact: false }))
 
       await waitFor(() => {
         expect(saveRecentCommand).toHaveBeenCalledWith(testCase.commandId)

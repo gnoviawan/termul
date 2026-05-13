@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::{Arc, OnceLock};
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::OnceLock;
+use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -62,18 +62,14 @@ pub struct TunnelLogEvent {
     pub line: String,
 }
 
-static TUNNELS: OnceLock<Arc<Mutex<HashMap<String, Child>>>> = OnceLock::new();
-static SESSIONS: OnceLock<Arc<Mutex<HashMap<String, TunnelSession>>>> = OnceLock::new();
+static TUNNELS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+static SESSIONS: OnceLock<Mutex<HashMap<String, TunnelSession>>> = OnceLock::new();
 
-fn tunnels() -> Arc<Mutex<HashMap<String, Child>>> {
-    TUNNELS
-        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-        .clone()
+fn tunnels() -> &'static Mutex<HashMap<String, Child>> {
+    TUNNELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
-fn sessions() -> Arc<Mutex<HashMap<String, TunnelSession>>> {
-    SESSIONS
-        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-        .clone()
+fn sessions() -> &'static Mutex<HashMap<String, TunnelSession>> {
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn cloudflared_command() -> Command {

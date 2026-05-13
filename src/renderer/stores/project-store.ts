@@ -38,7 +38,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       color,
       path,
       defaultShell,
-      gitBranch: 'main'
+      gitBranch: 'main',
+      tunnelPresets: []
     }
     set((state) => ({
       projects: [...state.projects, newProject],
