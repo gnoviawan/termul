@@ -52,7 +52,7 @@ import {
 	buildTerminalUrlLinks,
 	isSupportedTerminalUrl,
 } from "@/lib/terminal-url-links";
-import { openTerminalUrlInDedicatedBrowser } from "@/lib/browser/terminal-url-navigation";
+import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
@@ -595,7 +595,7 @@ function ConnectedTerminalComponent({
 			}
 
 			try {
-				await openTerminalUrlInDedicatedBrowser(url);
+				await openTerminalUrl(url);
 			} catch (error) {
 				console.error("[Terminal URL Link Open Failed]", error);
 				toast.error("Failed to open URL from terminal output.");

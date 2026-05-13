@@ -10,10 +10,18 @@ import {
   useMaxTerminalsPerProject,
   useConfirmTerminalClose,
   useOrphanDetectionEnabled,
-  useOrphanDetectionTimeout
+  useOrphanDetectionTimeout,
+  useTerminalUrlOpenMode
 } from '@/stores/app-settings-store'
 import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
-import { FONT_FAMILY_OPTIONS, BUFFER_SIZE_OPTIONS, MAX_TERMINALS_OPTIONS, ORPHAN_TIMEOUT_OPTIONS } from '@/types/settings'
+import {
+  FONT_FAMILY_OPTIONS,
+  BUFFER_SIZE_OPTIONS,
+  MAX_TERMINALS_OPTIONS,
+  ORPHAN_TIMEOUT_OPTIONS,
+  TERMINAL_URL_OPEN_MODE_OPTIONS,
+  type TerminalUrlOpenMode
+} from '@/types/settings'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -42,6 +50,7 @@ export default function AppPreferences(): React.JSX.Element {
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const confirmTerminalClose = useConfirmTerminalClose()
+  const terminalUrlOpenMode = useTerminalUrlOpenMode()
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -96,6 +105,17 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleMaxTerminalsChange = (value: number) => {
     updateSetting('maxTerminalsPerProject', value)
+  }
+
+  const isTerminalUrlOpenMode = (value: string): value is TerminalUrlOpenMode =>
+    TERMINAL_URL_OPEN_MODE_OPTIONS.some((option) => option.value === value)
+
+  const handleTerminalUrlOpenModeChange = (value: string) => {
+    if (!isTerminalUrlOpenMode(value)) {
+      return
+    }
+
+    updateSetting('terminalUrlOpenMode', value)
   }
 
   const handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
@@ -348,6 +368,26 @@ export default function AppPreferences(): React.JSX.Element {
                 </p>
               </div>
               <div className="w-2/3 space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Open Terminal Links In
+                  </label>
+                  <select
+                    value={terminalUrlOpenMode}
+                    onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                  >
+                    {TERMINAL_URL_OPEN_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system browser or a new Termul browser tab.
+                  </p>
+                </div>
+
                 {/* Orphan Detection Toggle */}
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
