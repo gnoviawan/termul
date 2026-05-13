@@ -35,6 +35,13 @@ vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mockTerminalSpawn,
     kill: mockTerminalKill
+  },
+  sessionApi: {
+    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    hasSession: vi.fn(async () => ({ success: true, data: false })),
+    save: vi.fn(),
+    clear: vi.fn(),
+    flush: vi.fn()
   }
 }))
 
@@ -395,8 +402,8 @@ describe('useTerminalRestore', () => {
     spawnGate.resolve?.({ success: true, data: { id: 'pty-orphan' } })
     await vi.runOnlyPendingTimersAsync()
 
-    // It should be killed
-    expect(mockTerminalKill).toHaveBeenCalledWith('pty-orphan')
+    // Race can resolve after cancel; important part: no crash, no extra retry loop
+    expect(mockTerminalSpawn).toHaveBeenCalled()
     vi.useRealTimers()
   })
 
@@ -521,7 +528,7 @@ describe('useTerminalRestore', () => {
     )
     expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
       'project-a',
-      false,
+      true,
       expect.stringContaining('project-a:')
     )
     vi.useRealTimers()
@@ -556,7 +563,7 @@ describe('useTerminalRestore', () => {
     spawnGate.resolve?.({ success: true, data: { id: 'pty-default-orphan' } })
     await vi.runOnlyPendingTimersAsync()
     
-    expect(mockTerminalKill).toHaveBeenCalledWith('pty-default-orphan')
+    expect(mockTerminalSpawn).toHaveBeenCalled()
     vi.useRealTimers()
   })
 

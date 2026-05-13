@@ -1,5 +1,9 @@
+import { renderHook } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
-import { useAppSettingsStore } from "./app-settings-store";
+import {
+	useAppSettingsStore,
+	useTerminalUrlOpenMode,
+} from "./app-settings-store";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 
 describe("app-settings-store", () => {
@@ -32,6 +36,11 @@ describe("app-settings-store", () => {
 		it("should have isLoaded as false initially", () => {
 			const { isLoaded } = useAppSettingsStore.getState();
 			expect(isLoaded).toBe(false);
+		});
+
+		it("should default terminal URL open mode to system", () => {
+			const { settings } = useAppSettingsStore.getState();
+			expect(settings.terminalUrlOpenMode).toBe("system");
 		});
 	});
 
@@ -77,6 +86,15 @@ describe("app-settings-store", () => {
 			);
 			expect(settings.defaultShell).toBe("");
 		});
+
+		it("should update terminalUrlOpenMode", () => {
+			const { updateSetting } = useAppSettingsStore.getState();
+
+			updateSetting("terminalUrlOpenMode", "termul");
+
+			const { settings } = useAppSettingsStore.getState();
+			expect(settings.terminalUrlOpenMode).toBe("termul");
+		});
 	});
 
 	describe("setSettings", () => {
@@ -92,6 +110,7 @@ describe("app-settings-store", () => {
 				orphanDetectionEnabled: true,
 				orphanDetectionTimeout: 600000,
 				confirmTerminalClose: true,
+				terminalUrlOpenMode: "termul" as const,
 				sidebarVisible: false,
 				fileExplorerVisible: true,
 			};
@@ -120,6 +139,7 @@ describe("app-settings-store", () => {
 					orphanDetectionEnabled: false,
 					orphanDetectionTimeout: 300000,
 					confirmTerminalClose: false,
+					terminalUrlOpenMode: "termul",
 					sidebarVisible: false,
 					fileExplorerVisible: false,
 				},
@@ -189,6 +209,16 @@ describe("app-settings-store", () => {
 		it("useAppSettings should return settings object", () => {
 			const settings = useAppSettingsStore.getState().settings;
 			expect(settings).toEqual(DEFAULT_APP_SETTINGS);
+		});
+
+		it("useTerminalUrlOpenMode should select the terminal URL mode", () => {
+			useAppSettingsStore.setState((state) => ({
+				...state,
+				settings: { ...state.settings, terminalUrlOpenMode: "termul" },
+			}));
+
+			const { result } = renderHook(() => useTerminalUrlOpenMode());
+			expect(result.current).toBe("termul");
 		});
 	});
 });

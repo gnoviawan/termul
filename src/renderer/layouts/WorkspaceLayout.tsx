@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
@@ -111,8 +111,10 @@ function getShortcutTargetContext(target: EventTarget | null): {
 
 export default function WorkspaceLayout(): React.JSX.Element {
 	const location = useLocation();
+	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+	const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
 		useState(false);
 	const [closeConfirmTerminal, setCloseConfirmTerminal] = useState<{
@@ -421,6 +423,35 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// Keyboard shortcuts
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
+	const handleOpenProjectSettings = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/settings");
+	}, [navigate]);
+
+	const handleOpenAppPreferences = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/preferences");
+	}, [navigate]);
+
+	const handleOpenCommandHistory = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsCommandHistoryOpen(true);
+	}, []);
+
+	const handleOpenShortcutMenu = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsShortcutMenuOpen(true);
+	}, []);
+
+	const getShortcutLabel = useCallback((id: string): string | undefined => {
+		const shortcut = shortcuts[id];
+		return shortcut ? shortcut.customKey ?? shortcut.defaultKey : undefined;
+	}, [shortcuts]);
+
+	const getProjectShortcutLabel = useCallback((index: number): string | undefined => {
+		const shortcut = shortcuts[`project-${index + 1}`];
+		return shortcut ? shortcut.customKey ?? shortcut.defaultKey : undefined;
+	}, [shortcuts]);
 	const fontSize = useTerminalFontSize();
 	const appDefaultShell = useDefaultShell();
 	const maxTerminals = useMaxTerminalsPerProject();
@@ -1041,7 +1072,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
-				<TitleBar />
+				<TitleBar
+					isShortcutsOpen={isShortcutMenuOpen}
+					onShortcutsOpenChange={setIsShortcutMenuOpen}
+				/>
 				<div className="flex-1 flex items-center justify-center">
 					<div className="text-muted-foreground text-sm">Loading...</div>
 				</div>
@@ -1051,7 +1085,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
-			<TitleBar />
+			<TitleBar
+				isShortcutsOpen={isShortcutMenuOpen}
+				onShortcutsOpenChange={setIsShortcutMenuOpen}
+			/>
 
 			<div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
 				{/* Sidebar */}
@@ -1160,6 +1197,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
+				onOpenProjectSettings={handleOpenProjectSettings}
+				onOpenAppPreferences={handleOpenAppPreferences}
+				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+				onOpenShortcutMenu={handleOpenShortcutMenu}
+				getShortcutLabel={getShortcutLabel}
+				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
 
 			<CreateSnapshotModal

@@ -17,7 +17,13 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Generate Star History SVG
         uses: star-history/star-history@04301c64f801e6fcfde8a1d0da021825ec6100af

@@ -3,6 +3,7 @@ import {
   Clock,
   Globe,
   History,
+  Keyboard,
   Layers,
   Save,
   Settings,
@@ -37,6 +38,7 @@ interface CommandPaletteProps {
   onOpenProjectSettings?: () => void
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
+  onOpenShortcutMenu?: () => void
   getShortcutLabel?: (id: CommandShortcutId) => string | undefined
   getProjectShortcutLabel?: (index: number) => string | undefined
 }
@@ -92,6 +94,7 @@ export function CommandPalette({
   onOpenProjectSettings,
   onOpenAppPreferences,
   onOpenCommandHistory,
+  onOpenShortcutMenu,
   getShortcutLabel,
   getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
@@ -200,6 +203,19 @@ export function CommandPalette({
               execute: onOpenCommandHistory
             }
           ]
+        : []),
+      ...(onOpenShortcutMenu
+        ? [
+            {
+              id: 'open-shortcut-menu',
+              category: 'tools' as const,
+              icon: <Keyboard aria-hidden="true" size={16} />,
+              label: 'Open Shortcut Menu',
+              description: 'View and edit common keyboard shortcuts',
+              keywords: ['keyboard', 'shortcuts', 'hotkeys', 'keys'],
+              execute: onOpenShortcutMenu
+            }
+          ]
         : [])
     ],
     [
@@ -211,6 +227,7 @@ export function CommandPalette({
       onOpenProjectSettings,
       onOpenAppPreferences,
       onOpenCommandHistory,
+      onOpenShortcutMenu,
       getShortcutLabel,
       getProjectShortcutLabel
     ]
