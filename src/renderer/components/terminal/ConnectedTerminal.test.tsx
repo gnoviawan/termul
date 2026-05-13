@@ -422,6 +422,35 @@ describe('ConnectedTerminal', () => {
     })
   })
 
+  it('should not respawn the terminal or re-register listeners when the terminal PTY changes via restart', async () => {
+    const { rerender } = render(<ConnectedTerminal />)
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const existingDisposeCalls = mockTerminalInstance.dispose.mock.calls.length
+    const existingOnDataCalls = vi.mocked(terminalApi).onData.mock.calls.length
+    const existingOnExitCalls = vi.mocked(terminalApi).onExit.mock.calls.length
+
+    mockTerminalStoreState.terminals = [
+      {
+        id: 'terminal-123',
+        ptyId: 'restart-123',
+        healthStatus: 'running'
+      }
+    ]
+    rerender(<ConnectedTerminal />)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+    expect(mockTerminalInstance.dispose.mock.calls.length).toBe(existingDisposeCalls)
+    expect(vi.mocked(terminalApi).onData.mock.calls.length).toBe(existingOnDataCalls)
+    expect(vi.mocked(terminalApi).onExit.mock.calls.length).toBe(existingOnExitCalls)
+    expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalledWith('terminal-123', true)
+  })
+
   it('should call onSpawned callback with terminal ID', async () => {
     const onSpawned = vi.fn()
     render(<ConnectedTerminal onSpawned={onSpawned} />)
@@ -470,6 +499,24 @@ describe('ConnectedTerminal', () => {
         expect.stringMatching(/^conn-/)
       )
     })
+  })
+
+  it('should clean up terminal listeners on unmount without creating extra registrations', async () => {
+    const { unmount } = render(<ConnectedTerminal />)
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(vi.mocked(terminalApi).onData).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(terminalApi).onExit).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    expect(mockTerminalInstance.dispose).toHaveBeenCalledTimes(1)
+    expect(removeRendererRef).toHaveBeenCalledWith('terminal-123', expect.stringMatching(/^conn-/))
+    expect(vi.mocked(terminalApi).onData).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(terminalApi).onExit).toHaveBeenCalledTimes(1)
   })
 
   it('should not spawn terminal when external ID provided', async () => {

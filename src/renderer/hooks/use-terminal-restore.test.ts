@@ -511,6 +511,43 @@ describe('useTerminalRestore', () => {
     })
   })
 
+  it('does not loop default-terminal restore retries when a default spawn succeeds', async () => {
+    vi.useFakeTimers()
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-default' } })
+    mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'terminal-a' }))
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(mockTerminalSpawn).toHaveBeenCalledTimes(1)
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'restore-path-selected',
+        projectId: 'project-a',
+        details: expect.objectContaining({ path: 'default-terminal' })
+      })
+    )
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'restore-complete',
+        projectId: 'project-a',
+        terminalId: 'terminal-a'
+      })
+    )
+    expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
+      'project-a',
+      false,
+      expect.stringContaining('project-a:')
+    )
+    vi.useRealTimers()
+  })
+
   it('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
     vi.useFakeTimers()
     const spawnGate = {

@@ -686,6 +686,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const allLeaves = getAllLeafPanes(root)
 
         let newRoot = root
+        let didChange = false
 
         // Remove orphaned terminal tabs from all panes
         for (const leaf of allLeaves) {
@@ -693,6 +694,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             (t) => t.type === 'terminal' && !terminalTabIds.has(t.id)
           )
           if (hasOrphans) {
+            didChange = true
             newRoot = updateLeaf(newRoot, leaf.id, (l) => {
               const newTabs = l.tabs.filter(
                 (t) => t.type !== 'terminal' || terminalTabIds.has(t.id)
@@ -718,12 +720,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         for (const tid of terminalIds) {
           const id = terminalTabId(tid)
           if (!existingTerminalIds.has(id)) {
+            didChange = true
             newRoot = updateLeaf(newRoot, activePaneId, (leaf) => ({
               ...leaf,
               tabs: [...leaf.tabs, { type: 'terminal' as const, id, terminalId: tid }],
               activeTabId: id
             }))
           }
+        }
+
+        if (!didChange) {
+          return
         }
 
         const normalizedRoot = normalizePaneTree(newRoot)

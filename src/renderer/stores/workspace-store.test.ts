@@ -233,6 +233,19 @@ describe('workspace-store split/move invariants', () => {
     expect(right.tabs).toEqual([])
   })
 
+  it('syncTerminalTabs is a no-op when the terminal set is unchanged', () => {
+    const store = useWorkspaceStore.getState()
+    const terminalA = createTerminalTab('a')
+
+    store.addTabToPane('pane-root', terminalA)
+
+    const before = useWorkspaceStore.getState().root
+    store.syncTerminalTabs(['a'])
+    const after = useWorkspaceStore.getState().root
+
+    expect(after).toBe(before)
+  })
+
   it('toggles fullscreen state for a valid leaf pane and restores on second toggle', () => {
     const store = useWorkspaceStore.getState()
     const tabA = createEditorTab('edit-/a.ts')

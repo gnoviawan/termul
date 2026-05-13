@@ -470,24 +470,10 @@ export function useTerminalRestore(): void {
 
         let attempt = 0
 
-        while (!isCancelled()) {
-          // FIX #1: Re-acquire lock before each spawn attempt
-          if (!acquireGlobalSpawnLock(restoreOwnerId)) {
-            debugLog('useTerminalRestore', `RE-ACQUIRE LOCK FAILED [${callId}] attempt ${attempt}, waiting...`)
-            await new Promise((resolve) => setTimeout(resolve, RESTORE_RETRY_DELAY_MS * (attempt + 1)))
-            attempt++
-            if (attempt >= MAX_RESTORE_RETRIES) break
-            continue
-          }
-
-          const restoreResult =
-            restoreMode === 'layout'
-              ? await restoreFromLayout(projectIdToRestore, layout!, isCancelled)
-              : await createDefaultTerminal(projectIdToRestore, isCancelled)
+        if (restoreMode !== 'layout') {
+          const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
 
           if (restoreResult.status === 'completed') {
-            // FIX #1: Release lock after successful completion
-            releaseGlobalSpawnLock(restoreOwnerId)
             if (!isCancelled()) {
               emitTerminalContinuityEvent({
                 name: 'restore-complete',
@@ -502,18 +488,7 @@ export function useTerminalRestore(): void {
                 }
               })
             }
-            break
-          }
-
-          if (restoreResult.status === 'cancelled') {
-            releaseGlobalSpawnLock(restoreOwnerId)
-            break
-          }
-
-          // FIX #1: Release lock between retries so other projects can proceed
-          releaseGlobalSpawnLock(restoreOwnerId)
-
-          if (restoreResult.status === 'failed') {
+          } else if (restoreResult.status === 'failed') {
             emitTerminalContinuityEvent({
               name: 'restore-failed',
               correlationId: continuityCorrelationId,
@@ -525,30 +500,72 @@ export function useTerminalRestore(): void {
                 path: restoreResult.path
               }
             })
-            break
           }
+        } else {
+          // Layout restore: let restoreFromLayout manage its own lock
+          while (!isCancelled()) {
+            const restoreResult = await restoreFromLayout(projectIdToRestore, layout!, isCancelled)
 
-          attempt += 1
-          const retryDelayMs = RESTORE_RETRY_DELAY_MS * attempt
-          emitTerminalContinuityEvent({
-            name: 'restore-failed',
-            correlationId: continuityCorrelationId,
-            projectId: projectIdToRestore,
-            details: {
-              callId,
-              attempt,
-              reason: attempt >= MAX_RESTORE_RETRIES ? 'retry-limit-reached' : 'spawn-blocked',
-              owner: GLOBAL_SPAWN_LOCK_OWNER,
-              path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
-              nextDelayMs: attempt >= MAX_RESTORE_RETRIES ? undefined : retryDelayMs
+            if (restoreResult.status === 'completed') {
+              if (!isCancelled()) {
+                emitTerminalContinuityEvent({
+                  name: 'restore-complete',
+                  correlationId: continuityCorrelationId,
+                  projectId: projectIdToRestore,
+                  terminalId: restoreResult.selectedTerminalId,
+                  details: {
+                    path: restoreResult.path,
+                    persistedTerminalCount: layout?.terminals.length ?? 0,
+                    restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
+                    attempt
+                  }
+                })
+              }
+              break
             }
-          })
 
-          if (attempt >= MAX_RESTORE_RETRIES) {
-            break
+            if (restoreResult.status === 'cancelled') {
+              break
+            }
+
+            if (restoreResult.status === 'failed') {
+              emitTerminalContinuityEvent({
+                name: 'restore-failed',
+                correlationId: continuityCorrelationId,
+                projectId: projectIdToRestore,
+                details: {
+                  callId,
+                  attempt,
+                  reason: 'permanent-restore-failure',
+                  path: restoreResult.path
+                }
+              })
+              break
+            }
+
+            // Blocked or retryable — wait and try again
+            attempt += 1
+            if (attempt >= MAX_RESTORE_RETRIES) {
+              break
+            }
+
+            const retryDelayMs = RESTORE_RETRY_DELAY_MS * attempt
+            emitTerminalContinuityEvent({
+              name: 'restore-failed',
+              correlationId: continuityCorrelationId,
+              projectId: projectIdToRestore,
+              details: {
+                callId,
+                attempt,
+                reason: attempt >= MAX_RESTORE_RETRIES ? 'retry-limit-reached' : 'spawn-blocked',
+                owner: GLOBAL_SPAWN_LOCK_OWNER,
+                path: 'persisted-replay',
+                nextDelayMs: attempt >= MAX_RESTORE_RETRIES ? undefined : retryDelayMs
+              }
+            })
+
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
           }
-
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
         }
       } catch (err: unknown) {
         debugLog('useTerminalRestore', `RESTORE ERROR [${callId}]`, {
@@ -572,7 +589,9 @@ export function useTerminalRestore(): void {
         await createDefaultTerminal(projectIdToRestore, isCancelled)
       } finally {
         // FIX #2: Always release & force-clear lock on cleanup to prevent deadlock
-        releaseGlobalSpawnLock(restoreOwnerId)
+        if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId) {
+          releaseGlobalSpawnLock(restoreOwnerId)
+        }
         // Force-clear in case lock was held by this owner but release didn't catch it
         if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId) {
           GLOBAL_SPAWN_LOCK_OWNER = null
