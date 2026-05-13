@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from 'sonner'
@@ -30,9 +30,11 @@ interface TitleBarShortcutsPopoverProps {
 
 export function TitleBarShortcutsPopover({
   buttonClassName,
-  open = false,
+  open,
   onOpenChange
 }: TitleBarShortcutsPopoverProps): React.JSX.Element {
+  const [openFallback, setOpenFallback] = useState(false)
+  const isOpen = open ?? openFallback
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const updateShortcut = useUpdateShortcut()
   const resetShortcut = useResetShortcut()
@@ -44,7 +46,12 @@ export function TitleBarShortcutsPopover({
 
   const setOpen = useCallback(
     (nextOpen: boolean) => {
-      onOpenChange?.(nextOpen)
+      if (onOpenChange) {
+        onOpenChange(nextOpen)
+        return
+      }
+
+      setOpenFallback(nextOpen)
     },
     [onOpenChange]
   )
@@ -62,16 +69,16 @@ export function TitleBarShortcutsPopover({
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!isOpen) return
 
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
     setTimeout(() => closeButtonRef.current?.focus(), 0)
-  }, [open])
+  }, [isOpen])
 
   useEffect(() => {
-    if (!open) return
+    if (!isOpen) return
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
@@ -91,7 +98,7 @@ export function TitleBarShortcutsPopover({
 
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [open, setOpen])
+  }, [isOpen, setOpen])
 
   return (
     <>
@@ -100,17 +107,17 @@ export function TitleBarShortcutsPopover({
         className={buttonClassName}
         title="Keyboard shortcuts"
         aria-label="Open keyboard shortcuts menu"
-        aria-expanded={open}
+        aria-expanded={isOpen}
         onClick={(event) => {
           event.stopPropagation()
-          setOpen(!open)
+          setOpen(!isOpen)
         }}
       >
-        <Keyboard size={16} className={open ? 'text-foreground' : 'text-muted-foreground'} />
+        <Keyboard size={16} className={isOpen ? 'text-foreground' : 'text-muted-foreground'} />
       </button>
 
       <AnimatePresence>
-        {open && (
+        {isOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

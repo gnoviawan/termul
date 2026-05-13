@@ -67,12 +67,11 @@ export function ShortcutRecorder({
   )
 
   const handleBlur = useCallback(() => {
-    if (!conflict) {
-      setIsRecording(false)
-      setPendingKey(null)
-    }
+    window.removeEventListener('keydown', handleKeyDown, { capture: true })
+    setIsRecording(false)
+    setPendingKey(null)
     setConflict(null)
-  }, [conflict])
+  }, [handleKeyDown])
 
   const handleClick = useCallback(() => {
     if (!isRecording) {
@@ -210,7 +209,9 @@ export function ShortcutRecorder({
         <div
           ref={inputRef}
           tabIndex={0}
+          role="button"
           data-shortcut-recorder="true"
+          aria-label={`Record ${shortcut.label} shortcut`}
           onClick={handleClick}
           onBlur={handleBlur}
           onKeyDown={handleKeyboardActivate}
