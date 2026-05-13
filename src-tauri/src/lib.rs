@@ -3,6 +3,7 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
+mod remote_server;
 mod shell_paths;
 mod trackers;
 mod tunnel;
@@ -702,6 +703,11 @@ pub fn run() {
             commands::tunnel_stop,
             commands::tunnel_get_status,
             commands::tunnel_list,
+            // Remote server commands
+            commands::remote_server_start,
+            commands::remote_server_stop,
+            commands::remote_server_get_status,
+            commands::remote_server_check_installed,
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_write,

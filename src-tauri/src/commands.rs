@@ -1,4 +1,5 @@
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
+use crate::remote_server::{RemoteServerStatus};
 use crate::tunnel::{TunnelConfig, TunnelSession};
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
@@ -97,6 +98,32 @@ pub async fn tunnel_get_status(
 #[tauri::command]
 pub async fn tunnel_list() -> Result<IpcResult<Vec<TunnelSession>>, String> {
     crate::tunnel::tunnel_list().await
+}
+
+// ==================== Remote Server Commands ====================
+
+#[tauri::command]
+pub async fn remote_server_start(
+    port: u16,
+    password: Option<String>,
+    app_handle: AppHandle,
+) -> Result<IpcResult<RemoteServerStatus>, String> {
+    crate::remote_server::start_remote_server(port, password, app_handle).await
+}
+
+#[tauri::command]
+pub async fn remote_server_stop() -> Result<IpcResult<()>, String> {
+    crate::remote_server::stop_remote_server().await
+}
+
+#[tauri::command]
+pub async fn remote_server_get_status() -> Result<IpcResult<RemoteServerStatus>, String> {
+    crate::remote_server::get_remote_server_status().await
+}
+
+#[tauri::command]
+pub async fn remote_server_check_installed() -> Result<IpcResult<bool>, String> {
+    Ok(IpcResult::success(crate::remote_server::check_code_server_installed().await))
 }
 
 // ==================== Terminal Commands ====================

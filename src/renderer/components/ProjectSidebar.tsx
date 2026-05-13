@@ -17,6 +17,7 @@ import {
 	Folder,
 	FolderOpen,
 	X,
+	Smartphone,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
@@ -128,6 +129,7 @@ export function ProjectSidebar({
 	const [settingsName, setSettingsName] = useState("");
 	const [settingsPath, setSettingsPath] = useState("");
 	const [settingsShell, setSettingsShell] = useState("");
+	const [settingsRemotePassword, setSettingsRemotePassword] = useState("");
 	const [settingsColor, setSettingsColor] = useState<ProjectColor>("blue");
 	const [settingsPathLoading, setSettingsPathLoading] = useState(false);
 
@@ -265,6 +267,7 @@ export function ProjectSidebar({
 				setSettingsName(project.name);
 				setSettingsPath(project.path || "");
 				setSettingsShell(project.defaultShell || "");
+				setSettingsRemotePassword(project.remoteCodingPassword || "");
 				setSettingsColor(project.color || "blue");
 			}
 		}
@@ -276,11 +279,12 @@ export function ProjectSidebar({
 				name: settingsName.trim(),
 				path: settingsPath.trim() || undefined,
 				defaultShell: settingsShell || undefined,
+				remoteCodingPassword: settingsRemotePassword.trim() || undefined,
 				color: settingsColor,
 			});
 		}
 		handleCloseSettings();
-	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
+	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsRemotePassword, settingsColor, onUpdateProject, handleCloseSettings]);
 
 	const handleBrowsePath = useCallback(async (): Promise<void> => {
 		try {
@@ -490,6 +494,22 @@ export function ProjectSidebar({
 							})}
 						</Reorder.Group>
 
+						{/* Remote Access Link */}
+						<div className="mt-4 px-1">
+							<button
+								onClick={() => navigate("/remote")}
+								className={cn(
+									"w-full flex items-center px-3 py-2 rounded-lg transition-all group",
+									location.pathname === "/remote"
+										? "bg-primary/10 text-primary border border-primary/20"
+										: "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+								)}
+							>
+								<Smartphone size={16} className="mr-3" />
+								<span className="text-sm font-medium">Remote Coding</span>
+							</button>
+						</div>
+
 						{/* Archived Projects Section */}
 						{archivedProjects.length > 0 && (
 							<div className="mt-2">
@@ -645,7 +665,19 @@ export function ProjectSidebar({
 									</div>
 							</div>
 
-							{/* Shell Field */}
+							{/* Remote Coding Password Field */}
+					<div className="space-y-2">
+						<label className="block text-xs font-medium text-muted-foreground mb-1">Remote Coding Password</label>
+						<input
+							type="password"
+							value={settingsRemotePassword}
+							onChange={(e) => setSettingsRemotePassword(e.target.value)}
+							className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+							placeholder="Password for code-server"
+						/>
+					</div>
+
+					{/* Shell Field */}
 							<div className="space-y-2">
 								<label className="block text-xs font-medium text-muted-foreground mb-1">Default Terminal</label>
 								{availableShells ? (

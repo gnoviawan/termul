@@ -28,6 +28,7 @@ export interface Project {
   defaultShell?: string
   envVars?: EnvVariable[]
   tunnelPresets?: TunnelConfig[]
+  remoteCodingPassword?: string
 }
 
 export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated' | 'disconnected'

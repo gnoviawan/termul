@@ -12,6 +12,7 @@ import ProjectSettings from './pages/ProjectSettings'
 import AppPreferences from './pages/AppPreferences'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
+import { RemoteAccessPanel } from '@/components/remote/RemoteAccessPanel'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
@@ -63,7 +64,8 @@ const router = createHashRouter(
         { index: true, element: <WorkspaceDashboard /> },
         { path: 'snapshots', element: <WorkspaceSnapshots /> },
         { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> }
+        { path: 'preferences', element: <AppPreferences /> },
+        { path: 'remote', element: <RemoteAccessPanel /> }
       ]
     },
     { path: '*', element: <NotFound /> }

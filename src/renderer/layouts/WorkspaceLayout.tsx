@@ -4,6 +4,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
+import { RemoteAccessPanel } from "@/components/remote/RemoteAccessPanel";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
 import { PaneDndProvider } from "@/hooks/use-pane-dnd";
 import { StatusBar } from "@/components/StatusBar";
@@ -439,6 +440,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// Determine if we should show the terminal area (only on workspace dashboard)
 	const isWorkspaceRoute = location.pathname === "/";
+	const isRemoteRoute = location.pathname === "/remote";
 
 	// Unified tab cycling - cycles through ALL workspace tabs in active pane
 	const cycleTab = useCallback(
@@ -1131,6 +1133,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 													activeProject?.defaultShell || appDefaultShell
 												}
 											/>
+										</div>
+									) : isRemoteRoute ? (
+										<div className="flex-1 overflow-auto bg-background">
+											<RemoteAccessPanel />
 										</div>
 									) : (
 										<div className="flex-1 overflow-hidden bg-background relative rounded-xl">
