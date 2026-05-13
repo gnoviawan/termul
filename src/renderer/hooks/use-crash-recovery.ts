@@ -19,13 +19,12 @@ export function useCrashRecovery(): void {
       const currentState = useProjectStore.getState()
       if (currentState.activeProjectId) return
 
-      const savedProjectIds = restoreResult.data.workspaces.map((workspace) => workspace.projectId)
-      const firstRestorableProjectId = savedProjectIds.find((projectId) =>
-        currentState.projects.some((project) => project.id === projectId)
-      )
+      const restorableWorkspace = restoreResult.data.workspaces.find((workspace) => {
+        return currentState.projects.some((project) => project.id === workspace.projectId)
+      })
 
-      if (firstRestorableProjectId) {
-        useProjectStore.setState({ activeProjectId: firstRestorableProjectId })
+      if (restorableWorkspace) {
+        useProjectStore.setState({ activeProjectId: restorableWorkspace.projectId })
       }
     })()
   }, [])

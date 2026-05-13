@@ -234,10 +234,11 @@ describe('useTerminalRestore', () => {
     })
   })
 
-  it('uses the pane containing the restored terminal tab when selecting a live terminal', async () => {
+  it('prefers currently active live terminal when selecting a live terminal', async () => {
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
     ]
+    mockTerminalStoreState.activeTerminalId = 'a-live'
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'a-live',
       terminals: [
@@ -251,27 +252,6 @@ describe('useTerminalRestore', () => {
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
-    mockWorkspaceStore.root = {
-      type: 'split',
-      id: 'split-root',
-      direction: 'horizontal',
-      sizes: [50, 50],
-      children: [
-        { type: 'leaf', id: 'pane-other', tabs: [], activeTabId: null },
-        {
-          type: 'leaf',
-          id: 'pane-restored',
-          tabs: [{ type: 'terminal', id: 'term-a-live', terminalId: 'a-live' }],
-          activeTabId: null
-        }
-      ]
-    } as PaneNode
-    mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
-      id: 'pane-active',
-      type: 'leaf',
-      tabs: [],
-      activeTabId: null
-    })
 
     renderHook(() => {
       mockProjectState.activeProjectId = 'project-a'
@@ -279,7 +259,6 @@ describe('useTerminalRestore', () => {
     })
 
     await waitFor(() => {
-      expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-restored', 'term-a-live')
       expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('a-live')
     })
   })

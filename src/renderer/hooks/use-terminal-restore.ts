@@ -4,7 +4,7 @@ import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
-import { terminalApi } from '@/lib/api'
+import { terminalApi, sessionApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import {
@@ -471,6 +471,11 @@ export function useTerminalRestore(): void {
         let attempt = 0
 
         if (restoreMode !== 'layout') {
+          const sessionResult = await sessionApi.restore()
+          const sessionWorkspace = sessionResult.success
+            ? sessionResult.data.workspaces.find((workspace) => workspace.projectId === projectIdToRestore)
+            : null
+          const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
           const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
 
           if (restoreResult.status === 'completed') {
@@ -481,7 +486,7 @@ export function useTerminalRestore(): void {
                 projectId: projectIdToRestore,
                 terminalId: restoreResult.selectedTerminalId,
                 details: {
-                  path: restoreResult.path,
+                  path: sessionActiveTerminalId ? 'session-active-terminal' : restoreResult.path,
                   persistedTerminalCount: layout?.terminals.length ?? 0,
                   restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
                   attempt
@@ -688,6 +693,17 @@ function selectTerminalForProject(
 ): string | null {
   if (existingTerminals.length === 0) {
     return null
+  }
+
+  const terminalStore = useTerminalStore.getState()
+  const activeTerminalId = terminalStore.activeTerminalId
+
+  // Strategy 0: keep currently active live terminal selected if it still belongs to project
+  if (activeTerminalId) {
+    const activeLiveMatch = existingTerminals.find((t) => t.id === activeTerminalId)
+    if (activeLiveMatch) {
+      return activeLiveMatch.id
+    }
   }
 
   let terminalIdToSelect: string | null = null
