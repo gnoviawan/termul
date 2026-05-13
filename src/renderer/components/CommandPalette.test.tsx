@@ -40,6 +40,7 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     onOpenProjectSettings: vi.fn(),
     onOpenAppPreferences: vi.fn(),
     onOpenCommandHistory: vi.fn(),
+    onOpenShortcutMenu: vi.fn(),
     getShortcutLabel: (id) =>
       ({
         newTerminal: 'Ctrl+T',
@@ -143,7 +144,8 @@ describe('CommandPalette', () => {
       { label: 'Save Workspace Snapshot', commandId: 'save-snapshot', callback: 'onSaveSnapshot' },
       { label: 'Project Settings', commandId: 'open-project-settings', callback: 'onOpenProjectSettings' },
       { label: 'App Preferences', commandId: 'open-app-preferences', callback: 'onOpenAppPreferences' },
-      { label: 'Command History', commandId: 'open-command-history', callback: 'onOpenCommandHistory' }
+      { label: 'Command History', commandId: 'open-command-history', callback: 'onOpenCommandHistory' },
+      { label: 'Open Shortcut Menu', commandId: 'open-shortcut-menu', callback: 'onOpenShortcutMenu' }
     ]
 
     for (const testCase of cases) {
@@ -169,7 +171,8 @@ describe('CommandPalette', () => {
       onNewBrowserTab: undefined,
       onOpenProjectSettings: undefined,
       onOpenAppPreferences: undefined,
-      onOpenCommandHistory: undefined
+      onOpenCommandHistory: undefined,
+      onOpenShortcutMenu: undefined
     })
 
     expect(screen.queryByText('New Terminal')).not.toBeInTheDocument()
@@ -178,6 +181,7 @@ describe('CommandPalette', () => {
     expect(screen.queryByText('Project Settings')).not.toBeInTheDocument()
     expect(screen.queryByText('App Preferences')).not.toBeInTheDocument()
     expect(screen.queryByText('Command History')).not.toBeInTheDocument()
+    expect(screen.queryByText('Open Shortcut Menu')).not.toBeInTheDocument()
     expect(screen.getByText('Switch to Project: Alpha')).toBeInTheDocument()
   })
 

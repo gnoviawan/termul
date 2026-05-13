@@ -116,6 +116,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+	const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
 		useState(false);
 	const [closeConfirmTerminal, setCloseConfirmTerminal] = useState<{
@@ -429,6 +430,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const handleOpenCommandHistory = useCallback(() => {
 		setIsCommandPaletteOpen(false);
 		setIsCommandHistoryOpen(true);
+	}, []);
+
+	const handleOpenShortcutMenu = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsShortcutMenuOpen(true);
 	}, []);
 
 	// Keyboard shortcuts
@@ -1079,7 +1085,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
-				<TitleBar />
+				<TitleBar
+					isShortcutsOpen={isShortcutMenuOpen}
+					onShortcutsOpenChange={setIsShortcutMenuOpen}
+				/>
 				<div className="flex-1 flex items-center justify-center">
 					<div className="text-muted-foreground text-sm">Loading...</div>
 				</div>
@@ -1089,7 +1098,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
-			<TitleBar />
+			<TitleBar
+				isShortcutsOpen={isShortcutMenuOpen}
+				onShortcutsOpenChange={setIsShortcutMenuOpen}
+			/>
 
 			<div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
 				{/* Sidebar */}
@@ -1206,6 +1218,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onOpenProjectSettings={handleOpenProjectSettings}
 				onOpenAppPreferences={handleOpenAppPreferences}
 				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+				onOpenShortcutMenu={handleOpenShortcutMenu}
 				getShortcutLabel={getShortcutLabel}
 				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
