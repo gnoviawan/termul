@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 
 lazy_static::lazy_static! {
     static ref URL_REGEX: Regex = Regex::new(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com").unwrap();
+    static ref URL_REGEX_FALLBACK: Regex = Regex::new(r"(https://[^\s]+\.trycloudflare\.com)").unwrap();
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -229,18 +230,20 @@ pub async fn tunnel_start(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            let line_trimmed = line.trim().to_string();
+            if line_trimmed.is_empty() { continue; }
+
             let _ = app_stdout.emit(
                 "tunnel-log",
                 TunnelLogEvent {
                     tunnel_id: id_stdout.clone(),
-                    line: line.clone(),
+                    line: line_trimmed.clone(),
                 },
             );
-            if let Some(url) = extract_url(&line) {
+            if let Some(url) = extract_url(&line_trimmed) {
                 set_session_status(&id_stdout, "running", Some(url.clone()), None).await;
                 emit_status(&app_stdout, &id_stdout, "running", Some(url), None);
-            } else if line.contains("Registered tunnel connection") || line.contains("Connection established") {
-                // Untuk Named Tunnel, kita mungkin tidak dapat URL dari log, tapi kita tahu tunnel sudah up
+            } else if line_trimmed.contains("Registered tunnel connection") || line_trimmed.contains("Connection established") {
                 set_session_status(&id_stdout, "running", None, None).await;
                 emit_status(&app_stdout, &id_stdout, "running", None, None);
             }
@@ -253,20 +256,23 @@ pub async fn tunnel_start(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            let line_trimmed = line.trim().to_string();
+            if line_trimmed.is_empty() { continue; }
+
             let _ = app_stderr.emit(
                 "tunnel-log",
                 TunnelLogEvent {
                     tunnel_id: id_stderr.clone(),
-                    line: line.clone(),
+                    line: line_trimmed.clone(),
                 },
             );
 
-            if let Some(url) = extract_url(&line) {
+            if let Some(url) = extract_url(&line_trimmed) {
                 set_session_status(&id_stderr, "running", Some(url.clone()), None).await;
                 emit_status(&app_stderr, &id_stderr, "running", Some(url), None);
             }
 
-            if let Some((message, code)) = classify_cloudflared_error(&line) {
+            if let Some((message, code)) = classify_cloudflared_error(&line_trimmed) {
                 set_session_status(
                     &id_stderr,
                     "error",
@@ -297,8 +303,14 @@ pub async fn tunnel_start(
 }
 
 fn extract_url(line: &str) -> Option<String> {
-    URL_REGEX
-        .find(line)
+    if let Some(m) = URL_REGEX.find(line) {
+        return Some(m.as_str().trim_matches(',').to_string());
+    }
+    
+    // Fallback if the standard regex fails
+    URL_REGEX_FALLBACK
+        .captures(line)
+        .and_then(|cap| cap.get(1))
         .map(|m| m.as_str().trim_matches(',').to_string())
 }
 

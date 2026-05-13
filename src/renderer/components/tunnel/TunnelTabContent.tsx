@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Copy, Square, Globe, Play, Trash2, Settings, List, Info, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { Copy, Square, Globe, Play, Trash2, Settings, List, Info, ChevronDown, ChevronUp, ExternalLink, ClipboardCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { useTunnelStore } from '@/stores/tunnel-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils'
 import { openerApi } from '@/lib/api'
 import type { TunnelConfig } from '@shared/types/ipc.types'
 import { CloudflaredSetupModal } from './CloudflaredSetupModal'
+
+import { tunnelApi } from '@/lib/api'
 
 interface TunnelTabContentProps {
   tunnelId: string
@@ -19,8 +21,37 @@ export function TunnelTabContent({ tunnelId, isVisible }: TunnelTabContentProps)
   const stopTunnel = useTunnelStore((state) => state.stopTunnel)
   const startTunnel = useTunnelStore((state) => state.startTunnel)
   const clearLogs = useTunnelStore((state) => state.clearLogs)
+  const appendLog = useTunnelStore((state) => state.appendLog)
+  const upsertSession = useTunnelStore((state) => state.upsertSession)
   
   const activeProject = useProjectStore((state) => state.projects.find(p => p.id === state.activeProjectId))
+
+  useEffect(() => {
+    if (!isVisible) return
+
+    const unsubStatus = tunnelApi.onStatusChanged((event) => {
+      if (event.tunnelId === tunnelId) {
+        upsertSession({ 
+          id: tunnelId, 
+          configId: tunnelId, 
+          status: event.status, 
+          publicUrl: event.publicUrl ?? null, 
+          lastError: event.lastError ?? null 
+        })
+      }
+    })
+
+    const unsubLog = tunnelApi.onLog((event) => {
+      if (event.tunnelId === tunnelId) {
+        appendLog(tunnelId, event.line)
+      }
+    })
+
+    return () => {
+      unsubStatus()
+      unsubLog()
+    }
+  }, [isVisible, tunnelId, appendLog, upsertSession])
 
   const tunnelLogs = useMemo(
     () => logs.filter((log) => log.tunnelId === tunnelId),
@@ -56,7 +87,17 @@ export function TunnelTabContent({ tunnelId, isVisible }: TunnelTabContentProps)
 
   const openInBrowser = async (): Promise<void> => {
     if (!session?.publicUrl) return
-    await openerApi.openWithExternalApp(session.publicUrl)
+    try {
+      const result = await openerApi.openWithExternalApp(session.publicUrl)
+      if (!result.success) {
+        // Fallback: Use window.open if plugin fails, though Tauri might block this
+        window.open(session.publicUrl, '_blank')
+        toast.error('Gagal membuka browser otomatis, link disalin ke clipboard')
+        await navigator.clipboard.writeText(session.publicUrl)
+      }
+    } catch (e) {
+      window.open(session.publicUrl, '_blank')
+    }
   }
 
   const handleStart = useCallback(async () => {
@@ -246,13 +287,26 @@ export function TunnelTabContent({ tunnelId, isVisible }: TunnelTabContentProps)
         <div className="flex-1 flex flex-col bg-background min-w-0">
           <div className="flex items-center justify-between px-4 py-2 border-b">
             <div className="text-[11px] font-medium text-muted-foreground">Live Logs</div>
-            <button 
-              className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-red-500 transition-colors" 
-              title="Clear Logs"
-              onClick={() => clearLogs(tunnelId)}
-            >
-              <Trash2 size={13} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button 
+                className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-primary transition-colors flex items-center gap-1" 
+                title="Copy All Logs"
+                onClick={async () => {
+                  const allLogs = [...tunnelLogs].reverse().map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.line}`).join('\n')
+                  await navigator.clipboard.writeText(allLogs)
+                  toast.success('Logs disalin')
+                }}
+              >
+                <ClipboardCheck size={13} />
+              </button>
+              <button 
+                className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-red-500 transition-colors" 
+                title="Clear Logs"
+                onClick={() => clearLogs(tunnelId)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
           </div>
           <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-relaxed bg-terminal-bg text-terminal-fg">
             {tunnelLogs.length ? (
