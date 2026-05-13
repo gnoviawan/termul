@@ -35,6 +35,8 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
 
 export const TOC_SETTINGS_KEY = "settings/toc";
 
+export type TerminalUrlOpenMode = "system" | "termul";
+
 // Application-wide settings
 export interface AppSettings {
 	terminalFontFamily: string;
@@ -47,6 +49,7 @@ export interface AppSettings {
 	orphanDetectionEnabled: boolean; // Enable automatic cleanup of inactive terminals
 	orphanDetectionTimeout: number | null; // Timeout in ms, null = disabled
 	confirmTerminalClose: boolean; // Show a confirmation dialog before closing a terminal
+	terminalUrlOpenMode: TerminalUrlOpenMode; // Controls how Ctrl/Cmd+Click terminal URLs are opened
 	sidebarVisible: boolean;
 	fileExplorerVisible: boolean;
 }
@@ -96,6 +99,15 @@ export const TERMINAL_RENDERER_OPTIONS = [
 	{ value: "dom", label: "DOM" },
 ];
 
+// Terminal URL opening mode options
+export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
+	value: TerminalUrlOpenMode;
+	label: string;
+}> = [
+	{ value: "system", label: "System Default Browser" },
+	{ value: "termul", label: "Termul Browser" },
+];
+
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -108,6 +120,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	orphanDetectionEnabled: true,
 	orphanDetectionTimeout: 600000, // 10 minutes
 	confirmTerminalClose: true,
+	terminalUrlOpenMode: "system",
 	sidebarVisible: true,
 	fileExplorerVisible: true,
 };
