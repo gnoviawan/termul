@@ -5,6 +5,7 @@ mod migrations;
 mod pty;
 mod shell_paths;
 mod trackers;
+mod tunnel;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -696,6 +697,11 @@ pub fn run() {
             detect_shells,
             get_default_shell,
             get_home_directory,
+            // Tunnel commands
+            commands::tunnel_start,
+            commands::tunnel_stop,
+            commands::tunnel_get_status,
+            commands::tunnel_list,
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_write,
@@ -769,6 +775,7 @@ pub fn run() {
                 // a thread without a Tokio reactor, e.g. macOS WKWebView events)
                 tauri::async_runtime::spawn(async move {
                     pty_manager_clone.kill_all().await;
+                    crate::tunnel::kill_all_tunnels().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
