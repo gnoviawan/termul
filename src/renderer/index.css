@@ -108,6 +108,45 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* Anti-flicker for xterm.js terminal rendering */
+  .xterm {
+    /* Force GPU compositing to prevent flicker during re-renders */
+    transform: translateZ(0);
+    will-change: contents;
+  }
+
+  .xterm .xterm-screen {
+    /* Prevent screen flash during buffer updates */
+    backface-visibility: hidden;
+  }
+
+  .xterm .xterm-rows {
+    /* Stabilize row rendering to prevent layout shifts */
+    contain: layout style;
+  }
+
+  .xterm .xterm-cursor-layer {
+    /* Prevent cursor layer from causing full repaint */
+    isolation: isolate;
+  }
+
+  .xterm .xterm-viewport {
+    /* Smooth viewport updates */
+    overscroll-behavior: contain;
+  }
+
+  /* Prevent invisible xterm containers from causing layout flash */
+  .xterm-helper-textarea {
+    /* Keep helper textarea stable */
+    caret-color: transparent;
+  }
+
+  /* Disable xterm cursor animation to prevent continuous repaints */
+  .xterm .xterm-cursor-layer .xterm-cursor {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 @layer utilities {

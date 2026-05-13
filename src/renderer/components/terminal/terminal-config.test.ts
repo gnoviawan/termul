@@ -31,9 +31,9 @@ describe('getTerminalOptions', () => {
     const macOptions = getTerminalOptions('MacIntel')
 
     // Both should have base options
-    expect(windowsOptions.cursorBlink).toBe(true)
+    expect(windowsOptions.cursorBlink).toBe(false)
     expect(windowsOptions.cursorStyle).toBe('block')
-    expect(macOptions.cursorBlink).toBe(true)
+    expect(macOptions.cursorBlink).toBe(false)
     expect(macOptions.cursorStyle).toBe('block')
   })
 })
@@ -47,6 +47,6 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
   it('should have expected default values', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.fontSize).toBe(14)
     expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(10000)
-    expect(DEFAULT_TERMINAL_OPTIONS.cursorBlink).toBe(true)
+    expect(DEFAULT_TERMINAL_OPTIONS.cursorBlink).toBe(false)
   })
 })

@@ -136,9 +136,37 @@ export function TauriTerminal(): React.JSX.Element {
 				return;
 			}
 
-			// Data I/O: PTY → Terminal
+			// Data I/O: PTY → Terminal (buffered to prevent flicker)
+			const writeBuffer: { data: string; timer: ReturnType<typeof setTimeout> | null; raf: number | null } = {
+				data: "",
+				timer: null,
+				raf: null,
+			};
+			const flushBuffer = (): void => {
+				if (writeBuffer.data.length > 0 && !disposedRef.current) {
+					const chunk = writeBuffer.data;
+					writeBuffer.data = "";
+					term.write(chunk);
+				}
+				if (writeBuffer.timer) { clearTimeout(writeBuffer.timer); writeBuffer.timer = null; }
+				if (writeBuffer.raf !== null) { cancelAnimationFrame(writeBuffer.raf); writeBuffer.raf = null; }
+			};
+			const bufferedWrite = (chunk: string): void => {
+				writeBuffer.data += chunk;
+				if (writeBuffer.raf === null && writeBuffer.timer === null) {
+					writeBuffer.raf = requestAnimationFrame(() => {
+						writeBuffer.raf = null;
+						flushBuffer();
+					});
+					writeBuffer.timer = setTimeout(() => {
+						writeBuffer.timer = null;
+						if (writeBuffer.raf !== null) { cancelAnimationFrame(writeBuffer.raf); writeBuffer.raf = null; }
+						flushBuffer();
+					}, 16);
+				}
+			};
 			const unlistenData = pty.onData((data) => {
-				if (!disposedRef.current) term.write(data);
+				if (!disposedRef.current) bufferedWrite(data);
 			});
 			cleanupFnsRef.current.push(unlistenData);
 

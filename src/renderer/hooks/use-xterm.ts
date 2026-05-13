@@ -90,7 +90,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       fontSize,
       lineHeight: 1.2,
       theme: TERMINAL_THEME,
-      cursorBlink: true,
+      cursorBlink: false,
       cursorStyle: 'block',
       allowTransparency: false,
       scrollback,

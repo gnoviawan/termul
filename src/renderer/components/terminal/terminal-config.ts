@@ -39,7 +39,7 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
 	fontSize: 14,
 	lineHeight: 1.2,
 	theme: TERMINAL_THEME,
-	cursorBlink: true,
+	cursorBlink: false,
 	cursorStyle: "block",
 	allowTransparency: false,
 	scrollback: 10000,

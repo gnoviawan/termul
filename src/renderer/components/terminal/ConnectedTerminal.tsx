@@ -115,6 +115,8 @@ const VISIBILITY_RECOVERY_DELAY_MS = 150;
 const POWER_RESUME_RECOVERY_DELAY_MS = 300;
 const ACTIVITY_DEBOUNCE_MS = 1000;
 const CLIPBOARD_RATE_LIMIT_MS = 100;
+const WRITE_BUFFER_FLUSH_MS = 16; // ~60fps - batch rapid writes into single render frame
+const RESIZE_DEBOUNCE_OBSERVER_MS = 100; // debounce ResizeObserver to prevent rapid re-renders
 
 const shouldUseWebglRenderer = (
 	rendererPreference: "auto" | "webgl" | "dom",
@@ -234,6 +236,11 @@ function ConnectedTerminalComponent({
 	const lastActivityUpdateRef = useRef<number>(0);
 	const pendingActivityUpdateRef = useRef<{ id: string } | null>(null);
 	const lastClipboardOpRef = useRef<number>(0);
+	// Write buffer: batch rapid PTY data into single write per frame to prevent flicker
+	const writeBufferRef = useRef<string>("");
+	const writeBufferFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const writeBufferRafRef = useRef<number | null>(0);
+	const pendingResizeRef = useRef<(() => void) | null>(null);
 
 	// 4. STATE
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
@@ -250,6 +257,45 @@ function ConnectedTerminalComponent({
 		}
 		webglContextLostRef.current = false;
 	}, []);
+
+	// Flush write buffer to terminal in a single call per frame
+	const flushWriteBuffer = useCallback((): void => {
+		const term = terminalRef.current;
+		const buf = writeBufferRef.current;
+		if (term && buf.length > 0) {
+			writeBufferRef.current = "";
+			if (writeBufferFlushRef.current) {
+				clearTimeout(writeBufferFlushRef.current);
+				writeBufferFlushRef.current = null;
+			}
+			if (writeBufferRafRef.current !== null) {
+				cancelAnimationFrame(writeBufferRafRef.current);
+				writeBufferRafRef.current = null;
+			}
+			term.write(buf);
+		}
+	}, []);
+
+	// Buffer incoming PTY data to prevent flicker from rapid small writes
+	const bufferWrite = useCallback((data: string): void => {
+		writeBufferRef.current += data;
+		// Schedule flush if not already scheduled
+		if (writeBufferRafRef.current === null && writeBufferFlushRef.current === null) {
+			writeBufferRafRef.current = requestAnimationFrame(() => {
+				writeBufferRafRef.current = null;
+				flushWriteBuffer();
+			});
+			// Safety fallback: force flush after max delay even if rAF doesn't fire
+			writeBufferFlushRef.current = setTimeout(() => {
+				writeBufferFlushRef.current = null;
+				if (writeBufferRafRef.current !== null) {
+					cancelAnimationFrame(writeBufferRafRef.current);
+					writeBufferRafRef.current = null;
+				}
+				flushWriteBuffer();
+			}, WRITE_BUFFER_FLUSH_MS);
+		}
+	}, [flushWriteBuffer]);
 
 	const performFit = (force = false): boolean => {
 		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
@@ -401,15 +447,30 @@ function ConnectedTerminalComponent({
 		};
 		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) loadWebglAddon(terminal);
 		loadWebglAddonRef.current = loadWebglAddon;
-		requestAnimationFrame(() => performFit(true));
-		if (autoFocus) terminal.focus();
-		const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => performFit()));
+		// Only fit/focus when visible — prevents layout flash on hidden tabs
+		if (isVisible) {
+			requestAnimationFrame(() => performFit(true));
+			if (autoFocus) terminal.focus();
+		} else {
+			needsResizeOnReadyRef.current = true;
+		}
+		const resizeObserver = new ResizeObserver(() => {
+			if (isVisible && pendingResizeRef.current === null) {
+				pendingResizeRef.current = () => {
+					pendingResizeRef.current = null;
+					performFit();
+				};
+				requestAnimationFrame(pendingResizeRef.current as () => void);
+			} else if (!isVisible) {
+				needsResizeOnReadyRef.current = true;
+			}
+		});
 		resizeObserver.observe(containerRef.current);
 		const dataDisposable = terminal.onData(handleTerminalData);
 		const resizeDisposable = terminal.onResize(({ cols, rows }) => handleResize(cols, rows));
 		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: string) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
-				terminalRef.current.write(data);
+				bufferWrite(data);
 				const now = Date.now();
 				const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id);
 				if (terminalRecord) {
@@ -474,10 +535,33 @@ function ConnectedTerminalComponent({
 			if (cleanupExitListenerRef.current) cleanupExitListenerRef.current();
 			if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
 			if (activityTimeoutRef.current) clearTimeout(activityTimeoutRef.current);
+			// Flush any pending write buffer before disposal
+			if (writeBufferFlushRef.current) { clearTimeout(writeBufferFlushRef.current); writeBufferFlushRef.current = null; }
+			if (writeBufferRafRef.current !== null) { cancelAnimationFrame(writeBufferRafRef.current); writeBufferRafRef.current = null; }
+			writeBufferRef.current = "";
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned]);
+	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned, bufferWrite, isVisible]);
+
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
+
+	// When tab becomes visible, perform deferred fit and focus
+	// Track isVisible via ref to avoid stale closure in rAF callback
+	const onVisible = useRef<(() => void) | null>(null);
+	onVisible.current = () => {
+		if (needsResizeOnReadyRef.current && terminalRef.current) {
+			needsResizeOnReadyRef.current = false;
+			requestAnimationFrame(() => {
+				performFit(true);
+				if (autoFocus) terminalRef.current?.focus();
+			});
+		}
+	};
+	useEffect(() => {
+		if (isVisible) onVisible.current?.();
+	}, [isVisible, autoFocus]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 

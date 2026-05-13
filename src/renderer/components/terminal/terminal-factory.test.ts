@@ -61,7 +61,7 @@ describe("terminalFactory", () => {
 			expect(terminal).toBeDefined();
 			expect(terminal.options).toBeDefined();
 			// Default options from terminal-config
-			expect(terminal.options.cursorBlink).toBe(true);
+			expect(terminal.options.cursorBlink).toBe(false);
 			expect(terminal.options.cursorStyle).toBe("block");
 			expect(terminal.options.scrollback).toBe(10000);
 		});
