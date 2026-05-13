@@ -926,5 +926,52 @@ describe('WorkspaceLayout - Empty States', () => {
         expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/workspace/a')
       })
     })
+
+    it('does not re-run terminal sync when terminal ids stay unchanged across rerenders', async () => {
+      const projects = [createProject('a', '/workspace/a', 'blue')]
+      const terminal = {
+        id: 'terminal-a',
+        projectId: 'a',
+        name: 'Terminal A',
+        shell: 'bash',
+        ptyId: 'pty-a'
+      } as Terminal
+
+      mockUseProjects.mockReturnValue(projects)
+      mockUseTerminals.mockReturnValue([terminal])
+      mockUseAllTerminals.mockReturnValue([terminal])
+      mockUseActiveTerminal.mockReturnValue(terminal)
+      mockUseActiveTerminalId.mockReturnValue('terminal-a')
+      mockUseActiveProject.mockReturnValue(projects[0])
+      mockUseActiveProjectId.mockReturnValue('a')
+
+      const view = renderWithRouter()
+
+      await waitFor(() => {
+        expect(mockApi.terminal.onData).toHaveBeenCalledTimes(1)
+      })
+
+      const consoleLogSpy = vi.spyOn(console, 'log')
+      const initialSyncCalls = consoleLogSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('[WorkspaceLayout] syncTerminalTabs CALL')
+      ).length
+
+      view.rerender(
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const syncCallsAfter = consoleLogSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('[WorkspaceLayout] syncTerminalTabs CALL')
+      ).length
+
+      expect(syncCallsAfter).toBe(initialSyncCalls)
+      consoleLogSpy.mockRestore()
+    })
   })
 })

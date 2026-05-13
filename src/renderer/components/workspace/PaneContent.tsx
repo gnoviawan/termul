@@ -237,6 +237,11 @@ export function PaneContent({
 									);
 								}
 								const isVisible = activeTab?.id === tab.id;
+								const connectedTerminalSpawnOptions = {
+									projectId: terminal.projectId,
+									shell: terminal.shell,
+									cwd: terminal.cwd,
+								};
 								return (
 									<div
 										key={tab.id}
@@ -250,11 +255,7 @@ export function PaneContent({
 											terminalId={terminal.ptyId}
 											storeTerminalId={terminal.id}
 											autoSpawn={false}
-											spawnOptions={{
-												projectId: terminal.projectId,
-												shell: terminal.shell,
-												cwd: terminal.cwd,
-											}}
+											spawnOptions={connectedTerminalSpawnOptions}
 											onBoundToStoreTerminal={(ptyId) => {
 												if (terminal.ptyId !== ptyId) {
 													setTerminalPtyId(terminal.id, ptyId);

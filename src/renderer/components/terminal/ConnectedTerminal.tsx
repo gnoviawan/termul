@@ -220,10 +220,18 @@ function ConnectedTerminalComponent({
 	const initializedTerminalIdRef = useRef<string | undefined>(undefined);
 	const onExitRef = useRef(onExit);
 	onExitRef.current = onExit;
+	const onErrorRef = useRef(onError);
+	onErrorRef.current = onError;
+	const onSpawnedRef = useRef(onSpawned);
+	onSpawnedRef.current = onSpawned;
 	const onCommandRef = useRef(onCommand);
 	onCommandRef.current = onCommand;
 	const onBoundToStoreTerminalRef = useRef(onBoundToStoreTerminal);
 	onBoundToStoreTerminalRef.current = onBoundToStoreTerminal;
+	const spawnOptionsRef = useRef(spawnOptions);
+	spawnOptionsRef.current = spawnOptions;
+	const initialScrollbackRef = useRef(initialScrollback);
+	initialScrollbackRef.current = initialScrollback;
 	const currentLineRef = useRef<string>("");
 	const continuityProjectIdRef = useRef<string | undefined>(getInstrumentationProjectId(spawnOptions));
 	const needsResizeOnReadyRef = useRef<boolean>(false);
@@ -272,18 +280,20 @@ function ConnectedTerminalComponent({
 	};
 
 	const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({ terminal: terminalInstance });
+	const copySelectionRef = useRef(copySelection);
+	copySelectionRef.current = copySelection;
+	const pasteFromClipboardRef = useRef(pasteFromClipboard);
+	pasteFromClipboardRef.current = pasteFromClipboard;
 
 	useEffect(() => { if (externalTerminalId) ptyIdRef.current = externalTerminalId; }, [externalTerminalId]);
 
-	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptions); }, [spawnOptions]);
+	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptionsRef.current); }, [spawnOptions]);
 
 	useEffect(() => {
 		if (!externalTerminalId || isTerminalPendingPtyAssignment(externalTerminalId)) return;
 		useTerminalStore.getState().setRendererAttached(externalTerminalId, true);
 		return () => { useTerminalStore.getState().setRendererAttached(externalTerminalId, false); };
 	}, [externalTerminalId]);
-
-	const memoizedSpawnOptions = useMemo(() => spawnOptions, [spawnOptions]);
 
 	const handleTerminalData = useCallback(async (data: string): Promise<void> => {
 		const ptyId = ptyIdRef.current;
@@ -303,11 +313,11 @@ function ConnectedTerminalComponent({
 		}
 		try {
 			const result = await terminalApi.write(ptyId, data);
-			if (!result.success && onError) onError(result.error);
+			if (!result.success && onErrorRef.current) onErrorRef.current(result.error);
 		} catch (err) {
-			if (onError) onError(err instanceof Error ? err.message : "Write failed");
+			if (onErrorRef.current) onErrorRef.current(err instanceof Error ? err.message : "Write failed");
 		}
-	}, [onError]);
+	}, []);
 
 	const handleResize = useCallback(async (cols: number, rows: number): Promise<void> => {
 		const ptyId = ptyIdRef.current;
@@ -353,11 +363,10 @@ function ConnectedTerminalComponent({
 
 	useEffect(() => {
 		const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`;
-		const terminalKey = `${targetId}-${ptyId ? "active" : "restarting"}`;
 		if (!containerRef.current || !targetId) return;
-		if (didInitRef.current && initializedTerminalIdRef.current === terminalKey) return;
+		if (didInitRef.current) return;
 		didInitRef.current = true;
-		initializedTerminalIdRef.current = terminalKey;
+		initializedTerminalIdRef.current = targetId;
 		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize, scrollback: bufferSize };
 		const terminal = new Terminal(terminalOptions);
 		terminalRef.current = terminal;
@@ -377,8 +386,8 @@ function ConnectedTerminalComponent({
 				const now = Date.now();
 				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) return false;
 				switch (event.key.toLowerCase()) {
-					case "c": if (terminal.hasSelection()) { event.preventDefault(); lastClipboardOpRef.current = now; void copySelection(); return false; } return true;
-					case "v": event.preventDefault(); lastClipboardOpRef.current = now; void pasteFromClipboard(); return false;
+					case "c": if (terminal.hasSelection()) { event.preventDefault(); lastClipboardOpRef.current = now; void copySelectionRef.current(); return false; } return true;
+					case "v": event.preventDefault(); lastClipboardOpRef.current = now; void pasteFromClipboardRef.current(); return false;
 					case "a": terminal.selectAll(); return false;
 				}
 			}
@@ -441,7 +450,8 @@ function ConnectedTerminalComponent({
 				if (!autoSpawn || spawnInFlightRef.current || ptyIdRef.current) return;
 				spawnInFlightRef.current = true;
 				try {
-					const result = await terminalApi.spawn({ ...memoizedSpawnOptions, shell: memoizedSpawnOptions?.shell || undefined, cols: terminal.cols || 80, rows: terminal.rows || 24 });
+					const currentSpawnOptions = spawnOptionsRef.current;
+					const result = await terminalApi.spawn({ ...currentSpawnOptions, shell: currentSpawnOptions?.shell || undefined, cols: terminal.cols || 80, rows: terminal.rows || 24 });
 					if (result.success) {
 						ptyIdRef.current = result.data.id;
 						useTerminalStore.getState().setRendererAttached(result.data.id, true);
@@ -449,17 +459,17 @@ function ConnectedTerminalComponent({
 						registerTerminal(result.data.id, terminal);
 						const transcript = useTerminalStore.getState().peekTranscript(result.data.id);
 						if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(result.data.id); }
-						else if (initialScrollback?.length) restoreScrollback(terminal, initialScrollback);
-						if (onSpawned) onSpawned(result.data.id);
+						else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
+						if (onSpawnedRef.current) onSpawnedRef.current(result.data.id);
 						if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(result.data.id);
-					} else if (onError) onError(result.error);
-				} catch (err) { if (onError) onError(err instanceof Error ? err.message : "Spawn failed"); } finally { spawnInFlightRef.current = false; }
+					} else if (onErrorRef.current) onErrorRef.current(result.error);
+				} catch (err) { if (onErrorRef.current) onErrorRef.current(err instanceof Error ? err.message : "Spawn failed"); } finally { spawnInFlightRef.current = false; }
 			} else {
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId);
 				if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(externalTerminalId); }
-				else if (initialScrollback?.length) restoreScrollback(terminal, initialScrollback);
+				else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
 				if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(externalTerminalId);
 			}
 		};
@@ -477,7 +487,7 @@ function ConnectedTerminalComponent({
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned]);
+	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handleResize, setTerminalHealthStatus, disposeWebglAddon]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 
