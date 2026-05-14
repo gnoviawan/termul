@@ -55,11 +55,6 @@ impl SSHConnectionManager {
         }
     }
 
-    /// Get a reference to the app handle
-    pub fn app_handle(&self) -> &AppHandle {
-        &self.app_handle
-    }
-
     /// Establish an SSH connection to the given profile
     pub async fn connect(
         &self,

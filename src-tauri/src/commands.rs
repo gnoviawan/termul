@@ -1456,10 +1456,6 @@ pub async fn ssh_port_forward_start(
         _ => return Ok(IpcResult::error("Profile not found", "SSH_PROFILE_NOT_FOUND")),
     };
 
-    let pf_manager = crate::ssh::port_forward::PortForwardManager::new(
-        ssh_manager.connections.app_handle().clone(),
-    );
-
     let pf_request = crate::ssh::port_forward::PortForwardRequest {
         id: request.id,
         forward_type: request.forward_type,
@@ -1469,7 +1465,7 @@ pub async fn ssh_port_forward_start(
         label: request.label,
     };
 
-    match pf_manager
+    match ssh_manager.port_forwards
         .start_local_forward(&request.connection_id, pf_request, &profile.host, profile.port)
         .await
     {
@@ -1484,11 +1480,7 @@ pub async fn ssh_port_forward_stop(
     forward_id: String,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
-    let pf_manager = crate::ssh::port_forward::PortForwardManager::new(
-        ssh_manager.connections.app_handle().clone(),
-    );
-
-    match pf_manager.stop_forward(&connection_id, &forward_id) {
+    match ssh_manager.port_forwards.stop_forward(&connection_id, &forward_id) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
     }
@@ -1596,11 +1588,24 @@ pub async fn sftp_rename(
 #[tauri::command]
 pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, String> {
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("termul-askpass-{}.bat", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp")));
+    let id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp").to_string();
+    let script_path = temp_dir.join(format!("termul-askpass-{}.bat", id));
+    let password_path = temp_dir.join(format!("termul-askpass-{}.dat", id));
 
-    // Write a batch script that echoes the password (SSH_ASKPASS protocol: write password to stdout)
-    let content = format!("@echo off\r\necho {}\r\n", password.replace('%', "%%"));
+    // Write the raw password to a separate data file to avoid batch metacharacter injection.
+    // The .bat script simply `type`s this file to stdout (SSH_ASKPASS protocol).
+    if let Err(e) = std::fs::write(&password_path, password.as_bytes()) {
+        return Ok(IpcResult::error(format!("Failed to create askpass data: {}", e), "SSH_ASKPASS_ERROR"));
+    }
+
+    // The batch script outputs the password file contents and cleans up both files on exit.
+    let content = format!(
+        "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
+        password_path.to_string_lossy(),
+        password_path.to_string_lossy(),
+    );
     if let Err(e) = std::fs::write(&script_path, &content) {
+        let _ = std::fs::remove_file(&password_path);
         return Ok(IpcResult::error(format!("Failed to create askpass: {}", e), "SSH_ASKPASS_ERROR"));
     }
 
