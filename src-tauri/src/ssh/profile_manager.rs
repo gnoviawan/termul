@@ -55,7 +55,7 @@ struct StoredSSHProfile {
 /// Active SSH connections may retain a process-memory copy of the relevant
 /// secret only so automatic reconnect can re-authenticate; SSH agent auth avoids
 /// that runtime secret retention path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SSHProfile {
     pub id: String,
@@ -82,6 +82,35 @@ pub struct SSHProfile {
     /// Indicates whether a passphrase exists in the OS keychain
     #[serde(default)]
     pub has_stored_passphrase: bool,
+}
+
+impl std::fmt::Debug for SSHProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SSHProfile")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth_method", &self.auth_method)
+            .field("private_key_path", &self.private_key_path)
+            .field(
+                "password",
+                &self.password.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .field("jump_host_id", &self.jump_host_id)
+            .field("port_forwards", &self.port_forwards)
+            .field("tags", &self.tags)
+            .field("last_connected", &self.last_connected)
+            .field("imported_from", &self.imported_from)
+            .field("has_stored_password", &self.has_stored_password)
+            .field("has_stored_passphrase", &self.has_stored_passphrase)
+            .finish()
+    }
 }
 
 impl From<StoredSSHProfile> for SSHProfile {
@@ -149,10 +178,10 @@ impl ProfileManager {
             .store(STORE_FILE)
             .map_err(|e| format!("Failed to open SSH store: {}", e))?;
 
-        let stored: Vec<StoredSSHProfile> = store
-            .get(STORE_KEY)
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
+        let value = store.get(STORE_KEY).unwrap_or(serde_json::json!([]));
+        
+        let stored: Vec<StoredSSHProfile> = serde_json::from_value(value)
+            .map_err(|e| format!("Failed to deserialize SSH profiles: {}", e))?;
 
         Ok(stored.into_iter().map(SSHProfile::from).collect())
     }
