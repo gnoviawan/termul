@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   Folder,
   File,
@@ -129,9 +129,9 @@ export function RemoteFileExplorer({
   }
 
   // Load initial directory on mount
-  useState(() => {
-    loadDirectory(initialPath)
-  })
+  useEffect(() => {
+    void loadDirectory(initialPath)
+  }, [initialPath, loadDirectory])
 
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`

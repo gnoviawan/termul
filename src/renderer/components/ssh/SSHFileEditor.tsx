@@ -25,6 +25,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
     const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, editingContent)
     if (result.success) {
       setStoreFile({ ...editingFile, originalContent: editingContent })
+      setConfirmClose(false)
       toast.success(`Saved: ${editingFile.name}`)
       setTimeout(() => setSaveAnimating(false), 600)
     } else {

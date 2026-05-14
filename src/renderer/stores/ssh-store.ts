@@ -63,9 +63,15 @@ export const useSSHStore = create<SSHState>((set, get) => ({
   editingContent: '',
 
   loadProfiles: async () => {
-    const result = await sshApi.listProfiles()
-    if (result.success) {
-      set({ profiles: result.data, isLoaded: true })
+    try {
+      const result = await sshApi.listProfiles()
+      if (result?.success) {
+        set({ profiles: result.data, isLoaded: true })
+      } else {
+        set({ isLoaded: true })
+      }
+    } catch {
+      set({ isLoaded: true })
     }
   },
 
@@ -99,9 +105,13 @@ export const useSSHStore = create<SSHState>((set, get) => ({
   importConfig: async () => {
     const result = await sshApi.importConfig()
     if (result.success && result.data.length > 0) {
-      set((state) => ({
-        profiles: [...state.profiles, ...result.data],
-      }))
+      set((state) => {
+        const byId = new Map(state.profiles.map((profile) => [profile.id, profile]))
+        for (const profile of result.data) {
+          byId.set(profile.id, profile)
+        }
+        return { profiles: Array.from(byId.values()) }
+      })
       return result.data
     }
     return []

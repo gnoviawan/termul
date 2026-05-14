@@ -5,6 +5,7 @@
 
 pub mod config_parser;
 pub mod connection;
+pub mod credential_store;
 pub mod port_forward;
 pub mod profile_manager;
 pub mod sftp;
@@ -30,6 +31,25 @@ impl SSHManager {
             connections,
             profiles,
             port_forwards,
+        }
+    }
+
+    pub async fn disconnect(&self, connection_id: &str) -> Result<(), String> {
+        self.port_forwards.stop_all_for_connection(connection_id);
+        self.connections.disconnect(connection_id).await
+    }
+
+    pub async fn shutdown(&self) {
+        self.port_forwards.stop_all();
+        let connection_ids = self.connections.connection_ids();
+        for connection_id in connection_ids {
+            if let Err(error) = self.connections.disconnect(&connection_id).await {
+                log::warn!(
+                    "[SSH] Failed to disconnect {} during shutdown: {}",
+                    connection_id,
+                    error
+                );
+            }
         }
     }
 }

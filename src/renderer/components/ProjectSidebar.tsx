@@ -686,13 +686,20 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 				const parsed = parseInt(saved, 10);
 				if (parsed >= SSH_MIN_HEIGHT && parsed <= SSH_MAX_HEIGHT) return parsed;
 			}
-		} catch {}
+		} catch {
+			return SSH_DEFAULT_HEIGHT;
+		}
 		return SSH_DEFAULT_HEIGHT;
 	});
 
 	const isDragging = useRef(false);
 	const startY = useRef(0);
 	const startHeight = useRef(0);
+	const latestHeight = useRef(height);
+
+	useEffect(() => {
+		latestHeight.current = height;
+	}, [height]);
 
 	const handleMouseDown = useCallback((e: React.MouseEvent) => {
 		e.preventDefault();
@@ -718,9 +725,10 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 			document.removeEventListener("mouseup", handleMouseUp);
 			// Persist
 			try {
-				const finalHeight = Math.min(SSH_MAX_HEIGHT, Math.max(SSH_MIN_HEIGHT, startHeight.current + (startY.current - (window.event as MouseEvent)?.clientY || 0)));
-				localStorage.setItem(SSH_HEIGHT_KEY, String(finalHeight));
-			} catch {}
+				localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
+			} catch {
+				// Ignore storage errors in restricted environments.
+			}
 		};
 
 		document.addEventListener("mousemove", handleMouseMove);
@@ -731,7 +739,9 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 	useEffect(() => {
 		try {
 			localStorage.setItem(SSH_HEIGHT_KEY, String(height));
-		} catch {}
+		} catch {
+			// Ignore storage errors in restricted environments.
+		}
 	}, [height]);
 
 	return (

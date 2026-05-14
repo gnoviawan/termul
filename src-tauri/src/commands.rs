@@ -355,7 +355,10 @@ pub async fn browser_tab_remove_annotation_overlay(
 ) -> Result<IpcResult<()>, String> {
     match browser_manager.remove_annotation_overlay(&tab_id) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_REMOVE_ANNOTATION_OVERLAY_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_REMOVE_ANNOTATION_OVERLAY_FAILED",
+        )),
     }
 }
 
@@ -367,9 +370,16 @@ pub async fn browser_tab_inject_annotation_markers(
     selected_id: Option<String>,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match browser_manager.inject_annotation_markers(&tab_id, &annotations_json, selected_id.as_deref()) {
+    match browser_manager.inject_annotation_markers(
+        &tab_id,
+        &annotations_json,
+        selected_id.as_deref(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED",
+        )),
     }
 }
 
@@ -382,7 +392,10 @@ pub async fn browser_tab_update_annotation_marker_selection(
 ) -> Result<IpcResult<()>, String> {
     match browser_manager.update_annotation_marker_selection(&tab_id, selected_id.as_deref()) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED",
+        )),
     }
 }
 
@@ -462,7 +475,11 @@ pub async fn browser_tab_report_region_captured(
     }
     log::debug!(
         "[BrowserTab] Region captured: tab={} x={} y={} w={} h={}",
-        tab_id, x, y, width, height
+        tab_id,
+        x,
+        y,
+        width,
+        height
     );
     app_handle
         .emit(
@@ -536,14 +553,14 @@ pub async fn browser_tab_report_element_captured(
         ));
     }
 
-    let attributes = attributes
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "Browser tab report element captured rejected: attributes must be an object".to_string())?;
+    let attributes = attributes.as_object().cloned().ok_or_else(|| {
+        "Browser tab report element captured rejected: attributes must be an object".to_string()
+    })?;
 
     log::debug!(
         "[BrowserTab] Element captured: tab={} tag={} selector=<redacted>",
-        tab_id, tag_name
+        tab_id,
+        tag_name
     );
     app_handle
         .emit(
@@ -589,7 +606,8 @@ pub async fn browser_tab_report_annotation_marker_clicked(
     }
     log::debug!(
         "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
-        tab_id, annotation_id
+        tab_id,
+        annotation_id
     );
     app_handle
         .emit(
@@ -728,7 +746,10 @@ fn rg_sidecar_name() -> &'static str {
     "rg-armv7-unknown-linux-gnueabihf"
 }
 
-#[cfg(all(target_os = "linux", not(any(target_arch = "aarch64", target_arch = "arm"))))]
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "aarch64", target_arch = "arm"))
+))]
 fn rg_sidecar_name() -> &'static str {
     "rg-x86_64-unknown-linux-musl"
 }
@@ -943,7 +964,8 @@ pub async fn search_content_stream(
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
 
-        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>, truncated: bool| {
+        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
+                           truncated: bool| {
             if pending.is_empty() {
                 return;
             }
@@ -1324,10 +1346,10 @@ pub async fn data_migration_rollback(
 // SSH Commands
 // ============================================================================
 
-use crate::ssh::SSHManager;
 use crate::ssh::config_parser;
 use crate::ssh::profile_manager::SSHProfile;
 use crate::ssh::sftp as sftp_ops;
+use crate::ssh::SSHManager;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1427,14 +1449,29 @@ pub async fn ssh_connect(
     request: SSHConnectRequest,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<crate::ssh::connection::SSHConnectionInfo>, String> {
-    let profile = match ssh_manager.profiles.get(&request.profile_id) {
+    // Load profile with credentials from OS keychain
+    let profile = match ssh_manager
+        .profiles
+        .get_with_credentials(&request.profile_id)
+    {
         Ok(Some(p)) => p,
-        Ok(None) => return Ok(IpcResult::error("Profile not found", "SSH_PROFILE_NOT_FOUND")),
+        Ok(None) => {
+            return Ok(IpcResult::error(
+                "Profile not found",
+                "SSH_PROFILE_NOT_FOUND",
+            ))
+        }
         Err(e) => return Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
     };
 
-    // Use request password, or fall back to stored profile password
-    let password = request.password.or_else(|| profile.password.clone());
+    // Use request password, or fall back to keychain-stored credential
+    let password = request
+        .password
+        .or_else(|| match profile.auth_method.as_str() {
+            "password" => profile.password.clone(),
+            "key" => profile.passphrase.clone(),
+            _ => None,
+        });
 
     match ssh_manager
         .connections
@@ -1443,7 +1480,9 @@ pub async fn ssh_connect(
     {
         Ok(info) => {
             // Update last_connected
-            let _ = ssh_manager.profiles.update_last_connected(&request.profile_id);
+            let _ = ssh_manager
+                .profiles
+                .update_last_connected(&request.profile_id);
             Ok(IpcResult::success(info))
         }
         Err(e) => Ok(IpcResult::error(e, "SSH_CONNECT_ERROR")),
@@ -1455,10 +1494,19 @@ pub async fn ssh_disconnect(
     connection_id: String,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match ssh_manager.connections.disconnect(&connection_id).await {
+    match ssh_manager.disconnect(&connection_id).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SSH_DISCONNECT_ERROR")),
     }
+}
+
+#[tauri::command]
+pub async fn ssh_get_connections(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<crate::ssh::connection::SSHConnectionInfo>>, String> {
+    Ok(IpcResult::success(
+        ssh_manager.connections.list_connections().await,
+    ))
 }
 
 #[tauri::command]
@@ -1466,15 +1514,25 @@ pub async fn ssh_port_forward_start(
     request: SSHPortForwardRequest,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<crate::ssh::port_forward::ActivePortForward>, String> {
-    // Get the profile to know host/port for the tunnel
-    let conn_info = match ssh_manager.connections.get_connection(&request.connection_id).await {
-        Some(info) => info,
-        None => return Ok(IpcResult::error("Connection not found", "SSH_CONNECTION_NOT_FOUND")),
-    };
+    if ssh_manager
+        .connections
+        .get_connection(&request.connection_id)
+        .await
+        .is_none()
+    {
+        return Ok(IpcResult::error(
+            "Connection not found",
+            "SSH_CONNECTION_NOT_FOUND",
+        ));
+    }
 
-    let profile = match ssh_manager.profiles.get(&conn_info.profile_id) {
-        Ok(Some(p)) => p,
-        _ => return Ok(IpcResult::error("Profile not found", "SSH_PROFILE_NOT_FOUND")),
+    let session = match ssh_manager
+        .connections
+        .clone_session(&request.connection_id)
+        .await
+    {
+        Ok(session) => session,
+        Err(e) => return Ok(IpcResult::error(e, "SSH_CONNECTION_NOT_FOUND")),
     };
 
     let pf_request = crate::ssh::port_forward::PortForwardRequest {
@@ -1486,8 +1544,9 @@ pub async fn ssh_port_forward_start(
         label: request.label,
     };
 
-    match ssh_manager.port_forwards
-        .start_local_forward(&request.connection_id, pf_request, &profile.host, profile.port)
+    match ssh_manager
+        .port_forwards
+        .start_local_forward(&request.connection_id, pf_request, session)
         .await
     {
         Ok(forward) => Ok(IpcResult::success(forward)),
@@ -1501,7 +1560,10 @@ pub async fn ssh_port_forward_stop(
     forward_id: String,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match ssh_manager.port_forwards.stop_forward(&connection_id, &forward_id) {
+    match ssh_manager
+        .port_forwards
+        .stop_forward(&connection_id, &forward_id)
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
     }
@@ -1513,10 +1575,14 @@ pub async fn sftp_list_dir(
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<Vec<crate::ssh::sftp::SFTPEntry>>, String> {
     let remote_path = request.remote_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::list_dir(&sftp, &remote_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::list_dir(&sftp, &remote_path)
+        })
+        .await
+    {
         Ok(entries) => Ok(IpcResult::success(entries)),
         Err(e) => Ok(IpcResult::error(e, "SFTP_ERROR")),
     }
@@ -1532,10 +1598,14 @@ pub async fn sftp_download(
     let local_path = request.local_path.clone();
     let conn_id = request.connection_id.clone();
     let app = app_handle.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, move |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, move |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
     }
@@ -1551,10 +1621,14 @@ pub async fn sftp_upload(
     let local_path = request.local_path.clone();
     let conn_id = request.connection_id.clone();
     let app = app_handle.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, move |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, move |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
     }
@@ -1566,10 +1640,14 @@ pub async fn sftp_delete(
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
     let remote_path = request.remote_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::delete_path(&sftp, &remote_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::delete_path(&sftp, &remote_path)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_DELETE_ERROR")),
     }
@@ -1581,10 +1659,14 @@ pub async fn sftp_mkdir(
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
     let remote_path = request.remote_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::mkdir(&sftp, &remote_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::mkdir(&sftp, &remote_path)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_MKDIR_ERROR")),
     }
@@ -1597,10 +1679,14 @@ pub async fn sftp_rename(
 ) -> Result<IpcResult<()>, String> {
     let old_path = request.old_path.clone();
     let new_path = request.new_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::rename(&sftp, &old_path, &new_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::rename(&sftp, &old_path, &new_path)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_RENAME_ERROR")),
     }
@@ -1609,14 +1695,22 @@ pub async fn sftp_rename(
 #[tauri::command]
 pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, String> {
     let temp_dir = std::env::temp_dir();
-    let id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp").to_string();
+    let id = uuid::Uuid::new_v4()
+        .to_string()
+        .split('-')
+        .next()
+        .unwrap_or("tmp")
+        .to_string();
     let script_path = temp_dir.join(format!("termul-askpass-{}.bat", id));
     let password_path = temp_dir.join(format!("termul-askpass-{}.dat", id));
 
     // Write the raw password to a separate data file to avoid batch metacharacter injection.
     // The .bat script simply `type`s this file to stdout (SSH_ASKPASS protocol).
     if let Err(e) = std::fs::write(&password_path, password.as_bytes()) {
-        return Ok(IpcResult::error(format!("Failed to create askpass data: {}", e), "SSH_ASKPASS_ERROR"));
+        return Ok(IpcResult::error(
+            format!("Failed to create askpass data: {}", e),
+            "SSH_ASKPASS_ERROR",
+        ));
     }
 
     // The batch script outputs the password file contents and cleans up both files on exit.
@@ -1627,11 +1721,16 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
     );
     if let Err(e) = std::fs::write(&script_path, &content) {
         let _ = std::fs::remove_file(&password_path);
-        return Ok(IpcResult::error(format!("Failed to create askpass: {}", e), "SSH_ASKPASS_ERROR"));
+        return Ok(IpcResult::error(
+            format!("Failed to create askpass: {}", e),
+            "SSH_ASKPASS_ERROR",
+        ));
     }
 
     log::info!("[SSH] Created askpass helper at {:?}", script_path);
-    Ok(IpcResult::success(script_path.to_string_lossy().to_string()))
+    Ok(IpcResult::success(
+        script_path.to_string_lossy().to_string(),
+    ))
 }
 
 #[tauri::command]
@@ -1640,10 +1739,14 @@ pub async fn sftp_read_file(
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<String>, String> {
     let remote_path = request.remote_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::read_file_to_string(&sftp, &remote_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::read_file_to_string(&sftp, &remote_path)
+        })
+        .await
+    {
         Ok(content) => Ok(IpcResult::success(content)),
         Err(e) => Ok(IpcResult::error(e, "SFTP_READ_ERROR")),
     }
@@ -1656,10 +1759,14 @@ pub async fn sftp_write_file(
 ) -> Result<IpcResult<()>, String> {
     let remote_path = request.remote_path.clone();
     let content = request.content.clone().unwrap_or_default();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::write_file_from_string(&sftp, &remote_path, &content)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::write_file_from_string(&sftp, &remote_path, &content)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_WRITE_ERROR")),
     }
@@ -1671,10 +1778,14 @@ pub async fn sftp_create_file(
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
     let remote_path = request.remote_path.clone();
-    match ssh_manager.connections.with_session(&request.connection_id, |session| {
-        let sftp = sftp_ops::create_sftp(session)?;
-        sftp_ops::create_file(&sftp, &remote_path)
-    }).await {
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::create_file(&sftp, &remote_path)
+        })
+        .await
+    {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_CREATE_ERROR")),
     }

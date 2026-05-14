@@ -207,8 +207,8 @@ pub fn upload_file(
         return Err(format!("Local file not found: {}", local_path));
     }
 
-    let metadata = fs::metadata(local)
-        .map_err(|e| format!("Failed to read local file metadata: {}", e))?;
+    let metadata =
+        fs::metadata(local).map_err(|e| format!("Failed to read local file metadata: {}", e))?;
 
     let total_bytes = metadata.len();
 
@@ -310,10 +310,11 @@ pub fn write_file_from_string(sftp: &Sftp, remote_path: &str, content: &str) -> 
 /// Create an empty file on the remote
 pub fn create_file(sftp: &Sftp, remote_path: &str) -> Result<(), String> {
     let path = Path::new(remote_path);
-    // Check if file already exists
-    if path.exists() {
+    // Check the remote filesystem, not the local filesystem.
+    if sftp.stat(path).is_ok() {
         return Err(format!("File already exists: {}", remote_path));
     }
+
     let mut file = sftp
         .create(path)
         .map_err(|e| format!("Failed to create file '{}': {}", remote_path, e))?;

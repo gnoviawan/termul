@@ -29,6 +29,7 @@ const SSH_COMMANDS = {
   IMPORT_CONFIG: 'ssh_import_config',
   CONNECT: 'ssh_connect',
   DISCONNECT: 'ssh_disconnect',
+  GET_CONNECTIONS: 'ssh_get_connections',
   PORT_FORWARD_START: 'ssh_port_forward_start',
   PORT_FORWARD_STOP: 'ssh_port_forward_stop',
   SFTP_LIST_DIR: 'sftp_list_dir',
@@ -86,8 +87,7 @@ export function createSSHApi(): SSHApi {
     },
 
     async getConnections(): Promise<IpcResult<SSHConnection[]>> {
-      // Connections are tracked client-side via events
-      return { success: true, data: [] }
+      return invokeIpc<SSHConnection[]>(SSH_COMMANDS.GET_CONNECTIONS)
     },
 
     // Port forwarding
