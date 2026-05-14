@@ -254,13 +254,13 @@ impl ProfileManager {
 
         // Clear password if auth method changed away from password
         if profile.auth_method != "password" && profile.has_stored_password {
-            let _ = credential_store::delete_password(&profile.id);
+            credential_store::delete_password(&profile.id)?;
             profile.has_stored_password = false;
         }
 
         // Clear passphrase if auth method changed away from key
         if profile.auth_method != "key" && profile.has_stored_passphrase {
-            let _ = credential_store::delete_passphrase(&profile.id);
+            credential_store::delete_passphrase(&profile.id)?;
             profile.has_stored_passphrase = false;
         }
 

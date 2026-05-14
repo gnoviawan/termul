@@ -1577,16 +1577,26 @@ pub async fn sftp_download(
     let local_path = request.local_path.clone();
     let conn_id = request.connection_id.clone();
     let app = app_handle.clone();
-    match ssh_manager
+
+    // Clone session to avoid holding the per-connection mutex during long I/O
+    let session = match ssh_manager
         .connections
-        .with_session(&request.connection_id, move |session| {
-            let sftp = sftp_ops::create_sftp(session)?;
-            sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
-        })
+        .clone_session(&request.connection_id)
         .await
     {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+        Ok(s) => s,
+        Err(e) => return Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let sftp = sftp_ops::create_sftp(&session)?;
+        sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(IpcResult::success(())),
+        Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_DOWNLOAD_ERROR")),
     }
 }
 
@@ -1600,16 +1610,26 @@ pub async fn sftp_upload(
     let local_path = request.local_path.clone();
     let conn_id = request.connection_id.clone();
     let app = app_handle.clone();
-    match ssh_manager
+
+    // Clone session to avoid holding the per-connection mutex during long I/O
+    let session = match ssh_manager
         .connections
-        .with_session(&request.connection_id, move |session| {
-            let sftp = sftp_ops::create_sftp(session)?;
-            sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
-        })
+        .clone_session(&request.connection_id)
         .await
     {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+        Ok(s) => s,
+        Err(e) => return Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let sftp = sftp_ops::create_sftp(&session)?;
+        sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(IpcResult::success(())),
+        Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_UPLOAD_ERROR")),
     }
 }
 
@@ -1692,6 +1712,21 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
         ));
     }
 
+    // Restrict file permissions: owner-only on Unix, hidden attribute on Windows
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&password_path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        // Mark the data file as hidden to reduce casual exposure
+        use std::process::Command;
+        let _ = Command::new("attrib")
+            .args(["+H", &password_path.to_string_lossy()])
+            .output();
+    }
+
     // The batch script outputs the password file contents and cleans up both files on exit.
     let content = format!(
         "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
@@ -1705,6 +1740,16 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
             "SSH_ASKPASS_ERROR",
         ));
     }
+
+    // Spawn a background cleanup task that removes both files after a timeout,
+    // ensuring secrets don't persist on disk if the helper is never invoked.
+    let cleanup_script = script_path.clone();
+    let cleanup_password = password_path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let _ = std::fs::remove_file(&cleanup_password);
+        let _ = std::fs::remove_file(&cleanup_script);
+    });
 
     log::info!("[SSH] Created askpass helper at {:?}", script_path);
     Ok(IpcResult::success(

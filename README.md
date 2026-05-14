@@ -291,8 +291,6 @@ npm run tauri <command>  # Direct Tauri CLI access
 - Local port forwarding uses `ssh2` `channel_direct_tcpip` over the active SSH session; remote/reverse forwarding is not supported by the MVP command path yet.
 - `ssh2` intentionally stays on system OpenSSL for now. Enabling `vendored-openssl` forces a local OpenSSL source build that can fail in Windows/MSYS environments without a complete Perl module setup.
 
-## Recommended IDE Setup
-
 ## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=gnoviawan/termul&type=date&legend=top-left)](https://www.star-history.com/?type=date&repos=gnoviawan%2Ftermul)

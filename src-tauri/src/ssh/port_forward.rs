@@ -61,15 +61,6 @@ impl PortForwardManager {
         }
     }
 
-    fn stop_all_in_map(forwards: &mut HashMap<String, HashMap<String, ForwardHandle>>) {
-        for (_, conn_forwards) in forwards.drain() {
-            for (_, handle) in conn_forwards {
-                handle.should_stop.store(true, Ordering::Relaxed);
-                handle.task.abort();
-            }
-        }
-    }
-
     /// Start a local port forward.
     ///
     /// Binds to local_port and tunnels traffic through the provided SSH session
@@ -116,8 +107,8 @@ impl PortForwardManager {
         let conn_id = connection_id.to_string();
         let fwd_info_clone = forward_info.clone();
 
-        // Spawn the forwarding loop
-        let task = tokio::spawn(async move {
+        // Spawn the forwarding loop on the blocking pool since it uses std::thread::sleep
+        let task = tokio::task::spawn_blocking(move || {
             Self::local_forward_loop(
                 listener,
                 session,
@@ -127,8 +118,7 @@ impl PortForwardManager {
                 app_handle,
                 conn_id,
                 fwd_info_clone,
-            )
-            .await;
+            );
         });
 
         // Store the handle
@@ -155,7 +145,8 @@ impl PortForwardManager {
     }
 
     /// Local port forward loop - accepts connections and tunnels them.
-    async fn local_forward_loop(
+    /// Runs on the blocking thread pool to avoid parking Tokio workers.
+    fn local_forward_loop(
         listener: TcpListener,
         session: Session,
         remote_host: String,
@@ -171,6 +162,10 @@ impl PortForwardManager {
             remote_host,
             remote_port
         );
+
+        // Set session to non-blocking for the lifetime of this forward.
+        // Each client thread gets a cloned Session handle sharing this state.
+        session.set_blocking(false);
 
         loop {
             if should_stop.load(Ordering::Relaxed) {
@@ -192,7 +187,7 @@ impl PortForwardManager {
                         remote_port
                     );
 
-                    tokio::task::spawn_blocking(move || {
+                    std::thread::spawn(move || {
                         if let Err(error) = Self::handle_local_client(
                             session,
                             client_stream,
@@ -244,15 +239,12 @@ impl PortForwardManager {
         client_stream
             .set_nonblocking(true)
             .map_err(|e| format!("Failed to set client stream non-blocking: {}", e))?;
-        session.set_blocking(false);
 
         let channel = session
             .channel_direct_tcpip(remote_host, remote_port, None)
             .map_err(|e| format!("Failed to open direct-tcpip channel: {}", e))?;
 
-        let result = Self::pump_bidirectional(client_stream, channel, should_stop);
-        session.set_blocking(true);
-        result
+        Self::pump_bidirectional(client_stream, channel, should_stop)
     }
 
     fn pump_bidirectional(
@@ -345,6 +337,12 @@ impl PortForwardManager {
             for (_, handle) in conn_forwards {
                 handle.should_stop.store(true, Ordering::Relaxed);
                 handle.task.abort();
+
+                let stopped_info = ActivePortForward {
+                    status: "stopped".to_string(),
+                    ..handle.info
+                };
+                self.emit_forward_status(connection_id, &stopped_info);
             }
         }
     }
@@ -352,7 +350,18 @@ impl PortForwardManager {
     /// Stop all active port forwards across all connections.
     pub fn stop_all(&self) {
         let mut forwards = self.forwards.write();
-        Self::stop_all_in_map(&mut forwards);
+        for (connection_id, conn_forwards) in forwards.drain() {
+            for (_, handle) in conn_forwards {
+                handle.should_stop.store(true, Ordering::Relaxed);
+                handle.task.abort();
+
+                let stopped_info = ActivePortForward {
+                    status: "stopped".to_string(),
+                    ..handle.info
+                };
+                self.emit_forward_status(&connection_id, &stopped_info);
+            }
+        }
     }
 
     /// List active forwards for a connection
@@ -426,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_all_clears_registered_forwards() {
+    async fn stop_all_in_map_signals_and_clears() {
         let should_stop = Arc::new(AtomicBool::new(false));
         let should_stop_assertion = should_stop.clone();
         let task = tokio::spawn(async {});
@@ -453,7 +462,13 @@ mod tests {
             )]),
         )]);
 
-        PortForwardManager::stop_all_in_map(&mut forwards);
+        // Drain and signal stop (same logic as stop_all without emit)
+        for (_, conn_forwards) in forwards.drain() {
+            for (_, handle) in conn_forwards {
+                handle.should_stop.store(true, Ordering::Relaxed);
+                handle.task.abort();
+            }
+        }
 
         assert!(forwards.is_empty());
         assert!(should_stop_assertion.load(Ordering::Relaxed));

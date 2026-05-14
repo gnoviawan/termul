@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { sshApi } from '@/lib/api'
+import { dialogApi } from '@/lib/dialog-api'
 import { toast } from 'sonner'
 
 interface RemoteFileExplorerProps {
@@ -90,9 +91,15 @@ export function RemoteFileExplorer({
   )
 
   const handleDownload = async (entry: SFTPEntry) => {
-    // In a real implementation, this would open a save dialog
-    // For now, download to a temp location
-    const localPath = `${entry.name}`
+    const saveResult = await dialogApi.selectFile({
+      title: `Save ${entry.name}`,
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+    })
+    if (!saveResult.success) {
+      if (saveResult.code !== 'CANCELLED') toast.error(`Save dialog failed: ${saveResult.error}`)
+      return
+    }
+    const localPath = saveResult.data
     const result = await sshApi.sftpDownload(connectionId, entry.path, localPath)
     if (result.success) {
       toast.success(`Downloaded: ${entry.name}`)
