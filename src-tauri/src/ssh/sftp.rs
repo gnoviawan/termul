@@ -45,7 +45,7 @@ pub fn create_sftp(session: &Session) -> Result<Sftp, String> {
 fn stat_to_entry_type(stat: &FileStat) -> &str {
     if stat.is_dir() {
         "directory"
-    } else if stat.perm.map_or(false, |p| p & 0o120000 == 0o120000) {
+    } else if stat.perm.is_some_and(|p| p & 0o120000 == 0o120000) {
         "symlink"
     } else {
         "file"
@@ -95,7 +95,7 @@ pub fn list_dir(sftp: &Sftp, remote_path: &str) -> Result<Vec<SFTPEntry>, String
             path: full_path,
             entry_type: stat_to_entry_type(&stat).to_string(),
             size: stat.size.unwrap_or(0),
-            permissions: stat.perm.unwrap_or(0) as u32,
+            permissions: stat.perm.unwrap_or(0),
             modified_at: mtime_to_iso(&stat),
             owner: stat.uid.map(|u| u.to_string()),
         });

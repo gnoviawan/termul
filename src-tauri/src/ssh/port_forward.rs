@@ -126,7 +126,7 @@ impl PortForwardManager {
             let mut forwards = self.forwards.write();
             let conn_forwards = forwards
                 .entry(connection_id.to_string())
-                .or_insert_with(HashMap::new);
+                .or_default();
 
             conn_forwards.insert(
                 forward_id.clone(),
@@ -146,6 +146,7 @@ impl PortForwardManager {
 
     /// Local port forward loop - accepts connections and tunnels them.
     /// Runs on the blocking thread pool to avoid parking Tokio workers.
+    #[allow(clippy::too_many_arguments)]
     fn local_forward_loop(
         listener: TcpListener,
         session: Session,
@@ -257,8 +258,8 @@ impl PortForwardManager {
         let mut client_buffer = vec![0u8; TUNNEL_BUFFER_SIZE];
         let mut remote_buffer = vec![0u8; TUNNEL_BUFFER_SIZE];
 
-        while !should_stop.load(Ordering::Relaxed)
-            && !(client_to_remote_closed && remote_to_client_closed)
+        while !(should_stop.load(Ordering::Relaxed)
+            || (client_to_remote_closed && remote_to_client_closed))
         {
             let mut progressed = false;
 
