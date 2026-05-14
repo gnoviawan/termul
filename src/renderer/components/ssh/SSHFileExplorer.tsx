@@ -79,7 +79,7 @@ export function SSHFileExplorer({
           <div className="hidden group-hover:flex items-center gap-0.5">
             {!isDir && <button onClick={(e) => { e.stopPropagation(); handleOpenFile(entry) }} className="p-0.5 rounded hover:bg-accent" title="Edit"><FileEdit className="h-3 w-3 text-muted-foreground" /></button>}
             <button onClick={(e) => { e.stopPropagation(); handleRename(entry) }} className="p-0.5 rounded hover:bg-accent" title="Rename"><Pencil className="h-3 w-3 text-muted-foreground" /></button>
-            {!isDir && <button onClick={(e) => { e.stopPropagation(); handleDelete(entry) }} className="p-0.5 rounded hover:bg-destructive/20" title="Delete"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>}
+            <button onClick={(e) => { e.stopPropagation(); handleDelete(entry) }} className="p-0.5 rounded hover:bg-destructive/20" title="Delete"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
           </div>
         </div>
         {isDir && isExp && children.map((c) => renderEntry(c, depth + 1))}
@@ -123,7 +123,7 @@ export function SSHFileExplorer({
         ) : !sftpReady ? (
           <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
             <FolderTree className="h-6 w-6 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">SFTP ready</p>
+            <p className="text-xs text-muted-foreground">SFTP not started</p>
             <button onClick={onBrowseFiles} className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Browse Files</button>
           </div>
         ) : isLoadingRoot ? (

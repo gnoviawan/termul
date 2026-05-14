@@ -41,12 +41,15 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
         username: username.trim(),
         authMethod,
         privateKeyPath: authMethod === 'key' ? privateKeyPath.trim() || undefined : undefined,
-        password: authMethod === 'password' ? password || undefined : undefined,
-        passphrase: authMethod === 'key' ? passphrase || undefined : undefined,
+        // Only send password/passphrase if user entered a new value
+        password: authMethod === 'password' && password ? password : undefined,
+        passphrase: authMethod === 'key' && passphrase ? passphrase : undefined,
         portForwards: profile?.portForwards ?? [],
         tags: profile?.tags,
         lastConnected: profile?.lastConnected,
         importedFrom: profile?.importedFrom,
+        hasStoredPassword: profile?.hasStoredPassword,
+        hasStoredPassphrase: profile?.hasStoredPassphrase,
       }
 
       const success = await saveProfile(profileData)
@@ -162,9 +165,14 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
                 type="password"
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
-                placeholder="Leave empty if no passphrase"
+                placeholder={profile?.hasStoredPassphrase ? '••••••••' : 'Leave empty if no passphrase'}
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {profile?.hasStoredPassphrase && (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  🔒 Passphrase stored securely in OS keychain. Leave blank to keep existing.
+                </p>
+              )}
             </div>
           )}
 
@@ -176,11 +184,13 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder={profile?.hasStoredPassword ? '••••••••' : 'Enter password'}
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
               <p className="mt-1 text-[10px] text-muted-foreground">
-                Password will be saved with the profile
+                {profile?.hasStoredPassword
+                  ? '🔒 Password stored securely in OS keychain. Leave blank to keep existing.'
+                  : '🔒 Password will be stored in your OS keychain (Windows Credential Manager / macOS Keychain)'}
               </p>
             </div>
           )}

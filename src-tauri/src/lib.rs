@@ -213,7 +213,11 @@ fn get_available_shells() -> Vec<ShellInfo> {
             ("pwsh", r"C:\Program Files\PowerShell\7\pwsh.exe", None),
             ("pwsh", r"C:\Program Files\PowerShell\6\pwsh.exe", None),
             // Windows PowerShell 5 (explicit path)
-            ("powershell", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", None),
+            (
+                "powershell",
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                None,
+            ),
             // PATH-based fallbacks (checked last)
             ("pwsh", "pwsh.exe", None),
             ("powershell", "powershell.exe", None),
@@ -281,12 +285,7 @@ fn is_builtin_windows_shell(shell_path: &str) -> bool {
     // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
-        "cmd"
-            | "cmd.exe"
-            | "powershell"
-            | "powershell.exe"
-            | "wsl"
-            | "wsl.exe"
+        "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "wsl" | "wsl.exe"
     )
 }
 
@@ -639,7 +638,8 @@ pub fn run() {
             app.manage(pty_manager.clone());
 
             // Create Browser Tab Manager
-            let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            let browser_tab_manager =
+                Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
             // Create SSH Manager
@@ -748,6 +748,7 @@ pub fn run() {
             commands::ssh_import_config,
             commands::ssh_connect,
             commands::ssh_disconnect,
+            commands::ssh_get_connections,
             commands::ssh_port_forward_start,
             commands::ssh_port_forward_stop,
             commands::sftp_list_dir,
@@ -781,6 +782,9 @@ pub fn run() {
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
                 .map(|state| state.inner().clone());
+            let ssh_manager = app_handle
+                .try_state::<Arc<ssh::SSHManager>>()
+                .map(|state| state.inner().clone());
 
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
@@ -790,6 +794,9 @@ pub fn run() {
                 // (not tokio::spawn directly — the run callback may fire on
                 // a thread without a Tokio reactor, e.g. macOS WKWebView events)
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
                     pty_manager_clone.kill_all().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
@@ -798,11 +805,17 @@ pub fn run() {
                     app_handle_clone.exit(0);
                 });
             } else {
-                if let Some(browser_tab_manager) = browser_tab_manager {
-                    browser_tab_manager.destroy_all();
-                }
-                // No PTY manager, just exit
-                app_handle.exit(0);
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
+                    // No PTY manager, just exit
+                    app_handle_clone.exit(0);
+                });
             }
         }
     });

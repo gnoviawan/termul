@@ -170,6 +170,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		profileName: string;
 	} | null>(null);
 	const [sshPasswordInput, setSSHPasswordInput] = useState('');
+	const [sshPromptPasswords, setSSHPromptPasswords] = useState<Record<string, string>>({});
 
 	// Load SSH profiles on mount
 	useEffect(() => {
@@ -469,8 +470,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		const profile = sshProfiles.find((p) => p.id === profileId);
 		if (!profile) return;
 
-		if (profile.authMethod === 'password' && !profile.password) {
-			// No stored password — show password prompt
+		if (profile.authMethod === 'password' && !profile.hasStoredPassword) {
+			// No password in OS keychain — show password prompt
 			setSSHPasswordPrompt({ profileId, profileName: profile.name });
 			setSSHPasswordInput('');
 		} else {
@@ -481,10 +482,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	const handleSSHPasswordSubmit = useCallback(() => {
 		if (!sshPasswordPrompt) return;
+		const password = sshPasswordInput;
+		setSSHPromptPasswords((prev) => ({
+			...prev,
+			[sshPasswordPrompt.profileId]: password,
+		}));
 		setSSHPasswordPrompt(null);
 		setSSHPasswordInput('');
 		selectSSHProfile(sshPasswordPrompt.profileId);
-	}, [sshPasswordPrompt, selectSSHProfile]);
+	}, [sshPasswordPrompt, sshPasswordInput, selectSSHProfile]);
 
 	// Keyboard shortcuts
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -1181,7 +1187,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							{activeSSHProfile ? (
 								/* SSH Workspace */
 								<SSHWorkspace
-									profile={activeSSHProfile}
+									profile={{
+										...activeSSHProfile,
+										password: sshPromptPasswords[activeSSHProfile.id] ?? activeSSHProfile.password,
+									}}
 								/>
 							) : projects.length === 0 ? (
 								/* No Projects Empty State */

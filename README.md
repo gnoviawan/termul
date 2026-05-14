@@ -283,6 +283,16 @@ npm run lint             # Linting
 npm run tauri <command>  # Direct Tauri CLI access
 ```
 
+## SSH Development Notes
+
+- SSH passwords and key passphrases are stored through the OS keychain, not in `ssh-profiles.json`.
+- Active SSH sessions may retain the relevant secret in process memory only to support automatic reconnect; use SSH agent authentication to avoid runtime secret retention.
+- Interactive SSH terminals use OpenSSH's default known-hosts file with `StrictHostKeyChecking=accept-new`; do not override `UserKnownHostsFile` to `/dev/null`/`NUL` because that disables persistent host-key verification.
+- Local port forwarding uses `ssh2` `channel_direct_tcpip` over the active SSH session; remote/reverse forwarding is not supported by the MVP command path yet.
+- `ssh2` intentionally stays on system OpenSSL for now. Enabling `vendored-openssl` forces a local OpenSSL source build that can fail in Windows/MSYS environments without a complete Perl module setup.
+
+## Recommended IDE Setup
+
 ## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=gnoviawan/termul&type=date&legend=top-left)](https://www.star-history.com/?type=date&repos=gnoviawan%2Ftermul)

@@ -14,9 +14,19 @@ export interface SSHProfile {
   username: string
   authMethod: SSHAuthMethod
   privateKeyPath?: string
-  /** Stored password (for password auth) */
+  /**
+   * Sensitive transient credential used only for IPC/backend auth and keychain writes.
+   * This field must not be persisted in renderer/local profile stores. While a
+   * connection is active, the backend may keep a process-memory copy solely for
+   * auto-reconnect; users can avoid that by using SSH agent auth.
+   */
   password?: string
-  /** Passphrase for private key */
+  /**
+   * Sensitive transient key passphrase used only for IPC/backend auth and
+   * keychain writes. This field must not be persisted in renderer/local profile
+   * stores. While a connection is active, the backend may keep a process-memory
+   * copy solely for auto-reconnect; users can avoid that by using SSH agent auth.
+   */
   passphrase?: string
   /** Jump/bastion host profile ID (future use) */
   jumpHostId?: string
@@ -28,6 +38,10 @@ export interface SSHProfile {
   lastConnected?: string
   /** Imported from ~/.ssh/config */
   importedFrom?: string
+  /** Whether a password is stored in the OS keychain */
+  hasStoredPassword?: boolean
+  /** Whether a passphrase is stored in the OS keychain */
+  hasStoredPassphrase?: boolean
 }
 
 export interface PortForwardConfig {

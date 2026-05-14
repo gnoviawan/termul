@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable"] }
+tauri = { version = "2.0", features = ["unstable", "test"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
@@ -44,7 +44,13 @@ lazy_static = "1.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # SSH
+# Keep ssh2 on system OpenSSL for now. Enabling ssh2/vendored-openssl forces a
+# local OpenSSL source build that fails in common Windows/MSYS dev environments
+# without a full Perl module setup; see README SSH development notes.
 ssh2 = "0.9"
+
+# OS keychain for secure credential storage
+keyring = "3"
 
 # Logging
 log = "0.4"

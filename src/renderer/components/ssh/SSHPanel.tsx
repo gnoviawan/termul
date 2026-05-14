@@ -167,7 +167,9 @@ export function SSHPanel({ onConnect, onSelectProfile, activeProfileId }: SSHPan
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleDisconnect(connection!.id, profile.name)
+                          if (connection) {
+                            handleDisconnect(connection.id, profile.name)
+                          }
                         }}
                         className="p-1 rounded hover:bg-destructive/20 text-destructive"
                         title="Disconnect"

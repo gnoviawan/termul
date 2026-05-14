@@ -26,10 +26,15 @@ export function useSSHConnection(profile: SSHProfile) {
   const loadDirectory = useCallback(async (path: string) => {
     if (!connectionId) return
     setIsLoadingRoot(true)
-    const result = await sshApi.sftpListDir(connectionId, path)
-    if (result.success) { setEntries(result.data); setCurrentPath(path) }
-    else toast.error(`Failed to load: ${result.error}`)
-    setIsLoadingRoot(false)
+    try {
+      const result = await sshApi.sftpListDir(connectionId, path)
+      if (result.success) { setEntries(result.data); setCurrentPath(path) }
+      else toast.error(`Failed to load: ${result.error}`)
+    } catch (error) {
+      toast.error(`Failed to load: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setIsLoadingRoot(false)
+    }
   }, [connectionId])
 
   // Stable ref for loadDirectory so effects always call latest version
@@ -53,60 +58,73 @@ export function useSSHConnection(profile: SSHProfile) {
     if (isConnecting || isConnected) return
     setIsConnecting(true)
 
-    let sshCmd = `ssh ${profile.username}@${profile.host}`
-    if (profile.port !== 22) sshCmd += ` -p ${profile.port}`
-    if (profile.authMethod === 'key' && profile.privateKeyPath) sshCmd += ` -i "${profile.privateKeyPath}"`
-    const nullDevice = navigator.platform?.includes('Win') ? 'NUL' : '/dev/null'
-    sshCmd += ` -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${nullDevice}`
-    if (profile.authMethod === 'password') sshCmd += ` -o PreferredAuthentications=password`
+    try {
+      let sshCmd = `ssh ${profile.username}@${profile.host}`
+      if (profile.port !== 22) sshCmd += ` -p ${profile.port}`
+      if (profile.authMethod === 'key' && profile.privateKeyPath) sshCmd += ` -i "${profile.privateKeyPath}"`
+      sshCmd += ' -o StrictHostKeyChecking=accept-new'
+      if (profile.authMethod === 'password') sshCmd += ` -o PreferredAuthentications=password`
 
-    let spawnEnv: Record<string, string> | undefined
-    if (profile.authMethod === 'password' && profile.password) {
-      const result = await createAskpassScript(profile.password)
-      if (result.success) spawnEnv = { SSH_ASKPASS: result.data, SSH_ASKPASS_REQUIRE: 'force' }
+      let spawnEnv: Record<string, string> | undefined
+      if (profile.authMethod === 'password' && profile.password) {
+        const result = await createAskpassScript(profile.password)
+        if (result.success) spawnEnv = { SSH_ASKPASS: result.data, SSH_ASKPASS_REQUIRE: 'force' }
+        else toast.warning(`Password helper unavailable: ${result.error}`)
+      }
+
+      const spawnResult = await terminalApi.spawn({ env: spawnEnv })
+      if (!spawnResult.success) { toast.error('Failed to create terminal'); return }
+
+      const ptyId = spawnResult.data.id
+      setLocalTerminalPtyId(ptyId)
+
+      const terminalStore = useTerminalStore.getState()
+      const terminal = terminalStore.addTerminal(`SSH: ${profile.name}`, `ssh-${profile.id}`, spawnResult.data.shell, spawnResult.data.cwd)
+      terminalStore.setTerminalPtyId(terminal.id, ptyId)
+      markConnected(profile.id, terminal.id)
+
+      setTimeout(() => { void terminalApi.write(ptyId, sshCmd + '\r') }, 500)
+
+      const sftpResult = await sshApi.connect(profile.id, profile.password)
+      if (sftpResult.success && sftpResult.data?.id) {
+        updateConnectionId(profile.id, sftpResult.data.id)
+        toast.success(`Connected: ${profile.name}`)
+      } else if (!sftpResult.success) {
+        toast.warning(`Terminal opened, but SFTP failed: ${sftpResult.error}`)
+      }
+    } catch (error) {
+      toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setIsConnecting(false)
     }
-
-    const spawnResult = await terminalApi.spawn({ env: spawnEnv })
-    if (!spawnResult.success) { toast.error('Failed to create terminal'); setIsConnecting(false); return }
-
-    const ptyId = spawnResult.data.id
-    setLocalTerminalPtyId(ptyId)
-
-    const terminalStore = useTerminalStore.getState()
-    const terminal = terminalStore.addTerminal(`SSH: ${profile.name}`, `ssh-${profile.id}`, spawnResult.data.shell, spawnResult.data.cwd)
-    terminalStore.setTerminalPtyId(terminal.id, ptyId)
-    markConnected(profile.id, terminal.id)
-
-    setTimeout(() => terminalApi.write(ptyId, sshCmd + '\r'), 500)
-
-    const sftpResult = await sshApi.connect(profile.id, profile.password)
-    if (sftpResult.success && sftpResult.data?.id) updateConnectionId(profile.id, sftpResult.data.id)
-
-    setIsConnecting(false)
-    toast.success(`Connected: ${profile.name}`)
   }, [profile, isConnecting, isConnected, markConnected, updateConnectionId])
 
   const handleDisconnect = useCallback(() => {
-    if (localTerminalPtyId) terminalApi.kill(localTerminalPtyId)
+    if (localTerminalPtyId) void terminalApi.kill(localTerminalPtyId)
     if (connection) markDisconnected(profile.id)
     setLocalTerminalPtyId(null); setSftpReady(false); setEntries([])
     toast.info(`Disconnected: ${profile.name}`)
   }, [localTerminalPtyId, connection, profile.id, profile.name, markDisconnected])
 
-  const handleBrowseFiles = useCallback(async () => {
+  const handleBrowseFiles = useCallback(() => {
     if (!connectionId) { toast.error('Not connected — open a terminal first'); return }
     if (connectionId.startsWith('ssh-conn-')) { toast.info('SFTP connecting... please wait'); return }
-    setSftpReady(true); loadDirectory('/')
+    setSftpReady(true); void loadDirectory('/')
   }, [connectionId, loadDirectory])
 
   const toggleDirectory = useCallback(async (dirPath: string) => {
     if (!connectionId) return
     if (expandedDirs.has(dirPath)) { setExpandedDirs((prev) => { const n = new Set(prev); n.delete(dirPath); return n }); return }
     setLoadingDirs((prev) => new Set(prev).add(dirPath))
-    const result = await sshApi.sftpListDir(connectionId, dirPath)
-    if (result.success) { setChildEntries((prev) => new Map(prev).set(dirPath, result.data)); setExpandedDirs((prev) => new Set(prev).add(dirPath)) }
-    else toast.error(`Permission denied: ${dirPath}`)
-    setLoadingDirs((prev) => { const n = new Set(prev); n.delete(dirPath); return n })
+    try {
+      const result = await sshApi.sftpListDir(connectionId, dirPath)
+      if (result.success) { setChildEntries((prev) => new Map(prev).set(dirPath, result.data)); setExpandedDirs((prev) => new Set(prev).add(dirPath)) }
+      else toast.error(`Permission denied: ${dirPath}`)
+    } catch (error) {
+      toast.error(`Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setLoadingDirs((prev) => { const n = new Set(prev); n.delete(dirPath); return n })
+    }
   }, [connectionId, expandedDirs])
 
   return {

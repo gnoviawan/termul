@@ -17,44 +17,61 @@ export function SSHWorkspace({ profile }: SSHWorkspaceProps): React.JSX.Element 
   const editingFile = useSSHEditorFile()
 
   const conn = useSSHConnection(profile)
+  const { connectionId, currentPath, loadDirectory } = conn
 
   const handleMkdir = useCallback(async () => {
-    if (!conn.connectionId) return
+    if (!connectionId) return
     const name = prompt('New folder name:')
     if (!name) return
-    const newPath = conn.currentPath.endsWith('/') ? `${conn.currentPath}${name}` : `${conn.currentPath}/${name}`
-    const r = await sshApi.sftpMkdir(conn.connectionId, newPath)
-    if (r.success) { toast.success(`Created: ${name}`); conn.loadDirectory(conn.currentPath) }
-    else toast.error(`Failed: ${r.error}`)
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
+    const newPath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
+    try {
+      const r = await sshApi.sftpMkdir(connectionId, newPath)
+      if (r.success) { toast.success(`Created: ${name}`); loadDirectory(currentPath) }
+      else toast.error(`Failed: ${r.error}`)
+    } catch (error) {
+      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [connectionId, currentPath, loadDirectory])
 
   const handleCreateFile = useCallback(async () => {
-    if (!conn.connectionId) return
+    if (!connectionId) return
     const name = prompt('New file name:')
     if (!name) return
-    const newPath = conn.currentPath.endsWith('/') ? `${conn.currentPath}${name}` : `${conn.currentPath}/${name}`
-    const r = await sshApi.sftpCreateFile(conn.connectionId, newPath)
-    if (r.success) { toast.success(`Created: ${name}`); conn.loadDirectory(conn.currentPath) }
-    else toast.error(`Failed: ${r.error}`)
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
+    const newPath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
+    try {
+      const r = await sshApi.sftpCreateFile(connectionId, newPath)
+      if (r.success) { toast.success(`Created: ${name}`); loadDirectory(currentPath) }
+      else toast.error(`Failed: ${r.error}`)
+    } catch (error) {
+      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [connectionId, currentPath, loadDirectory])
 
   const handleDelete = useCallback(async (entry: SFTPEntry) => {
-    if (!conn.connectionId) return
+    if (!connectionId) return
     if (!confirm(`Delete ${entry.entryType} "${entry.name}"?`)) return
-    const r = await sshApi.sftpDelete(conn.connectionId, entry.path)
-    if (r.success) { toast.success(`Deleted: ${entry.name}`); conn.loadDirectory(conn.currentPath) }
-    else toast.error(`Delete failed: ${r.error}`)
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
+    try {
+      const r = await sshApi.sftpDelete(connectionId, entry.path)
+      if (r.success) { toast.success(`Deleted: ${entry.name}`); loadDirectory(currentPath) }
+      else toast.error(`Delete failed: ${r.error}`)
+    } catch (error) {
+      toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [connectionId, currentPath, loadDirectory])
 
   const handleRename = useCallback(async (entry: SFTPEntry) => {
-    if (!conn.connectionId) return
+    if (!connectionId) return
     const newName = prompt(`Rename "${entry.name}" to:`, entry.name)
     if (!newName || newName === entry.name) return
     const pp = entry.path.substring(0, entry.path.lastIndexOf('/'))
-    const r = await sshApi.sftpRename(conn.connectionId, entry.path, `${pp}/${newName}`)
-    if (r.success) { toast.success(`Renamed: ${entry.name} → ${newName}`); conn.loadDirectory(conn.currentPath) }
-    else toast.error(`Rename failed: ${r.error}`)
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
+    try {
+      const r = await sshApi.sftpRename(connectionId, entry.path, `${pp}/${newName}`)
+      if (r.success) { toast.success(`Renamed: ${entry.name} → ${newName}`); loadDirectory(currentPath) }
+      else toast.error(`Rename failed: ${r.error}`)
+    } catch (error) {
+      toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [connectionId, currentPath, loadDirectory])
 
   return (
     <div className="flex h-full w-full overflow-hidden rounded-xl bg-card">

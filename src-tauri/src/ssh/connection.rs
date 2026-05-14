@@ -141,13 +141,27 @@ impl SSHConnectionManager {
         )
         .map_err(|e| format!("TCP connection to {} failed: {}", addr, e))?;
 
-        let mut session = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
+        let mut session =
+            Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
         session.set_tcp_stream(tcp);
         session
             .handshake()
             .map_err(|e| format!("SSH handshake failed: {}", e))?;
 
         // Authenticate
+        Self::authenticate_session(&session, profile, password)?;
+
+        // Enable keepalive
+        session.set_keepalive(true, HEARTBEAT_INTERVAL_SECS as u32);
+
+        Ok(session)
+    }
+
+    fn authenticate_session(
+        session: &Session,
+        profile: &SSHProfile,
+        secret: Option<&str>,
+    ) -> Result<(), String> {
         match profile.auth_method.as_str() {
             "key" => {
                 let key_path = profile
@@ -165,14 +179,14 @@ impl SSHConnectionManager {
                         &profile.username,
                         None, // public key (auto-derived)
                         key_path,
-                        password, // passphrase
+                        secret, // passphrase
                     )
                     .map_err(|e| format!("Key authentication failed: {}", e))?;
             }
             "password" => {
-                let pass = password.ok_or_else(|| "Password required".to_string())?;
+                let password = secret.ok_or_else(|| "Password required".to_string())?;
                 session
-                    .userauth_password(&profile.username, pass)
+                    .userauth_password(&profile.username, password)
                     .map_err(|e| format!("Password authentication failed: {}", e))?;
             }
             "agent" => {
@@ -189,10 +203,7 @@ impl SSHConnectionManager {
             return Err("Authentication failed".to_string());
         }
 
-        // Enable keepalive
-        session.set_keepalive(true, HEARTBEAT_INTERVAL_SECS as u32);
-
-        Ok(session)
+        Ok(())
     }
 
     /// Heartbeat loop that monitors connection health and auto-reconnects
@@ -228,7 +239,10 @@ impl SSHConnectionManager {
             };
 
             if !is_alive {
-                log::warn!("[SSH] Connection {} lost, attempting reconnect", connection_id);
+                log::warn!(
+                    "[SSH] Connection {} lost, attempting reconnect",
+                    connection_id
+                );
 
                 // Update status to reconnecting
                 {
@@ -241,12 +255,12 @@ impl SSHConnectionManager {
                 let mut attempts = 0u32;
                 let mut reconnected = false;
 
-                while attempts < MAX_RECONNECT_ATTEMPTS && !should_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                while attempts < MAX_RECONNECT_ATTEMPTS
+                    && !should_stop.load(std::sync::atomic::Ordering::Relaxed)
+                {
                     attempts += 1;
-                    let backoff = std::cmp::min(
-                        INITIAL_BACKOFF_MS * 2u64.pow(attempts - 1),
-                        MAX_BACKOFF_MS,
-                    );
+                    let backoff =
+                        std::cmp::min(INITIAL_BACKOFF_MS * 2u64.pow(attempts - 1), MAX_BACKOFF_MS);
 
                     log::info!(
                         "[SSH] Reconnect attempt {}/{} for {} (backoff: {}ms)",
@@ -271,55 +285,30 @@ impl SSHConnectionManager {
                     if let Ok(tcp) = tcp_result {
                         if let Ok(mut new_session) = Session::new() {
                             new_session.set_tcp_stream(tcp);
-                            if new_session.handshake().is_ok() {
-                                let auth_ok = match profile.auth_method.as_str() {
-                                    "key" => {
-                                        if let Some(ref key_path) = profile.private_key_path {
-                                            new_session
-                                                .userauth_pubkey_file(
-                                                    &profile.username,
-                                                    None,
-                                                    Path::new(key_path),
-                                                    password.as_deref(),
-                                                )
-                                                .is_ok()
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    "password" => {
-                                        if let Some(ref pass) = password {
-                                            new_session
-                                                .userauth_password(&profile.username, pass)
-                                                .is_ok()
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    "agent" => {
-                                        new_session.userauth_agent(&profile.username).is_ok()
-                                    }
-                                    _ => false,
-                                };
+                            if new_session.handshake().is_ok()
+                                && Self::authenticate_session(
+                                    &new_session,
+                                    &profile,
+                                    password.as_deref(),
+                                )
+                                .is_ok()
+                            {
+                                new_session.set_keepalive(true, HEARTBEAT_INTERVAL_SECS as u32);
 
-                                if auth_ok && new_session.authenticated() {
-                                    new_session.set_keepalive(true, HEARTBEAT_INTERVAL_SECS as u32);
+                                let mut state_guard = state.lock().await;
+                                state_guard.session = Some(new_session);
+                                state_guard.info.status = "connected".to_string();
+                                state_guard.info.reconnect_attempts = attempts;
+                                state_guard.info.error = None;
+                                Self::emit_status_static(&app_handle, &state_guard.info);
 
-                                    let mut state_guard = state.lock().await;
-                                    state_guard.session = Some(new_session);
-                                    state_guard.info.status = "connected".to_string();
-                                    state_guard.info.reconnect_attempts = attempts;
-                                    state_guard.info.error = None;
-                                    Self::emit_status_static(&app_handle, &state_guard.info);
-
-                                    log::info!(
-                                        "[SSH] Reconnected {} after {} attempts",
-                                        connection_id,
-                                        attempts
-                                    );
-                                    reconnected = true;
-                                    break;
-                                }
+                                log::info!(
+                                    "[SSH] Reconnected {} after {} attempts",
+                                    connection_id,
+                                    attempts
+                                );
+                                reconnected = true;
+                                break;
                             }
                         }
                     }
@@ -377,23 +366,24 @@ impl SSHConnectionManager {
     }
 
     /// Get all active connections
-    #[allow(dead_code)]
-    pub fn list_connections(&self) -> Vec<SSHConnectionInfo> {
+    pub async fn list_connections(&self) -> Vec<SSHConnectionInfo> {
+        let states: Vec<Arc<AsyncMutex<ConnectionState>>> = {
+            let connections = self.connections.read();
+            connections.values().cloned().collect()
+        };
+
+        let mut infos = Vec::with_capacity(states.len());
+        for state in states {
+            let state_guard = state.lock().await;
+            infos.push(state_guard.info.clone());
+        }
+        infos
+    }
+
+    /// Snapshot active connection IDs without waiting on per-connection locks.
+    pub fn connection_ids(&self) -> Vec<String> {
         let connections = self.connections.read();
-        // We can't await inside a sync context, so return cached info
-        // The heartbeat loop keeps info up-to-date
-        connections
-            .keys()
-            .map(|id| SSHConnectionInfo {
-                id: id.clone(),
-                profile_id: String::new(),
-                status: "unknown".to_string(),
-                terminal_id: None,
-                error: None,
-                reconnect_attempts: 0,
-                connected_at: None,
-            })
-            .collect()
+        connections.keys().cloned().collect()
     }
 
     /// Get connection info by ID
@@ -412,11 +402,7 @@ impl SSHConnectionManager {
 
     /// Get the SSH session for SFTP/port-forward operations.
     /// Runs the provided closure with access to the SSH session.
-    pub async fn with_session<F, R>(
-        &self,
-        connection_id: &str,
-        f: F,
-    ) -> Result<R, String>
+    pub async fn with_session<F, R>(&self, connection_id: &str, f: F) -> Result<R, String>
     where
         F: FnOnce(&Session) -> Result<R, String>,
     {
@@ -437,13 +423,27 @@ impl SSHConnectionManager {
         f(session)
     }
 
+    /// Clone the current SSH session handle for long-running operations such as port forwarding.
+    pub async fn clone_session(&self, connection_id: &str) -> Result<Session, String> {
+        let state = {
+            let connections = self.connections.read();
+            connections
+                .get(connection_id)
+                .cloned()
+                .ok_or_else(|| format!("Connection not found: {}", connection_id))?
+        };
+
+        let state_guard = state.lock().await;
+        state_guard
+            .session
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Not connected".to_string())
+    }
+
     /// Execute a command on the SSH session (for SFTP subsystem access)
     #[allow(dead_code)]
-    pub async fn exec_command(
-        &self,
-        connection_id: &str,
-        command: &str,
-    ) -> Result<String, String> {
+    pub async fn exec_command(&self, connection_id: &str, command: &str) -> Result<String, String> {
         let state = {
             let connections = self.connections.read();
             connections
@@ -484,5 +484,51 @@ impl SSHConnectionManager {
         if let Err(e) = app_handle.emit("ssh-connection-status-changed", info) {
             log::error!("[SSH] Failed to emit connection status: {}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(auth_method: &str) -> SSHProfile {
+        SSHProfile {
+            id: "p1".to_string(),
+            name: "Test".to_string(),
+            host: "example.com".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            auth_method: auth_method.to_string(),
+            private_key_path: None,
+            password: None,
+            passphrase: None,
+            jump_host_id: None,
+            port_forwards: Vec::new(),
+            tags: None,
+            last_connected: None,
+            imported_from: None,
+            has_stored_password: false,
+            has_stored_passphrase: false,
+        }
+    }
+
+    #[test]
+    fn auth_result_requires_password_for_password_profiles() {
+        let session = Session::new().expect("session should be created");
+        let error =
+            SSHConnectionManager::authenticate_session(&session, &profile("password"), None)
+                .expect_err("missing password must fail before network authentication");
+
+        assert_eq!(error, "Password required");
+    }
+
+    #[test]
+    fn auth_result_rejects_unknown_auth_method() {
+        let session = Session::new().expect("session should be created");
+        let error =
+            SSHConnectionManager::authenticate_session(&session, &profile("webauthn"), None)
+                .expect_err("unknown auth method must fail before network authentication");
+
+        assert_eq!(error, "Unknown auth method: webauthn");
     }
 }
