@@ -227,15 +227,19 @@ impl SSHConnectionManager {
                 break;
             }
 
-            // Check connection health
-            let is_alive = {
+            // Check connection health outside the mutex using a cloned session
+            let session_clone = {
                 let state_guard = state.lock().await;
-                if let Some(ref session) = state_guard.session {
-                    // Try to send keepalive
-                    session.keepalive_send().is_ok()
-                } else {
-                    false
-                }
+                state_guard.session.clone()
+            };
+
+            let is_alive = if let Some(session) = session_clone {
+                // Perform blocking keepalive I/O without holding the lock
+                tokio::task::spawn_blocking(move || session.keepalive_send().is_ok())
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
             };
 
             if !is_alive {
@@ -349,18 +353,25 @@ impl SSHConnectionManager {
                 .ok_or_else(|| format!("Connection not found: {}", connection_id))?
         };
 
-        let mut state_guard = state.lock().await;
-        state_guard
-            .should_stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let session_to_disconnect = {
+            let mut state_guard = state.lock().await;
+            state_guard
+                .should_stop
+                .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        if let Some(ref session) = state_guard.session {
-            let _ = session.disconnect(None, "User disconnected", None);
+            let session = state_guard.session.take();
+            state_guard.info.status = "disconnected".to_string();
+            self.emit_status(&state_guard.info);
+            session
+        };
+
+        // Perform blocking disconnect I/O outside the mutex
+        if let Some(session) = session_to_disconnect {
+            let _ = tokio::task::spawn_blocking(move || {
+                session.disconnect(None, "User disconnected", None)
+            })
+            .await;
         }
-        state_guard.session = None;
-        state_guard.info.status = "disconnected".to_string();
-
-        self.emit_status(&state_guard.info);
 
         Ok(())
     }
