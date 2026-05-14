@@ -342,8 +342,7 @@ impl ProfileManager {
 
             if duplicate {
                 log::debug!(
-                    "[SSH] Skipping duplicate: {}@{}:{}",
-                    parsed_profile.username,
+                    "[SSH] Skipping duplicate import for host {}:{}",
                     parsed_profile.host,
                     parsed_profile.port
                 );
