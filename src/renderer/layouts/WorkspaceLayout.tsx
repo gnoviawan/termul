@@ -4,6 +4,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
+import { SSHWorkspace } from "@/components/ssh/SSHWorkspace";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
 import { PaneDndProvider } from "@/hooks/use-pane-dnd";
 import { StatusBar } from "@/components/StatusBar";
@@ -37,6 +38,7 @@ import {
 	useFileExplorerVisible,
 } from "@/stores/file-explorer-store";
 import { useSidebarVisible } from "@/stores/sidebar-store";
+import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile } from "@/stores/ssh-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCommandHistoryStore } from "@/stores/command-history-store";
 import {
@@ -160,6 +162,31 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// File explorer & editor state
 	const isExplorerVisible = useFileExplorerVisible();
 	const isSidebarVisible = useSidebarVisible();
+
+	// SSH state
+	const sshProfiles = useSSHProfiles();
+	const { loadProfiles: loadSSHProfiles, selectProfile: selectSSHProfile } = useSSHActions();
+	const activeSSHProfileId = useActiveSSHProfileId();
+	const activeSSHProfile = useActiveSSHProfile();
+	const [sshPasswordPrompt, setSSHPasswordPrompt] = useState<{
+		profileId: string;
+		profileName: string;
+	} | null>(null);
+	const [sshPasswordInput, setSSHPasswordInput] = useState('');
+
+	// Load SSH profiles on mount
+	useEffect(() => {
+		loadSSHProfiles();
+	}, [loadSSHProfiles]);
+
+	const handleSelectSSHProfile = useCallback((profileId: string) => {
+		selectSSHProfile(profileId);
+	}, [selectSSHProfile]);
+
+	const handleSelectProject = useCallback((id: string) => {
+		selectProject(id);
+		selectSSHProfile(null); // Deselect SSH when switching to project
+	}, [selectProject, selectSSHProfile]);
 	const activeTab = useActiveTab();
 	const fullscreenPaneId = useFullscreenPaneId();
 	const paneRoot = usePaneRoot();
@@ -439,6 +466,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		setIsCommandPaletteOpen(false);
 		setIsShortcutMenuOpen(true);
 	}, []);
+
+	// SSH - just select profile (SSH workspace handles its own connect/terminal)
+	const handleSSHConnect = useCallback((profileId: string) => {
+		const profile = sshProfiles.find((p) => p.id === profileId);
+		if (!profile) return;
+
+		if (profile.authMethod === 'password' && !profile.password) {
+			// No stored password — show password prompt
+			setSSHPasswordPrompt({ profileId, profileName: profile.name });
+			setSSHPasswordInput('');
+		} else {
+			// Select profile → SSH workspace handles connect
+			selectSSHProfile(profileId);
+		}
+	}, [sshProfiles, selectSSHProfile]);
+
+	const handleSSHPasswordSubmit = useCallback(() => {
+		if (!sshPasswordPrompt) return;
+		setSSHPasswordPrompt(null);
+		setSSHPasswordInput('');
+		selectSSHProfile(sshPasswordPrompt.profileId);
+	}, [sshPasswordPrompt, selectSSHProfile]);
 
 	// Keyboard shortcuts
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
@@ -1131,13 +1180,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						<ProjectSidebar
 							projects={projects}
 							activeProjectId={activeProjectId}
-							onSelectProject={selectProject}
+							onSelectProject={handleSelectProject}
 							onNewProject={() => setIsNewProjectModalOpen(true)}
 							onUpdateProject={updateProject}
 							onDeleteProject={deleteProject}
 							onArchiveProject={archiveProject}
 							onRestoreProject={restoreProject}
 							onReorderProjects={reorderProjects}
+							onSSHConnect={handleSSHConnect}
+							onSelectSSHProfile={handleSelectSSHProfile}
+							activeSSHProfileId={activeSSHProfileId}
 						/>
 					</div>
 				)}
@@ -1147,7 +1199,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					<div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
 						{/* Main Content Area */}
 						<main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
-							{projects.length === 0 ? (
+							{activeSSHProfile ? (
+								/* SSH Workspace */
+								<SSHWorkspace
+									profile={activeSSHProfile}
+								/>
+							) : projects.length === 0 ? (
 								/* No Projects Empty State */
 								<div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
 									<motion.div
@@ -1240,6 +1297,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onOpenAppPreferences={handleOpenAppPreferences}
 				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
 				onOpenShortcutMenu={handleOpenShortcutMenu}
+				onSSHConnect={handleSSHConnect}
+				sshProfiles={sshProfiles.map((p) => ({ id: p.id, name: p.name, host: p.host, username: p.username }))}
 				getShortcutLabel={getShortcutLabel}
 				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
@@ -1258,6 +1317,44 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onSelectCommand={handleInsertCommand}
 				onClearHistory={handleClearCommandHistory}
 			/>
+
+			{/* SSH Password Prompt */}
+			{sshPasswordPrompt && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+					<div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
+						<h3 className="text-sm font-semibold mb-1">SSH Password</h3>
+						<p className="text-xs text-muted-foreground mb-3">
+							Enter password for <span className="font-medium">{sshPasswordPrompt.profileName}</span>
+						</p>
+						<input
+							type="password"
+							value={sshPasswordInput}
+							onChange={(e) => setSSHPasswordInput(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === 'Enter') handleSSHPasswordSubmit();
+								if (e.key === 'Escape') { setSSHPasswordPrompt(null); setSSHPasswordInput(''); }
+							}}
+							placeholder="Password"
+							autoFocus
+							className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+						/>
+						<div className="flex justify-end gap-2 mt-3">
+							<button
+								onClick={() => { setSSHPasswordPrompt(null); setSSHPasswordInput(''); }}
+								className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleSSHPasswordSubmit}
+								className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+							>
+								Connect
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* Close Terminal Confirmation */}
 			<ConfirmDialog
