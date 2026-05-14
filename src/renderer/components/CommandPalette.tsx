@@ -5,6 +5,7 @@ import {
   History,
   Keyboard,
   Layers,
+  Monitor,
   Save,
   Settings,
   SlidersHorizontal,
@@ -39,6 +40,8 @@ interface CommandPaletteProps {
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
   onOpenShortcutMenu?: () => void
+  onSSHConnect?: (profileId: string) => void
+  sshProfiles?: Array<{ id: string; name: string; host: string; username: string }>
   getShortcutLabel?: (id: CommandShortcutId) => string | undefined
   getProjectShortcutLabel?: (index: number) => string | undefined
 }
@@ -95,6 +98,8 @@ export function CommandPalette({
   onOpenAppPreferences,
   onOpenCommandHistory,
   onOpenShortcutMenu,
+  onSSHConnect,
+  sshProfiles,
   getShortcutLabel,
   getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
@@ -216,6 +221,17 @@ export function CommandPalette({
               execute: onOpenShortcutMenu
             }
           ]
+        : []),
+      ...(onSSHConnect && sshProfiles
+        ? sshProfiles.map((profile) => ({
+            id: `ssh-${profile.id}`,
+            category: 'tools' as const,
+            icon: <Monitor aria-hidden="true" size={16} />,
+            label: `SSH: ${profile.name}`,
+            description: `${profile.username}@${profile.host}`,
+            keywords: ['ssh', 'remote', 'connect', profile.name, profile.host, profile.username],
+            execute: () => onSSHConnect(profile.id)
+          }))
         : [])
     ],
     [
@@ -228,6 +244,8 @@ export function CommandPalette({
       onOpenAppPreferences,
       onOpenCommandHistory,
       onOpenShortcutMenu,
+      onSSHConnect,
+      sshProfiles,
       getShortcutLabel,
       getProjectShortcutLabel
     ]

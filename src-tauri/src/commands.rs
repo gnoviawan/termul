@@ -1299,6 +1299,361 @@ pub async fn data_migration_rollback(
     Ok(migration_manager.rollback_migration(request.version))
 }
 
+// ============================================================================
+// SSH Commands
+// ============================================================================
+
+use crate::ssh::SSHManager;
+use crate::ssh::config_parser;
+use crate::ssh::profile_manager::SSHProfile;
+use crate::ssh::sftp as sftp_ops;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SSHConnectRequest {
+    pub profile_id: String,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SSHPortForwardRequest {
+    pub connection_id: String,
+    pub id: String,
+    pub forward_type: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPPathRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPTransferRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+    pub local_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPRenameRequest {
+    pub connection_id: String,
+    pub old_path: String,
+    pub new_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPFileRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+    pub content: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ssh_list_profiles(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<SSHProfile>>, String> {
+    match ssh_manager.profiles.list() {
+        Ok(profiles) => Ok(IpcResult::success(profiles)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_save_profile(
+    profile: SSHProfile,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.profiles.save(profile) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_delete_profile(
+    profile_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.profiles.delete(&profile_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_import_config(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<SSHProfile>>, String> {
+    let parsed = config_parser::parse_ssh_config();
+    match ssh_manager.profiles.import_from_config(parsed) {
+        Ok(imported) => Ok(IpcResult::success(imported)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_IMPORT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_connect(
+    request: SSHConnectRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<crate::ssh::connection::SSHConnectionInfo>, String> {
+    let profile = match ssh_manager.profiles.get(&request.profile_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => return Ok(IpcResult::error("Profile not found", "SSH_PROFILE_NOT_FOUND")),
+        Err(e) => return Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    };
+
+    // Use request password, or fall back to stored profile password
+    let password = request.password.or_else(|| profile.password.clone());
+
+    match ssh_manager
+        .connections
+        .connect(&profile, password.as_deref())
+        .await
+    {
+        Ok(info) => {
+            // Update last_connected
+            let _ = ssh_manager.profiles.update_last_connected(&request.profile_id);
+            Ok(IpcResult::success(info))
+        }
+        Err(e) => Ok(IpcResult::error(e, "SSH_CONNECT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_disconnect(
+    connection_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.connections.disconnect(&connection_id).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_DISCONNECT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_port_forward_start(
+    request: SSHPortForwardRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<crate::ssh::port_forward::ActivePortForward>, String> {
+    // Get the profile to know host/port for the tunnel
+    let conn_info = match ssh_manager.connections.get_connection(&request.connection_id).await {
+        Some(info) => info,
+        None => return Ok(IpcResult::error("Connection not found", "SSH_CONNECTION_NOT_FOUND")),
+    };
+
+    let profile = match ssh_manager.profiles.get(&conn_info.profile_id) {
+        Ok(Some(p)) => p,
+        _ => return Ok(IpcResult::error("Profile not found", "SSH_PROFILE_NOT_FOUND")),
+    };
+
+    let pf_manager = crate::ssh::port_forward::PortForwardManager::new(
+        ssh_manager.connections.app_handle().clone(),
+    );
+
+    let pf_request = crate::ssh::port_forward::PortForwardRequest {
+        id: request.id,
+        forward_type: request.forward_type,
+        local_port: request.local_port,
+        remote_host: request.remote_host,
+        remote_port: request.remote_port,
+        label: request.label,
+    };
+
+    match pf_manager
+        .start_local_forward(&request.connection_id, pf_request, &profile.host, profile.port)
+        .await
+    {
+        Ok(forward) => Ok(IpcResult::success(forward)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_port_forward_stop(
+    connection_id: String,
+    forward_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let pf_manager = crate::ssh::port_forward::PortForwardManager::new(
+        ssh_manager.connections.app_handle().clone(),
+    );
+
+    match pf_manager.stop_forward(&connection_id, &forward_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_list_dir(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<crate::ssh::sftp::SFTPEntry>>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::list_dir(&sftp, &remote_path)
+    }).await {
+        Ok(entries) => Ok(IpcResult::success(entries)),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_download(
+    request: SFTPTransferRequest,
+    app_handle: AppHandle,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let local_path = request.local_path.clone();
+    let conn_id = request.connection_id.clone();
+    let app = app_handle.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, move |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_upload(
+    request: SFTPTransferRequest,
+    app_handle: AppHandle,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let local_path = request.local_path.clone();
+    let conn_id = request.connection_id.clone();
+    let app = app_handle.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, move |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_delete(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::delete_path(&sftp, &remote_path)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_DELETE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::mkdir(&sftp, &remote_path)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_MKDIR_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    request: SFTPRenameRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let old_path = request.old_path.clone();
+    let new_path = request.new_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::rename(&sftp, &old_path, &new_path)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_RENAME_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, String> {
+    let temp_dir = std::env::temp_dir();
+    let script_path = temp_dir.join(format!("termul-askpass-{}.bat", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("tmp")));
+
+    // Write a batch script that echoes the password (SSH_ASKPASS protocol: write password to stdout)
+    let content = format!("@echo off\r\necho {}\r\n", password.replace('%', "%%"));
+    if let Err(e) = std::fs::write(&script_path, &content) {
+        return Ok(IpcResult::error(format!("Failed to create askpass: {}", e), "SSH_ASKPASS_ERROR"));
+    }
+
+    log::info!("[SSH] Created askpass helper at {:?}", script_path);
+    Ok(IpcResult::success(script_path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn sftp_read_file(
+    request: SFTPFileRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<String>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::read_file_to_string(&sftp, &remote_path)
+    }).await {
+        Ok(content) => Ok(IpcResult::success(content)),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_READ_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_write_file(
+    request: SFTPFileRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let content = request.content.clone().unwrap_or_default();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::write_file_from_string(&sftp, &remote_path, &content)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_WRITE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_create_file(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager.connections.with_session(&request.connection_id, |session| {
+        let sftp = sftp_ops::create_sftp(session)?;
+        sftp_ops::create_file(&sftp, &remote_path)
+    }).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_CREATE_ERROR")),
+    }
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {

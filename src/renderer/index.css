@@ -108,6 +108,24 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* xterm v6 scrollbar: proper spacing, no text overlap */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar {
+    width: 8px !important;
+    background: transparent !important;
+  }
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border-radius: 4px !important;
+  }
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra:hover {
+    background: rgba(255, 255, 255, 0.25) !important;
+  }
+  /* Reserve space on the right so scrollbar doesn't overlay text */
+  .xterm .xterm-viewport {
+    scrollbar-width: thin !important;
+    padding-right: 10px;
+  }
 }
 
 @layer utilities {

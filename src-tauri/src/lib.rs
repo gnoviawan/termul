@@ -4,6 +4,7 @@ mod commands;
 mod migrations;
 mod pty;
 mod shell_paths;
+mod ssh;
 mod trackers;
 
 #[cfg(target_os = "windows")]
@@ -641,6 +642,10 @@ pub fn run() {
             let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
+            // Create SSH Manager
+            let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
+            app.manage(ssh_manager);
+
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
@@ -736,6 +741,27 @@ pub fn run() {
             commands::search_content_stream,
             commands::search_content_cancel,
             commands::search_file_names,
+            // SSH commands
+            commands::ssh_list_profiles,
+            commands::ssh_save_profile,
+            commands::ssh_delete_profile,
+            commands::ssh_import_config,
+            commands::ssh_connect,
+            commands::ssh_disconnect,
+            commands::ssh_port_forward_start,
+            commands::ssh_port_forward_stop,
+            commands::sftp_list_dir,
+            commands::sftp_download,
+            commands::sftp_upload,
+            commands::sftp_delete,
+            commands::sftp_mkdir,
+            commands::sftp_rename,
+            // SSH askpass helper
+            commands::ssh_create_askpass,
+            // SFTP file operations
+            commands::sftp_read_file,
+            commands::sftp_write_file,
+            commands::sftp_create_file,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,

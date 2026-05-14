@@ -20,6 +20,7 @@ import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ColorPickerPopover } from "./ColorPickerPopover";
+import { SSHPanel } from "./ssh/SSHPanel";
 import { shellApi } from "@/lib/api";
 
 function getFirstLetter(name: string): string {
@@ -59,6 +60,9 @@ interface ProjectSidebarProps {
 	onArchiveProject: (id: string) => void;
 	onRestoreProject: (id: string) => void;
 	onReorderProjects: (projectIds: string[]) => void;
+	onSSHConnect?: (profileId: string) => void;
+	onSelectSSHProfile?: (profileId: string) => void;
+	activeSSHProfileId?: string | null;
 }
 
 export function ProjectSidebar({
@@ -71,6 +75,9 @@ export function ProjectSidebar({
 	onArchiveProject,
 	onRestoreProject,
 	onReorderProjects,
+	onSSHConnect,
+	onSelectSSHProfile,
+	activeSSHProfileId,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
 
@@ -435,11 +442,12 @@ export function ProjectSidebar({
 				)}
 			</div>
 
-			{/* Bottom toolbar - Version */}
-			<div className="p-2 rounded-b-xl">
-				<div className="w-full h-6 inline-flex items-center justify-center">
-					<span className="text-xs text-muted-foreground">Termul v0.3.6</span>
-				</div>
+			{/* SSH Connections - Resizable */}
+			<SSHResizableSection onSSHConnect={onSSHConnect} onSelectProfile={onSelectSSHProfile} activeProfileId={activeSSHProfileId} />
+
+			{/* Version - pinned bottom */}
+			<div className="border-t border-sidebar-border px-3 py-1.5 rounded-b-xl flex-shrink-0">
+				<span className="text-[10px] text-muted-foreground/50 select-none">Termul v0.3.6</span>
 			</div>
 
 			{/* Context Menu */}
@@ -637,5 +645,88 @@ function ArchivedProjectItem({
 			</span>
 			<Archive size={12} className="text-muted-foreground mr-3" />
 		</button>
+	);
+}
+
+// ============================================================================
+// SSH Resizable Section
+// ============================================================================
+
+const SSH_HEIGHT_KEY = "termul-ssh-panel-height";
+const SSH_MIN_HEIGHT = 48;
+const SSH_MAX_HEIGHT = 400;
+const SSH_DEFAULT_HEIGHT = 140;
+
+function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }: { onSSHConnect?: (profileId: string) => void; onSelectProfile?: (profileId: string) => void; activeProfileId?: string | null }): React.JSX.Element {
+	const [height, setHeight] = useState(() => {
+		try {
+			const saved = localStorage.getItem(SSH_HEIGHT_KEY);
+			if (saved) {
+				const parsed = parseInt(saved, 10);
+				if (parsed >= SSH_MIN_HEIGHT && parsed <= SSH_MAX_HEIGHT) return parsed;
+			}
+		} catch {}
+		return SSH_DEFAULT_HEIGHT;
+	});
+
+	const isDragging = useRef(false);
+	const startY = useRef(0);
+	const startHeight = useRef(0);
+
+	const handleMouseDown = useCallback((e: React.MouseEvent) => {
+		e.preventDefault();
+		isDragging.current = true;
+		startY.current = e.clientY;
+		startHeight.current = height;
+		document.body.style.cursor = "row-resize";
+		document.body.style.userSelect = "none";
+
+		const handleMouseMove = (ev: MouseEvent) => {
+			if (!isDragging.current) return;
+			// Dragging UP = increase height (startY - currentY)
+			const delta = startY.current - ev.clientY;
+			const newHeight = Math.min(SSH_MAX_HEIGHT, Math.max(SSH_MIN_HEIGHT, startHeight.current + delta));
+			setHeight(newHeight);
+		};
+
+		const handleMouseUp = () => {
+			isDragging.current = false;
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+			document.removeEventListener("mousemove", handleMouseMove);
+			document.removeEventListener("mouseup", handleMouseUp);
+			// Persist
+			try {
+				const finalHeight = Math.min(SSH_MAX_HEIGHT, Math.max(SSH_MIN_HEIGHT, startHeight.current + (startY.current - (window.event as MouseEvent)?.clientY || 0)));
+				localStorage.setItem(SSH_HEIGHT_KEY, String(finalHeight));
+			} catch {}
+		};
+
+		document.addEventListener("mousemove", handleMouseMove);
+		document.addEventListener("mouseup", handleMouseUp);
+	}, [height]);
+
+	// Persist on height change (debounced via ref)
+	useEffect(() => {
+		try {
+			localStorage.setItem(SSH_HEIGHT_KEY, String(height));
+		} catch {}
+	}, [height]);
+
+	return (
+		<div className="flex-shrink-0 flex flex-col" style={{ height: `${height}px` }}>
+			{/* Drag handle */}
+			<div
+				onMouseDown={handleMouseDown}
+				className="h-[3px] border-t border-sidebar-border cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors group flex items-center justify-center"
+				title="Drag to resize"
+			>
+				<div className="w-8 h-[2px] rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
+			</div>
+			{/* SSH Panel content */}
+			<div className="flex-1 overflow-hidden">
+				<SSHPanel onConnect={onSSHConnect} onSelectProfile={onSelectProfile} activeProfileId={activeProfileId} />
+			</div>
+		</div>
 	);
 }
