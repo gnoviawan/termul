@@ -17,16 +17,19 @@ use std::sync::Arc;
 pub struct SSHManager {
     pub connections: Arc<SSHConnectionManager>,
     pub profiles: Arc<ProfileManager>,
+    pub port_forwards: Arc<port_forward::PortForwardManager>,
 }
 
 impl SSHManager {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
         let profiles = Arc::new(ProfileManager::new(app_handle.clone()));
-        let connections = Arc::new(SSHConnectionManager::new(app_handle));
+        let connections = Arc::new(SSHConnectionManager::new(app_handle.clone()));
+        let port_forwards = Arc::new(port_forward::PortForwardManager::new(app_handle));
 
         Self {
             connections,
             profiles,
+            port_forwards,
         }
     }
 }
