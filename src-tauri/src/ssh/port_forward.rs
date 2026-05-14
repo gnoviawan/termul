@@ -128,6 +128,12 @@ impl PortForwardManager {
                 .entry(connection_id.to_string())
                 .or_default();
 
+            // Clear any prior handle leaking the same forward ID
+            if let Some(prior) = conn_forwards.remove(&forward_id) {
+                prior.should_stop.store(true, Ordering::Relaxed);
+                prior.task.abort();
+            }
+
             conn_forwards.insert(
                 forward_id.clone(),
                 ForwardHandle {
