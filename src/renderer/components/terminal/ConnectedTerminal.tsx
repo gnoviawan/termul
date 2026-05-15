@@ -16,7 +16,6 @@ import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
@@ -28,6 +27,8 @@ import {
 	captureScrollPosition,
 	restoreScrollPosition,
 } from "../../utils/terminal-registry";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	useTerminalFontFamily,
 	useTerminalFontSize,
@@ -54,6 +55,11 @@ import {
 	buildTerminalPathLinks,
 	openFilePathFromTerminal,
 } from "@/lib/file-path-links";
+import {
+	buildTerminalUrlLinks,
+	isSupportedTerminalUrl,
+} from "@/lib/terminal-url-links";
+import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import {
@@ -222,10 +228,18 @@ function ConnectedTerminalComponent({
 	const initializedTerminalIdRef = useRef<string | undefined>(undefined);
 	const onExitRef = useRef(onExit);
 	onExitRef.current = onExit;
+	const onErrorRef = useRef(onError);
+	onErrorRef.current = onError;
+	const onSpawnedRef = useRef(onSpawned);
+	onSpawnedRef.current = onSpawned;
 	const onCommandRef = useRef(onCommand);
 	onCommandRef.current = onCommand;
 	const onBoundToStoreTerminalRef = useRef(onBoundToStoreTerminal);
 	onBoundToStoreTerminalRef.current = onBoundToStoreTerminal;
+	const spawnOptionsRef = useRef(spawnOptions);
+	spawnOptionsRef.current = spawnOptions;
+	const initialScrollbackRef = useRef(initialScrollback);
+	initialScrollbackRef.current = initialScrollback;
 	const currentLineRef = useRef<string>("");
 	const continuityProjectIdRef = useRef<string | undefined>(getInstrumentationProjectId(spawnOptions));
 	const needsResizeOnReadyRef = useRef<boolean>(false);
@@ -318,10 +332,14 @@ function ConnectedTerminalComponent({
 	};
 
 	const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({ terminal: terminalInstance });
+	const copySelectionRef = useRef(copySelection);
+	copySelectionRef.current = copySelection;
+	const pasteFromClipboardRef = useRef(pasteFromClipboard);
+	pasteFromClipboardRef.current = pasteFromClipboard;
 
 	useEffect(() => { if (externalTerminalId) ptyIdRef.current = externalTerminalId; }, [externalTerminalId]);
 
-	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptions); }, [spawnOptions]);
+	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptionsRef.current); }, [spawnOptions]);
 
 	useEffect(() => {
 		if (!externalTerminalId || isTerminalPendingPtyAssignment(externalTerminalId)) return;
@@ -329,31 +347,1043 @@ function ConnectedTerminalComponent({
 		return () => { useTerminalStore.getState().setRendererAttached(externalTerminalId, false); };
 	}, [externalTerminalId]);
 
-	const memoizedSpawnOptions = useMemo(() => spawnOptions, [spawnOptions]);
+	const instrumentationProjectId = getInstrumentationProjectId(spawnOptions);
 
-	const handleTerminalData = useCallback(async (data: string): Promise<void> => {
-		const ptyId = ptyIdRef.current;
-		if (!ptyId) return;
-		if (data === "\r" || data === "\n") {
-			const command = currentLineRef.current;
-			currentLineRef.current = "";
-			if (command && onCommandRef.current) onCommandRef.current(command);
-		} else if (data === "\x7f" || data === "\b") {
-			currentLineRef.current = currentLineRef.current.slice(0, -1);
-		} else if (data === "\x03") {
-			currentLineRef.current = "";
-		} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			currentLineRef.current += data;
-		} else if (data.length > 1) {
-			currentLineRef.current += data;
+	useEffect(() => {
+		if (instrumentationProjectId) {
+			continuityProjectIdRef.current = instrumentationProjectId;
 		}
-		try {
-			const result = await terminalApi.write(ptyId, data);
-			if (!result.success && onError) onError(result.error);
-		} catch (err) {
-			if (onError) onError(err instanceof Error ? err.message : "Write failed");
+	}, [instrumentationProjectId]);
+
+	// Memoize spawn options to prevent unnecessary re-spawns
+	const memoizedSpawnOptions = useMemo(
+		() => spawnOptions,
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[
+			spawnOptions?.shell,
+			spawnOptions?.cwd,
+			spawnOptions?.cols,
+			spawnOptions?.rows,
+			spawnOptions?.env,
+		],
+	);
+
+	// Handle input from xterm to PTY
+	const handleTerminalData = useCallback(
+		async (data: string): Promise<void> => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+
+			// Track command input for history
+			if (data === "\r" || data === "\n") {
+				// Enter pressed - capture command
+				const command = currentLineRef.current;
+				currentLineRef.current = "";
+				if (command && onCommandRef.current) {
+					onCommandRef.current(command);
+				}
+			} else if (data === "\x7f" || data === "\b") {
+				// Backspace
+				currentLineRef.current = currentLineRef.current.slice(0, -1);
+			} else if (data === "\x03") {
+				// Ctrl+C - clear current line
+				currentLineRef.current = "";
+			} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+				// Printable character
+				currentLineRef.current += data;
+			} else if (data.length > 1) {
+				// Pasted text
+				currentLineRef.current += data;
+			}
+
+			try {
+				const result = await terminalApi.write(ptyId, data);
+				if (!result.success && onErrorRef.current) {
+					onErrorRef.current(result.error);
+				}
+			} catch (err) {
+				if (onErrorRef.current) {
+					onErrorRef.current(err instanceof Error ? err.message : "Write failed");
+				}
+			}
+		},
+		[],
+	);
+
+	// Initialize terminal, set up IPC listeners, and spawn PTY
+	useEffect(() => {
+		const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`;
+
+		devLog(`[ConnectedTerminal] MOUNT [${debugId}]`, {
+			instanceId,
+			externalTerminalId,
+			autoSpawn,
+			spawnOptions,
+			isVisible,
+		});
+
+		if (!containerRef.current) {
+			devLog(`[ConnectedTerminal] SKIP [${debugId}]: no container`);
+			return;
 		}
-	}, [onError]);
+
+		// Check if we're initializing a new terminal (different from previous)
+		const terminalKey = externalTerminalId ?? "new";
+		devLog(`[ConnectedTerminal] terminalKey check [${debugId}]`, {
+			terminalKey,
+			didInit: didInitRef.current,
+			initializedKey: initializedTerminalIdRef.current,
+			willSkip:
+				didInitRef.current && initializedTerminalIdRef.current === terminalKey,
+		});
+
+		if (
+			didInitRef.current &&
+			initializedTerminalIdRef.current === terminalKey
+		) {
+			devLog(
+				`[ConnectedTerminal] SKIP [${debugId}]: already initialized for ${terminalKey}`,
+			);
+			return;
+		}
+
+		// Reset init state for new terminal
+		didInitRef.current = true;
+		initializedTerminalIdRef.current = terminalKey;
+
+		devLog(
+			`[ConnectedTerminal] INITIALIZING [${debugId}] for key: ${terminalKey}`,
+		);
+
+		// Merge platform-aware options with dynamic app settings
+		const terminalOptions = {
+			...getTerminalOptions(navigator.platform),
+			fontFamily,
+			fontSize,
+			scrollback: bufferSize,
+		};
+
+		// Check for a cached terminal preserved across project switches.
+		// If found, reuse it (preserves scrollback, alt buffer, cursor, etc.)
+		// and skip both terminal.open() and transcript replay.
+		const cacheKey = externalTerminalId || undefined;
+		const cachedTerminal = cacheKey ? takeCachedTerminal(cacheKey) : undefined;
+
+		let terminal: Terminal;
+		if (cachedTerminal) {
+			devLog(`[ConnectedTerminal] RESTORED cached terminal`, {
+				cacheKey,
+			});
+			terminal = cachedTerminal;
+		} else {
+			terminal = new Terminal(terminalOptions);
+		}
+		terminalRef.current = terminal;
+		setTerminalInstance(terminal);
+
+		const fitAddon = new FitAddon();
+		fitAddonRef.current = fitAddon;
+		terminal.loadAddon(fitAddon);
+
+		const handleFilePathActivate = async (
+			event: MouseEvent,
+			uri: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			try {
+				const result = await openFilePathFromTerminal(uri, {
+					cwd:
+						useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || "")
+							?.cwd,
+					projectRoot: activeProjectPathRef.current,
+				});
+
+				if (!result.ok) {
+					toast.error(result.message);
+				}
+			} catch (error) {
+				console.error("[Terminal File Link Open Failed]", error);
+				toast.error("Failed to open file from terminal output.");
+			}
+		};
+
+		const handleUrlActivate = async (
+			event: MouseEvent,
+			url: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			if (!isSupportedTerminalUrl(url)) {
+				toast.error("Only http/https URLs are supported from terminal output.");
+				return;
+			}
+
+			try {
+				await openTerminalUrl(url);
+			} catch (error) {
+				console.error("[Terminal URL Link Open Failed]", error);
+				toast.error("Failed to open URL from terminal output.");
+			}
+		};
+
+		fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
+			provideLinks(y, callback) {
+				const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+				const pathLinks = buildTerminalPathLinks(line, y, handleFilePathActivate);
+				const urlLinks = buildTerminalUrlLinks(line, y, handleUrlActivate);
+				callback([...urlLinks, ...pathLinks]);
+			},
+		});
+
+		// Load search addon
+		const searchAddon = new SearchAddon();
+		searchAddonRef.current = searchAddon;
+		terminal.loadAddon(searchAddon);
+
+		if (cachedTerminal) {
+			// Reattach the preserved xterm element to the new container.
+			// This avoids losing scrollback, alt-buffer, and cursor state.
+			if (containerRef.current && terminal.element) {
+				containerRef.current.appendChild(terminal.element);
+			}
+			// Force a full refresh so the renderer repaints after DOM reattachment.
+			terminal.refresh(0, terminal.rows - 1);
+		} else {
+			terminal.open(containerRef.current);
+		}
+
+		// Intercept keyboard shortcuts before xterm processes them
+		// Return false to prevent xterm from handling, true to let xterm handle
+		terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+			if (event.type !== "keydown") return true;
+
+			const shortcuts = shortcutsRef.current;
+
+			// Check if this key matches any app shortcut
+			// On macOS: Ctrl+key shortcuts should pass through to the shell (not intercepted by app)
+			// Only ⌘+key shortcuts are intercepted by the app on macOS
+			if (isAppOwnedTerminalShortcut(event, shortcuts)) {
+				// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
+				// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
+				// The ⌘ equivalent is handled by the clipboardModifier block above.
+				if (isMac && event.ctrlKey && !event.metaKey) {
+					// Passthrough: let xterm send the raw ctrl sequence to the shell
+					return true;
+				}
+
+				// Don't call stopPropagation() - let event bubble to window handler
+				// Return false to prevent xterm from handling the event
+				return false;
+			}
+
+			// Handle copy/paste/select all keyboard shortcuts
+			// macOS convention: ⌘+C/V/A for clipboard operations, Ctrl+C = SIGINT
+			// Windows/Linux convention: Ctrl+C/V/A for everything
+			const clipboardModifier = isPlatformModifier(event);
+
+			if (clipboardModifier) {
+				// Rate limit check
+				const now = Date.now();
+				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) {
+					return false; // Rate limited - prevent xterm handling but don't process
+				}
+
+				switch (event.key.toLowerCase()) {
+					case "c":
+						// Copy: if selection exists, copy and prevent xterm handling
+						// Otherwise allow xterm to handle (for interrupt signal)
+						if (terminal.hasSelection()) {
+							event.preventDefault();
+							const selection = terminal.getSelection();
+							if (selection) {
+								lastClipboardOpRef.current = now;
+								// Use the hook's copySelection for consistency
+								void copySelection();
+							}
+							return false;
+						}
+						// No selection - allow xterm to send Ctrl+C (interrupt signal)
+						return true;
+
+					case "v":
+						// Paste: read clipboard and paste to terminal
+						event.preventDefault();
+						lastClipboardOpRef.current = now;
+						// Use the hook's pasteFromClipboard for consistency
+						void pasteFromClipboard();
+						return false;
+
+					case "a":
+						// Select all
+						terminal.selectAll();
+						return false;
+					}
+			}
+
+			return true;
+		});
+
+		// WebGL addon loading with context loss recovery
+		const loadWebglAddon = (
+			term: Terminal,
+			isRecovery: boolean = false,
+		): void => {
+			if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+				webglAddonRef.current = null;
+				return;
+			}
+			if (webglAddonRef.current) {
+				return;
+			}
+			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
+				console.warn(
+					"WebGL recovery attempts exhausted, falling back to DOM renderer",
+				);
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-exhausted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempts: webglRecoveryAttemptsRef.current,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+					},
+				});
+				return;
+			}
+			try {
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-attempted",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						maxAttempts: MAX_WEBGL_RECOVERY_ATTEMPTS,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
+				const webglAddon = new WebglAddon();
+				webglAddon.onContextLoss(() => {
+					webglAddon.dispose();
+					webglAddonRef.current = null;
+					// Mark context as lost for recovery decisions
+					webglContextLostRef.current = true;
+					if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+						webglContextLostRef.current = false;
+						return;
+					}
+					// Increment recovery counter BEFORE scheduling recovery
+					webglRecoveryAttemptsRef.current++;
+					// Clear any pending recovery timeout
+					if (webglRecoveryTimeoutRef.current) {
+						clearTimeout(webglRecoveryTimeoutRef.current);
+					}
+					// Delay before recovery to avoid rapid-fire loops
+					webglRecoveryTimeoutRef.current = setTimeout(() => {
+						webglRecoveryTimeoutRef.current = null;
+						loadWebglAddon(term, true);
+					}, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS);
+				});
+				term.loadAddon(webglAddon);
+				webglAddonRef.current = webglAddon;
+				// Clear context lost flag on successful load
+				webglContextLostRef.current = false;
+				if (!isRecovery) {
+					webglRecoveryAttemptsRef.current = 0;
+				}
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-succeeded",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						attempt: webglRecoveryAttemptsRef.current + 1,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.warn(
+					"WebGL addon failed to load, falling back to DOM renderer:",
+					error,
+				);
+				webglAddonRef.current = null;
+				webglRecoveryAttemptsRef.current++;
+				recordTerminalContinuityEvent({
+					name: "renderer-recovery-failed",
+					ptyId: ptyIdRef.current ?? undefined,
+					details: {
+						error: message,
+						attempt: webglRecoveryAttemptsRef.current,
+						isRecovery,
+						renderer: "webgl",
+					},
+				});
+			}
+		};
+
+		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+			loadWebglAddon(terminal);
+		}
+		// Store reference for recovery handlers to use
+		loadWebglAddonRef.current = loadWebglAddon;
+
+		// Defer initial fit to next animation frame so the WebGL renderer has time
+		// to fully initialize its internal _renderer.value before we call dimensions.
+		// Calling fit() synchronously after loadWebglAddon() causes an uncaught
+		// "Cannot read properties of undefined (reading 'dimensions')" from xterm.
+		requestAnimationFrame(() => {
+			performFit(true);
+		});
+
+		if (autoFocus) {
+			terminal.focus();
+		}
+
+		// Set up resize observer
+		const resizeObserver = new ResizeObserver(() => {
+			requestAnimationFrame(() => {
+				performFit();
+			});
+		});
+		resizeObserver.observe(containerRef.current);
+
+		// Listen for input from xterm
+		const dataDisposable = terminal.onData(handleTerminalData);
+		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+			handleResize(cols, rows);
+		});
+
+		// Set up IPC listeners BEFORE spawning to avoid missing data
+		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
+		let cachedTerminalId: string | null = null;
+		cleanupDataListenerRef.current = terminalApi.onData(
+			(id: string, data: string) => {
+				if (id === ptyIdRef.current && terminalRef.current) {
+					terminalRef.current.write(data);
+					// Resolve terminal record ID (cached to avoid linear scan)
+					if (!cachedTerminalId) {
+						const terminalRecord = useTerminalStore
+							.getState()
+							.findTerminalByPtyId(id);
+						if (terminalRecord) {
+							cachedTerminalId = terminalRecord.id;
+						}
+					}
+					if (cachedTerminalId) {
+						const now = Date.now();
+						const timeSinceLastUpdate = now - lastActivityUpdateRef.current;
+
+						// If enough time has passed since last update, update immediately
+						if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
+							useTerminalStore
+								.getState()
+								.updateTerminalActivityBatch(cachedTerminalId, true, now);
+							lastActivityUpdateRef.current = now;
+						} else {
+							// Otherwise, store pending update for later
+							pendingActivityUpdateRef.current = { id: cachedTerminalId };
+						}
+
+						// Clear existing activity timeout and set new one
+						if (activityTimeoutRef.current) {
+							clearTimeout(activityTimeoutRef.current);
+						}
+						const termId = cachedTerminalId;
+						activityTimeoutRef.current = setTimeout(() => {
+							// Flush any pending activity update
+							if (pendingActivityUpdateRef.current) {
+								useTerminalStore
+									.getState()
+									.updateTerminalActivityBatch(
+										pendingActivityUpdateRef.current.id,
+										false,
+										Date.now(),
+									);
+								pendingActivityUpdateRef.current = null;
+							} else {
+								// Clear activity after 2 seconds of inactivity
+								useTerminalStore
+									.getState()
+									.updateTerminalActivityBatch(termId, false, Date.now());
+							}
+							activityTimeoutRef.current = null;
+							lastActivityUpdateRef.current = 0;
+						}, 2000);
+					}
+				}
+			},
+		);
+
+		cleanupExitListenerRef.current = terminalApi.onExit(
+			(id: string, exitCode: number, signal?: number) => {
+				if (id === ptyIdRef.current && onExitRef.current) {
+					onExitRef.current(exitCode, signal);
+				}
+			},
+		);
+
+		// Spawn terminal if no external ID provided and auto-spawn enabled
+		const initTerminal = async (): Promise<void> => {
+			const spawnDebugId = `${instanceId}-spawn-${Date.now().toString().slice(-6)}`;
+			const recordReplayEvent = (
+				name:
+					| "restore-replay-attempted"
+					| "restore-replay-succeeded"
+					| "restore-replay-failed"
+					| "restore-replay-skipped",
+				details?: Record<string, unknown>,
+				terminalEventId?: string,
+				ptyId?: string,
+			): void => {
+				const projectId = continuityProjectIdRef.current;
+				recordTerminalContinuityEvent({
+					name,
+					correlationId: getOrCreateProjectContinuityCorrelation(projectId),
+					projectId,
+					terminalId: terminalEventId,
+					ptyId,
+					details,
+				});
+			};
+
+			devLog(`[ConnectedTerminal.initTerminal] START [${spawnDebugId}]`, {
+				externalTerminalId,
+				autoSpawn,
+				spawnInFlight: spawnInFlightRef.current,
+				hasPtyId: !!ptyIdRef.current,
+			});
+
+			// Fit to get real dimensions BEFORE spawning
+			performFit(true);
+			const spawnCols = terminal.cols || 80;
+			const spawnRows = terminal.rows || 24;
+
+			if (!externalTerminalId) {
+				if (!autoSpawn) {
+					devLog(
+						`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: autoSpawn is false`,
+					);
+					return;
+				}
+				if (spawnInFlightRef.current || ptyIdRef.current) {
+					devLog(
+						`[ConnectedTerminal.initTerminal] SKIP [${spawnDebugId}]: already spawning or has PTY`,
+					);
+					return;
+				}
+			} else if (isTerminalPendingPtyAssignment(externalTerminalId)) {
+				devLog(
+					`SKIP autoSpawn: terminal ${externalTerminalId} pending PTY assignment from restore`,
+				);
+				return;
+			}
+
+			if (!externalTerminalId) {
+				spawnInFlightRef.current = true;
+				devLog(`[ConnectedTerminal.initTerminal] SPAWNING [${spawnDebugId}]`, {
+					cols: spawnCols,
+					rows: spawnRows,
+					spawnOpts: memoizedSpawnOptions,
+				});
+
+				try {
+					const spawnOpts = {
+						...memoizedSpawnOptions,
+						// Ensure empty shell string is treated as undefined so Rust uses default
+						shell: memoizedSpawnOptions?.shell || undefined,
+						cols: spawnCols,
+						rows: spawnRows,
+					};
+					const result = await terminalApi.spawn(spawnOpts);
+					devLog(
+						`[ConnectedTerminal.initTerminal] SPAWN RESULT [${spawnDebugId}]`,
+						{
+							success: result.success,
+							error: result.success ? undefined : result.error,
+							ptyId: result.success ? result.data.id : "FAILED",
+						},
+					);
+
+					if (result.success) {
+						// Update ref immediately so listener can start processing data
+						ptyIdRef.current = result.data.id;
+						useTerminalStore
+							.getState()
+							.setRendererAttached(result.data.id, true);
+						void addRendererRef(result.data.id, instanceIdRef.current);
+						// If tab was visible before PTY was ready, flush deferred fit+resize now
+						if (needsResizeOnReadyRef.current) {
+							needsResizeOnReadyRef.current = false;
+							performFit(true);
+							terminalApi
+								.resize(result.data.id, terminal.cols, terminal.rows)
+								.catch(() => {});
+						}
+						// Register terminal for scrollback persistence
+						registerTerminal(result.data.id, terminal);
+						const terminalStoreState = useTerminalStore.getState();
+						const transcript = terminalStoreState.peekTranscript(result.data.id);
+						const transcriptLooksPartial =
+							transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
+						recordReplayEvent(
+							"restore-replay-attempted",
+							{
+								mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+								transcriptLength: transcript.length,
+								initialScrollbackLineCount: initialScrollback?.length ?? 0,
+								source: "spawned-terminal",
+								alternateScreenDetected: transcriptLooksPartial,
+							},
+							storeTerminalId,
+							result.data.id,
+						);
+						try {
+							if (transcript) {
+								if (transcriptLooksPartial) {
+									if (!transcript.startsWith("\u001b[?1049h")) {
+										terminal.write("\u001b[?1049h");
+									}
+									terminal.write(transcript);
+									terminal.write(PARTIAL_RESTORE_NOTE);
+								} else {
+									terminal.write(transcript);
+								}
+								terminalStoreState.consumeTranscript(result.data.id);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "transcript",
+										transcriptLength: transcript.length,
+										source: "spawned-terminal",
+										fullFidelity: !transcriptLooksPartial,
+										restoreLimitation: transcriptLooksPartial
+											? "alternate-screen-or-in-place-redraw"
+											: undefined,
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else if (initialScrollback && initialScrollback.length > 0) {
+								restoreScrollback(terminal, initialScrollback);
+								recordReplayEvent(
+									"restore-replay-succeeded",
+									{
+										mode: "scrollback",
+										initialScrollbackLineCount: initialScrollback.length,
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							} else {
+								recordReplayEvent(
+									"restore-replay-skipped",
+									{
+										reason: "no-persisted-history",
+										source: "spawned-terminal",
+									},
+									storeTerminalId,
+									result.data.id,
+								);
+							}
+						} catch (error) {
+							const replayError = error instanceof Error ? error.message : String(error);
+							recordReplayEvent(
+								"restore-replay-failed",
+								{
+									mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+									error: replayError,
+									source: "spawned-terminal",
+								},
+								storeTerminalId,
+								result.data.id,
+							);
+							console.error("[Terminal Replay Failed]", replayError);
+							if (onError) onError(replayError);
+						}
+						// Write one-time info line if project env vars were applied
+						if (
+							memoizedSpawnOptions?.env &&
+							Object.keys(memoizedSpawnOptions.env).length > 0
+						) {
+							const envCount = Object.keys(memoizedSpawnOptions.env).length;
+							terminal.write(
+								`\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? "s" : ""} applied]\x1b[0m\r\n`,
+							);
+						}
+						// Restore scroll position if cached from previous pane
+						restoreScrollPosition(result.data.id, terminal);
+						if (onSpawned) {
+							onSpawned(result.data.id);
+						}
+						if (onBoundToStoreTerminalRef.current) {
+							onBoundToStoreTerminalRef.current(result.data.id);
+						}
+					} else {
+						const errorMsg = result.error || "Unknown spawn error";
+						console.error("[Terminal Spawn Failed]", errorMsg);
+						terminal.write(
+							`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`,
+						);
+						if (onError) onError(errorMsg);
+					}
+				} catch (err) {
+					const errorMsg = err instanceof Error ? err.message : "Spawn failed";
+					console.error("[Terminal Spawn Exception]", errorMsg);
+					terminal.write(
+						`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`,
+					);
+					if (onError) onError(errorMsg);
+				} finally {
+					spawnInFlightRef.current = false;
+				}
+			} else {
+				// External terminal ID provided - register and restore scrollback
+				devLog(
+					`[ConnectedTerminal.initTerminal] EXTERNAL PTY [${spawnDebugId}]`,
+					{
+						externalTerminalId,
+					},
+				);
+				// Set ptyIdRef so that resize/recovery operations (performFit, terminalApi.resize)
+				// work for external terminals just like spawned ones. Without this, the TUI app
+				// never receives SIGWINCH on project-switch restore and can't redraw.
+				ptyIdRef.current = externalTerminalId;
+				// Renderer-attached tracking is handled by the externalTerminalId effect
+				// above (with proper lifecycle cleanup). The effect also calls
+				// setRendererAttached, so we avoid duplicating it here. The backend ref
+				// (addRendererRef) is still registered here since it is async and not
+				// managed by the effect's lifecycle.
+				void addRendererRef(externalTerminalId, instanceIdRef.current);
+				registerTerminal(externalTerminalId, terminal);
+				const terminalStoreState = useTerminalStore.getState();
+				const transcript = terminalStoreState.peekTranscript(externalTerminalId);
+				const transcriptLooksPartial =
+					transcript.includes("\u001b[?1049h") || transcript.includes("\u001b[?47h");
+				recordReplayEvent(
+					"restore-replay-attempted",
+					{
+						mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+						transcriptLength: transcript.length,
+						initialScrollbackLineCount: initialScrollback?.length ?? 0,
+						source: "external-terminal",
+						alternateScreenDetected: transcriptLooksPartial,
+					},
+					storeTerminalId,
+					externalTerminalId,
+				);
+				try {
+					if (cachedTerminal) {
+						// Cached terminal already has full state — skip transcript/scrollback replay.
+						// Still consume the transcript to prevent unbounded growth.
+						if (transcript) {
+							terminalStoreState.consumeTranscript(externalTerminalId);
+						}
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "cached-terminal",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (transcript) {
+						if (transcriptLooksPartial) {
+							if (!transcript.startsWith("\u001b[?1049h")) {
+								terminal.write("\u001b[?1049h");
+							}
+							terminal.write(transcript);
+							terminal.write(PARTIAL_RESTORE_NOTE);
+						} else {
+							terminal.write(transcript);
+						}
+						terminalStoreState.consumeTranscript(externalTerminalId);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "transcript",
+								transcriptLength: transcript.length,
+								source: "external-terminal",
+								fullFidelity: !transcriptLooksPartial,
+								restoreLimitation: transcriptLooksPartial
+									? "alternate-screen-or-in-place-redraw"
+									: undefined,
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (initialScrollback && initialScrollback.length > 0) {
+						restoreScrollback(terminal, initialScrollback);
+						recordReplayEvent(
+							"restore-replay-succeeded",
+							{
+								mode: "scrollback",
+								initialScrollbackLineCount: initialScrollback.length,
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else {
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "no-persisted-history",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					}
+				} catch (error) {
+					const replayError = error instanceof Error ? error.message : String(error);
+					recordReplayEvent(
+						"restore-replay-failed",
+						{
+							mode: transcript ? "transcript" : initialScrollback?.length ? "scrollback" : "none",
+							error: replayError,
+							source: "external-terminal",
+						},
+						storeTerminalId,
+						externalTerminalId,
+					);
+					console.error("[Terminal Replay Failed]", replayError);
+					if (onError) onError(replayError);
+				}
+				// Write one-time info line if project env vars were applied
+				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
+				if (
+					memoizedSpawnOptions?.env &&
+					Object.keys(memoizedSpawnOptions.env).length > 0
+				) {
+					const envCount = Object.keys(memoizedSpawnOptions.env).length;
+					terminal.write(
+						`\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? "s" : ""} applied]\x1b[0m\r\n`,
+					);
+				}
+				// Restore scroll position if cached from previous pane
+				restoreScrollPosition(externalTerminalId, terminal);
+				if (onBoundToStoreTerminalRef.current) {
+					onBoundToStoreTerminalRef.current(externalTerminalId);
+				}
+			}
+		};
+
+		devLog(`[ConnectedTerminal] Calling initTerminal [${debugId}]`);
+		initTerminal();
+
+		return () => {
+			devLog(`[ConnectedTerminal] UNMOUNT [${debugId}]`, {
+				instanceId,
+				ptyId: ptyIdRef.current,
+				externalTerminalId,
+			});
+			// Capture scroll position BEFORE unregistering for pane transitions
+			const terminalId = ptyIdRef.current || externalTerminalId;
+			if (terminalId && terminalRef.current) {
+				captureScrollPosition(terminalId);
+				useTerminalStore.getState().setRendererAttached(terminalId, false);
+				void removeRendererRef(terminalId, instanceId);
+			}
+
+			// Unregister terminal from registry
+			if (ptyIdRef.current) {
+				unregisterTerminal(ptyIdRef.current);
+			} else if (externalTerminalId) {
+				unregisterTerminal(externalTerminalId);
+			}
+
+			// PTY lifecycle is handled by explicit terminal close, not component unmount
+			resizeObserver.disconnect();
+			dataDisposable.dispose();
+			resizeDisposable.dispose();
+			if (cleanupDataListenerRef.current) {
+				cleanupDataListenerRef.current();
+				cleanupDataListenerRef.current = null;
+			}
+			if (cleanupExitListenerRef.current) {
+				cleanupExitListenerRef.current();
+				cleanupExitListenerRef.current = null;
+			}
+			// Clean up resize debounce timer
+			if (resizeTimeoutRef.current) {
+				clearTimeout(resizeTimeoutRef.current);
+			}
+			// Clean up activity timeout timer
+			if (activityTimeoutRef.current) {
+				clearTimeout(activityTimeoutRef.current);
+			}
+			// Flush pending activity update on unmount
+			if (pendingActivityUpdateRef.current) {
+				useTerminalStore
+					.getState()
+					.updateTerminalActivityBatch(
+						pendingActivityUpdateRef.current.id,
+						true,
+						Date.now(),
+					);
+				pendingActivityUpdateRef.current = null;
+			}
+			// Cursor cleanup: Disable cursor blink before WebGL disposal to prevent ghost cursors
+			if (terminalRef.current) {
+				terminalRef.current.options.cursorBlink = false;
+			}
+
+			// Dispose WebGL addon BEFORE terminal disposal for proper cursor layer cleanup
+			disposeWebglAddon();
+			if (fileLinkProviderDisposableRef.current) {
+				fileLinkProviderDisposableRef.current.dispose();
+				fileLinkProviderDisposableRef.current = null;
+			}
+
+			// Cache the terminal for reuse on project-switch-back instead of
+			// disposing it. This preserves all xterm internal state (scrollback,
+			// alt buffer, cursor position). Only cache if the terminal is still
+			// alive in the store (not closed/exited) — otherwise dispose.
+			const cacheKey = terminalId;
+			const terminalStillInStore = cacheKey &&
+				useTerminalStore.getState().findTerminalByPtyId(cacheKey);
+			if (terminalStillInStore) {
+				cacheTerminal(cacheKey, terminal);
+			} else {
+				terminal.dispose();
+			}
+			terminalRef.current = null;
+			setTerminalInstance(null);
+			fitAddonRef.current = null;
+			searchAddonRef.current = null;
+			ptyIdRef.current = null;
+			spawnInFlightRef.current = false;
+			// Reset init flag so a new terminal can be created if component remounts
+			didInitRef.current = false;
+			initializedTerminalIdRef.current = undefined;
+			// Reset WebGL recovery state for next terminal creation
+			webglRecoveryAttemptsRef.current = 0;
+			webglContextLostRef.current = false;
+			loadWebglAddonRef.current = null;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	// Update terminal font settings when app settings change (without recreating terminal)
+	useEffect(() => {
+		if (terminalRef.current) {
+			terminalRef.current.options.fontFamily = fontFamily;
+			terminalRef.current.options.fontSize = fontSize;
+			performFit(true);
+		}
+	}, [fontFamily, fontSize]);
+
+	useEffect(() => {
+		if (!shouldUseWebglRenderer(rendererPreference)) {
+			disposeWebglAddon();
+			webglRecoveryAttemptsRef.current = 0;
+			return;
+		}
+
+		if (
+			terminalRef.current &&
+			loadWebglAddonRef.current &&
+			!webglAddonRef.current
+		) {
+			webglRecoveryAttemptsRef.current = 0;
+			loadWebglAddonRef.current(terminalRef.current);
+		}
+	}, [disposeWebglAddon, rendererPreference]);
+
+	// Trigger fit + PTY resize when terminal becomes visible
+	// Uses double requestAnimationFrame for proper timing after pane transitions
+	useEffect(() => {
+		if (isVisible && fitAddonRef.current && terminalRef.current) {
+			// Double RAF ensures DOM is fully rendered after pane transition
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => {
+					const didFit = performFit();
+
+					const terminal = terminalRef.current;
+					if (!terminal) return;
+
+					// Only focus if no interactive element (button, input, etc.) currently has focus.
+					// This prevents stealing focus from TitleBar window controls when tab switch happens.
+					const active = document.activeElement;
+					const isInteractiveElementFocused =
+						active &&
+						active !== document.body &&
+						(active.tagName === "BUTTON" ||
+							active.tagName === "INPUT" ||
+							active.tagName === "TEXTAREA" ||
+							active.tagName === "SELECT" ||
+							active.tagName === "A");
+					if (!isInteractiveElementFocused) {
+						terminal.focus();
+					}
+
+					const ptyId = ptyIdRef.current;
+					if (ptyId) {
+						// Always sync PTY dimensions on visibility change for safety,
+						// but only trigger fit when container dimensions actually changed.
+						const resizePromise = terminalApi.resize(
+							ptyId,
+							terminal.cols,
+							terminal.rows,
+						);
+						if (resizePromise && typeof resizePromise.catch === "function") {
+							resizePromise.catch(() => {
+								// Ignore resize errors when toggling visibility
+							});
+						}
+						// Restore scroll position after fit (in case of pane transition)
+						restoreScrollPosition(ptyId, terminal);
+					} else {
+						// PTY not ready yet — defer resize until spawn completes
+						needsResizeOnReadyRef.current = true;
+					}
+				});
+			});
+		}
+	}, [isVisible]);
+
+	// Shared terminal recovery logic - re-fit and check WebGL health
+	const performTerminalRecovery = useCallback((): void => {
+		if (!fitAddonRef.current || !terminalRef.current) return;
+
+		// Only recreate WebGL addon if context was actually lost, the current preference still
+		// allows WebGL, and we're not already recovering.
+		if (
+			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
+			webglContextLostRef.current &&
+			!webglAddonRef.current
+		) {
+			try {
+				// Cancel any pending auto-recovery timeout to avoid double-creation race
+				if (webglRecoveryTimeoutRef.current) {
+					clearTimeout(webglRecoveryTimeoutRef.current);
+					webglRecoveryTimeoutRef.current = null;
+				}
+				console.warn(
+					"WebGL context was lost, recreating addon during recovery",
+				);
+				// Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
+				if (loadWebglAddonRef.current && terminalRef.current) {
+					loadWebglAddonRef.current(terminalRef.current, true);
+				}
+			} catch (error) {
+				console.warn("WebGL context recovery failed:", error);
+			}
+		}
+
+		// Re-fit terminal to current dimensions
+		performFit(true);
+	}, []);
 
 	const handleResize = useCallback(async (cols: number, rows: number): Promise<void> => {
 		const ptyId = ptyIdRef.current;
@@ -399,11 +1429,10 @@ function ConnectedTerminalComponent({
 
 	useEffect(() => {
 		const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`;
-		const terminalKey = `${targetId}-${ptyId ? "active" : "restarting"}`;
 		if (!containerRef.current || !targetId) return;
-		if (didInitRef.current && initializedTerminalIdRef.current === terminalKey) return;
+		if (didInitRef.current) return;
 		didInitRef.current = true;
-		initializedTerminalIdRef.current = terminalKey;
+		initializedTerminalIdRef.current = targetId;
 		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize, scrollback: bufferSize };
 		const terminal = new Terminal(terminalOptions);
 		terminalRef.current = terminal;
@@ -423,8 +1452,8 @@ function ConnectedTerminalComponent({
 				const now = Date.now();
 				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) return false;
 				switch (event.key.toLowerCase()) {
-					case "c": if (terminal.hasSelection()) { event.preventDefault(); lastClipboardOpRef.current = now; void copySelection(); return false; } return true;
-					case "v": event.preventDefault(); lastClipboardOpRef.current = now; void pasteFromClipboard(); return false;
+					case "c": if (terminal.hasSelection()) { event.preventDefault(); lastClipboardOpRef.current = now; void copySelectionRef.current(); return false; } return true;
+					case "v": event.preventDefault(); lastClipboardOpRef.current = now; void pasteFromClipboardRef.current(); return false;
 					case "a": terminal.selectAll(); return false;
 				}
 			}
@@ -502,7 +1531,8 @@ function ConnectedTerminalComponent({
 				if (!autoSpawn || spawnInFlightRef.current || ptyIdRef.current) return;
 				spawnInFlightRef.current = true;
 				try {
-					const result = await terminalApi.spawn({ ...memoizedSpawnOptions, shell: memoizedSpawnOptions?.shell || undefined, cols: terminal.cols || 80, rows: terminal.rows || 24 });
+					const currentSpawnOptions = spawnOptionsRef.current;
+					const result = await terminalApi.spawn({ ...currentSpawnOptions, shell: currentSpawnOptions?.shell || undefined, cols: terminal.cols || 80, rows: terminal.rows || 24 });
 					if (result.success) {
 						ptyIdRef.current = result.data.id;
 						useTerminalStore.getState().setRendererAttached(result.data.id, true);
@@ -510,17 +1540,17 @@ function ConnectedTerminalComponent({
 						registerTerminal(result.data.id, terminal);
 						const transcript = useTerminalStore.getState().peekTranscript(result.data.id);
 						if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(result.data.id); }
-						else if (initialScrollback?.length) restoreScrollback(terminal, initialScrollback);
-						if (onSpawned) onSpawned(result.data.id);
+						else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
+						if (onSpawnedRef.current) onSpawnedRef.current(result.data.id);
 						if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(result.data.id);
-					} else if (onError) onError(result.error);
-				} catch (err) { if (onError) onError(err instanceof Error ? err.message : "Spawn failed"); } finally { spawnInFlightRef.current = false; }
+					} else if (onErrorRef.current) onErrorRef.current(result.error);
+				} catch (err) { if (onErrorRef.current) onErrorRef.current(err instanceof Error ? err.message : "Spawn failed"); } finally { spawnInFlightRef.current = false; }
 			} else {
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId);
 				if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(externalTerminalId); }
-				else if (initialScrollback?.length) restoreScrollback(terminal, initialScrollback);
+				else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
 				if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(externalTerminalId);
 			}
 		};

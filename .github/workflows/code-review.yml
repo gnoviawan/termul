@@ -23,14 +23,20 @@ jobs:
       ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
       API_TIMEOUT_MS: 3000000
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@b112a167ee1f4aa7ad2e3adae255c8c8c69e740b # v1
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           API_TIMEOUT_MS: 3000000

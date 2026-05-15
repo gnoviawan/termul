@@ -14,6 +14,16 @@ vi.mock('@/lib/api', () => ({
     save: vi.fn(),
     clear: vi.fn(),
     flush: vi.fn()
+  },
+  terminalApi: {
+    onData: vi.fn(() => vi.fn())
+  },
+  persistenceApi: {
+    read: vi.fn(),
+    write: vi.fn(),
+    writeDebounced: vi.fn(),
+    flushPendingWrites: vi.fn(),
+    delete: vi.fn()
   }
 }))
 

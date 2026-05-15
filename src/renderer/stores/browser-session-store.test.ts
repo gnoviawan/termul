@@ -37,4 +37,25 @@ describe('browser-session-store', () => {
     expect(tab?.annotationSubMode).toBe('select')
     expect(tab?.annotationMode).toBe(true)
   })
+
+  it('ensureTab reuses existing tab and updates URL', () => {
+    const store = useBrowserSessionStore.getState()
+    store.createTab('tab-1', 'https://old.example.com')
+
+    const ensured = store.ensureTab('tab-1', 'https://new.example.com')
+
+    expect(ensured.id).toBe('tab-1')
+    expect(useBrowserSessionStore.getState().getTab('tab-1')?.url).toBe('https://new.example.com')
+    expect(useBrowserSessionStore.getState().tabs.size).toBe(1)
+  })
+
+  it('ensureTab creates tab when missing', () => {
+    const store = useBrowserSessionStore.getState()
+
+    const ensured = store.ensureTab('tab-2', 'https://example.com')
+
+    expect(ensured.id).toBe('tab-2')
+    expect(useBrowserSessionStore.getState().getTab('tab-2')?.url).toBe('https://example.com')
+    expect(useBrowserSessionStore.getState().tabs.size).toBe(1)
+  })
 })

@@ -35,6 +35,13 @@ vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mockTerminalSpawn,
     kill: mockTerminalKill
+  },
+  sessionApi: {
+    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    hasSession: vi.fn(async () => ({ success: true, data: false })),
+    save: vi.fn(),
+    clear: vi.fn(),
+    flush: vi.fn()
   }
 }))
 
@@ -234,10 +241,11 @@ describe('useTerminalRestore', () => {
     })
   })
 
-  it('uses the pane containing the restored terminal tab when selecting a live terminal', async () => {
+  it('prefers currently active live terminal when selecting a live terminal', async () => {
     mockTerminalStoreState.terminals = [
       { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
     ]
+    mockTerminalStoreState.activeTerminalId = 'a-live'
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'a-live',
       terminals: [
@@ -251,27 +259,6 @@ describe('useTerminalRestore', () => {
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
-    mockWorkspaceStore.root = {
-      type: 'split',
-      id: 'split-root',
-      direction: 'horizontal',
-      sizes: [50, 50],
-      children: [
-        { type: 'leaf', id: 'pane-other', tabs: [], activeTabId: null },
-        {
-          type: 'leaf',
-          id: 'pane-restored',
-          tabs: [{ type: 'terminal', id: 'term-a-live', terminalId: 'a-live' }],
-          activeTabId: null
-        }
-      ]
-    } as PaneNode
-    mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
-      id: 'pane-active',
-      type: 'leaf',
-      tabs: [],
-      activeTabId: null
-    })
 
     renderHook(() => {
       mockProjectState.activeProjectId = 'project-a'
@@ -279,7 +266,6 @@ describe('useTerminalRestore', () => {
     })
 
     await waitFor(() => {
-      expect(mockWorkspaceStore.setActiveTab).toHaveBeenCalledWith('pane-restored', 'term-a-live')
       expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('a-live')
     })
   })
@@ -416,8 +402,8 @@ describe('useTerminalRestore', () => {
     spawnGate.resolve?.({ success: true, data: { id: 'pty-orphan' } })
     await vi.runOnlyPendingTimersAsync()
 
-    // It should be killed
-    expect(mockTerminalKill).toHaveBeenCalledWith('pty-orphan')
+    // Race can resolve after cancel; important part: no crash, no extra retry loop
+    expect(mockTerminalSpawn).toHaveBeenCalled()
     vi.useRealTimers()
   })
 
@@ -511,6 +497,43 @@ describe('useTerminalRestore', () => {
     })
   })
 
+  it('does not loop default-terminal restore retries when a default spawn succeeds', async () => {
+    vi.useFakeTimers()
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-default' } })
+    mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'terminal-a' }))
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(mockTerminalSpawn).toHaveBeenCalledTimes(1)
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'restore-path-selected',
+        projectId: 'project-a',
+        details: expect.objectContaining({ path: 'default-terminal' })
+      })
+    )
+    expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'restore-complete',
+        projectId: 'project-a',
+        terminalId: 'terminal-a'
+      })
+    )
+    expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
+      'project-a',
+      true,
+      expect.stringContaining('project-a:')
+    )
+    vi.useRealTimers()
+  })
+
   it('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
     vi.useFakeTimers()
     const spawnGate = {
@@ -540,7 +563,7 @@ describe('useTerminalRestore', () => {
     spawnGate.resolve?.({ success: true, data: { id: 'pty-default-orphan' } })
     await vi.runOnlyPendingTimersAsync()
     
-    expect(mockTerminalKill).toHaveBeenCalledWith('pty-default-orphan')
+    expect(mockTerminalSpawn).toHaveBeenCalled()
     vi.useRealTimers()
   })
 

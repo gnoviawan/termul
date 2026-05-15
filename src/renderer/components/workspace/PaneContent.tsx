@@ -114,25 +114,157 @@ export function PaneContent({
 								return <div key={tab.id} className={isVisible ? "w-full h-full flex items-center justify-center text-muted-foreground text-sm" : "hidden"}>Connecting...</div>;
 							}
 							const isVisible = activeTab?.id === tab.id;
-							return <div key={tab.id} className={isVisible ? "w-full h-full" : "w-full h-full absolute inset-0 invisible"}><ConnectedTerminal terminalId={terminal.ptyId} storeTerminalId={terminal.id} autoSpawn={false} spawnOptions={{ projectId: terminal.projectId, shell: terminal.shell, cwd: terminal.cwd }} onBoundToStoreTerminal={(ptyId) => { if (terminal.ptyId !== ptyId) setTerminalPtyId(terminal.id, ptyId); }} initialScrollback={terminal.pendingScrollback} className="w-full h-full" isVisible={isVisible} /></div>;
+							return (
+								<div
+									key={tab.id}
+									className={
+										isVisible
+											? "w-full h-full"
+											: "w-full h-full absolute inset-0 invisible"
+									}
+								>
+									<ConnectedTerminal
+										terminalId={terminal.ptyId}
+										storeTerminalId={terminal.id}
+										autoSpawn={false}
+										spawnOptions={{
+											projectId: terminal.projectId,
+											shell: terminal.shell,
+											cwd: terminal.cwd,
+										}}
+										onBoundToStoreTerminal={(ptyId) => {
+											if (terminal.ptyId !== ptyId) {
+												setTerminalPtyId(terminal.id, ptyId);
+											}
+										}}
+										initialScrollback={terminal.pendingScrollback}
+										className="w-full h-full"
+										isVisible={isVisible}
+									/>
+								</div>
+							);
 						})}
-						{pane.tabs.filter((t): t is WorkspaceTab & { type: "editor" } => t.type === "editor").map((tab) => {
-							const isVisible = activeTab?.id === tab.id;
-							return <div key={tab.id} className={isVisible ? "w-full h-full" : "w-full h-full absolute inset-0 invisible"}><EditorPanel filePath={tab.filePath} isVisible={isVisible} /></div>;
-						})}
-						{pane.tabs.filter((t): t is WorkspaceTab & { type: "browser" } => t.type === "browser").map((tab) => {
-							const isVisible = activeTab?.id === tab.id;
-							return <div key={tab.id} className={isVisible ? "w-full h-full" : "w-full h-full absolute inset-0 invisible"}><BrowserPanel browserTabId={tab.browserTabId} isVisible={isVisible} /></div>;
-						})}
-						{pane.tabs.filter((t): t is WorkspaceTab & { type: "git" } => t.type === "git").map((tab) => {
-							const isVisible = activeTab?.id === tab.id;
-							return <div key={tab.id} className={isVisible ? "w-full h-full" : "w-full h-full absolute inset-0 invisible"}><GitPanel cwd={tab.cwd} isVisible={isVisible} /></div>;
-						})}
-						{pane.tabs.filter((t): t is WorkspaceTab & { type: "tunnel" } => t.type === "tunnel").map((tab) => {
-							const isVisible = activeTab?.id === tab.id;
-							return <div key={tab.id} className={isVisible ? "w-full h-full" : "w-full h-full absolute inset-0 invisible"}><TunnelTabContent tunnelId={tab.tunnelId} isVisible={isVisible} /></div>;
-						})}
-						{pane.tabs.length === 0 ? (<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8"><div className="flex flex-col items-center gap-2 text-center"><span className="text-muted-foreground text-sm font-medium">Drag a tab or file here</span><span className="text-muted-foreground/50 text-xs">or open a new terminal or tab</span></div><div className="flex flex-wrap items-center justify-center gap-2 max-w-md">{sortedShells?.map((shell) => (<Button key={shell.name} variant="outline" size="sm" className="h-8 text-[11px] gap-2" onClick={() => onAddTerminal?.(pane.id, shell)}><TerminalIcon size={12} />{shell.displayName}</Button>))}</div></div>) : null}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "editor" } =>
+									t.type === "editor",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<EditorPanel
+											filePath={tab.filePath}
+											isVisible={isVisible}
+										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "browser" } =>
+									t.type === "browser",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<BrowserPanel
+											browserTabId={tab.browserTabId}
+											isVisible={isVisible}
+										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "git" } =>
+									t.type === "git",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<GitPanel cwd={tab.cwd} isVisible={isVisible} />
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "tunnel" } =>
+									t.type === "tunnel",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<TunnelTabContent
+											tunnelId={tab.tunnelId}
+											isVisible={isVisible}
+										/>
+									</div>
+								);
+							})}
+
+						{pane.tabs.length === 0 ? (
+							<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8">
+								<div className="flex flex-col items-center gap-2 text-center">
+									<span className="text-muted-foreground text-sm font-medium">
+										Drag a tab or file here
+									</span>
+									<span className="text-muted-foreground/50 text-xs">
+										or open a new terminal or tab
+									</span>
+								</div>
+
+								<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
+									{sortedShells?.map((shell) => (
+										<Button
+											key={shell.name}
+											variant="outline"
+											size="sm"
+											className="h-8 text-[11px] gap-2"
+											onClick={() => onAddTerminal?.(pane.id, shell)}
+										>
+											<TerminalIcon size={12} />
+											{shell.displayName}
+										</Button>
+									))}
+								</div>
+							</div>
+						) : null}
 					</div>
 				</div>
 				{isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}

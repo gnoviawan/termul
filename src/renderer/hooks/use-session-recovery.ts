@@ -30,11 +30,15 @@ function buildSessionData(): SessionData {
       const projectTerminals = terminalState.terminals.filter(
         (terminal) => terminal.projectId === project.id
       )
+      const activeTerminal =
+        projectTerminals.find((terminal) => terminal.id === terminalState.activeTerminalId) ??
+        projectTerminals.find((terminal) => terminal.ptyId) ??
+        projectTerminals[0] ??
+        null
+
       return {
         projectId: project.id,
-        activeTerminalId:
-          projectTerminals.find((terminal) => terminal.id === terminalState.activeTerminalId)?.id ??
-          null,
+        activeTerminalId: activeTerminal?.id ?? null,
         terminals: projectTerminals.map(toTerminalSession)
       }
     })
