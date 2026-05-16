@@ -106,8 +106,17 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
 
         {/* Content area */}
         <div className="flex-1 flex min-h-0 relative">
-          {editingFile ? (
-            <SSHFileEditor connectionId={conn.connectionId ?? ''} />
+          {editingFile && conn.connectionId ? (
+            <SSHFileEditor connectionId={conn.connectionId} />
+          ) : editingFile && !conn.connectionId ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
+              <Terminal className="h-10 w-10 text-muted-foreground/20" />
+              <p className="text-sm text-muted-foreground">Reconnecting to load editor...</p>
+              <button onClick={conn.handleConnect} disabled={conn.isConnecting}
+                className="px-4 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1.5 disabled:opacity-50">
+                <Terminal className="h-3.5 w-3.5" />{conn.isConnecting ? 'Connecting...' : 'Reconnect'}
+              </button>
+            </div>
           ) : conn.isConnected && conn.localTerminalPtyId ? (
             <div className="absolute inset-0 overflow-hidden">
               <ConnectedTerminal terminalId={conn.localTerminalPtyId} autoSpawn={false} isVisible={true} />

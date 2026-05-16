@@ -80,6 +80,24 @@ impl PortForwardManager {
 
         let forward_id = request.id.clone();
 
+        // Stop any existing forward with the same ID before binding the port,
+        // so the old listener is released and we avoid "address in use".
+        {
+            let mut forwards = self.forwards.write();
+            if let Some(conn_forwards) = forwards.get_mut(connection_id) {
+                if let Some(prior) = conn_forwards.remove(&forward_id) {
+                    prior.should_stop.store(true, Ordering::Relaxed);
+                    prior.task.abort();
+
+                    let stopped_info = ActivePortForward {
+                        status: "stopped".to_string(),
+                        ..prior.info
+                    };
+                    self.emit_forward_status(connection_id, &stopped_info);
+                }
+            }
+        }
+
         // Try to bind the local port
         let listener = TcpListener::bind(format!("127.0.0.1:{}", request.local_port))
             .map_err(|e| format!("Failed to bind port {}: {}", request.local_port, e))?;
@@ -127,12 +145,6 @@ impl PortForwardManager {
             let conn_forwards = forwards
                 .entry(connection_id.to_string())
                 .or_default();
-
-            // Clear any prior handle leaking the same forward ID
-            if let Some(prior) = conn_forwards.remove(&forward_id) {
-                prior.should_stop.store(true, Ordering::Relaxed);
-                prior.task.abort();
-            }
 
             conn_forwards.insert(
                 forward_id.clone(),
