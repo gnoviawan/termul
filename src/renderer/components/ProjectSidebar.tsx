@@ -129,7 +129,6 @@ export function ProjectSidebar({
 	const [settingsName, setSettingsName] = useState("");
 	const [settingsPath, setSettingsPath] = useState("");
 	const [settingsShell, setSettingsShell] = useState("");
-	const [settingsRemotePassword, setSettingsRemotePassword] = useState("");
 	const [settingsColor, setSettingsColor] = useState<ProjectColor>("blue");
 	const [settingsPathLoading, setSettingsPathLoading] = useState(false);
 
@@ -263,28 +262,26 @@ export function ProjectSidebar({
 	useEffect(() => {
 		if (settingsDialog.isOpen && settingsDialog.projectId) {
 			const project = projects.find((p) => p.id === settingsDialog.projectId);
-			if (project) {
-				setSettingsName(project.name);
-				setSettingsPath(project.path || "");
-				setSettingsShell(project.defaultShell || "");
-				setSettingsRemotePassword(project.remoteCodingPassword || "");
-				setSettingsColor(project.color || "blue");
-			}
+		if (project) {
+			setSettingsName(project.name);
+			setSettingsPath(project.path || "");
+			setSettingsShell(project.defaultShell || "");
+			setSettingsColor(project.color || "blue");
 		}
-	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
+	}
+}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
 
-	const handleSaveSettings = useCallback(() => {
-		if (settingsDialog.projectId) {
-			onUpdateProject(settingsDialog.projectId, {
-				name: settingsName.trim(),
-				path: settingsPath.trim() || undefined,
-				defaultShell: settingsShell || undefined,
-				remoteCodingPassword: settingsRemotePassword.trim() || undefined,
-				color: settingsColor,
-			});
-		}
-		handleCloseSettings();
-	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsRemotePassword, settingsColor, onUpdateProject, handleCloseSettings]);
+const handleSaveSettings = useCallback(() => {
+	if (settingsDialog.projectId) {
+		onUpdateProject(settingsDialog.projectId, {
+			name: settingsName.trim(),
+			path: settingsPath.trim() || undefined,
+			defaultShell: settingsShell || undefined,
+			color: settingsColor,
+		});
+	}
+	handleCloseSettings();
+}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
 
 	const handleBrowsePath = useCallback(async (): Promise<void> => {
 		try {
@@ -665,19 +662,7 @@ export function ProjectSidebar({
 									</div>
 							</div>
 
-							{/* Remote Coding Password Field */}
-					<div className="space-y-2">
-						<label className="block text-xs font-medium text-muted-foreground mb-1">Remote Coding Password</label>
-						<input
-							type="password"
-							value={settingsRemotePassword}
-							onChange={(e) => setSettingsRemotePassword(e.target.value)}
-							className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-							placeholder="Password for code-server"
-						/>
-					</div>
-
-					{/* Shell Field */}
+							{/* Shell Field */}
 							<div className="space-y-2">
 								<label className="block text-xs font-medium text-muted-foreground mb-1">Default Terminal</label>
 								{availableShells ? (

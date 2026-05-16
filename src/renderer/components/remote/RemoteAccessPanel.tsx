@@ -1,91 +1,120 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Smartphone, Globe, Shield, Play, Square, AlertCircle, Terminal, Copy, Eye, EyeOff } from 'lucide-react'
-import { QRCodeCanvas } from 'qrcode.react'
-import { useRemoteServerStore } from '@/stores/remote-server-store'
+import { Globe, Terminal, Copy, Wifi, WifiOff, RefreshCw, Clock, FileText, Link } from 'lucide-react'
+import { useWsServerStore } from '@/stores/ws-server-store'
 import { useTunnelStore } from '@/stores/tunnel-store'
-import { useProjectStore } from '@/stores/project-store'
-import { remoteServerApi } from '@/lib/remote-server-api'
+import { wsServerApi } from '@/lib/ws-server-api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import type { ConnectionAudit } from '@/lib/ws-server-api'
+
+const WS_PORT = 9876
+const TUNNEL_ID = 'termul-web-tunnel'
 
 export function RemoteAccessPanel(): React.JSX.Element {
-  const { status, isLoading, isInstalled, logs, checkInstalled, refreshStatus, startServer, stopServer, appendLog } = useRemoteServerStore()
+  const { status: wsStatus, isLoading: wsLoading, authToken, tokenExpiry, startServer: startWsServer, stopServer: stopWsServer, generateToken, rotateToken, refreshStatus: refreshWsStatus } = useWsServerStore()
   const tunnelSessions = useTunnelStore((state) => state.sessions)
   const startTunnel = useTunnelStore((state) => state.startTunnel)
   const stopTunnel = useTunnelStore((state) => state.stopTunnel)
-  const activeProject = useProjectStore((state) => state.projects.find((p) => p.id === state.activeProjectId))
 
-  const [port, setPort] = useState(8080)
-  const [password, setPassword] = useState(activeProject?.remoteCodingPassword ?? '')
-  const [showPassword, setShowPassword] = useState(() => {
-    return window.localStorage.getItem('termul.remoteCoding.showPassword') === 'true'
-  })
-  const [autoOpenQr, setAutoOpenQr] = useState(false)
-  const [showPasswordWarning, setShowPasswordWarning] = useState(false)
-
-  useEffect(() => {
-    void checkInstalled()
-    void refreshStatus()
-    const unsubPromise = remoteServerApi.onLog((line) => appendLog(line))
-    return () => {
-      void unsubPromise.then((unsub) => unsub())
-    }
-  }, [appendLog, checkInstalled, refreshStatus])
-
-  useEffect(() => {
-    setPassword(activeProject?.remoteCodingPassword ?? '')
-    setShowPasswordWarning(false)
-  }, [activeProject?.id, activeProject?.remoteCodingPassword])
-
-  useEffect(() => {
-    window.localStorage.setItem('termul.remoteCoding.showPassword', String(showPassword))
-  }, [showPassword])
+  const [useHttps, setUseHttps] = useState(false)
+  const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
+  const [showAuditLog, setShowAuditLog] = useState(false)
+  const [isTunnelStarting, setIsTunnelStarting] = useState(false)
 
   const activeTunnel = useMemo(
-    () => tunnelSessions.find((session) => session.id === 'remote-coding-tunnel') ?? null,
+    () => tunnelSessions.find((s) => s.id === TUNNEL_ID) ?? null,
     [tunnelSessions],
   )
 
   const publicUrl = activeTunnel?.publicUrl ?? null
 
   useEffect(() => {
-    if (status?.isRunning && publicUrl) {
-      setAutoOpenQr(true)
-      window.setTimeout(() => setAutoOpenQr(false), 4000)
-    }
-  }, [status?.isRunning, publicUrl])
+    void refreshWsStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const handleStartAll = async () => {
-    if (!password.trim()) {
-      setShowPasswordWarning(true)
-    }
-    const result = await startServer(port, password || undefined)
+  const tokenRemaining = useMemo(() => {
+    if (!tokenExpiry) return null
+    const remaining = tokenExpiry - Math.floor(Date.now() / 1000)
+    return remaining > 0 ? remaining : 0
+  }, [tokenExpiry])
 
-    if (result.success === false) return
+  const [tokenCountdown, setTokenCountdown] = useState<number | null>(null)
 
-    if (activeProject) {
-      useProjectStore.getState().updateProject(activeProject.id, { remoteCodingPassword: password || undefined })
+  useEffect(() => {
+    if (tokenRemaining !== null) {
+      setTokenCountdown(tokenRemaining)
+      const interval = setInterval(() => {
+        setTokenCountdown((prev) => {
+          if (prev === null || prev <= 0) return 0
+          return prev - 1
+        })
+      }, 1000)
+      return () => clearInterval(interval)
     }
+  }, [tokenRemaining])
 
-    const tunnelConfig = {
-      id: 'remote-coding-tunnel',
-      name: 'Remote Coding IDE',
-      localPort: port,
-      autoStart: false,
+  const handleStartWsServer = async () => {
+    const token = authToken || await generateToken()
+    const result = await startWsServer(WS_PORT, token, useHttps)
+    if (result.success) {
+      setIsTunnelStarting(true)
+      const tunnelConfig = {
+        id: TUNNEL_ID,
+        name: 'Termul Web',
+        localPort: WS_PORT,
+        autoStart: false,
+      }
+      const tunnelResult = await startTunnel(tunnelConfig)
+      setIsTunnelStarting(false)
+      if (tunnelResult) {
+        toast.success('Termul Web server started with public URL')
+      } else {
+        toast.success('Termul Web server started (tunnel failed, local only)')
+      }
+    } else {
+      toast.error(result.error || 'Failed to start server')
     }
-    const tunnelResult = await startTunnel(tunnelConfig)
-    if (!tunnelResult) {
-      toast.error('Failed to start tunnel, retrying...')
-      await stopServer()
-      return
-    }
-    toast.success('Remote access enabling...')
   }
 
-  const handleStopAll = async () => {
-    await stopServer()
-    await stopTunnel('remote-coding-tunnel')
-    toast.success('Remote access disabled')
+  const handleStopWsServer = async () => {
+    await stopTunnel(TUNNEL_ID)
+    const result = await stopWsServer()
+    if (result.success) {
+      toast.success('Termul Web server stopped')
+    } else {
+      toast.error(result.error || 'Failed to stop server')
+    }
+  }
+
+  const handleCopyWsUrl = async () => {
+    const url = publicUrl || wsStatus.httpUrl || `http://localhost:${WS_PORT}`
+    await navigator.clipboard.writeText(url)
+    toast.success('URL copied to clipboard')
+  }
+
+  const handleOpenBrowser = async () => {
+    const url = publicUrl || wsStatus.httpUrl || `http://localhost:${WS_PORT}`
+    window.open(url, '_blank')
+  }
+
+  const handleRotateToken = async () => {
+    const result = await rotateToken()
+    if (result.success) {
+      toast.success('Token rotated')
+    } else {
+      toast.error(result.error || 'Failed to rotate token')
+    }
+  }
+
+  const handleLoadAuditLog = async () => {
+    const result = await wsServerApi.getAuditLog()
+    if (result.success && result.logs) {
+      setAuditLog(result.logs)
+      setShowAuditLog(true)
+    } else {
+      toast.error(result.error || 'Failed to load audit log')
+    }
   }
 
   return (
@@ -93,168 +122,196 @@ export function RemoteAccessPanel(): React.JSX.Element {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-primary/10 rounded-2xl text-primary">
-            <Smartphone size={32} />
+            <Globe size={32} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Remote Coding</h1>
-            <p className="text-muted-foreground">Access your workspace from your phone or tablet.</p>
+            <h1 className="text-2xl font-bold tracking-tight">Termul Web</h1>
+            <p className="text-muted-foreground">Access your terminal from any browser, anywhere.</p>
           </div>
         </div>
         <div className={cn(
           'px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest flex items-center gap-2',
-          status?.isRunning ? 'bg-green-500/10 text-green-600 border border-green-500/20' : 'bg-muted text-muted-foreground border',
+          wsStatus.isRunning ? 'bg-green-500/10 text-green-600 border border-green-500/20' : 'bg-muted text-muted-foreground border',
         )}>
-          <div className={cn('w-2 h-2 rounded-full', status?.isRunning ? 'bg-green-500 animate-pulse' : 'bg-current')} />
-          {status?.isRunning ? 'Remote Active' : 'Offline'}
+          <div className={cn('w-2 h-2 rounded-full', wsStatus.isRunning ? 'bg-green-500 animate-pulse' : 'bg-current')} />
+          {wsStatus.isRunning ? `${wsStatus.clientCount} connected` : 'Offline'}
         </div>
       </div>
 
-      {!isInstalled && isInstalled !== null && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-4 text-amber-800">
-          <AlertCircle className="shrink-0" />
+      <div className="bg-card border rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground">
+            <Wifi size={14} /> Termul Web Server
+          </h3>
+        </div>
+
+        <div className="flex gap-3">
+          {wsStatus.isRunning ? (
+            <>
+              <button
+                onClick={handleOpenBrowser}
+                className="flex-1 py-3 bg-primary text-primary-foreground rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-primary/90 transition-all"
+              >
+                <Globe size={16} /> Open in Browser
+              </button>
+              <button
+                onClick={handleStopWsServer}
+                disabled={wsLoading}
+                className="flex-1 py-3 bg-red-500/10 text-red-600 border border-red-500/20 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-500/20 transition-all disabled:opacity-50"
+              >
+                <WifiOff size={16} /> Stop
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleStartWsServer}
+              disabled={wsLoading}
+              className="flex-1 py-3 bg-primary text-primary-foreground rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-primary/90 transition-all disabled:opacity-50"
+            >
+              <Wifi size={16} /> Start Termul Web Server
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+            <input
+              type="checkbox"
+              checked={useHttps}
+              onChange={(e) => setUseHttps(e.target.checked)}
+              className="rounded border-border bg-background"
+            />
+            Use HTTPS (self-signed cert)
+          </label>
+        </div>
+
+        {wsStatus.isRunning && (
           <div className="space-y-2">
-            <p className="text-sm font-semibold">code-server not found</p>
-            <p className="text-xs opacity-80">Install code-server first:</p>
-            <code className="block bg-amber-900/10 p-2 rounded font-mono text-[11px] select-all">npm install -g code-server</code>
-          </div>
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <div className="bg-card border rounded-2xl p-6 space-y-4 shadow-sm">
-            <h3 className="font-semibold flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground">
-              <Shield size={14} /> Security & Port
-            </h3>
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium px-1">Local Port</label>
-                <input
-                  type="number"
-                  className="w-full bg-muted/50 border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all"
-                  value={port}
-                  onChange={(e) => setPort(parseInt(e.target.value, 10) || 8080)}
-                  disabled={status?.isRunning}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium px-1">Password (optional)</label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    className="w-full bg-muted/50 border rounded-xl px-4 py-3 pr-24 outline-none focus:ring-2 focus:ring-primary/20 transition-all"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Set a password for code-server"
-                    disabled={status?.isRunning}
-                  />
-                  <div className="absolute inset-y-0 right-0 flex items-center gap-1 pr-2">
-                    <button
-                      type="button"
-                      className="px-2 text-muted-foreground hover:text-foreground"
-                      onClick={async () => {
-                        if (!password) return
-                        await navigator.clipboard.writeText(password)
-                        toast.success('Password copied')
-                      }}
-                      aria-label="Copy password"
-                      disabled={!password}
-                    >
-                      <Copy size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="px-2 text-muted-foreground hover:text-foreground"
-                      onClick={() => setShowPassword((v) => !v)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground select-none pt-1">
-                  <input
-                    type="checkbox"
-                    checked={showPassword}
-                    onChange={(e) => setShowPassword(e.target.checked)}
-                    className="rounded border-border bg-background"
-                  />
-                  Show password
-                </label>
-              </div>
-              {showPasswordWarning ? (
-                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                  <p className="text-xs text-amber-700 leading-relaxed">
-                    Password is empty. Remote access will run without auth.
-                  </p>
-                </div>
-              ) : (
-                <div className="p-4 rounded-xl bg-primary/5 border border-primary/10">
-                  <p className="text-xs text-primary/80 leading-relaxed">
-                    If password is empty, remote access runs without auth.
-                  </p>
-                </div>
-              )}
+            <label className="text-xs font-medium px-1 text-muted-foreground">Local URL</label>
+            <div className="flex items-center gap-2 bg-muted p-3 rounded-xl">
+              <code className="text-xs text-muted-foreground truncate flex-1">
+                {wsStatus.httpUrl || `http://localhost:${WS_PORT}`}
+              </code>
+              <button
+                className="p-1.5 hover:bg-background rounded text-primary transition-colors shrink-0"
+                onClick={handleCopyWsUrl}
+                title="Copy URL"
+              >
+                <Copy size={14} />
+              </button>
             </div>
 
-            <div className="pt-4">
-              {status?.isRunning ? (
-                <button
-                  onClick={handleStopAll}
-                  className="w-full py-4 bg-red-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
-                >
-                  <Square size={18} fill="currentColor" /> Disable Remote Access
-                </button>
-              ) : (
-                <button
-                  onClick={handleStartAll}
-                  disabled={isLoading || isInstalled === false}
-                  className="w-full py-4 bg-primary text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 disabled:opacity-50"
-                >
-                  <Play size={18} fill="currentColor" /> Enable Remote Access
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-6">
-          <div className={cn(
-            'bg-card border rounded-2xl p-6 h-full flex flex-col justify-center items-center text-center space-y-4 shadow-sm transition-opacity',
-            !status?.isRunning && 'opacity-50 pointer-events-none',
-          )}>
             {publicUrl ? (
-              <>
-                <div className={cn("p-4 bg-white rounded-xl border-4 shadow-inner transition-all", autoOpenQr ? "border-primary ring-4 ring-primary/20" : "border-muted") }>
-                  <QRCodeCanvas value={publicUrl} size={180} includeMargin />
+              <div className="space-y-1">
+                <label className="text-xs font-medium px-1 text-muted-foreground flex items-center gap-1">
+                  <Link size={12} /> Public URL
+                </label>
+                <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 p-3 rounded-xl">
+                  <code className="text-xs text-green-600 truncate flex-1">{publicUrl}</code>
+                  <button
+                    className="p-1.5 hover:bg-green-500/20 rounded text-green-600 transition-colors shrink-0"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(publicUrl)
+                      toast.success('Public URL copied')
+                    }}
+                    title="Copy public URL"
+                  >
+                    <Copy size={14} />
+                  </button>
                 </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold">Scan to Open on HP</p>
-                  <div className="flex items-center gap-2 bg-muted p-2 rounded-lg group">
-                    <code className="text-[10px] text-muted-foreground truncate max-w-[180px]">{publicUrl}</code>
-                    <button
-                      className="p-1.5 hover:bg-background rounded text-primary transition-colors"
-                      onClick={() => navigator.clipboard.writeText(publicUrl)}
-                      title="Copy URL"
-                    >
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-col items-center gap-4 py-8">
-                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center animate-pulse">
-                  <Globe className="text-muted-foreground/30" size={32} />
-                </div>
-                <p className="text-xs text-muted-foreground max-w-[200px]">
-                  {status?.isRunning ? 'Creating secure tunnel...' : 'Start remote server to generate link'}
-                </p>
               </div>
+            ) : isTunnelStarting ? (
+              <div className="flex items-center gap-2 bg-muted p-3 rounded-xl">
+                <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-muted-foreground">Starting public tunnel...</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
+                <span className="text-xs text-amber-600">No public tunnel. Server is local-only.</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 bg-muted p-3 rounded-xl">
+              <code className="text-xs text-muted-foreground truncate flex-1">
+                Token: {authToken ? `${authToken.slice(0, 16)}...` : 'N/A'}
+              </code>
+              <button
+                className="p-1.5 hover:bg-background rounded text-primary transition-colors shrink-0"
+                onClick={async () => {
+                  if (authToken) {
+                    await navigator.clipboard.writeText(authToken)
+                    toast.success('Token copied')
+                  }
+                }}
+                title="Copy token"
+              >
+                <Copy size={14} />
+              </button>
+            </div>
+            {tokenCountdown !== null && (
+              <div className="flex items-center gap-2 bg-muted p-3 rounded-xl">
+                <Clock size={14} className="text-muted-foreground" />
+                <span className="text-xs text-muted-foreground flex-1">
+                  Token expires in {Math.floor(tokenCountdown / 60)}m {tokenCountdown % 60}s
+                </span>
+                <button
+                  className="p-1.5 hover:bg-background rounded text-primary transition-colors shrink-0"
+                  onClick={handleRotateToken}
+                  title="Rotate token"
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                className="flex-1 py-2 text-xs bg-muted hover:bg-background rounded-lg transition-colors flex items-center justify-center gap-2"
+                onClick={handleLoadAuditLog}
+              >
+                <FileText size={12} /> Audit Log ({auditLog.length})
+              </button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Share public URL + token to access from anywhere. Local URL works on same network.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {showAuditLog && (
+        <div className="bg-card border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground">
+              <FileText size={14} /> Connection Audit Log
+            </h3>
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setShowAuditLog(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="h-64 overflow-y-auto font-mono text-[11px] space-y-1">
+            {auditLog.length > 0 ? (
+              auditLog.map((entry, i) => (
+                <div key={i} className="flex items-center gap-3 p-2 rounded bg-muted/50">
+                  <span className="text-muted-foreground whitespace-nowrap">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                  <span className={cn(
+                    'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                    entry.event === 'authenticated' ? 'bg-green-500/20 text-green-600' :
+                    entry.event === 'auth_failed' ? 'bg-red-500/20 text-red-600' :
+                    entry.event === 'disconnected' ? 'bg-yellow-500/20 text-yellow-600' :
+                    'bg-blue-500/20 text-blue-600'
+                  )}>{entry.event}</span>
+                  <span className="text-muted-foreground truncate">{entry.remoteAddr}</span>
+                </div>
+              ))
+            ) : (
+              <div className="text-muted-foreground italic">No audit entries yet</div>
             )}
           </div>
         </div>
-      </div>
+      )}
 
       <div className="bg-black/95 rounded-2xl border border-white/5 overflow-hidden shadow-2xl">
         <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
@@ -268,24 +325,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
           </div>
         </div>
         <div className="h-48 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-green-500/80">
-          {logs.length > 0 ? (
-            logs.map((log, i) => <div key={i} className="mb-0.5">{`> ${log}`}</div>)
-          ) : (
-            <div className="space-y-3 text-white/20 italic">
-              <div>Waiting for logs...</div>
-              <button
-                type="button"
-                className="text-xs not-italic text-primary hover:underline"
-                onClick={async () => {
-                  await stopServer()
-                  await startServer(port, password || undefined)
-                  toast.success('Retrying remote access...')
-                }}
-              >
-                Retry remote access
-              </button>
-            </div>
-          )}
+          <div className="space-y-3 text-white/20 italic">
+            <div>Termul Web server logs appear here when running.</div>
+          </div>
         </div>
       </div>
     </div>

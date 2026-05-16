@@ -36,6 +36,15 @@ anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 
+# WebSocket server for remote access
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace", "timeout"] }
+futures-util = "0.3"
+rand = "0.8"
+rcgen = "0.14"
+rustls = "0.23"
+time = "0.3"
+
 # Regex and parsing
 regex = "1"
 lazy_static = "1.4"

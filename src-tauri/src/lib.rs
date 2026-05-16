@@ -3,10 +3,10 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
-mod remote_server;
 mod shell_paths;
 mod trackers;
 mod tunnel;
+mod ws_server;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    Emitter, Manager, RunEvent,
+    AppHandle, Emitter, Listener, Manager, RunEvent, State,
 };
 
 const MENU_ID_CHECK_FOR_UPDATES: &str = "check-for-updates";
@@ -578,8 +578,56 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
     }
 }
 
+// ==================== WebSocket Server Commands ====================
+
+#[tauri::command]
+async fn ws_server_start(
+    port: u16,
+    auth_token: String,
+    use_https: Option<bool>,
+    app_handle: AppHandle,
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<ws_server::WsServerStatus, String> {
+    ws_server.start(app_handle, port, auth_token, use_https.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn ws_server_stop(
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<(), String> {
+    ws_server.stop().await
+}
+
+#[tauri::command]
+async fn ws_server_get_status(
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<ws_server::WsServerStatus, String> {
+    Ok(ws_server.get_status().await)
+}
+
+#[tauri::command]
+async fn ws_server_get_token() -> Result<String, String> {
+    Ok(ws_server::WsServer::generate_token())
+}
+
+#[tauri::command]
+async fn ws_rotate_token(
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<serde_json::Value, String> {
+    let token = ws_server.rotate_token().await;
+    Ok(serde_json::json!({ "token": token }))
+}
+
+#[tauri::command]
+async fn ws_get_audit_log(
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<Vec<ws_server::ConnectionAudit>, String> {
+    Ok(ws_server.get_audit_log().await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+
     let mut builder = tauri::Builder::default()
         .menu(build_app_menu)
         .on_menu_event(handle_menu_event)
@@ -647,6 +695,53 @@ pub fn run() {
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
 
+            // Create WebSocket Server
+            let ws_server = ws_server::WsServer::init_arc();
+            app.manage(ws_server.clone());
+
+            // Setup event forwarding from Tauri to WS clients
+            let ws_for_data = ws_server.clone();
+            let _ = handle.listen("terminal-data", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_data.emit_event("terminal-data", payload);
+                }
+            });
+
+            let ws_for_exit = ws_server.clone();
+            let _ = handle.listen("terminal-exit", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_exit.emit_event("terminal-exit", payload);
+                }
+            });
+
+            let ws_for_cwd = ws_server.clone();
+            let _ = handle.listen("terminal-cwd-changed", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_cwd.emit_event("terminal-cwd-changed", payload);
+                }
+            });
+
+            let ws_for_git_branch = ws_server.clone();
+            let _ = handle.listen("terminal-git-branch-changed", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_git_branch.emit_event("terminal-git-branch-changed", payload);
+                }
+            });
+
+            let ws_for_git_status = ws_server.clone();
+            let _ = handle.listen("terminal-git-status-changed", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_git_status.emit_event("terminal-git-status-changed", payload);
+                }
+            });
+
+            let ws_for_exit_code = ws_server.clone();
+            let _ = handle.listen("terminal-exit-code-changed", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
+                    ws_for_exit_code.emit_event("terminal-exit-code-changed", payload);
+                }
+            });
+
             // Register default migrations
             register_default_migrations(migration_manager.as_ref());
 
@@ -703,11 +798,6 @@ pub fn run() {
             commands::tunnel_stop,
             commands::tunnel_get_status,
             commands::tunnel_list,
-            // Remote server commands
-            commands::remote_server_start,
-            commands::remote_server_stop,
-            commands::remote_server_get_status,
-            commands::remote_server_check_installed,
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_write,
@@ -759,6 +849,13 @@ pub fn run() {
             // Git commands
             commands::git_get_status,
             commands::git_get_diff,
+            // WebSocket server commands
+            ws_server_start,
+            ws_server_stop,
+            ws_server_get_status,
+            ws_server_get_token,
+            ws_rotate_token,
+            ws_get_audit_log,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -782,6 +879,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     pty_manager_clone.kill_all().await;
                     crate::tunnel::kill_all_tunnels().await;
+                    if let Some(ws_server) = app_handle_clone.try_state::<Arc<ws_server::WsServer>>() {
+                        let _ = ws_server.stop().await;
+                    }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
