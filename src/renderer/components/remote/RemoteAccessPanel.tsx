@@ -15,6 +15,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
   const tunnelSessions = useTunnelStore((state) => state.sessions)
   const startTunnel = useTunnelStore((state) => state.startTunnel)
   const stopTunnel = useTunnelStore((state) => state.stopTunnel)
+  const tunnelError = useTunnelStore((state) => state.error)
 
   const [useHttps, setUseHttps] = useState(false)
   const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
@@ -227,7 +228,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
               </div>
             ) : (
               <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
-                <span className="text-xs text-amber-600">No public tunnel. Server is local-only.</span>
+                <span className="text-xs text-amber-600">
+                  {tunnelError || 'No public tunnel. Server is local-only.'}
+                </span>
               </div>
             )}
 
