@@ -25,14 +25,18 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
   const [saving, setSaving] = useState(false)
 
   const handleSelectKeyFile = async () => {
-    const result = await dialogApi.selectFile({
-      title: 'Select Private Key',
-      filters: [{ name: 'All Files', extensions: ['*'] }],
-    })
-    if (result.success) {
-      setPrivateKeyPath(result.data)
-    } else if (result.code !== 'CANCELLED') {
-      toast.error(`Failed to select file: ${result.error}`)
+    try {
+      const result = await dialogApi.selectFile({
+        title: 'Select Private Key',
+        filters: [{ name: 'All Files', extensions: ['*'] }],
+      })
+      if (result.success) {
+        setPrivateKeyPath(result.data)
+      } else if (result.code !== 'CANCELLED') {
+        toast.error(`Failed to select file: ${result.error}`)
+      }
+    } catch (error) {
+      toast.error(`File dialog failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -41,6 +45,11 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
 
     if (!name.trim() || !host.trim() || !username.trim()) {
       toast.error('Name, host, and username are required')
+      return
+    }
+
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      toast.error('Port must be an integer between 1 and 65535')
       return
     }
 
