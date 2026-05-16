@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Globe, Terminal, Copy, Wifi, WifiOff, RefreshCw, Clock, FileText, Link } from 'lucide-react'
 import { useWsServerStore } from '@/stores/ws-server-store'
 import { useTunnelStore } from '@/stores/tunnel-store'
+import { tunnelApi } from '@/lib/tunnel-api'
 import { wsServerApi } from '@/lib/ws-server-api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -31,6 +32,14 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   useEffect(() => {
     void refreshWsStatus()
+    const unsub = tunnelApi.onStatusChanged((event) => {
+      if (event.tunnelId === TUNNEL_ID) {
+        if (event.status === 'running' && event.publicUrl) {
+          toast.success('Tunnel ready: ' + event.publicUrl)
+        }
+      }
+    })
+    return () => unsub()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -68,10 +77,12 @@ export function RemoteAccessPanel(): React.JSX.Element {
       }
       const tunnelResult = await startTunnel(tunnelConfig)
       setIsTunnelStarting(false)
-      if (tunnelResult) {
-        toast.success('Termul Web server started with public URL')
+      if (tunnelResult && tunnelResult.publicUrl) {
+        toast.success('Termul Web ready at ' + tunnelResult.publicUrl)
+      } else if (tunnelResult) {
+        toast.success('Termul Web started, waiting for tunnel URL...')
       } else {
-        toast.success('Termul Web server started (tunnel failed, local only)')
+        toast.error('Tunnel failed: ' + (tunnelError || 'unknown error'))
       }
     } else {
       toast.error(result.error || 'Failed to start server')
