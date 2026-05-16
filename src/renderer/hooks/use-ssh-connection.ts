@@ -5,9 +5,9 @@ import { useSSHConnections, useSSHActions } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { SSHProfile, SFTPEntry } from '@shared/types/ssh.types'
 
-export function useSSHConnection(profile: SSHProfile) {
+export function useSSHConnection(profile: SSHProfile | null) {
   const connections = useSSHConnections()
-  const connection = connections.find((c) => c.profileId === profile.id)
+  const connection = profile ? connections.find((c) => c.profileId === profile.id) : undefined
   const isConnected = connection?.status === 'connected'
   const connectionId = connection?.id
   const terminalStoreId = connection?.terminalId
@@ -55,6 +55,7 @@ export function useSSHConnection(profile: SSHProfile) {
   }, [isConnected, terminalStoreId, localTerminalPtyId, connectionId])
 
   const handleConnect = useCallback(async () => {
+    if (!profile) return
     if (isConnecting || isConnected) return
     setIsConnecting(true)
 
@@ -100,11 +101,12 @@ export function useSSHConnection(profile: SSHProfile) {
   }, [profile, isConnecting, isConnected, markConnected, updateConnectionId])
 
   const handleDisconnect = useCallback(() => {
+    if (!profile) return
     if (localTerminalPtyId) void terminalApi.kill(localTerminalPtyId)
     if (connection) markDisconnected(profile.id)
     setLocalTerminalPtyId(null); setSftpReady(false); setEntries([])
     toast.info(`Disconnected: ${profile.name}`)
-  }, [localTerminalPtyId, connection, profile.id, profile.name, markDisconnected])
+  }, [localTerminalPtyId, connection, profile?.id, profile?.name, markDisconnected])
 
   const handleBrowseFiles = useCallback(() => {
     if (!connectionId) { toast.error('Not connected — open a terminal first'); return }
