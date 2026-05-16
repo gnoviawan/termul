@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { X, FolderOpen } from 'lucide-react'
 import type { SSHProfile, SSHAuthMethod, PortForwardConfig } from '@shared/types/ssh.types'
 import { useSSHActions } from '@/stores/ssh-store'
 import { toast } from 'sonner'
+import { dialogApi } from '@/lib/api'
 
 interface SSHProfileFormProps {
   profile: SSHProfile | null
@@ -22,6 +23,18 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
   const [password, setPassword] = useState(profile?.password ?? '')
   const [passphrase, setPassphrase] = useState(profile?.passphrase ?? '')
   const [saving, setSaving] = useState(false)
+
+  const handleSelectKeyFile = async () => {
+    const result = await dialogApi.selectFile({
+      title: 'Select Private Key',
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+    })
+    if (result.success) {
+      setPrivateKeyPath(result.data)
+    } else if (result.code !== 'CANCELLED') {
+      toast.error(`Failed to select file: ${result.error}`)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -147,13 +160,23 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
           {authMethod === 'key' && (
             <div>
               <label className="text-xs font-medium text-muted-foreground">Private Key Path</label>
-              <input
-                type="text"
-                value={privateKeyPath}
-                onChange={(e) => setPrivateKeyPath(e.target.value)}
-                placeholder="~/.ssh/id_rsa"
-                className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
-              />
+              <div className="flex gap-2 mt-1">
+                <input
+                  type="text"
+                  value={privateKeyPath}
+                  onChange={(e) => setPrivateKeyPath(e.target.value)}
+                  placeholder="~/.ssh/id_rsa"
+                  className="flex-1 px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  onClick={handleSelectKeyFile}
+                  className="px-2 py-1.5 text-xs rounded border border-border bg-muted hover:bg-accent text-muted-foreground flex items-center"
+                  title="Browse for private key file"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
 

@@ -88,7 +88,7 @@ export function SSHFileExplorer({
   }
 
   return (
-    <div className="w-64 flex-shrink-0 border-r border-border flex flex-col">
+    <div className="w-full h-full flex flex-col">
       <div className="h-9 flex items-center justify-between px-3 border-b border-border">
         <div className="flex items-center gap-1.5">
           <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
