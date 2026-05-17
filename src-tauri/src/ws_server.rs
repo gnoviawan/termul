@@ -3,7 +3,7 @@ use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 use axum::{
     Router,
-    extract::{ConnectInfo, State, WebSocketUpgrade},
+    extract::{State, WebSocketUpgrade},
     response::{Html, IntoResponse},
     routing::get,
 };
@@ -1095,9 +1095,8 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid params: {}", e))?
                 .unwrap_or_default();
 
-            // Tauri State dipasok sebagai Arc global, kita ambil PtyManager dari AppHandle secara aman
+            // Kita sudah pastikan state terdaftar sebagai Arc<PtyManager> di lib.rs
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
-                .or_else(|| app_handle.try_state::<PtyManager>())
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.spawn(options).await {
@@ -1113,7 +1112,6 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid data: {}", e))?;
 
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
-                .or_else(|| app_handle.try_state::<PtyManager>())
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.write(&terminal_id, &data).await {
@@ -1131,7 +1129,6 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid rows: {}", e))?;
 
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
-                .or_else(|| app_handle.try_state::<PtyManager>())
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.resize(&terminal_id, cols, rows).await {
@@ -1145,7 +1142,6 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid terminalId: {}", e))?;
 
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
-                .or_else(|| app_handle.try_state::<PtyManager>())
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.kill(&terminal_id).await {
