@@ -1109,7 +1109,7 @@ async fn handle_command(
     method: &str,
     params: Option<serde_json::Value>,
     app_handle: &AppHandle,
-    _server: &Arc<WsServer>,
+    server: &Arc<WsServer>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
     match method {
         "terminal_spawn" => {
