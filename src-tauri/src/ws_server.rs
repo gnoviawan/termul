@@ -1095,7 +1095,11 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid params: {}", e))?
                 .unwrap_or_default();
 
-            let pty_manager = app_handle.state::<Arc<PtyManager>>();
+            // Tauri State dipasok sebagai Arc global, kita ambil PtyManager dari AppHandle secara aman
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .or_else(|| app_handle.try_state::<PtyManager>())
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
             match pty_manager.spawn(options).await {
                 Ok(info) => Ok(IpcResult::success(serde_json::to_value(&info).map_err(|e| e.to_string())?)),
                 Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
@@ -1108,7 +1112,10 @@ async fn handle_command(
             let data: String = serde_json::from_value(params["data"].clone())
                 .map_err(|e| format!("Invalid data: {}", e))?;
 
-            let pty_manager = app_handle.state::<Arc<PtyManager>>();
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .or_else(|| app_handle.try_state::<PtyManager>())
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
             match pty_manager.write(&terminal_id, &data).await {
                 Ok(()) => Ok(IpcResult::success(serde_json::json!(null))),
                 Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
@@ -1123,7 +1130,10 @@ async fn handle_command(
             let rows: u16 = serde_json::from_value(params["rows"].clone())
                 .map_err(|e| format!("Invalid rows: {}", e))?;
 
-            let pty_manager = app_handle.state::<Arc<PtyManager>>();
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .or_else(|| app_handle.try_state::<PtyManager>())
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
             match pty_manager.resize(&terminal_id, cols, rows).await {
                 Ok(()) => Ok(IpcResult::success(serde_json::json!(null))),
                 Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
@@ -1134,7 +1144,10 @@ async fn handle_command(
             let terminal_id: String = serde_json::from_value(params["terminalId"].clone())
                 .map_err(|e| format!("Invalid terminalId: {}", e))?;
 
-            let pty_manager = app_handle.state::<Arc<PtyManager>>();
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .or_else(|| app_handle.try_state::<PtyManager>())
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
             match pty_manager.kill(&terminal_id).await {
                 Ok(()) => Ok(IpcResult::success(serde_json::json!(null))),
                 Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
