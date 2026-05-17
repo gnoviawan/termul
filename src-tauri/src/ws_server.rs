@@ -471,10 +471,11 @@ fn get_index_html() -> &'static str {
         .dot.red { background: #f38ba8; }
         .dot.yellow { background: #f9e2af; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .terminal-container { flex: 1; padding: 4px; display: none; width: 100%; height: 100%; min-height: 0; }
+        .terminal-container { flex: 1; padding: 12px; display: none; width: 100%; height: 100%; min-height: 0; background: #1e1e2e; }
         .terminal-container.active { display: flex; flex-direction: column; }
+        .terminal-screen { width: 100%; height: 100%; flex: 1; min-height: 0; }
         .xterm { width: 100%; height: 100%; flex: 1; min-height: 0; }
-        .xterm-viewport { overflow-y: auto; }
+        .xterm-viewport { overflow-y: auto !important; }
         #terminal { width: 100%; height: 100%; }
         .connecting { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
         .spinner { width: 40px; height: 40px; border: 3px solid #313244; border-top-color: #89b4fa; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -672,7 +673,8 @@ fn get_index_html() -> &'static str {
             term.loadAddon(webLinksAddon);
 
             const container = document.getElementById("term-" + terminalObj.id);
-            term.open(container);
+            const screen = container.querySelector(".terminal-screen") || container;
+            term.open(screen);
             fitAddon.fit();
 
             terminalObj.term = term;
@@ -707,7 +709,9 @@ fn get_index_html() -> &'static str {
             });
 
             listen("terminal-data", (payload) => {
-                if (payload.terminalId === terminalObj.remoteId) term.write(payload.data || "");
+                if (payload.terminalId === terminalObj.remoteId) {
+                    term.write(payload.data || "");
+                }
             });
 
             listen("terminal-exit", (payload) => {
@@ -745,11 +749,19 @@ fn get_index_html() -> &'static str {
             saveSession();
         }
 
-        async function createTerminalContainer(terminalObj) {
+        function createTerminalContainer(terminalObj) {
             const root = document.getElementById("root");
             const container = document.createElement("div");
             container.className = "terminal-container";
             container.id = "term-" + terminalObj.id;
+            
+            // Tambahkan inner div khusus untuk xterm agar sizing height 100% didukung browser remote
+            const xtermDiv = document.createElement("div");
+            xtermDiv.className = "terminal-screen";
+            xtermDiv.style.width = "100%";
+            xtermDiv.style.height = "100%";
+            container.appendChild(xtermDiv);
+            
             const header = root.querySelector(".header");
             const tabBar = root.querySelector(".tab-bar");
             if (tabBar) {
@@ -790,7 +802,10 @@ fn get_index_html() -> &'static str {
                 });
             });
 
-            document.getElementById("add-tab").addEventListener("click", () => addTerminal());
+            const addTabBtn = document.getElementById("add-tab");
+            if (addTabBtn) {
+                addTabBtn.addEventListener("click", () => addTerminal());
+            }
         }
 
         function setActiveTerminal(id) {
