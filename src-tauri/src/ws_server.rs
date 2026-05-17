@@ -495,7 +495,15 @@ fn get_index_html() -> &'static str {
         if (window.location.protocol === "https:" || window.location.hostname.endsWith("trycloudflare.com")) {
             wsProto = "wss://";
         }
-        const WS_URL = wsProto + window.location.host + "/ws";
+        
+        // Cek jika link di-route lewat Cloudflare Tunnel, port local (:9876) tidak boleh dimasukkan karena port HTTPS Cloudflare
+        // adalah standard 443. Jika localhost / IP local biasa, port wajib ada.
+        let wsHost = window.location.host;
+        if (window.location.hostname.endsWith("trycloudflare.com")) {
+            wsHost = window.location.hostname;
+        }
+        
+        const WS_URL = wsProto + wsHost + "/ws";
         const WS_TOKEN = "__TERMUL_TOKEN__";
         const TOKEN_EXPIRES_AT = parseInt("__TERMUL_TOKEN_EXPIRES__") || 0;
 
@@ -550,15 +558,8 @@ fn get_index_html() -> &'static str {
 
         async function connect() {
             return new Promise((resolve, reject) => {
-                // Cloudflare Tunnel seringkali memblokir koneksi wss:// jika menggunakan port non-standard di URL-nya,
-                // tapi karena cloudflared bertindak sebagai SSL terminator di port 443, host remote aslinya tidak punya port.
-                // Kita pastikan WS_URL bersih tanpa port internal jika lewat trycloudflare.
-                let targetUrl = WS_URL;
-                if (window.location.hostname.endsWith("trycloudflare.com")) {
-                    targetUrl = "wss://" + window.location.hostname + "/ws";
-                }
-                console.log("Connecting to WebSocket URL:", targetUrl);
-                ws = new WebSocket(targetUrl);
+                console.log("Connecting to WebSocket URL:", WS_URL);
+                ws = new WebSocket(WS_URL);
                 
                 const timeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
