@@ -53,7 +53,12 @@ export function RemoteAccessPanel(): React.JSX.Element {
     [tunnelSessions]
   )
 
-  const publicUrl = activeTunnel?.publicUrl ?? null
+  const publicUrl = useMemo(() => {
+    if (activeTunnel?.status === 'running' && activeTunnel?.publicUrl) {
+      return activeTunnel.publicUrl
+    }
+    return null
+  }, [activeTunnel])
 
   useEffect(() => {
     void refreshWsStatus()
@@ -61,6 +66,14 @@ export function RemoteAccessPanel(): React.JSX.Element {
       if (event.tunnelId === TUNNEL_ID) {
         if (event.status === 'running' && event.publicUrl) {
           setIsTunnelStarting(false)
+          // Sink ke store agar state tersinkronisasi
+          useTunnelStore.getState().upsertSession({
+            id: TUNNEL_ID,
+            configId: TUNNEL_ID,
+            status: 'running',
+            publicUrl: event.publicUrl,
+            lastError: null
+          })
           toast.success('Tunnel ready: ' + event.publicUrl)
         } else if (event.status === 'error' || event.status === 'stopped') {
           setIsTunnelStarting(false)
