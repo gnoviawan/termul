@@ -499,7 +499,7 @@ fn get_index_html() -> &'static str {
         // Jika diakses lewat Cloudflare Tunnel (https://*.trycloudflare.com), browser akan melihat protokol https,
         // sehingga WebSocket harus dipaksa menggunakan wss:// agar tidak diblokir oleh mixed content policy.
         let wsProto = "ws://";
-        if (window.location.protocol === "https:" || window.location.host.includes("trycloudflare.com")) {
+        if (window.location.protocol === "https:" || window.location.hostname.includes("trycloudflare.com")) {
             wsProto = "wss://";
         }
         const WS_URL = wsProto + window.location.host + "/ws";
@@ -557,25 +557,35 @@ fn get_index_html() -> &'static str {
 
         async function connect() {
             return new Promise((resolve, reject) => {
+                console.log("Connecting to WebSocket URL:", WS_URL);
                 ws = new WebSocket(WS_URL);
+                
                 const timeout = setTimeout(() => {
-                    reject(new Error("Connection timeout"));
+                    if (ws.readyState !== WebSocket.OPEN) {
+                        console.error("WebSocket connection timed out");
+                        ws.close();
+                        reject(new Error("Connection timeout"));
+                    }
                 }, 15000);
 
                 ws.onopen = () => {
+                    console.log("WebSocket connection opened. Sending auth token...");
                     ws.send(JSON.stringify({ type: "auth", token: WS_TOKEN }));
                 };
 
                 ws.onmessage = async (event) => {
+                    console.log("WebSocket received message:", event.data);
                     try {
                         const msg = JSON.parse(event.data);
                         if (msg.type === "response") {
                             if (msg.id === "auth") {
                                 clearTimeout(timeout);
                                 if (msg.success) {
+                                    console.log("WebSocket authenticated successfully");
                                     reconnectAttempts = 0;
                                     resolve();
                                 } else {
+                                    console.error("WebSocket auth failed:", msg.error);
                                     reject(new Error(msg.error || "Auth failed"));
                                 }
                             } else {
@@ -590,10 +600,13 @@ fn get_index_html() -> &'static str {
                         } else if (msg.type === "event") {
                             emitEvent(msg.event, msg.payload || {});
                         }
-                    } catch {}
+                    } catch (e) {
+                        console.error("Error processing websocket message:", e);
+                    }
                 };
 
-                ws.onclose = () => {
+                ws.onclose = (event) => {
+                    console.warn("WebSocket connection closed:", event);
                     for (const [, p] of pendingRequests) {
                         clearTimeout(p.timeout);
                         p.reject(new Error("Disconnected"));
@@ -602,11 +615,16 @@ fn get_index_html() -> &'static str {
                     if (reconnectAttempts < maxReconnectAttempts) {
                         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
                         reconnectAttempts++;
-                        setTimeout(connect, delay).catch(() => {});
+                        console.log(`Reconnecting in ${delay}ms (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+                        setTimeout(() => connect().then(resolve).catch(reject), delay);
+                    } else {
+                        reject(new Error("Max reconnect attempts reached"));
                     }
                 };
 
-                ws.onerror = () => {};
+                ws.onerror = (error) => {
+                    console.error("WebSocket error observed:", error);
+                };
             });
         }
 
