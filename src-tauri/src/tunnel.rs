@@ -11,8 +11,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 lazy_static::lazy_static! {
-    static ref URL_REGEX: Regex = Regex::new(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com").unwrap();
-    static ref URL_REGEX_FALLBACK: Regex = Regex::new(r"(https://[^\s]+\.trycloudflare\.com)").unwrap();
+    static ref URL_REGEX: Regex = Regex::new(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com(?:/[^\s]*)?").unwrap();
+    static ref URL_REGEX_FALLBACK: Regex = Regex::new(r#"(https://[^\s"']+\.trycloudflare\.com(?:/[^\s"']*)?)"#).unwrap();
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -186,10 +186,17 @@ pub async fn tunnel_start(
     }
 
     let mut cmd = cloudflared_command();
+    let initial_public_url = config.hostname.as_ref().map(|hostname| {
+        if hostname.starts_with("http://") || hostname.starts_with("https://") {
+            hostname.clone()
+        } else {
+            format!("https://{}", hostname)
+        }
+    });
     
     if let Some(token) = &config.cloudflare_token {
         // Mode Named Tunnel (Pakai Token)
-        // URL lokal biasanya sudah dikonfigurasi di Cloudflare Dashboard
+        // URL publik biasanya muncul dari hostname tunnel / log cloudflared
         cmd.args(["tunnel", "--no-autoupdate", "run", "--token", token]);
     } else {
         // Mode Quick Tunnel (Random URL)
@@ -206,7 +213,7 @@ pub async fn tunnel_start(
         id: config.id.clone(),
         config_id: config.id.clone(),
         status: "starting".to_string(),
-        public_url: None,
+        public_url: initial_public_url,
         pid,
         last_error: None,
     };
@@ -244,8 +251,9 @@ pub async fn tunnel_start(
                 set_session_status(&id_stdout, "running", Some(url.clone()), None).await;
                 emit_status(&app_stdout, &id_stdout, "running", Some(url), None);
             } else if line_trimmed.contains("Registered tunnel connection") || line_trimmed.contains("Connection established") {
-                set_session_status(&id_stdout, "running", None, None).await;
-                emit_status(&app_stdout, &id_stdout, "running", None, None);
+                let public_url = sessions().lock().await.get(&id_stdout).and_then(|session| session.public_url.clone());
+                set_session_status(&id_stdout, "running", public_url.clone(), None).await;
+                emit_status(&app_stdout, &id_stdout, "running", public_url, None);
             }
         }
     });
@@ -270,6 +278,10 @@ pub async fn tunnel_start(
             if let Some(url) = extract_url(&line_trimmed) {
                 set_session_status(&id_stderr, "running", Some(url.clone()), None).await;
                 emit_status(&app_stderr, &id_stderr, "running", Some(url), None);
+            } else if line_trimmed.contains("Registered tunnel connection") || line_trimmed.contains("Connection established") {
+                let public_url = sessions().lock().await.get(&id_stderr).and_then(|session| session.public_url.clone());
+                set_session_status(&id_stderr, "running", public_url.clone(), None).await;
+                emit_status(&app_stderr, &id_stderr, "running", public_url, None);
             }
 
             if let Some((message, code)) = classify_cloudflared_error(&line_trimmed) {
@@ -304,14 +316,14 @@ pub async fn tunnel_start(
 
 fn extract_url(line: &str) -> Option<String> {
     if let Some(m) = URL_REGEX.find(line) {
-        return Some(m.as_str().trim_matches(',').to_string());
+        return Some(m.as_str().trim_matches(',').trim_matches('"').trim_matches('\'').to_string());
     }
     
     // Fallback if the standard regex fails
     URL_REGEX_FALLBACK
         .captures(line)
         .and_then(|cap| cap.get(1))
-        .map(|m| m.as_str().trim_matches(',').to_string())
+        .map(|m| m.as_str().trim_matches(',').trim_matches('"').trim_matches('\'').to_string())
 }
 
 pub async fn tunnel_stop(

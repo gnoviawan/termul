@@ -16,11 +16,13 @@ describe('useTunnelStore', () => {
     useTunnelStore.setState({ configs: [], sessions: [], logs: [], activeTunnelId: '', isLoading: false, error: null })
   })
 
-  it('upserts sessions', () => {
-    useTunnelStore.getState().upsertSession({ id: 't1', configId: 't1', status: 'starting', publicUrl: null, pid: 1, lastError: null })
-    useTunnelStore.getState().upsertSession({ id: 't1', configId: 't1', status: 'running', publicUrl: 'https://x', pid: 1, lastError: null })
+  it('upserts sessions and preserves old url when update omits it', () => {
+    useTunnelStore.getState().upsertSession({ id: 't1', configId: 't1', status: 'starting', publicUrl: 'https://old', pid: 1, lastError: 'old' })
+    useTunnelStore.getState().upsertSession({ id: 't1', configId: 't1', status: 'running', publicUrl: null, pid: 1, lastError: null })
     expect(useTunnelStore.getState().sessions).toHaveLength(1)
     expect(useTunnelStore.getState().sessions[0]?.status).toBe('running')
+    expect(useTunnelStore.getState().sessions[0]?.publicUrl).toBe('https://old')
+    expect(useTunnelStore.getState().sessions[0]?.lastError).toBe('old')
   })
 
   it('appends logs', () => {

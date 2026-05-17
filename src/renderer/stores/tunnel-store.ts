@@ -44,8 +44,14 @@ export const useTunnelStore = create<TunnelState>((set, get) => ({
   upsertSession: (session) => set((state) => {
     const existing = state.sessions.findIndex((item) => item.id === session.id)
     const sessions = [...state.sessions]
-    if (existing >= 0) sessions[existing] = session
-    else sessions.unshift(session)
+    if (existing >= 0) {
+      sessions[existing] = {
+        ...sessions[existing],
+        ...session,
+        publicUrl: session.publicUrl ?? sessions[existing].publicUrl,
+        lastError: session.lastError ?? sessions[existing].lastError,
+      }
+    } else sessions.unshift(session)
     return { sessions }
   }),
   appendLog: (tunnelId, line) => set((state) => ({

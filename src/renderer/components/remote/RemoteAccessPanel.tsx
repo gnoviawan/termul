@@ -35,7 +35,10 @@ export function RemoteAccessPanel(): React.JSX.Element {
     const unsub = tunnelApi.onStatusChanged((event) => {
       if (event.tunnelId === TUNNEL_ID) {
         if (event.status === 'running' && event.publicUrl) {
+          setIsTunnelStarting(false)
           toast.success('Tunnel ready: ' + event.publicUrl)
+        } else if (event.status === 'error' || event.status === 'stopped') {
+          setIsTunnelStarting(false)
         }
       }
     })
@@ -76,12 +79,13 @@ export function RemoteAccessPanel(): React.JSX.Element {
         autoStart: false,
       }
       const tunnelResult = await startTunnel(tunnelConfig)
-      setIsTunnelStarting(false)
       if (tunnelResult && tunnelResult.publicUrl) {
+        setIsTunnelStarting(false)
         toast.success('Termul Web ready at ' + tunnelResult.publicUrl)
       } else if (tunnelResult) {
         toast.success('Termul Web started, waiting for tunnel URL...')
       } else {
+        setIsTunnelStarting(false)
         toast.error('Tunnel failed: ' + (tunnelError || 'unknown error'))
       }
     } else {
@@ -200,16 +204,19 @@ export function RemoteAccessPanel(): React.JSX.Element {
         {wsStatus.isRunning && (
           <div className="space-y-2">
             <label className="text-xs font-medium px-1 text-muted-foreground">Local URL</label>
-            <div className="flex items-center gap-2 bg-muted p-3 rounded-xl">
+            <div
+              className="flex items-center gap-2 bg-muted p-3 rounded-xl cursor-pointer"
+              onClick={handleCopyWsUrl}
+              title="Click to copy"
+            >
               <code className="text-xs text-muted-foreground truncate flex-1">
                 {wsStatus.httpUrl || `http://localhost:${WS_PORT}`}
               </code>
               <button
-                className="p-1.5 hover:bg-background rounded text-primary transition-colors shrink-0"
-                onClick={handleCopyWsUrl}
-                title="Copy URL"
+                className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 text-primary hover:bg-primary/20 rounded-lg text-xs font-medium transition-colors shrink-0"
+                onClick={(e) => { e.stopPropagation(); handleCopyWsUrl() }}
               >
-                <Copy size={14} />
+                <Copy size={12} /> Copy
               </button>
             </div>
 
@@ -218,17 +225,24 @@ export function RemoteAccessPanel(): React.JSX.Element {
                 <label className="text-xs font-medium px-1 text-muted-foreground flex items-center gap-1">
                   <Link size={12} /> Public URL
                 </label>
-                <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 p-3 rounded-xl">
+                <div
+                  className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 p-3 rounded-xl cursor-pointer"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(publicUrl)
+                    toast.success('Public URL copied')
+                  }}
+                  title="Click to copy"
+                >
                   <code className="text-xs text-green-600 truncate flex-1">{publicUrl}</code>
                   <button
-                    className="p-1.5 hover:bg-green-500/20 rounded text-green-600 transition-colors shrink-0"
-                    onClick={async () => {
+                    className="flex items-center gap-1.5 px-2 py-1 bg-green-600/20 text-green-600 hover:bg-green-600/30 rounded-lg text-xs font-medium transition-colors shrink-0"
+                    onClick={async (e) => {
+                      e.stopPropagation()
                       await navigator.clipboard.writeText(publicUrl)
                       toast.success('Public URL copied')
                     }}
-                    title="Copy public URL"
                   >
-                    <Copy size={14} />
+                    <Copy size={12} /> Copy
                   </button>
                 </div>
               </div>
@@ -239,9 +253,32 @@ export function RemoteAccessPanel(): React.JSX.Element {
               </div>
             ) : (
               <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
-                <span className="text-xs text-amber-600">
+                <span className="text-xs text-amber-600 flex-1">
                   {tunnelError || 'No public tunnel. Server is local-only.'}
                 </span>
+                <button
+                  onClick={async () => {
+                    setIsTunnelStarting(true)
+                    useTunnelStore.getState().setError(null)
+                    const tunnelConfig = {
+                      id: TUNNEL_ID,
+                      name: 'Termul Web',
+                      localPort: WS_PORT,
+                      autoStart: false,
+                    }
+                    const tunnelResult = await startTunnel(tunnelConfig)
+                    if (tunnelResult && tunnelResult.publicUrl) {
+                      setIsTunnelStarting(false)
+                      toast.success('Tunnel ready at ' + tunnelResult.publicUrl)
+                    } else if (!tunnelResult) {
+                      setIsTunnelStarting(false)
+                    }
+                  }}
+                  disabled={isTunnelStarting}
+                  className="px-3 py-1.5 text-xs bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 shrink-0"
+                >
+                  {isTunnelStarting ? 'Starting...' : 'Start Tunnel'}
+                </button>
               </div>
             )}
 
