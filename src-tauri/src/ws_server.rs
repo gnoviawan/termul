@@ -471,8 +471,10 @@ fn get_index_html() -> &'static str {
         .dot.red { background: #f38ba8; }
         .dot.yellow { background: #f9e2af; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .terminal-container { flex: 1; padding: 4px; display: none; }
-        .terminal-container.active { display: block; }
+        .terminal-container { flex: 1; padding: 4px; display: none; width: 100%; height: 100%; min-height: 0; }
+        .terminal-container.active { display: flex; flex-direction: column; }
+        .xterm { width: 100%; height: 100%; flex: 1; min-height: 0; }
+        .xterm-viewport { overflow-y: auto; }
         #terminal { width: 100%; height: 100%; }
         .connecting { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
         .spinner { width: 40px; height: 40px; border: 3px solid #313244; border-top-color: #89b4fa; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -634,6 +636,12 @@ fn get_index_html() -> &'static str {
         }
 
         async function loadXterm() {
+            // Load xterm.js stylesheet agar tidak hancur berantakan
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = "https://esm.sh/@xterm/xterm@5.5.0/css/xterm.css";
+            document.head.appendChild(link);
+
             const xtermModule = await import("https://esm.sh/@xterm/xterm@5.5.0");
             const fitModule = await import("https://esm.sh/@xterm/addon-fit@0.12.0-beta.216");
             const webLinksModule = await import("https://esm.sh/@xterm/addon-web-links@0.11.0");
