@@ -240,16 +240,6 @@ export function RemoteAccessPanel(): React.JSX.Element {
                     <WifiOff size={16} /> Disconnect
                   </button>
                 </>
-              ) : activeTunnel?.status === 'running' ? (
-                <button
-                  onClick={async () => {
-                    await stopTunnel(TUNNEL_ID)
-                    toast.success('Tunnel stopped')
-                  }}
-                  className="flex-1 py-4 px-6 bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded-2xl font-semibold flex items-center justify-center gap-2 hover:bg-amber-500 hover:text-white transition-all active:scale-[0.99]"
-                >
-                  <WifiOff size={16} /> Stop Running Tunnel
-                </button>
               ) : (
                 <button
                   onClick={handleStartWsServer}

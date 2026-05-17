@@ -179,10 +179,22 @@ pub async fn tunnel_start(
     }
 
     if tunnels().lock().await.contains_key(&config.id) {
-        return Ok(IpcResult::error(
-            "Tunnel already running for this id",
-            "TUNNEL_ALREADY_RUNNING",
-        ));
+        // Auto-stop tunnel lama jika ID yang sama masih running agar tidak nyangkut
+        if let Some(mut old_child) = tunnels().lock().await.remove(&config.id) {
+            let _ = old_child.kill().await;
+        }
+        if let Some(session) = sessions().lock().await.get_mut(&config.id) {
+            session.status = "stopped".to_string();
+        }
+        let _ = app_handle.emit(
+            "tunnel-status-changed",
+            TunnelStatusEvent {
+                tunnel_id: config.id.clone(),
+                status: "stopped".to_string(),
+                public_url: None,
+                last_error: None,
+            },
+        );
     }
 
     let mut cmd = cloudflared_command();
