@@ -1039,36 +1039,45 @@ async fn handle_ws(
                                 continue;
                             }
 
-                            let result = handle_command(&method, params, &app_handle, &server).await;
-                            let resp = match result {
-                                Ok(ipc_result) => {
-                                    if ipc_result.success {
-                                        WsOutbound::Response {
-                                            id,
-                                            success: true,
-                                            data: ipc_result.data,
-                                            error: None,
-                                            code: None,
-                                        }
-                                    } else {
-                                        WsOutbound::Response {
-                                            id,
-                                            success: false,
-                                            data: None,
-                                            error: ipc_result.error,
-                                            code: ipc_result.code,
+                            // Spawn blocking task agar spawn/write/resize PTY tidak menghalangi event loop axum
+                            let app_handle_clone = app_handle.clone();
+                            let server_clone = server.clone();
+                            let tx_clone = tx.clone();
+                            let method_string = method.clone();
+                            let id_string = id.clone();
+                            
+                            tokio::spawn(async move {
+                                let result = handle_command(&method_string, params, &app_handle_clone, &server_clone).await;
+                                let resp = match result {
+                                    Ok(ipc_result) => {
+                                        if ipc_result.success {
+                                            WsOutbound::Response {
+                                                id: id_string,
+                                                success: true,
+                                                data: ipc_result.data,
+                                                error: None,
+                                                code: None,
+                                            }
+                                        } else {
+                                            WsOutbound::Response {
+                                                id: id_string,
+                                                success: false,
+                                                data: None,
+                                                error: ipc_result.error,
+                                                code: ipc_result.code,
+                                            }
                                         }
                                     }
-                                }
-                                Err(e) => WsOutbound::Response {
-                                    id,
-                                    success: false,
-                                    data: None,
-                                    error: Some(e),
-                                    code: Some("COMMAND_ERROR".to_string()),
-                                },
-                            };
-                            let _ = tx.send(resp);
+                                    Err(e) => WsOutbound::Response {
+                                        id: id_string,
+                                        success: false,
+                                        data: None,
+                                        error: Some(e),
+                                        code: Some("COMMAND_ERROR".to_string()),
+                                    },
+                                };
+                                let _ = tx_clone.send(resp);
+                            });
                         }
                     }
                 }
@@ -1100,7 +1109,7 @@ async fn handle_command(
     method: &str,
     params: Option<serde_json::Value>,
     app_handle: &AppHandle,
-    server: &Arc<WsServer>,
+    _server: &Arc<WsServer>,
 ) -> Result<IpcResult<serde_json::Value>, String> {
     match method {
         "terminal_spawn" => {
@@ -1110,13 +1119,15 @@ async fn handle_command(
                 .map_err(|e| format!("Invalid params: {}", e))?
                 .unwrap_or_default();
 
-            // Kita sudah pastikan state terdaftar sebagai Arc<PtyManager> di lib.rs
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.spawn(options).await {
                 Ok(info) => Ok(IpcResult::success(serde_json::to_value(&info).map_err(|e| e.to_string())?)),
-                Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
+                Err(e) => {
+                    log::error!("[WsServer] Spawn terminal failed: {}", e);
+                    Ok(IpcResult::error(e, "SPAWN_FAILED"))
+                }
             }
         }
         "terminal_write" => {
