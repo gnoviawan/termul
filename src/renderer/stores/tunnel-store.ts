@@ -80,6 +80,16 @@ export const useTunnelStore = create<TunnelState>((set, get) => ({
     set({ isLoading: false })
     if (!result.success) {
       set({ error: result.error })
+      if (result.code === 'TUNNEL_ALREADY_RUNNING') {
+        // Force update status biar UI tahu tunnel running dan bisa di-stop
+        get().upsertSession({
+          id: config.id,
+          configId: config.id,
+          status: 'running',
+          publicUrl: null,
+          lastError: null
+        })
+      }
       return null
     }
     get().upsertSession(result.data)
