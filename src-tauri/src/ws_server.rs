@@ -448,51 +448,343 @@ fn get_index_html() -> &'static str {
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Termul Web - Remote Terminal</title>
-    <meta name="theme-color" content="#1E1E2E" />
+    <title>Termul Manager - Remote Portal</title>
+    <meta name="theme-color" content="#0c0c0c" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #1e1e2e; color: #cdd6f4; font-family: system-ui, sans-serif; }
-        #root { height: 100vh; display: flex; flex-direction: column; }
-        .header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: #181825; border-bottom: 1px solid #313244; }
-        .header h1 { font-size: 16px; font-weight: 600; }
-        .header-controls { display: flex; align-items: center; gap: 12px; }
-        .tab-bar { display: flex; gap: 2px; padding: 4px 20px 0; background: #181825; border-bottom: 1px solid #313244; }
-        .tab { padding: 8px 16px; background: #1e1e2e; border: 1px solid #313244; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 12px; color: #a6adc8; display: flex; align-items: center; gap: 8px; }
-        .tab.active { background: #313244; color: #cdd6f4; }
-        .tab:hover { background: #45475a; }
-        .tab-close { width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; opacity: 0.5; }
-        .tab-close:hover { opacity: 1; background: #f38ba8; color: #1e1e2e; }
-        .add-tab { padding: 8px 12px; cursor: pointer; font-size: 16px; color: #a6adc8; background: none; border: none; }
-        .add-tab:hover { color: #89b4fa; }
-        .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a6adc8; }
-        .dot { width: 8px; height: 8px; border-radius: 50%; }
+        body { 
+            background: #0c0c0c; 
+            color: #e0e0e0; 
+            font-family: 'Inter', system-ui, sans-serif; 
+            overflow: hidden; 
+            height: 100vh;
+        }
+        #root { 
+            height: 100vh; 
+            display: grid; 
+            grid-template-rows: 44px 1fr 22px; 
+            grid-template-columns: 240px 1fr;
+            grid-template-areas: 
+                "header header"
+                "sidebar main"
+                "statusbar statusbar";
+        }
+        
+        /* Header style matching Desktop */
+        .header { 
+            grid-area: header;
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            padding: 0 16px; 
+            background: #181825; 
+            border-bottom: 1px solid #2a2b3c;
+            user-select: none;
+        }
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #cdd6f4;
+        }
+        .header-title i {
+            color: #3b82f6;
+            width: 16px;
+            height: 16px;
+        }
+        .header-controls { 
+            display: flex; 
+            align-items: center; 
+            gap: 16px; 
+        }
+        .token-expiry { 
+            font-size: 11px; 
+            font-family: 'JetBrains Mono', monospace;
+            color: #a6adc8;
+            background: #1e1e2e;
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid #313244;
+        }
+        .status { 
+            display: flex; 
+            align-items: center; 
+            gap: 6px; 
+            font-size: 11px; 
+            color: #bac2de; 
+        }
+        .dot { width: 6px; height: 6px; border-radius: 50%; }
         .dot.green { background: #a6e3a1; animation: pulse 2s infinite; }
         .dot.red { background: #f38ba8; }
         .dot.yellow { background: #f9e2af; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .terminal-container { flex: 1; padding: 12px; display: none; width: 100%; height: 100%; min-height: 0; background: #1e1e2e; }
-        .terminal-container.active { display: flex; flex-direction: column; }
-        .terminal-screen { width: 100%; height: 100%; flex: 1; min-height: 0; }
-        .xterm { width: 100%; height: 100%; flex: 1; min-height: 0; }
+        
+        /* Sidebar styling matching Desktop ProjectSidebar */
+        .sidebar {
+            grid-area: sidebar;
+            background: #171717;
+            border-right: 1px solid #222222;
+            display: flex;
+            flex-direction: column;
+            padding: 12px;
+            gap: 16px;
+            overflow-y: auto;
+            user-select: none;
+        }
+        .sidebar-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #888888;
+            font-weight: 700;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sidebar-section-title i {
+            width: 12px;
+            height: 12px;
+        }
+        .sidebar-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #a6adc8;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .sidebar-item:hover {
+            background: #262626;
+            color: #cdd6f4;
+        }
+        .sidebar-item.active {
+            background: #2e2e2e;
+            color: #ffffff;
+            font-weight: 500;
+            border-left: 3px solid #3b82f6;
+        }
+        .sidebar-item i {
+            width: 14px;
+            height: 14px;
+        }
+        
+        /* Main area & Tab bar styling */
+        .main-content {
+            grid-area: main;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: #0c0c0c;
+        }
+        
+        .tab-bar { 
+            display: flex; 
+            align-items: flex-end;
+            gap: 4px; 
+            padding: 6px 12px 0; 
+            background: #171717; 
+            border-bottom: 1px solid #222222; 
+            height: 38px;
+            user-select: none;
+        }
+        .tab { 
+            padding: 6px 12px; 
+            background: #1c1c1c; 
+            border: 1px solid #222222; 
+            border-bottom: none; 
+            border-radius: 6px 6px 0 0; 
+            cursor: pointer; 
+            font-size: 12px; 
+            color: #888888; 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+            height: 32px;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .tab.active { 
+            background: #0c0c0c; 
+            color: #ffffff; 
+            font-weight: 500;
+            border-color: #222222;
+            box-shadow: inset 0 2px 0 0 #3b82f6;
+        }
+        .tab:hover:not(.active) { 
+            background: #262626; 
+            color: #cdd6f4;
+        }
+        .tab-close { 
+            width: 14px; 
+            height: 14px; 
+            border-radius: 4px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 9px; 
+            opacity: 0.5; 
+            transition: all 0.15s ease;
+        }
+        .tab-close:hover { 
+            opacity: 1; 
+            background: #f38ba8; 
+            color: #1e1e2e; 
+        }
+        .add-tab { 
+            padding: 6px 10px; 
+            cursor: pointer; 
+            color: #888888; 
+            background: none; 
+            border: none; 
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px 4px 0 0;
+        }
+        .add-tab:hover { 
+            color: #3b82f6; 
+            background: #262626;
+        }
+        
+        /* Terminal panels */
+        .terminal-container { 
+            flex: 1; 
+            padding: 8px; 
+            display: none; 
+            width: 100%; 
+            height: 100%; 
+            min-height: 0; 
+            background: #0c0c0c; 
+        }
+        .terminal-container.active { 
+            display: flex; 
+            flex-direction: column; 
+        }
+        .terminal-screen { 
+            width: 100%; 
+            height: 100%; 
+            flex: 1; 
+            min-height: 0; 
+        }
+        .xterm { 
+            width: 100%; 
+            height: 100%; 
+            flex: 1; 
+            min-height: 0; 
+        }
         .xterm-viewport { overflow-y: auto !important; }
-        #terminal { width: 100%; height: 100%; }
-        .connecting { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
-        .spinner { width: 40px; height: 40px; border: 3px solid #313244; border-top-color: #89b4fa; border-radius: 50%; animation: spin 1s linear infinite; }
+        
+        /* Bottom status bar matching Desktop */
+        .status-bar {
+            grid-area: statusbar;
+            background: #007acc;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            font-size: 11px;
+            font-weight: 500;
+            user-select: none;
+        }
+        .status-bar-left, .status-bar-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .status-bar-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .status-bar-item i {
+            width: 12px;
+            height: 12px;
+        }
+        
+        /* Loading and error panels */
+        .connecting { 
+            grid-column: 1 / -1;
+            grid-row: 1 / -1;
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            flex-direction: column; 
+            gap: 16px; 
+            background: #0c0c0c;
+            z-index: 1000;
+        }
+        .spinner { 
+            width: 32px; 
+            height: 32px; 
+            border: 3px solid #1c1c1c; 
+            border-top-color: #3b82f6; 
+            border-radius: 50%; 
+            animation: spin 1s linear infinite; 
+        }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .error { color: #f38ba8; font-size: 14px; text-align: center; padding: 20px; }
-        .retry-btn { padding: 8px 20px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
-        .retry-btn:hover { background: #74c7ec; }
-        .token-expiry { font-size: 11px; color: #6c7086; }
-        .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; background: #313244; border-radius: 8px; font-size: 13px; animation: slideIn 0.3s ease; z-index: 1000; }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .error { 
+            grid-column: 1 / -1;
+            grid-row: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 12px;
+            background: #0c0c0c;
+            color: #f38ba8; 
+            font-size: 14px; 
+            text-align: center; 
+            padding: 20px; 
+            z-index: 1000;
+        }
+        .retry-btn { 
+            padding: 8px 20px; 
+            background: #3b82f6; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            font-size: 12px;
+            transition: background 0.15s ease;
+        }
+        .retry-btn:hover { background: #2563eb; }
+        .toast { 
+            position: fixed; 
+            bottom: 30px; 
+            right: 20px; 
+            padding: 10px 16px; 
+            background: #1c1c1c; 
+            color: #ffffff;
+            border: 1px solid #222222;
+            border-radius: 6px; 
+            font-size: 12px; 
+            animation: slideIn 0.2s ease; 
+            z-index: 2000; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     </style>
 </head>
 <body>
     <div id="root">
         <div class="connecting" id="loading">
             <div class="spinner"></div>
-            <p>Connecting to Termul server...</p>
+            <p style="font-size:13px;color:#888888">Connecting to Termul server...</p>
         </div>
     </div>
     <script type="module">
@@ -509,6 +801,7 @@ fn get_index_html() -> &'static str {
         if (window.location.hostname.endsWith("trycloudflare.com")) {
             wsHost = window.location.hostname;
         }
+        
         
         const WS_URL = wsProto + wsHost + "/ws";
         const WS_TOKEN = "__TERMUL_TOKEN__";
@@ -731,7 +1024,13 @@ fn get_index_html() -> &'static str {
                 }
             });
 
-            listen("terminal-cwd-changed", () => {});
+            listen("terminal-cwd-changed", (payload) => {
+                if (payload.terminalId === terminalObj.remoteId) {
+                    if (terminalObj.metadata) terminalObj.metadata.cwd = payload.cwd;
+                    updateStatusBar();
+                    renderSidebar();
+                }
+            });
             listen("terminal-git-branch-changed", () => {});
             listen("terminal-git-status-changed", () => {});
             listen("terminal-exit-code-changed", () => {});
@@ -742,7 +1041,10 @@ fn get_index_html() -> &'static str {
                 try {
                     const spawnData = await invoke("terminal_spawn", { options: {} });
                     terminalObj.remoteId = spawnData.id;
+                    terminalObj.metadata = spawnData;
                     saveSession();
+                    updateStatusBar();
+                    renderSidebar();
                     // Flush buffered data that arrived before remoteId was set
                     for (const p of earlyDataBuffer) {
                         if ((p.id || p.terminalId) === terminalObj.remoteId) term.write(p.data || "");
@@ -757,9 +1059,10 @@ fn get_index_html() -> &'static str {
 
         async function addTerminal() {
             const id = "tab-" + Date.now();
-            const terminalObj = { id, remoteId: null, term: null, fitAddon: null };
+            const terminalObj = { id, remoteId: null, term: null, fitAddon: null, metadata: null };
             terminals.push(terminalObj);
             renderTabs();
+            renderSidebar();
             await createTerminalContainer(terminalObj);
             setActiveTerminal(id);
             await initTerminal(terminalObj);
@@ -767,7 +1070,7 @@ fn get_index_html() -> &'static str {
         }
 
         function createTerminalContainer(terminalObj) {
-            const root = document.getElementById("root");
+            const mainContent = document.getElementById("main-content");
             const container = document.createElement("div");
             container.className = "terminal-container";
             container.id = "term-" + terminalObj.id;
@@ -779,34 +1082,31 @@ fn get_index_html() -> &'static str {
             xtermDiv.style.height = "100%";
             container.appendChild(xtermDiv);
             
-            const header = root.querySelector(".header");
-            const tabBar = root.querySelector(".tab-bar");
-            if (tabBar) {
-                tabBar.after(container);
-            } else {
-                header.after(container);
-            }
+            mainContent.appendChild(container);
         }
 
         function renderTabs() {
-            const root = document.getElementById("root");
-            let tabBar = root.querySelector(".tab-bar");
+            const mainContent = document.getElementById("main-content");
+            let tabBar = mainContent.querySelector(".tab-bar");
             if (!tabBar) {
                 tabBar = document.createElement("div");
                 tabBar.className = "tab-bar";
-                const header = root.querySelector(".header");
-                header.after(tabBar);
+                mainContent.prepend(tabBar);
             }
-            tabBar.innerHTML = terminals.map(t =>
-                "<div class='tab" + (t.id === activeTerminalId ? " active" : "") + "' data-id='" + t.id + "'>" +
-                "<span>Terminal</span>" +
-                "<div class='tab-close' data-close='" + t.id + "'>x</div>" +
-                "</div>"
-            ).join("") + "<button class='add-tab' id='add-tab'>+</button>";
+            
+            tabBar.innerHTML = terminals.map(t => {
+                const isActive = t.id === activeTerminalId;
+                const icon = "<i data-lucide='terminal' style='width:13px;height:13px;color:" + (isActive ? "#3b82f6" : "#888888") + "'></i>";
+                return "<div class='tab" + (isActive ? " active" : "") + "' data-id='" + t.id + "'>" +
+                    icon +
+                    "<span>" + (t.metadata?.shell ? t.metadata.shell.split(/[\\/]/).pop() : "Terminal") + "</span>" +
+                    "<div class='tab-close' data-close='" + t.id + "'><i data-lucide='x' style='width:10px;height:10px'></i></div>" +
+                    "</div>";
+            }).join("") + "<button class='add-tab' id='add-tab'><i data-lucide='plus' style='width:14px;height:14px'></i></button>";
 
             tabBar.querySelectorAll(".tab").forEach(el => {
                 el.addEventListener("click", (e) => {
-                    if (!e.target.classList.contains("tab-close")) {
+                    if (!e.target.closest(".tab-close")) {
                         setActiveTerminal(el.dataset.id);
                     }
                 });
@@ -823,6 +1123,74 @@ fn get_index_html() -> &'static str {
             if (addTabBtn) {
                 addTabBtn.addEventListener("click", () => addTerminal());
             }
+            
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function renderSidebar() {
+            const sidebar = document.getElementById("sidebar");
+            if (!sidebar) return;
+            
+            let html = "<div class='sidebar-section-title'>" +
+                "<i data-lucide='folder-kanban'></i>" +
+                "<span>Workspaces</span>" +
+                "</div>" +
+                "<div class='sidebar-list'>";
+                
+            html += terminals.map(t => {
+                const isActive = t.id === activeTerminalId;
+                const shellName = t.metadata?.shell ? t.metadata.shell.split(/[\\/]/).pop() : "Connecting...";
+                const pidText = t.metadata?.pid ? "PID: " + t.metadata.pid : "Starting";
+                return "<div class='sidebar-item" + (isActive ? " active" : "") + "' data-id='" + t.id + "'>" +
+                    "<i data-lucide='terminal'></i>" +
+                    "<div style='display:flex;flex-direction:column;gap:2px'>" +
+                    "<span style='font-size:12px;font-weight:500'>" + shellName + "</span>" +
+                    "<span style='font-size:10px;color:#888888'>" + pidText + "</span>" +
+                    "</div>" +
+                    "</div>";
+            }).join("");
+            
+            html += "</div>";
+            sidebar.innerHTML = html;
+            
+            sidebar.querySelectorAll(".sidebar-item").forEach(el => {
+                el.addEventListener("click", () => {
+                    setActiveTerminal(el.dataset.id);
+                });
+            });
+            
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function updateStatusBar() {
+            const statusBar = document.getElementById("status-bar");
+            if (!statusBar) return;
+            
+            const activeTab = terminals.find(t => t.id === activeTerminalId);
+            if (!activeTab || !activeTab.metadata) {
+                statusBar.innerHTML = "<div class='status-bar-left'>" +
+                    "<div class='status-bar-item'><i data-lucide='info'></i><span>Ready</span></div>" +
+                    "</div>" +
+                    "<div class='status-bar-right'></div>";
+                if (window.lucide) window.lucide.createIcons();
+                return;
+            }
+            
+            const meta = activeTab.metadata;
+            const shellName = meta.shell ? meta.shell.split(/[\\/]/).pop() : "shell";
+            const cwd = meta.cwd || "C:\\Users\\USER";
+            const sizeText = activeTab.term ? activeTab.term.cols + "x" + activeTab.term.rows : "80x24";
+            
+            statusBar.innerHTML = "<div class='status-bar-left'>" +
+                "<div class='status-bar-item'><i data-lucide='terminal'></i><span>" + shellName + "</span></div>" +
+                "<div class='status-bar-item'><i data-lucide='folder'></i><span>" + cwd + "</span></div>" +
+                "<div class='status-bar-item'><i data-lucide='cpu'></i><span>PID: " + meta.pid + "</span></div>" +
+                "</div>" +
+                "<div class='status-bar-right'>" +
+                "<div class='status-bar-item'><i data-lucide='activity'></i><span>" + sizeText + "</span></div>" +
+                "</div>";
+                
+            if (window.lucide) window.lucide.createIcons();
         }
 
         function setActiveTerminal(id) {
@@ -835,6 +1203,8 @@ fn get_index_html() -> &'static str {
                 setTimeout(() => terminalObj.fitAddon.fit(), 50);
             }
             renderTabs();
+            renderSidebar();
+            updateStatusBar();
         }
 
         function closeTerminal(id) {
@@ -856,11 +1226,13 @@ fn get_index_html() -> &'static str {
             }
             saveSession();
             renderTabs();
+            renderSidebar();
+            updateStatusBar();
         }
 
         function saveSession() {
             try {
-                const data = terminals.map(t => ({ id: t.id, remoteId: t.remoteId }));
+                const data = terminals.map(t => ({ id: t.id, remoteId: t.remoteId, metadata: t.metadata }));
                 sessionStorage.setItem("termul-terminals", JSON.stringify(data));
             } catch {}
         }
@@ -878,13 +1250,15 @@ fn get_index_html() -> &'static str {
                 await connect();
                 const root = document.getElementById("root");
                 root.innerHTML = "<div class='header'>" +
-                    "<h1>Termul Web</h1>" +
+                    "<div class='header-title'><i data-lucide='terminal'></i><span>Termul Manager</span></div>" +
                     "<div class='header-controls'>" +
                     "<span class='token-expiry' id='token-expiry'></span>" +
                     "<div class='status'><div class='dot green'></div><span>Connected</span></div>" +
                     "</div>" +
                     "</div>" +
-                    "<div class='tab-bar'></div>";
+                    "<div class='sidebar' id='sidebar'></div>" +
+                    "<div class='main-content' id='main-content'></div>" +
+                    "<div class='status-bar' id='status-bar'></div>";
 
                 if (TOKEN_EXPIRES_AT > 0) {
                     const expiryEl = document.getElementById("token-expiry");
@@ -904,11 +1278,13 @@ fn get_index_html() -> &'static str {
 
                 if (sessionTerminals && sessionTerminals.length > 0) {
                     for (const saved of sessionTerminals) {
-                        const terminalObj = { id: saved.id, remoteId: saved.remoteId, term: null, fitAddon: null };
+                        const terminalObj = { id: saved.id, remoteId: saved.remoteId, term: null, fitAddon: null, metadata: saved.metadata || null };
                         terminals.push(terminalObj);
                         await createTerminalContainer(terminalObj);
                     }
                     renderTabs();
+                    renderSidebar();
+                    updateStatusBar();
                     if (terminals.length > 0) setActiveTerminal(terminals[0].id);
                     for (const t of terminals) {
                         await initTerminal(t, true);
@@ -919,9 +1295,9 @@ fn get_index_html() -> &'static str {
             } catch (err) {
                 const root = document.getElementById("root");
                 root.innerHTML = "<div class='error'>" +
-                    "<h2>Connection Failed</h2>" +
-                    "<p>" + (err.message || "Cannot connect to server") + "</p>" +
-                    "<p style='font-size:12px;color:#a6adc8;margin-top:8px'>Attempt " + (reconnectAttempts + 1) + "/" + maxReconnectAttempts + "</p>" +
+                    "<h2 style='font-size:16px;font-weight:600;margin-bottom:4px'>Connection Failed</h2>" +
+                    "<p style='font-size:13px;color:#888888;margin-bottom:8px'>" + (err.message || "Cannot connect to server") + "</p>" +
+                    "<p style='font-size:11px;color:#666666;margin-bottom:12px'>Attempt " + (reconnectAttempts + 1) + "/" + maxReconnectAttempts + "</p>" +
                     "<button class='retry-btn' onclick='location.reload()'>Retry</button>" +
                     "</div>";
             }
