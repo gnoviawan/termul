@@ -48,7 +48,6 @@ async fn index_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
@@ -57,13 +56,18 @@ async fn ws_handler(
     if token_expired {
         log::warn!("[WsServer] Rejecting WS connection: token expired");
         return ws.on_upgrade(move |_| async move {
-            log::info!("[WsServer] Dropped expired connection from {}", addr);
+            log::info!("[WsServer] Dropped expired connection");
         });
     }
 
     let server = state.server;
     let token = state.auth_token;
     let app = state.app_handle;
+    
+    // Cloudflare Tunnel tidak mengirimkan proper SocketAddr peer yang valid lewat ConnectInfo
+    // jika kita menggunakan server global biasa, yang memicu error internal di axum extractor.
+    // Kita gunakan fallback socket address tiruan agar extractor tidak crash.
+    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     server.log_connection(&addr, "connecting");
 
     ws.on_upgrade(move |socket| handle_ws(socket, server, token, app, addr))
