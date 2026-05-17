@@ -492,7 +492,7 @@ fn get_index_html() -> &'static str {
         // Jika diakses lewat Cloudflare Tunnel (https://*.trycloudflare.com), browser akan melihat protokol https,
         // sehingga WebSocket harus dipaksa menggunakan wss:// agar tidak diblokir oleh mixed content policy.
         let wsProto = "ws://";
-        if (window.location.protocol === "https:" || window.location.hostname.includes("trycloudflare.com")) {
+        if (window.location.protocol === "https:" || window.location.hostname.endsWith("trycloudflare.com")) {
             wsProto = "wss://";
         }
         const WS_URL = wsProto + window.location.host + "/ws";
@@ -550,8 +550,15 @@ fn get_index_html() -> &'static str {
 
         async function connect() {
             return new Promise((resolve, reject) => {
-                console.log("Connecting to WebSocket URL:", WS_URL);
-                ws = new WebSocket(WS_URL);
+                // Cloudflare Tunnel seringkali memblokir koneksi wss:// jika menggunakan port non-standard di URL-nya,
+                // tapi karena cloudflared bertindak sebagai SSL terminator di port 443, host remote aslinya tidak punya port.
+                // Kita pastikan WS_URL bersih tanpa port internal jika lewat trycloudflare.
+                let targetUrl = WS_URL;
+                if (window.location.hostname.endsWith("trycloudflare.com")) {
+                    targetUrl = "wss://" + window.location.hostname + "/ws";
+                }
+                console.log("Connecting to WebSocket URL:", targetUrl);
+                ws = new WebSocket(targetUrl);
                 
                 const timeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
