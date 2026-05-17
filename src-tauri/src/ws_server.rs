@@ -496,9 +496,13 @@ fn get_index_html() -> &'static str {
         </div>
     </div>
     <script type="module">
-        const WS_URL = window.location.protocol === "https:"
-            ? "wss://" + window.location.host
-            : "ws://" + window.location.host;
+        // Jika diakses lewat Cloudflare Tunnel (https://*.trycloudflare.com), browser akan melihat protokol https,
+        // sehingga WebSocket harus dipaksa menggunakan wss:// agar tidak diblokir oleh mixed content policy.
+        let wsProto = "ws://";
+        if (window.location.protocol === "https:" || window.location.host.includes("trycloudflare.com")) {
+            wsProto = "wss://";
+        }
+        const WS_URL = wsProto + window.location.host + "/ws";
         const WS_TOKEN = "__TERMUL_TOKEN__";
         const TOKEN_EXPIRES_AT = parseInt("__TERMUL_TOKEN_EXPIRES__") || 0;
 
@@ -556,7 +560,7 @@ fn get_index_html() -> &'static str {
                 ws = new WebSocket(WS_URL);
                 const timeout = setTimeout(() => {
                     reject(new Error("Connection timeout"));
-                }, 10000);
+                }, 15000);
 
                 ws.onopen = () => {
                     ws.send(JSON.stringify({ type: "auth", token: WS_TOKEN }));
