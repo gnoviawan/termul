@@ -708,15 +708,26 @@ fn get_index_html() -> &'static str {
                 return true;
             });
 
+            // Buffer data that arrives before remoteId is assigned (race between spawn response and PTY output)
+            const earlyDataBuffer = [];
+            let earlyExited = false;
+
             listen("terminal-data", (payload) => {
-                if (payload.terminalId === terminalObj.remoteId) {
-                    term.write(payload.data || "");
+                const payloadId = payload.id || payload.terminalId;
+                if (terminalObj.remoteId) {
+                    if (payloadId === terminalObj.remoteId) term.write(payload.data || "");
+                } else {
+                    // remoteId not yet set — buffer by payload id so we can flush after spawn resolves
+                    earlyDataBuffer.push(payload);
                 }
             });
 
             listen("terminal-exit", (payload) => {
-                if (payload.terminalId === terminalObj.remoteId) {
-                    term.write("\r\n\x1b[33mProcess exited.\x1b[0m\r\n");
+                const payloadId = payload.id || payload.terminalId;
+                if (terminalObj.remoteId) {
+                    if (payloadId === terminalObj.remoteId) term.write("\r\n\x1b[33mProcess exited.\x1b[0m\r\n");
+                } else {
+                    earlyExited = true;
                 }
             });
 
@@ -728,12 +739,18 @@ fn get_index_html() -> &'static str {
             if (isRestore && terminalObj.remoteId) {
                 term.write("\r\n\x1b[33mSession restored. Terminal ID: " + terminalObj.remoteId + "\x1b[0m\r\n");
             } else {
-                const result = await invoke("terminal_spawn", {});
-                if (result.success) {
-                    terminalObj.remoteId = result.data.id;
+                try {
+                    const spawnData = await invoke("terminal_spawn", { options: {} });
+                    terminalObj.remoteId = spawnData.id;
                     saveSession();
-                } else {
-                    term.write("\r\n\x1b[31mFailed to spawn terminal: " + (result.error || "Unknown") + "\x1b[0m\r\n");
+                    // Flush buffered data that arrived before remoteId was set
+                    for (const p of earlyDataBuffer) {
+                        if ((p.id || p.terminalId) === terminalObj.remoteId) term.write(p.data || "");
+                    }
+                    earlyDataBuffer.length = 0;
+                    if (earlyExited) term.write("\r\n\x1b[33mProcess exited.\x1b[0m\r\n");
+                } catch (err) {
+                    term.write("\r\n\x1b[31mFailed to spawn terminal: " + (err?.message || String(err) || "Unknown") + "\x1b[0m\r\n");
                 }
             }
         }
