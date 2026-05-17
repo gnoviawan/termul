@@ -70,11 +70,12 @@ describe("terminalFactory", () => {
 			const terminal = terminalFactory.createTerminal({
 				scrollback: 5000,
 				fontSize: 18,
+				cursorBlink: false,
 			});
 			expect(terminal.options.scrollback).toBe(5000);
 			expect(terminal.options.fontSize).toBe(18);
 			// Non-overridden defaults should still be present
-			expect(terminal.options.cursorBlink).toBe(true);
+			expect(terminal.options.cursorBlink).toBe(false);
 		});
 	});
 
