@@ -21,6 +21,14 @@ use tower_http::cors::CorsLayer;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectInfo {
+    pub name: String,
+    pub path: String,
+    pub default_shell: Option<String>,
+}
+
 #[derive(Clone)]
 struct AppState {
     auth_token: String,
@@ -145,6 +153,7 @@ pub struct WsServer {
     token_created_at: AtomicU64,
     token_ttl_secs: AtomicU64,
     auth_attempts: Mutex<HashMap<String, (u32, Instant)>>,
+    active_project: Mutex<Option<ActiveProjectInfo>>,
 }
 
 const DEFAULT_TOKEN_TTL_SECS: u64 = 3600;
@@ -173,6 +182,7 @@ impl WsServer {
             token_created_at: AtomicU64::new(now),
             token_ttl_secs: AtomicU64::new(DEFAULT_TOKEN_TTL_SECS),
             auth_attempts: Mutex::new(HashMap::new()),
+            active_project: Mutex::new(None),
         }
     }
 
@@ -233,6 +243,15 @@ impl WsServer {
 
     pub async fn get_audit_log(&self) -> Vec<ConnectionAudit> {
         self.audit_log.lock().await.clone()
+    }
+
+    pub async fn set_active_project(&self, name: String, path: String, default_shell: Option<String>) {
+        let mut active_proj = self.active_project.lock().await;
+        *active_proj = Some(ActiveProjectInfo {
+            name,
+            path,
+            default_shell,
+        });
     }
 
     pub async fn is_rate_limited(&self, addr: &SocketAddr) -> bool {
@@ -1506,11 +1525,25 @@ async fn handle_command(
 ) -> Result<IpcResult<serde_json::Value>, String> {
     match method {
         "terminal_spawn" => {
-            let options: SpawnOptions = params
+            let mut options: SpawnOptions = params
                 .map(|p| serde_json::from_value(p))
                 .transpose()
                 .map_err(|e| format!("Invalid params: {}", e))?
                 .unwrap_or_default();
+
+            // Merge with active project from the Tauri context
+            if let Some(active_proj) = &*server.active_project.lock().await {
+                if options.cwd.is_none() || options.cwd.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                    options.cwd = Some(active_proj.path.clone());
+                }
+                if options.shell.is_none() || options.shell.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                    if let Some(shell) = &active_proj.default_shell {
+                        if !shell.is_empty() {
+                            options.shell = Some(shell.clone());
+                        }
+                    }
+                }
+            }
 
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;

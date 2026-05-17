@@ -69,4 +69,13 @@ export const wsServerApi = {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
+
+  async setActiveProject(projectName: string, projectPath: string, defaultShell?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await invoke('ws_server_set_active_project', { projectName, projectPath, defaultShell })
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
 }

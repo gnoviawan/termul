@@ -619,6 +619,17 @@ async fn ws_rotate_token(
 }
 
 #[tauri::command]
+async fn ws_server_set_active_project(
+    project_name: String,
+    project_path: String,
+    default_shell: Option<String>,
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<(), String> {
+    ws_server.set_active_project(project_name, project_path, default_shell).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn ws_get_audit_log(
     ws_server: State<'_, Arc<ws_server::WsServer>>,
 ) -> Result<Vec<ws_server::ConnectionAudit>, String> {
@@ -856,6 +867,7 @@ pub fn run() {
             ws_server_get_token,
             ws_rotate_token,
             ws_get_audit_log,
+            ws_server_set_active_project,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -90,6 +90,7 @@ import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
+import { wsServerApi } from "@/lib/ws-server-api";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -275,6 +276,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// Editor state persistence
 	useEditorPersistence(activeProjectId);
+
+	useEffect(() => {
+		if (activeProject && activeProject.path) {
+			void wsServerApi.setActiveProject(
+				activeProject.name,
+				activeProject.path,
+				activeProject.defaultShell
+			);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [activeProject?.name, activeProject?.path, activeProject?.defaultShell]);
 
 	useEffect(() => {
 		return () => {
