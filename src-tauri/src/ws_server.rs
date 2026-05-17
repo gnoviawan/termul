@@ -61,13 +61,6 @@ async fn ws_handler(
         });
     }
 
-    if state.server.is_rate_limited(&addr).await {
-        log::warn!("[WsServer] Rate limit exceeded for {}", addr);
-        return ws.on_upgrade(move |_| async move {
-            log::info!("[WsServer] Dropped rate-limited connection from {}", addr);
-        });
-    }
-
     let server = state.server;
     let token = state.auth_token;
     let app = state.app_handle;
@@ -566,7 +559,7 @@ fn get_index_html() -> &'static str {
                         ws.close();
                         reject(new Error("Connection timeout"));
                     }
-                }, 15000);
+                }, 30000); // 30s timeout to allow cold tunnel connections
 
                 ws.onopen = () => {
                     console.log("WebSocket connection opened. Sending auth token...");
