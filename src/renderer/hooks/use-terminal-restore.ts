@@ -983,7 +983,7 @@ async function restoreFromLayout(
       restoredTerminalCount: newTerminals.length
     }
   } finally {
-    // FIX #2: Always release the global spawn lock
+    cleanupGlobalState(restoreId)
     releaseGlobalSpawnLock(restoreId)
     debugLog('restoreFromLayout', `RELEASED LOCK [${restoreId}]`, {
       totalSpawnCalls: SPAWN_CALL_COUNT
