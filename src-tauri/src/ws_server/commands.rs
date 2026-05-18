@@ -144,6 +144,13 @@ pub(crate) async fn handle_command(
 
             Ok(IpcResult::success(probe))
         }
+        "terminal_list" => {
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
+            let active_terminals = pty_manager.get_active_terminals();
+            Ok(IpcResult::success(serde_json::to_value(&active_terminals).map_err(|e| e.to_string())?))
+        }
         "terminal_get_git_branch" => {
             let params = params.ok_or("Missing params")?;
             let terminal_id: String = serde_json::from_value(params["terminalId"].clone())

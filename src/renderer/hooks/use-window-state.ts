@@ -28,7 +28,7 @@ function createDefaultWindowState(monitor: Monitor | null): WindowState {
     y: Math.round(originY + (workHeight - DEFAULT_HEIGHT) / 2),
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    isMaximized: false
+    isMaximized: true
   }
 }
 

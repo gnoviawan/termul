@@ -441,6 +441,22 @@ impl PtyManager {
         });
     }
 
+    /// Get all active terminal IDs and their information
+    pub fn get_active_terminals(&self) -> Vec<TerminalInfo> {
+        let terminals = self.terminals.read();
+        terminals
+            .iter()
+            .map(|(id, instance)| TerminalInfo {
+                id: id.clone(),
+                shell: instance.shell.clone(),
+                cwd: instance.cwd.clone(),
+                pid: instance.pid,
+                cols: *instance.cols.read(),
+                rows: *instance.rows.read(),
+            })
+            .collect()
+    }
+
     /// Generate a unique terminal ID
     fn generate_id(&self) -> String {
         let counter = self.id_counter.fetch_add(1, Ordering::SeqCst);

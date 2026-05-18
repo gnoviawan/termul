@@ -770,6 +770,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
+			// Clear terminal (Ctrl+L)
+			if (matchesShortcut(e, getActiveKey("clearTerminal"))) {
+				e.preventDefault();
+				e.stopPropagation();
+				const activeTermId = useTerminalStore.getState().activeTerminalId;
+				if (activeTermId) {
+					terminalApi.write(activeTermId, "\x0C").catch(console.error);
+				}
+				return;
+			}
+
 			// New browser tab (Ctrl+Shift+N) - workspace only
 			if (matchesShortcut(e, getActiveKey("newBrowserTab"))) {
 				if (!isWorkspaceRoute) return;

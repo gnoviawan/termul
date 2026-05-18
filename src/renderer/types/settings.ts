@@ -252,6 +252,12 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		description: "Delete selected files",
 		defaultKey: "delete",
 	},
+	clearTerminal: {
+		id: "clearTerminal",
+		label: "Clear Terminal",
+		description: "Clear and redraw the terminal screen",
+		defaultKey: "ctrl+l",
+	},
 };
 
 // Persistence key for keyboard shortcuts

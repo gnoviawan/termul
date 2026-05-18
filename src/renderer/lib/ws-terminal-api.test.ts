@@ -112,10 +112,50 @@ describe('createWsTerminalApi', () => {
     expect(mockWs.listen).toHaveBeenCalledWith('terminal-data', expect.any(Function))
   })
 
+  it('onData handles payload with "id" key correctly', () => {
+    let receivedTerminalId = ''
+    let receivedData = ''
+    
+    api.onData((termId, data) => {
+      receivedTerminalId = termId
+      receivedData = data
+    })
+
+    const handler = vi.mocked(mockWs.listen).mock.calls[0][1]
+    
+    handler({ id: 't1', data: 'hello' })
+    expect(receivedTerminalId).toBe('t1')
+    expect(receivedData).toBe('hello')
+
+    handler({ terminalId: 't2', data: 'world' })
+    expect(receivedTerminalId).toBe('t2')
+    expect(receivedData).toBe('world')
+  })
+
   it('onExit returns unsubscribe function', () => {
     const unsub = api.onExit(() => {})
     expect(typeof unsub).toBe('function')
     expect(mockWs.listen).toHaveBeenCalledWith('terminal-exit', expect.any(Function))
+  })
+
+  it('onExit handles payload with "id" key correctly', () => {
+    let receivedTerminalId = ''
+    let receivedExitCode = -1
+
+    api.onExit((termId, exitCode) => {
+      receivedTerminalId = termId
+      receivedExitCode = exitCode
+    })
+
+    const handler = vi.mocked(mockWs.listen).mock.calls[0][1]
+
+    handler({ id: 't1', exitCode: 0 })
+    expect(receivedTerminalId).toBe('t1')
+    expect(receivedExitCode).toBe(0)
+
+    handler({ terminalId: 't2', exitCode: 1 })
+    expect(receivedTerminalId).toBe('t2')
+    expect(receivedExitCode).toBe(1)
   })
 
   it('onCwdChanged returns unsubscribe function', () => {

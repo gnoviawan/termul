@@ -40,7 +40,7 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
 
   const onData = (callback: (terminalId: string, data: string) => void): (() => void) => {
     return ws.listen('terminal-data', (payload) => {
-      const terminalId = payload.terminalId as string
+      const terminalId = (payload.id || payload.terminalId) as string
       const data = payload.data as string
       if (terminalId && data) callback(terminalId, data)
     })
@@ -48,7 +48,7 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
 
   const onExit = (callback: (terminalId: string, exitCode: number, signal?: number) => void): (() => void) => {
     return ws.listen('terminal-exit', (payload) => {
-      const terminalId = payload.terminalId as string
+      const terminalId = (payload.id || payload.terminalId) as string
       const exitCode = payload.exitCode as number
       const signal = payload.signal as number | undefined
       if (terminalId && exitCode !== undefined) callback(terminalId, exitCode, signal)

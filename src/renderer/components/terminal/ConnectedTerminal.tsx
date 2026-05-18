@@ -316,7 +316,15 @@ function ConnectedTerminalComponent({
 		const rect = containerRef.current.getBoundingClientRect();
 		const width = Math.round(rect.width);
 		const height = Math.round(rect.height);
-		if (!force && width > 0 && height > 0 && width === lastContainerWidthRef.current && height === lastContainerHeightRef.current) {
+		
+		// CRITICAL FIX: Never attempt to fit if container is hidden (0 width/height).
+		// Doing so causes xterm to calculate a 1-character wide column, 
+		// breaking the layout completely when it becomes visible again.
+		if (width <= 0 || height <= 0) {
+			return false;
+		}
+
+		if (!force && width === lastContainerWidthRef.current && height === lastContainerHeightRef.current) {
 			return false;
 		}
 		try {

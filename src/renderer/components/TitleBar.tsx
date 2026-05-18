@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal } from 'lucide-react'
+import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal, Globe } from 'lucide-react'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarVisible } from '@/stores/sidebar-store'
@@ -8,6 +8,7 @@ import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { windowApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { isMac } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 const focusableButtonClass = 'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
@@ -143,10 +144,23 @@ export function TitleBar({
           />
         </button>
 
+        <button
+          onClick={(e) => { e.stopPropagation(); navigate('/remote'); }}
+          className={focusableButtonClass}
+          title="Remote Coding"
+          aria-label="Open remote coding"
+          aria-current={location.pathname === '/remote' ? 'page' : undefined}
+        >
+          <Globe
+            size={16}
+            className={location.pathname === '/remote' ? 'text-foreground' : 'text-muted-foreground'}
+          />
+        </button>
+
         <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 
-        {/* Window controls — hidden on macOS (native traffic lights) */}
-        {!isMac && (
+        {/* Window controls — hidden on macOS (native traffic lights) or when running on web */}
+        {!isMac && isTauriContext() && (
           <>
             <button
               onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}

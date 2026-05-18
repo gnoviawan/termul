@@ -19,7 +19,8 @@ const QUICK_SHORTCUT_IDS = [
   'sidebarToggle',
   'zoomIn',
   'zoomOut',
-  'zoomReset'
+  'zoomReset',
+  'clearTerminal'
 ] as const
 
 interface TitleBarShortcutsPopoverProps {

@@ -491,21 +491,7 @@ const handleSaveSettings = useCallback(() => {
 							})}
 						</Reorder.Group>
 
-						{/* Remote Access Link */}
-						<div className="mt-4 px-1">
-							<button
-								onClick={() => navigate("/remote")}
-								className={cn(
-									"w-full flex items-center px-3 py-2 rounded-lg transition-all group",
-									location.pathname === "/remote"
-										? "bg-primary/10 text-primary border border-primary/20"
-										: "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-								)}
-							>
-								<Smartphone size={16} className="mr-3" />
-								<span className="text-sm font-medium">Remote Coding</span>
-							</button>
-						</div>
+
 
 						{/* Archived Projects Section */}
 						{archivedProjects.length > 0 && (
