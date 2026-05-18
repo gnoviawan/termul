@@ -1,3 +1,13 @@
+/**
+ * @deprecated Use `use-terminal-resize-v2` instead.
+ * This hook used a single 100ms debounce with manual charWidth/charHeight calculation.
+ * The v2 hook implements the two-stage resize pipeline (8ms fit + 256ms PTY resize)
+ * from ADR-002.4, using xterm's FitAddon for accurate dimension measurement.
+ *
+ * This module is retained for backwards compatibility and will be removed in a
+ * future release. No new code should import from this module.
+ */
+
 import { useEffect, useRef, useCallback } from 'react'
 
 export interface UseTerminalResizeOptions {
@@ -10,6 +20,7 @@ export interface UseTerminalResizeReturn {
   triggerResize: () => void
 }
 
+/** @deprecated Use useTerminalResizeV2 from use-terminal-resize-v2 instead */
 export function useTerminalResize(options: UseTerminalResizeOptions): UseTerminalResizeReturn {
   const { onResize, debounceMs = 100 } = options
   const containerRef = useRef<HTMLDivElement | null>(null)

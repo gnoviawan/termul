@@ -204,14 +204,56 @@ function resolveActivePaneId(
     : requestedPaneId
 }
 
-function normalizePaneTree(root: PaneNode): PaneNode {
+// Flatten nested same-direction splits into a single flat group.
+// E.g. Split(h, [A, Split(h, [B, C])]) → Split(h, [A, B, C])
+export function flattenSameDirection(root: PaneNode): PaneNode {
+  if (root.type === 'leaf') return root
+
+  // First recursively flatten children
+  const flattenedChildren: PaneNode[] = []
+  const flattenedSizes: number[] = []
+
+  for (let i = 0; i < root.children.length; i++) {
+    const child = flattenSameDirection(root.children[i])
+    // If child is same-direction split, merge its children into this level
+    if (child.type === 'split' && child.direction === root.direction) {
+      const parentSize = root.sizes[i] ?? 1
+      const childTotal = child.sizes.reduce((a, b) => a + b, 0)
+      for (let j = 0; j < child.children.length; j++) {
+        flattenedChildren.push(child.children[j])
+        flattenedSizes.push(parentSize * (child.sizes[j] / childTotal))
+      }
+    } else {
+      flattenedChildren.push(child)
+      flattenedSizes.push(root.sizes[i] ?? 1)
+    }
+  }
+
+  // Re-normalize sizes to sum to 100
+  const sizeTotal = flattenedSizes.reduce((a, b) => a + b, 1)
+  const normalizedSizes = flattenedSizes.map((s) => (s / sizeTotal) * 100)
+
+  return {
+    ...root,
+    children: flattenedChildren,
+    sizes: normalizedSizes
+  }
+}
+
+export function normalizePaneTree(root: PaneNode): PaneNode {
   const collapse = (node: PaneNode): PaneNode | null => {
     if (node.type === 'leaf') {
       return node
     }
 
+    // First flatten nested same-direction splits
+    const flattened = flattenSameDirection(node)
+
+    // After flattenSameDirection, a non-leaf node always yields a SplitNode
+    if (flattened.type !== 'split') return null
+
     // Track original indices to correctly map sizes after filtering
-    const survivingEntries = node.children
+    const survivingEntries = flattened.children
       .map((child, originalIndex) => ({
         child: collapse(child),
         originalIndex
@@ -226,7 +268,7 @@ function normalizePaneTree(root: PaneNode): PaneNode {
       return survivingEntries[0].child
     }
 
-    const originalSizes = node.sizes
+    const originalSizes = flattened.sizes
     const validSizes = survivingEntries.map((entry) => {
       const raw = originalSizes[entry.originalIndex]
       return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 1
@@ -236,7 +278,9 @@ function normalizePaneTree(root: PaneNode): PaneNode {
     const normalizedSizes = validSizes.map((size) => (size / total) * 100)
 
     return {
-      ...node,
+      type: 'split' as const,
+      id: flattened.id,
+      direction: flattened.direction,
       children: survivingEntries.map((entry) => entry.child),
       sizes: normalizedSizes
     }
@@ -265,6 +309,35 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       const newLeaf = createLeaf([newTab], newTab.id)
       const isLeading = position === 'left' || position === 'top'
+
+      // Same-direction collapse: insert as sibling in existing flat group
+      const parentSplit = findParentSplit(root, paneId)
+      if (parentSplit && parentSplit.direction === direction) {
+        const targetIndex = parentSplit.children.findIndex((c) => c.id === paneId)
+        if (targetIndex === -1) return
+
+        const insertIndex = isLeading ? targetIndex : targetIndex + 1
+        const childCount = parentSplit.children.length
+        const newSize = 100 / (childCount + 1)
+        const scaleFactor = childCount / (childCount + 1)
+        const newSizes = parentSplit.sizes.map((s) => s * scaleFactor)
+        newSizes.splice(insertIndex, 0, newSize)
+
+        const newChildren = [...parentSplit.children]
+        newChildren.splice(insertIndex, 0, newLeaf)
+
+        const updatedSplit: SplitNode = {
+          ...parentSplit,
+          children: newChildren,
+          sizes: newSizes
+        }
+
+        const newRoot = replaceNode(root, parentSplit.id, updatedSplit)
+        set({ root: newRoot, activePaneId: newLeaf.id, fullscreenPaneId: null })
+        return
+      }
+
+      // Default: create nested split
       const split: SplitNode = {
         type: 'split',
         id: generateId(),
@@ -385,6 +458,45 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const direction: PaneDirection =
         position === 'left' || position === 'right' ? 'horizontal' : 'vertical'
       const newLeaf = createLeaf([tab], tab.id)
+
+      // Same-direction collapse: insert as sibling in existing flat group
+      const parentSplit = findParentSplit(newRoot, targetPaneId)
+      if (parentSplit && parentSplit.direction === direction) {
+        const targetIndex = parentSplit.children.findIndex((c) => c.id === targetPaneId)
+        if (targetIndex === -1) {
+          // Fallback
+          const newSingleRoot = createLeaf([tab], tab.id)
+          set({ root: newSingleRoot, activePaneId: newSingleRoot.id, fullscreenPaneId: null })
+          return
+        }
+
+        const isLeading = position === 'left' || position === 'top'
+        const insertIndex = isLeading ? targetIndex : targetIndex + 1
+        const childCount = parentSplit.children.length
+        const newSize = 100 / (childCount + 1)
+        const scaleFactor = childCount / (childCount + 1)
+        const newSizes = parentSplit.sizes.map((s) => s * scaleFactor)
+        newSizes.splice(insertIndex, 0, newSize)
+
+        const newChildren = [...parentSplit.children]
+        newChildren.splice(insertIndex, 0, newLeaf)
+
+        const updatedSplit: SplitNode = {
+          ...parentSplit,
+          children: newChildren,
+          sizes: newSizes
+        }
+
+        newRoot = replaceNode(newRoot, parentSplit.id, updatedSplit)
+        set((state) => ({
+          root: newRoot,
+          activePaneId: newLeaf.id,
+          fullscreenPaneId: resolveFullscreenPaneId(newRoot, state.fullscreenPaneId)
+        }))
+        return
+      }
+
+      // Default: create nested split
       const children =
         position === 'left' || position === 'top'
           ? [newLeaf, target]

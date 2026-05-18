@@ -19,7 +19,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { getTerminalOptions } from "./terminal-config";
+import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -241,7 +242,7 @@ function ConnectedTerminalComponent({
 	const currentLineRef = useRef<string>("");
 	const continuityProjectIdRef = useRef<string | undefined>(getInstrumentationProjectId(spawnOptions));
 	const needsResizeOnReadyRef = useRef<boolean>(false);
-	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Track last fitted container dimensions to avoid redundant fit() calls
 	const lastContainerWidthRef = useRef<number>(0);
 	const lastContainerHeightRef = useRef<number>(0);
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,8 +250,31 @@ function ConnectedTerminalComponent({
 	const pendingActivityUpdateRef = useRef<{ id: string } | null>(null);
 	const lastClipboardOpRef = useRef<number>(0);
 
-	// 4. STATE
-	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
+	const handlePtyResize = useCallback(
+		async (cols: number, rows: number): Promise<void> => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+			try {
+				await terminalApi.resize(ptyId, cols, rows);
+			} catch {
+				// Ignore resize errors during rapid resize
+			}
+		},
+		[],
+	);
+
+	const { forceFit: forceResizeFit } = useTerminalResizeV2({
+		onPtyResize: handlePtyResize,
+		terminalRef,
+		fitAddonRef,
+		containerRef,
+		isVisible,
+	});
+
+	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
+		null,
+	);
 
 	// 5. CALLBACKS & EFFECTS
 	const disposeWebglAddon = useCallback((): void => {
@@ -702,24 +726,16 @@ function ConnectedTerminalComponent({
 		}
 
 		// Set up resize observer
-		const resizeObserver = new ResizeObserver(() => {
-			requestAnimationFrame(() => {
-				performFit();
-			});
-		});
-		resizeObserver.observe(containerRef.current);
+
 
 		// Listen for input from xterm
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-			handleResize(cols, rows);
-		});
 
 		// Set up IPC listeners BEFORE spawning to avoid missing data
 		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
 		let cachedTerminalId: string | null = null;
 		cleanupDataListenerRef.current = terminalApi.onData(
-			(id: string, data: string) => {
+			(id: string, data: Uint8Array) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
@@ -1157,9 +1173,7 @@ function ConnectedTerminalComponent({
 			}
 
 			// PTY lifecycle is handled by explicit terminal close, not component unmount
-			resizeObserver.disconnect();
 			dataDisposable.dispose();
-			resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) {
 				cleanupDataListenerRef.current();
 				cleanupDataListenerRef.current = null;
@@ -1168,10 +1182,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current();
 				cleanupExitListenerRef.current = null;
 			}
-			// Clean up resize debounce timer
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
+
 			// Clean up activity timeout timer
 			if (activityTimeoutRef.current) {
 				clearTimeout(activityTimeoutRef.current);
@@ -1255,13 +1266,16 @@ function ConnectedTerminalComponent({
 	}, [disposeWebglAddon, rendererPreference]);
 
 	// Trigger fit + PTY resize when terminal becomes visible
-	// Uses double requestAnimationFrame for proper timing after pane transitions
+	// Uses the two-stage resize pipeline via forceResizeFit,
+	// which skips both debounces for immediate responsiveness.
 	useEffect(() => {
 		if (isVisible && fitAddonRef.current && terminalRef.current) {
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					const didFit = performFit();
+					// Use forceResizeFit for immediate fit + PTY resize
+					// This bypasses both debounce stages for visibility changes
+					forceResizeFit();
 
 					const terminal = terminalRef.current;
 					if (!terminal) return;
@@ -1283,18 +1297,6 @@ function ConnectedTerminalComponent({
 
 					const ptyId = ptyIdRef.current;
 					if (ptyId) {
-						// Always sync PTY dimensions on visibility change for safety,
-						// but only trigger fit when container dimensions actually changed.
-						const resizePromise = terminalApi.resize(
-							ptyId,
-							terminal.cols,
-							terminal.rows,
-						);
-						if (resizePromise && typeof resizePromise.catch === "function") {
-							resizePromise.catch(() => {
-								// Ignore resize errors when toggling visibility
-							});
-						}
 						// Restore scroll position after fit (in case of pane transition)
 						restoreScrollPosition(ptyId, terminal);
 					} else {
@@ -1304,7 +1306,7 @@ function ConnectedTerminalComponent({
 				});
 			});
 		}
-	}, [isVisible]);
+	}, [isVisible, forceResizeFit]);
 
 	// Shared terminal recovery logic - re-fit and check WebGL health
 	const performTerminalRecovery = useCallback((): void => {
@@ -1339,20 +1341,7 @@ function ConnectedTerminalComponent({
 		performFit(true);
 	}, []);
 
-	const handleResize = useCallback(async (cols: number, rows: number): Promise<void> => {
-		const ptyId = ptyIdRef.current;
-		if (!ptyId) return;
-		if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-		resizeTimeoutRef.current = setTimeout(async () => {
-			const currentPtyId = ptyIdRef.current;
-			if (!currentPtyId) return;
-			try {
-				await terminalApi.resize(currentPtyId, cols, rows);
-			} catch (error) {
-				if (import.meta.env.DEV) console.error("Failed to resize terminal", error);
-			}
-		}, RESIZE_DEBOUNCE_MS);
-	}, []);
+
 
 	const handleContainerClick = useCallback((): void => {
 		terminalRef.current?.focus();
@@ -1435,8 +1424,8 @@ function ConnectedTerminalComponent({
 		const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => performFit()));
 		resizeObserver.observe(containerRef.current);
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => handleResize(cols, rows));
-		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: string) => {
+		const resizeDisposable = terminal.onResize(({ cols, rows }) => handlePtyResize(cols, rows));
+		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
 				terminalRef.current.write(data);
 				const now = Date.now();
@@ -1502,12 +1491,12 @@ function ConnectedTerminalComponent({
 			resizeObserver.disconnect(); dataDisposable.dispose(); resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) cleanupDataListenerRef.current();
 			if (cleanupExitListenerRef.current) cleanupExitListenerRef.current();
-			if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+
 			if (activityTimeoutRef.current) clearTimeout(activityTimeoutRef.current);
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handleResize, setTerminalHealthStatus, disposeWebglAddon]);
+	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handlePtyResize, setTerminalHealthStatus, disposeWebglAddon]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 
