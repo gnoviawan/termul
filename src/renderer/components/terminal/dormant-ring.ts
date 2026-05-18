@@ -39,6 +39,7 @@ export class DormantRing {
 		while (this.chunks.length > DORMANT_RING_CHUNK_CAP) {
 			const oldest = this.chunks.shift()!;
 			this.totalBytes -= oldest.length;
+			this.overflowed = true;
 		}
 
 		// Enforce byte cap — drop oldest chunks until under limit
@@ -150,7 +151,7 @@ export class SessionDormantRing {
 	 */
 	hasPending(sessionId: string): boolean {
 		const ring = this.rings.get(sessionId);
-		return ring ? ring.chunkCount > 0 : false;
+		return ring ? ring.chunkCount > 0 || ring.hasOverflowed : false;
 	}
 
 	/**

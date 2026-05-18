@@ -165,6 +165,12 @@ export function useTerminalResizeV2(
 	 * Used when the terminal becomes visible after being hidden, or on init.
 	 */
 	const forceFit = useCallback((): void => {
+		// Clear any pending PTY debounce timer to prevent stale overwrites
+		if (ptyTimerRef.current) {
+			clearTimeout(ptyTimerRef.current)
+			ptyTimerRef.current = null
+		}
+
 		const didFit = performFitRef.current(true)
 		const terminal = terminalRef.current
 		if (didFit && terminal) {

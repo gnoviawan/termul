@@ -17,7 +17,7 @@ export interface UseXtermReturn {
   terminalRef: React.RefObject<Terminal | null>
   containerRef: React.RefObject<HTMLDivElement | null>
   isReady: boolean
-  write: (data: string) => void
+  write: (data: string | Uint8Array) => void
   writeln: (data: string) => void
   clear: () => void
   focus: () => void

@@ -224,9 +224,9 @@ export function acquireSlot(
 		// Apply initial options
 		const opts = options.initialOptions;
 		if (opts) {
-			if (opts.fontFamily) newSlot.term.options.fontFamily = opts.fontFamily;
-			if (opts.fontSize) newSlot.term.options.fontSize = opts.fontSize;
-			if (opts.scrollback) newSlot.term.options.scrollback = opts.scrollback;
+			if (opts.fontFamily !== undefined) newSlot.term.options.fontFamily = opts.fontFamily;
+			if (opts.fontSize !== undefined) newSlot.term.options.fontSize = opts.fontSize;
+			if (opts.scrollback !== undefined) newSlot.term.options.scrollback = opts.scrollback;
 		}
 
 		poolSlots.push(newSlot);
@@ -280,6 +280,9 @@ function bindSlot(
 ): PoolSlot {
 	slot.currentLeafId = leafId;
 	slot.lastUsedAt = Date.now();
+
+	// Clear any snapshot from previous session to prevent cross-leaf leakage
+	slot.snapshot = null;
 
 	slot.host.remove();
 	container.appendChild(slot.host);
@@ -381,7 +384,8 @@ function evictAndAcquire(
 	// Detach from old container
 	slot.host?.remove();
 
-	// Reset state
+	// Clear state for new session
+	slot.snapshot = null;
 	slot.isAltScreen = false;
 	slot.isFocused = false;
 	slot.currentLeafId = null;

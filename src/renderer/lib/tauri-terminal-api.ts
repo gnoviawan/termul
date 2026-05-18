@@ -233,6 +233,10 @@ export function createTauriTerminalApi(): TerminalApi {
           }
           pendingBuffer = []
         }
+      } else {
+        // Spawn failed — clean up channel to prevent memory leaks
+        pendingBuffer = []
+        on_data.onmessage = null
       }
 
       return result

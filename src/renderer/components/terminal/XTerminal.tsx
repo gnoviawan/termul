@@ -83,12 +83,15 @@ function XTerminalComponent({
 			// Ignore fit errors during initialization
 		}
 
+		let onDataDisposable: { dispose: () => void } | undefined;
+		let onResizeDisposable: { dispose: () => void } | undefined;
+
 		if (onData) {
-			terminal.onData(onData);
+			onDataDisposable = terminal.onData(onData);
 		}
 
 		if (onResize) {
-			terminal.onResize(({ cols, rows }) => {
+			onResizeDisposable = terminal.onResize(({ cols, rows }) => {
 				onResize(cols, rows);
 			});
 		}
@@ -115,6 +118,10 @@ function XTerminalComponent({
 
 		return () => {
 			resizeObserver.disconnect();
+
+			// Dispose event subscriptions
+			onDataDisposable?.dispose();
+			onResizeDisposable?.dispose();
 
 			// Only dispose the terminal if we created it (not a pool slot)
 			if (!poolSlot) {

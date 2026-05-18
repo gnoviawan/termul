@@ -149,18 +149,20 @@ export function useTerminalRendererSession(
 		}
 	}, [acquire, release])
 
-	// Track visibility changes
+	// Track visibility changes — acquire on show, release on hide
 	useEffect(() => {
 		if (isVisible) {
 			// Becoming visible — ensure we have a slot
 			if (!isAcquiredRef.current) {
 				acquire()
 			}
+		} else {
+			// Becoming hidden — release the slot back to the pool
+			if (isAcquiredRef.current) {
+				release()
+			}
 		}
-		// Note: when becoming hidden, we keep the slot
-		// The actual visibility toggle (visibility: hidden) keeps the slot alive.
-		// Only release on unmount (handled above).
-	}, [isVisible, acquire])
+	}, [isVisible, acquire, release])
 
 	// Track focus/blur for eviction scoring
 	const handleFocus = useCallback(() => {

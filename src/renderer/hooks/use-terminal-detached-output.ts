@@ -45,11 +45,7 @@ export function useTerminalDetachedOutput(): void {
         return
       }
 
-      // Decode binary data to string for transcript storage
-      const dataString = new TextDecoder().decode(data)
-
-      // Flush any previously buffered data for this PTY
-      // Decode data to string for transcript operations
+      // Decode binary data to string for transcript operations
       const dataStr = new TextDecoder().decode(data)
 
       const buffered = pendingDetachedBuffer.get(ptyId)

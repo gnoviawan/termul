@@ -217,7 +217,7 @@ export function flattenSameDirection(root: PaneNode): PaneNode {
     // If child is same-direction split, merge its children into this level
     if (child.type === 'split' && child.direction === root.direction) {
       const parentSize = root.sizes[i] ?? 1
-      const childTotal = child.sizes.reduce((a, b) => a + b, 1)
+      const childTotal = child.sizes.reduce((a, b) => a + b, 0)
       for (let j = 0; j < child.children.length; j++) {
         flattenedChildren.push(child.children[j])
         flattenedSizes.push(parentSize * (child.sizes[j] / childTotal))

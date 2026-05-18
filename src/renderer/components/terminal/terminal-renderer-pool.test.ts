@@ -183,12 +183,13 @@ describe('TerminalRendererPool', () => {
 	})
 
 	it('should move host div out of container on release', () => {
-		acquireSlot('leaf-1', container1)
+		const slot = acquireSlot('leaf-1', container1)
+		const releasedHost = slot!.host
 
 		releaseSlot('leaf-1')
 
 		// The host should not be in the old container
-		expect(container1.contains(document.querySelector('[data-termul-recycler]')!)).toBe(false)
+		expect(container1.contains(releasedHost)).toBe(false)
 	})
 
 	it('should track pool stats correctly', () => {
