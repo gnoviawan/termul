@@ -258,6 +258,10 @@ function ConnectedTerminalComponent({
 
 	// 4. STATE
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+	const [isSuspended, setIsSuspended] = useState(false);
+	const isSuspendedRef = useRef(isSuspended);
+	isSuspendedRef.current = isSuspended;
+	const isOwnerRef = useRef(false); // tracks if this Tauri window currently owns the terminal
 
 	// 5. CALLBACKS & EFFECTS
 	const disposeWebglAddon = useCallback((): void => {
@@ -345,6 +349,30 @@ function ConnectedTerminalComponent({
 	const pasteFromClipboardRef = useRef(pasteFromClipboard);
 	pasteFromClipboardRef.current = pasteFromClipboard;
 
+	const handleResume = useCallback(async (): Promise<void> => {
+		const ptyId = ptyIdRef.current || externalTerminalId;
+		if (!ptyId) return;
+
+		try {
+			isOwnerRef.current = true; // claim before invoke so keypress guard is set
+			const { invoke } = await import("@tauri-apps/api/core");
+			await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+			
+			setIsSuspended(false);
+			
+			requestAnimationFrame(() => {
+				performFit(true);
+				terminalRef.current?.focus();
+				
+				terminalRef.current?.clear();
+				void terminalApi.write(ptyId, "\x0C");
+			});
+		} catch (err) {
+			isOwnerRef.current = false;
+			console.error("Resume takeover failed", err);
+		}
+	}, [externalTerminalId]);
+
 	useEffect(() => { if (externalTerminalId) ptyIdRef.current = externalTerminalId; }, [externalTerminalId]);
 
 	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptionsRef.current); }, [spawnOptions]);
@@ -379,8 +407,22 @@ function ConnectedTerminalComponent({
 	// Handle input from xterm to PTY
 	const handleTerminalData = useCallback(
 		async (data: string): Promise<void> => {
+			if (isSuspendedRef.current) return;
 			const ptyId = ptyIdRef.current;
 			if (!ptyId) return;
+
+			// Auto-claim ownership on first keystroke — locks web side immediately
+			if (!isOwnerRef.current) {
+				isOwnerRef.current = true;
+				void (async () => {
+					try {
+						const { invoke } = await import("@tauri-apps/api/core");
+						await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+					} catch (e) {
+						console.error("Auto-takeover failed:", e);
+					}
+				})();
+			}
 
 			// Track command input for history
 			if (data === "\r" || data === "\n") {
@@ -1399,6 +1441,7 @@ function ConnectedTerminalComponent({
 	}, []);
 
 	const handleResize = useCallback(async (cols: number, rows: number): Promise<void> => {
+		if (isSuspendedRef.current) return;
 		const ptyId = ptyIdRef.current;
 		if (!ptyId) return;
 		if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -1414,8 +1457,12 @@ function ConnectedTerminalComponent({
 	}, []);
 
 	const handleContainerClick = useCallback((): void => {
-		terminalRef.current?.focus();
-	}, []);
+		if (isSuspendedRef.current) {
+			void handleResume();
+		} else {
+			terminalRef.current?.focus();
+		}
+	}, [handleResume]);
 
 	const handleSelectAll = useCallback((): void => {
 		terminalRef.current?.selectAll();
@@ -1538,6 +1585,37 @@ function ConnectedTerminalComponent({
 				if (onExitRef.current) onExitRef.current(exitCode, signal);
 			}
 		});
+		let unlistenFn: (() => void) | null = null;
+		const unsubPromise = (async () => {
+			try {
+				const { listen } = await import("@tauri-apps/api/event");
+				return await listen<{ terminalId: string; clientType: string }>(
+					"terminal-takeover",
+					(event) => {
+						const currentId = ptyIdRef.current || externalTerminalId;
+						if (currentId && event.payload.terminalId === currentId) {
+							if (event.payload.clientType === "web") {
+								// Web typed first — lock this Tauri window
+								isOwnerRef.current = false;
+								setIsSuspended(true);
+							} else if (event.payload.clientType === "tauri") {
+								// Tauri reclaimed — this fires from our own claim too, so just ensure correct state
+								isOwnerRef.current = true;
+								setIsSuspended(false);
+							}
+						}
+					}
+				);
+			} catch (err) {
+				console.error("Failed to setup takeover listener", err);
+				return null;
+			}
+		})();
+		
+		unsubPromise.then((unsub) => {
+			if (unsub) unlistenFn = unsub;
+		});
+
 		const spawnTerminal = async (): Promise<void> => {
 			performFit(true);
 			if (!externalTerminalId) {
@@ -1551,6 +1629,7 @@ function ConnectedTerminalComponent({
 						useTerminalStore.getState().setRendererAttached(result.data.id, true);
 						void addRendererRef(result.data.id, instanceIdRef.current);
 						registerTerminal(result.data.id, terminal);
+						
 						const transcript = useTerminalStore.getState().peekTranscript(result.data.id);
 						if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(result.data.id); }
 						else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
@@ -1561,6 +1640,7 @@ function ConnectedTerminalComponent({
 			} else {
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
+				
 				const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId);
 				if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(externalTerminalId); }
 				else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
@@ -1569,6 +1649,9 @@ function ConnectedTerminalComponent({
 		};
 		spawnTerminal();
 		return () => {
+			if (unlistenFn) unlistenFn();
+			else unsubPromise.then((unsub) => unsub?.());
+
 			const tId = ptyIdRef.current || externalTerminalId;
 			if (tId && terminalRef.current) { captureScrollPosition(tId); if (!externalTerminalId) useTerminalStore.getState().setRendererAttached(tId, false); void removeRendererRef(tId, instanceId); }
 			if (ptyIdRef.current) unregisterTerminal(ptyIdRef.current);
@@ -1613,6 +1696,28 @@ function ConnectedTerminalComponent({
 			<ContextMenuTrigger asChild>
 				<div className="relative w-full h-full group overflow-hidden">
 					<div ref={containerRef} className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`} onClick={handleContainerClick} onMouseDown={(e) => { e.stopPropagation(); terminalRef.current?.focus(); }} />
+					{isSuspended && (
+						<div className="absolute inset-0 bg-[#0c0c0ced]/90 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+							<div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-blue-500">
+								<div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">
+									<div className="w-20 h-20 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-3 shadow-inner">
+										<AlertTriangle className="text-blue-500 animate-pulse" size={40} />
+									</div>
+									<span className="text-[10px] uppercase tracking-[0.2em] font-black text-blue-500 text-center">SUSPENDED</span>
+								</div>
+								<div className="flex flex-col justify-center text-center md:text-left">
+									<div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider opacity-70">Terminal Shared Session</div>
+									<h3 className="text-2xl md:text-3xl font-bold tracking-tighter mb-3">Session Suspended</h3>
+									<p className="text-muted-foreground leading-relaxed text-sm md:text-base mb-8">This terminal is active in the <strong>Web Browser</strong> client. Take over to restore rendering in this window.</p>
+									<div className="flex flex-col sm:flex-row items-center gap-4">
+										<button onClick={(e) => { e.stopPropagation(); void handleResume(); }} className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-blue-600 text-white rounded-xl hover:bg-blue-500 hover:shadow-xl hover:shadow-blue-500/20 active:scale-95 transition-all font-bold shadow-md">
+											<RefreshCcw size={20} /> Take Over Session
+										</button>
+									</div>
+								</div>
+							</div>
+						</div>
+					)}
 					{isCrashed && (
 						<div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
 							<div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-destructive">

@@ -228,6 +228,24 @@ pub async fn terminal_remove_renderer_ref(
     }
 }
 
+/// Take over control of a terminal, notifying other clients to suspend
+#[tauri::command]
+pub async fn terminal_takeover(
+    terminal_id: String,
+    client_type: String,
+    app_handle: tauri::AppHandle,
+) -> Result<IpcResult<()>, String> {
+    let payload = serde_json::json!({
+        "terminalId": terminal_id,
+        "clientType": client_type,
+    });
+    // emit() to Tauri event bus.
+    // The bridge in lib.rs automatically forwards this to all WebSocket clients.
+    // Do NOT also call ws_server.emit_event() — that would cause double-emission.
+    let _ = app_handle.emit("terminal-takeover", payload);
+    Ok(IpcResult::success(()))
+}
+
 /// Set visibility state (affects polling behavior and PTY kill deferral)
 #[tauri::command]
 pub async fn terminal_set_visibility(

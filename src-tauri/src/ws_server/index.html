@@ -580,6 +580,79 @@
             width: 100%;
             min-height: 0;
         }
+        .takeover-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(12, 12, 12, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+        }
+        .takeover-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .takeover-content {
+            background: #171717;
+            border: 1px solid #262626;
+            border-radius: 12px;
+            padding: 32px;
+            text-align: center;
+            max-width: 380px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+        .takeover-icon {
+            width: 48px;
+            height: 48px;
+            color: #f9e2af;
+            stroke-width: 1.5;
+        }
+        .takeover-content h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #cdd6f4;
+            margin: 0;
+        }
+        .takeover-content p {
+            font-size: 13px;
+            color: #a6adc8;
+            line-height: 1.5;
+            margin: 0;
+        }
+        .resume-btn {
+            background: #3b82f6;
+            color: #ffffff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+            margin-top: 8px;
+        }
+        .resume-btn:hover {
+            background: #2563eb;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+            transform: translateY(-1px);
+        }
+        .resume-btn:active {
+            transform: translateY(0);
+        }
         .status-bar {
             grid-area: statusbar;
             height: 26px;
@@ -875,10 +948,18 @@
             terminalObj.fitAddon = fitAddon;
 
             term.onData((data) => {
-                if (terminalObj.remoteId) invoke("terminal_write", { terminalId: terminalObj.remoteId, data }).catch(() => {});
+                if (terminalObj.isSuspended) return;
+                if (!terminalObj.remoteId) return;
+                // Auto-claim ownership on first keystroke — locks Tauri side immediately
+                if (!terminalObj.isOwner) {
+                    terminalObj.isOwner = true;
+                    invoke("terminal_takeover", { terminalId: terminalObj.remoteId, clientType: "web" }).catch(() => {});
+                }
+                invoke("terminal_write", { terminalId: terminalObj.remoteId, data }).catch(() => {});
             });
 
             term.onResize(({ cols, rows }) => {
+                if (terminalObj.isSuspended) return;
                 if (terminalObj.remoteId) invoke("terminal_resize", { terminalId: terminalObj.remoteId, cols, rows }).catch(() => {});
             });
 
@@ -948,6 +1029,23 @@
                 if (payload.terminalId === terminalObj.remoteId) {
                     terminalObj.exitCode = payload.exitCode;
                     updateStatusBar();
+                }
+            });
+
+            listen("terminal-takeover", (payload) => {
+                if (payload.terminalId !== terminalObj.remoteId) return;
+                if (payload.clientType === "tauri") {
+                    // Tauri typed first — lock web side
+                    terminalObj.isOwner = false;
+                    terminalObj.isSuspended = true;
+                    const overlay = document.getElementById("takeover-" + terminalObj.id);
+                    if (overlay) overlay.classList.add("active");
+                } else if (payload.clientType === "web") {
+                    // Web claimed it (could be this tab or another) — ensure not suspended
+                    terminalObj.isOwner = true;
+                    terminalObj.isSuspended = false;
+                    const overlay = document.getElementById("takeover-" + terminalObj.id);
+                    if (overlay) overlay.classList.remove("active");
                 }
             });
 
@@ -1030,8 +1128,8 @@
                         terminalObj.metadata = spawnData;
                     }
                     
-                    // CRITICAL: Synchronize backend PTY dimensions with frontend canvas
-                    // immediately after spawn/attach so TUI apps render correctly.
+                    // Sync PTY dimensions on connect (no ownership claim here —
+                    // ownership is determined by who types first).
                     setTimeout(() => {
                         if (terminalObj.remoteId && term.cols && term.rows) {
                             invoke("terminal_resize", {
@@ -1101,8 +1199,63 @@
             xtermDiv.style.width = "100%";
             xtermDiv.style.height = "100%";
             container.appendChild(xtermDiv);
+
+            // Create takeover overlay
+            const overlay = document.createElement("div");
+            overlay.className = "takeover-overlay";
+            overlay.id = "takeover-" + terminalObj.id;
+            overlay.innerHTML = `
+                <div class="takeover-content">
+                    <i data-lucide="monitor-off" class="takeover-icon"></i>
+                    <h3>Session Suspended</h3>
+                    <p>This terminal session is active in the <strong>Tauri Desktop</strong> app.</p>
+                    <button class="resume-btn" onclick="resumeTerminalSession('${terminalObj.id}')">Resume Session</button>
+                </div>
+            `;
+            container.appendChild(overlay);
             
             mainContent.appendChild(container);
+
+            if (window.lucide) {
+                window.lucide.createIcons();
+            }
+        }
+
+        async function resumeTerminalSession(terminalId) {
+            const terminalObj = terminals.find(t => t.id === terminalId);
+            if (!terminalObj) return;
+
+            const overlay = document.getElementById("takeover-" + terminalId);
+            if (overlay) overlay.classList.remove("active");
+
+            terminalObj.isSuspended = false;
+            terminalObj.isOwner = true;
+
+            if (!terminalObj.remoteId) return;
+            try {
+                // 1. Claim ownership — tells Tauri to suspend
+                await invoke("terminal_takeover", { terminalId: terminalObj.remoteId, clientType: "web" });
+
+                // 2. Re-fit to current viewport
+                if (terminalObj.fitAddon) terminalObj.fitAddon.fit();
+
+                // 3. Explicitly sync PTY size (even if cols/rows unchanged from xterm perspective)
+                if (terminalObj.term && terminalObj.term.cols && terminalObj.term.rows) {
+                    await invoke("terminal_resize", {
+                        terminalId: terminalObj.remoteId,
+                        cols: terminalObj.term.cols,
+                        rows: terminalObj.term.rows,
+                    });
+                }
+
+                // 4. Clear screen + Ctrl+L to force TUI apps to repaint
+                if (terminalObj.term) {
+                    terminalObj.term.clear();
+                    await invoke("terminal_write", { terminalId: terminalObj.remoteId, data: "\x0C" });
+                }
+            } catch (e) {
+                console.error("Takeover failed:", e);
+            }
         }
 
         function renderEmptyState() {

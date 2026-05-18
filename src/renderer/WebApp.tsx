@@ -1,10 +1,8 @@
-/* eslint-disable react-refresh/only-export-components */
+/* eslint-disable react-refresh/only-export-components, @typescript-eslint/no-explicit-any, no-empty */
 import { useEffect, useState, createContext, useContext, useCallback, useRef } from 'react'
 import { createWsAdapter } from '@/lib/ws-adapter'
 import type { WsAdapter } from '@shared/types/ws.types'
 import type { TerminalApi } from '@shared/types/ipc.types'
-import type { Terminal } from '@xterm/xterm'
-import type { FitAddon } from '@xterm/addon-fit'
 import { Toaster, toast } from 'sonner'
 import {
   Terminal as TerminalIcon,
@@ -66,15 +64,6 @@ interface DirectoryEntry {
   extension?: string
   size?: number
   modifiedAt?: number
-}
-
-interface RemoteTerminalInfo {
-  id: string
-  shell: string
-  cwd: string
-  pid: number
-  cols: number
-  rows: number
 }
 
 export function WebApp(): React.JSX.Element {
@@ -187,17 +176,16 @@ export function WebApp(): React.JSX.Element {
 }
 
 function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
-  const terminalApiRef = useRef<TerminalApi | null>(null)
+  const terminalApiRef = useRef<any>(null)
   
   interface WebTerminalSession {
     id: string
     remoteId: string | null
-    term: Terminal | null
-    fitAddon: FitAddon | null
+    term: any
+    fitAddon: any
     projectId: string | null
     shellName: string
     isAttached?: boolean
-    cleanup?: () => void
   }
 
   const [sessions, setSessions] = useState<WebTerminalSession[]>([])
@@ -206,9 +194,9 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalDeps, setTerminalDeps] = useState<{
-    Terminal: typeof Terminal
-    FitAddon: typeof FitAddon
-    api: TerminalApi
+    Terminal: any
+    FitAddon: any
+    api: any
   } | null>(null)
 
   // Remote Workspace State
@@ -453,9 +441,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     setTimeout(() => {
       try {
         fitAddon.fit()
-      } catch {
-        /* ignore */
-      }
+      } catch {}
     }, 50)
 
     session.term = term
@@ -517,7 +503,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       
       if (ws) {
         try {
-          const activeTerminals = await ws.invoke<RemoteTerminalInfo[]>('terminal_list')
+          const activeTerminals = await ws.invoke<any[]>('terminal_list')
           console.log(`[RemoteCoding] Queried terminal_list. Found ${activeTerminals?.length || 0} active terminals on desktop:`, activeTerminals)
           
           if (activeTerminals && activeTerminals.length > 0) {
@@ -580,9 +566,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
           try {
             fitAddon.fit()
             void api.resize(result.data.id, term.cols, term.rows)
-          } catch {
-            /* ignore */
-          }
+          } catch {}
         }, 100)
       } else {
         term.write(`\r\n\x1b[31mSpawn failed: ${result.error}\x1b[0m\r\n`)
@@ -592,14 +576,12 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       term.write(`\r\n\x1b[31mFailed to spawn terminal process\x1b[0m\r\n`)
     }
 
-    session.cleanup = () => {
+    (session as any).cleanup = () => {
       try {
         unsubData()
         unsubExit()
         term.dispose()
-      } catch {
-        /* ignore */
-      }
+      } catch {}
     }
   }, [terminalDeps, projects, ws])
 
@@ -616,19 +598,15 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     }
 
     try {
-      if (session.cleanup) {
-        session.cleanup()
+      if ((session as any).cleanup) {
+        (session as any).cleanup()
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
 
     if (session.remoteId && terminalDeps?.api && !session.isAttached) {
       try {
         await terminalDeps.api.kill(session.remoteId)
-      } catch {
-        /* ignore */
-      }
+      } catch {}
     }
   }, [sessions, activeSessionId, terminalDeps])
 
@@ -650,17 +628,14 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
   // Fit terminal on active session changes
   useEffect(() => {
     const activeSession = sessions.find(s => s.id === activeSessionId)
-    if (activeSession && activeSession.fitAddon && activeSession.term) {
-      const { fitAddon, term, remoteId } = activeSession
+    if (activeSession && activeSession.fitAddon) {
       setTimeout(() => {
         try {
-          fitAddon.fit()
-          if (remoteId && terminalDeps?.api) {
-            void terminalDeps.api.resize(remoteId, term.cols, term.rows)
+          activeSession.fitAddon.fit()
+          if (activeSession.remoteId && terminalDeps?.api) {
+            void terminalDeps.api.resize(activeSession.remoteId, activeSession.term.cols, activeSession.term.rows)
           }
-        } catch {
-          /* ignore */
-        }
+        } catch {}
       }, 50)
     }
   }, [activeSessionId, sessions, terminalDeps])
@@ -672,20 +647,16 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     const activeSession = sessions.find(s => s.id === activeSessionId)
     if (!activeSession || !activeSession.term || !activeSession.fitAddon) return
 
-    const { term, fitAddon, remoteId } = activeSession
-
     const resizeObserver = new ResizeObserver(() => {
       requestAnimationFrame(() => {
         try {
-          fitAddon.fit()
-          if (remoteId && terminalDeps.api) {
-            const cols = term.cols || 80
-            const rows = term.rows || 24
-            void terminalDeps.api.resize(remoteId, cols, rows)
+          activeSession.fitAddon.fit()
+          if (activeSession.remoteId && terminalDeps.api) {
+            const cols = activeSession.term.cols || 80
+            const rows = activeSession.term.rows || 24
+            void terminalDeps.api.resize(activeSession.remoteId, cols, rows)
           }
-        } catch {
-          /* ignore */
-        }
+        } catch {}
       })
     })
 

@@ -721,7 +721,6 @@ pub fn run() {
             let ws_server = ws_server::WsServer::init_arc();
             app.manage(ws_server.clone());
 
-            // Forward Tauri events to WebSocket clients
             for event_name in &[
                 "terminal-data",
                 "terminal-exit",
@@ -729,6 +728,7 @@ pub fn run() {
                 "terminal-git-branch-changed",
                 "terminal-git-status-changed",
                 "terminal-exit-code-changed",
+                "terminal-takeover",
             ] {
                 let ws = ws_server.clone();
                 let name = event_name.to_string();
@@ -807,6 +807,7 @@ pub fn run() {
             commands::terminal_update_orphan_detection,
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
+            commands::terminal_takeover,
             commands::terminal_set_visibility,
             // Browser tab commands
             commands::browser_tab_create,

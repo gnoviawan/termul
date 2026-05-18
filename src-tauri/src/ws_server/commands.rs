@@ -4,7 +4,7 @@ use crate::commands::IpcResult;
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub(crate) async fn handle_command(
     method: &str,
@@ -81,6 +81,25 @@ pub(crate) async fn handle_command(
                 Ok(()) => Ok(IpcResult::success(serde_json::json!(null))),
                 Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
             }
+        }
+        "terminal_takeover" => {
+            let params = params.ok_or("Missing params")?;
+            let terminal_id: String = serde_json::from_value(params["terminalId"].clone())
+                .map_err(|e| format!("Invalid terminalId: {}", e))?;
+            let client_type: String = serde_json::from_value(params["clientType"].clone())
+                .map_err(|e| format!("Invalid clientType: {}", e))?;
+
+            let payload = serde_json::json!({
+                "terminalId": terminal_id,
+                "clientType": client_type,
+            });
+
+            // emit() to Tauri event bus — ConnectedTerminal.tsx receives this.
+            // The bridge in lib.rs forwards it to all WebSocket clients too.
+            // Do NOT also call server.emit_event() — double-emission breaks lock state.
+            let _ = app_handle.emit("terminal-takeover", payload);
+
+            Ok(IpcResult::success(serde_json::json!(null)))
         }
         "terminal_kill" => {
             let params = params.ok_or("Missing params")?;
