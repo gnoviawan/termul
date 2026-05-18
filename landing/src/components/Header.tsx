@@ -59,6 +59,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
           href={GITHUB_REPO_URL} 
           target="_blank" 
           rel="noreferrer" 
+          aria-label="GitHub"
           className={cn(
             "flex items-center gap-2 transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
             isScrolled ? "text-white hover:text-gray-300" : "text-black hover:text-black/70"

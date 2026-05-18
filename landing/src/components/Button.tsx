@@ -22,6 +22,8 @@ const renderButton = <E extends React.ElementType = 'button'>(
   ref: React.ComponentPropsWithRef<E>['ref']
 ) => {
     const Component = as ?? 'button';
+    const componentProps = Component === 'button' ? { type: 'button', ...props } : props;
+
     return (
       <Component
         ref={ref}
@@ -64,7 +66,7 @@ const renderButton = <E extends React.ElementType = 'button'>(
           
           className
         )}
-        {...props}
+        {...componentProps}
       >
         {children}
       </Component>

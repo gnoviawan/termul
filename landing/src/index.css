@@ -2,7 +2,7 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Neue Haas Grotesk Display Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-sans: "Neue Haas Grotesk Display Pro", "helvetica neue", helvetica, arial, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
   
   --color-background: #000000;
