@@ -19,11 +19,10 @@
 ///   │                    │                                                      │
 ///   └─ other byte ──→    └─ other byte ──→ flush hold                            └─→ Idle
 /// ```
-
-/// DA1 response: "I am an xterm-256color terminal with VT220 features"
+// DA1 response: "I am an xterm-256color terminal with VT220 features"
 const DA1_RESPONSE: &[u8] = b"\x1b[?1;2c";
 
-/// DA2 response: "I am terminal version 0;276;0"
+// DA2 response: "I am terminal version 0;276;0"
 const DA2_RESPONSE: &[u8] = b"\x1b[>0;276;0c";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

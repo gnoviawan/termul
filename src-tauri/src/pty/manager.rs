@@ -541,7 +541,6 @@ impl PtyManager {
             let app_handle = self.app_handle.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
-            let channel = on_data.clone();
 
             // Spawn flusher thread first (it references pending_buf and done_flag)
             let flusher_pending = pending_buf.clone();
@@ -566,7 +565,6 @@ impl PtyManager {
                     app_handle,
                     exit_code_tracker,
                     terminal_id,
-                    channel,
                     pending_buf,
                     done_flag,
                 );
@@ -674,7 +672,6 @@ impl PtyManager {
             let app_handle = self.app_handle.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
-            let channel = on_data.clone();
 
             let reader_task = std::thread::spawn(move || {
                 Self::reader_loop(
@@ -683,7 +680,6 @@ impl PtyManager {
                     app_handle,
                     exit_code_tracker,
                     terminal_id,
-                    channel,
                     pending_buf,
                     done_flag,
                 );
@@ -721,7 +717,6 @@ impl PtyManager {
         app_handle: AppHandle,
         exit_code_tracker: Arc<ExitCodeTracker>,
         terminal_id: String,
-        _on_data: Option<Channel<Response>>,
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
     ) {
