@@ -40,19 +40,21 @@ export function useTerminalDetachedOutput(): void {
     // (e.g. between spawn and setTerminalPtyId populating the ptyIdIndex).
     const pendingDetachedBuffer = new Map<string, string[]>()
 
-    const unsubscribe = terminalApi.onData((ptyId: string, data: string) => {
-      if (!data) {
+    const unsubscribe = terminalApi.onData((ptyId: string, data: Uint8Array) => {
+      if (!data || data.length === 0) {
         return
       }
 
-      // Flush any previously buffered data for this PTY
+      // Decode binary data to string for transcript operations
+      const dataStr = new TextDecoder().decode(data)
+
       const buffered = pendingDetachedBuffer.get(ptyId)
       if (buffered) {
         pendingDetachedBuffer.delete(ptyId)
         const store = useTerminalStore.getState()
         const terminal = store.findTerminalByPtyId(ptyId)
         if (terminal && (terminal.rendererAttachmentCount ?? 0) === 0) {
-          const allData = buffered.join('') + data
+          const allData = buffered.join('') + dataStr
           store.appendTranscript(ptyId, allData)
           if (IS_DEV && terminal.transcript !== undefined) {
             logTranscriptStats(ptyId, allData.length, terminal.transcript.length + allData.length)
@@ -68,14 +70,14 @@ export function useTerminalDetachedOutput(): void {
         // Store record not yet available — buffer data until it is
         if (IS_DEV) {
           console.debug(
-            `[DetachedOutput] Buffering data for unknown PTY pty=${ptyId.slice(0, 12)} len=${data.length}`
+            `[DetachedOutput] Buffering data for unknown PTY pty=${ptyId.slice(0, 12)} len=${dataStr.length}`
           )
         }
         const existing = pendingDetachedBuffer.get(ptyId)
         if (existing) {
-          existing.push(data)
+          existing.push(dataStr)
         } else {
-          pendingDetachedBuffer.set(ptyId, [data])
+          pendingDetachedBuffer.set(ptyId, [dataStr])
         }
         return
       }
@@ -88,11 +90,11 @@ export function useTerminalDetachedOutput(): void {
         return
       }
 
-      store.appendTranscript(ptyId, data)
+      store.appendTranscript(ptyId, dataStr)
 
       if (IS_DEV && terminal.transcript !== undefined) {
         // Compute new length directly from terminal object instead of re-querying store
-        logTranscriptStats(ptyId, data.length, terminal.transcript.length + data.length)
+        logTranscriptStats(ptyId, dataStr.length, terminal.transcript.length + dataStr.length)
       }
     })
 
