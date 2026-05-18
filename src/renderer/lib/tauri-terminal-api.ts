@@ -215,7 +215,7 @@ export function createTauriTerminalApi(): TerminalApi {
         }
       }
 
-      const result = await invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options, on_data })
+      const result = await invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options, onData: on_data })
 
       if (result.success && result.data) {
         capturedTerminalId = result.data.id
