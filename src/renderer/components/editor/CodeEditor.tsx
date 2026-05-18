@@ -13,6 +13,8 @@ interface CodeEditorProps {
   language: string
   readOnly?: boolean
   isVisible: boolean
+  initialCursorPosition?: { line: number; col: number }
+  initialScrollTop?: number
   onChange: (content: string) => void
   onCursorChange: (line: number, col: number) => void
   onScrollChange: (scrollTop: number) => void
@@ -29,15 +31,22 @@ function getTocPercentBounds(panelWidth: number): { minPercent: number; maxPerce
 }
 
 export function CodeEditor({
+  filePath,
   content,
   language,
   readOnly = false,
   isVisible,
+  initialCursorPosition,
+  initialScrollTop = 0,
   onChange,
   onCursorChange,
   onScrollChange
 }: CodeEditorProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const lastAppliedLineRef = useRef<number | null>(null)
+  const pendingRevealLineRef = useRef<number | null>(null)
+  const pendingRevealTermRef = useRef<string | undefined>(undefined)
+  const hasRestoredViewStateRef = useRef(false)
   const layoutRef = useRef<HTMLDivElement>(null)
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null)
   const [visibleRange, setVisibleRange] = useState<VisibleLineRange | undefined>()
@@ -51,7 +60,7 @@ export function CodeEditor({
     }))
   )
 
-  const { view, setContent, scrollToLine } = useCodeMirror(containerRef, {
+  const { view, setContent, scrollToLine, restoreViewState } = useCodeMirror(containerRef, {
     content,
     language,
     readOnly,
@@ -101,6 +110,13 @@ export function CodeEditor({
   }, [content, setContent])
 
   useEffect(() => {
+    lastAppliedLineRef.current = null
+    pendingRevealLineRef.current = null
+    pendingRevealTermRef.current = undefined
+    hasRestoredViewStateRef.current = false
+  }, [filePath])
+
+  useEffect(() => {
     const element = layoutRef.current
     if (!element) {
       return
@@ -129,6 +145,84 @@ export function CodeEditor({
   }, [isVisible, view])
 
   useEffect(() => {
+    if (hasRestoredViewStateRef.current) {
+      return
+    }
+
+    const initialLine = initialCursorPosition?.line
+    const initialCol = initialCursorPosition?.col ?? 1
+
+    if (!initialLine) {
+      return
+    }
+
+    // Intentionally wait until the editor is visible before restoring view state.
+    // Hidden mounts don't have stable layout metrics yet; restoring too early can
+    // misplace cursor/scroll. Keep `isVisible` in dependencies to retry when shown.
+    if (!view || !isVisible) {
+      return
+    }
+
+    restoreViewState(initialLine, initialCol, initialScrollTop)
+    hasRestoredViewStateRef.current = true
+    lastAppliedLineRef.current = initialLine
+  }, [initialCursorPosition, initialScrollTop, isVisible, restoreViewState, view])
+
+  useEffect(() => {
+    const pending = (window as unknown as {
+      __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string }
+    }).__termulPendingRevealLine
+
+    if (
+      pending &&
+      pending.filePath === filePath &&
+      isVisible &&
+      view
+    ) {
+      scrollToLine(pending.lineNumber, pending.searchTerm)
+      lastAppliedLineRef.current = pending.lineNumber
+      pendingRevealLineRef.current = null
+      pendingRevealTermRef.current = undefined
+      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine = undefined
+    }
+
+    const handler = (event: Event): void => {
+      const customEvent = event as CustomEvent<{
+        filePath: string
+        lineNumber: number
+        searchTerm?: string
+      }>
+      if (!customEvent.detail) return
+      if (customEvent.detail.filePath !== filePath) return
+
+      if (!isVisible || !view) {
+        pendingRevealLineRef.current = customEvent.detail.lineNumber
+        pendingRevealTermRef.current = customEvent.detail.searchTerm
+        return
+      }
+
+      scrollToLine(customEvent.detail.lineNumber, customEvent.detail.searchTerm)
+      lastAppliedLineRef.current = customEvent.detail.lineNumber
+      pendingRevealLineRef.current = null
+      pendingRevealTermRef.current = undefined
+    }
+
+    window.addEventListener('termul:reveal-line', handler)
+    return () => window.removeEventListener('termul:reveal-line', handler)
+  }, [filePath, isVisible, scrollToLine, view])
+
+  useEffect(() => {
+    if (!isVisible || !view || pendingRevealLineRef.current == null) {
+      return
+    }
+
+    scrollToLine(pendingRevealLineRef.current, pendingRevealTermRef.current)
+    lastAppliedLineRef.current = pendingRevealLineRef.current
+    pendingRevealLineRef.current = null
+    pendingRevealTermRef.current = undefined
+  }, [isVisible, scrollToLine, view])
+
+  useEffect(() => {
     if (!canRenderToc) {
       return
     }
@@ -149,7 +243,9 @@ export function CodeEditor({
   }, [canRenderToc, getTocPanelSizePercent])
 
   return (
-    <div className="h-full w-full" style={{ display: isVisible ? 'block' : 'none' }}>
+    <div
+      className={isVisible ? 'h-full w-full' : 'absolute inset-0 invisible pointer-events-none overflow-hidden'}
+    >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
           <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>

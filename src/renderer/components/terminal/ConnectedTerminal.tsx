@@ -12,11 +12,11 @@ import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { getTerminalOptions } from "./terminal-config";
+import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -32,7 +32,7 @@ import {
 } from "@/stores/app-settings-store";
 import {
 	useKeyboardShortcutsStore,
-	normalizeKeyEvent,
+	matchesShortcut,
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac, isPlatformModifier } from "@/lib/platform";
 import { useTerminalStore } from "@/stores/terminal-store";
@@ -49,13 +49,75 @@ import {
 	buildTerminalPathLinks,
 	openFilePathFromTerminal,
 } from "@/lib/file-path-links";
+import {
+	buildTerminalUrlLinks,
+	isSupportedTerminalUrl,
+} from "@/lib/terminal-url-links";
+import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
+import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	getOrCreateProjectContinuityCorrelation,
 	recordTerminalContinuityEvent,
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
+
+// Common readline/shell Ctrl sequences that pass through to the PTY only when
+// no configured app shortcut claims them. Checking these LAST (after app
+// shortcuts) ensures that app bindings like commandPalette=ctrl+k,
+// commandHistory=ctrl+r, newProject=ctrl+n work from terminal focus.
+// On macOS readline Ctrl sequences are already protected by matchesShortcut's
+// isMac guard (Ctrl+key never triggers app shortcuts on macOS).
+const READLINE_PASSTHROUGH_KEYS = new Set([
+	"a", // Ctrl+A  move to beginning of line
+	"e", // Ctrl+E  move to end of line
+	"k", // Ctrl+K  kill to end of line
+	"r", // Ctrl+R  reverse-i-search
+	"f", // Ctrl+F  move forward one char
+	"b", // Ctrl+B  move back one char
+	"w", // Ctrl+W  delete previous word
+	"u", // Ctrl+U  delete to beginning of line
+	"p", // Ctrl+P  previous history entry
+	"n", // Ctrl+N  next history entry
+	"l", // Ctrl+L  clear screen
+	"d", // Ctrl+D  EOF / delete char
+]);
+
+function isReadlinePassthrough(event: KeyboardEvent): boolean {
+	return (
+		event.ctrlKey &&
+		!event.metaKey &&
+		!event.shiftKey &&
+		!event.altKey &&
+		READLINE_PASSTHROUGH_KEYS.has(event.key.toLowerCase())
+	);
+}
+
+function isAppOwnedTerminalShortcut(
+	event: KeyboardEvent,
+	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
+): boolean {
+	// 1. App shortcuts take priority over readline passthrough.
+	// This ensures commandPalette, commandHistory, etc. work from terminal
+	// focus even though their Ctrl+key also matches a readline binding.
+	for (const shortcut of Object.values(shortcuts)) {
+		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
+		if (matchesShortcut(event, activeKey)) {
+			return true;
+		}
+	}
+
+	// 2. No app shortcut matched — check readline passthrough.
+	// Ctrl+letter readline bindings must reach the PTY on every platform.
+	// On macOS the isMac guard in matchesShortcut already prevents Ctrl+key
+	// from matching app shortcuts, so the readline behavior is preserved.
+	if (isReadlinePassthrough(event)) {
+		return false;
+	}
+
+	return false;
+}
 
 // Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
@@ -66,8 +128,8 @@ const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per sec
 const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
 
 const shouldUseWebglRenderer = (
-	rendererPreference: "auto" | "webgl" | "canvas",
-): boolean => rendererPreference !== "canvas";
+	rendererPreference: "auto" | "webgl" | "dom",
+): boolean => rendererPreference !== "dom";
 
 export interface TerminalSearchHandle {
 	findNext: (term: string) => boolean;
@@ -180,11 +242,11 @@ function ConnectedTerminalComponent({
 	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
 	const terminalInitializedForRef = useRef<string | undefined>(undefined);
 	const needsResizeOnReadyRef = useRef<boolean>(false);
-	// Resize debounce timer ref
-	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 	// Track last fitted container dimensions to avoid redundant fit() calls
 	const lastContainerWidthRef = useRef<number>(0);
 	const lastContainerHeightRef = useRef<number>(0);
+
 	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Debounced activity tracking refs
@@ -193,6 +255,28 @@ function ConnectedTerminalComponent({
 
 	// Rate limiting for clipboard operations
 	const lastClipboardOpRef = useRef<number>(0);
+
+	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
+	const handlePtyResize = useCallback(
+		async (cols: number, rows: number): Promise<void> => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+			try {
+				await terminalApi.resize(ptyId, cols, rows);
+			} catch {
+				// Ignore resize errors during rapid resize
+			}
+		},
+		[],
+	);
+
+	const { forceFit: forceResizeFit } = useTerminalResizeV2({
+		onPtyResize: handlePtyResize,
+		terminalRef,
+		fitAddonRef,
+		containerRef,
+		isVisible,
+	});
 
 	// State to track terminal instance for clipboard hook
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
@@ -227,12 +311,24 @@ function ConnectedTerminalComponent({
 			return false; // No change — skip fit to reduce churn
 		}
 
+		// Save scroll position before fit to preserve it across the v6 viewport rewrite.
+		// xterm 6 changed the scroll bar/viewport behavior and fit() can reset scrollTop to 0.
+		const terminal = terminalRef.current;
+		const scrollTop = terminal.buffer.active.viewportY;
+		const baseY = terminal.buffer.active.baseY;
+
 		try {
 			fitAddonRef.current.fit();
 			if (width > 0 && height > 0) {
 				lastContainerWidthRef.current = width;
 				lastContainerHeightRef.current = height;
 			}
+
+			// Restore scroll position if user was scrolled up, clamping to valid range.
+			if (scrollTop > 0 && scrollTop < baseY) {
+				terminal.scrollToLine(scrollTop);
+			}
+
 			return true;
 		} catch {
 			return false;
@@ -333,31 +429,7 @@ function ConnectedTerminalComponent({
 		[onError],
 	);
 
-	// Handle resize events with debouncing to prevent IPC flooding
-	const handleResize = useCallback(
-		async (cols: number, rows: number): Promise<void> => {
-			const ptyId = ptyIdRef.current;
-			if (!ptyId) return;
 
-			// Clear existing timeout
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
-
-			// Debounce resize IPC calls - re-read ptyId inside timeout to avoid stale closure
-			resizeTimeoutRef.current = setTimeout(async () => {
-				const currentPtyId = ptyIdRef.current;
-				if (!currentPtyId) return;
-
-				try {
-					await terminalApi.resize(currentPtyId, cols, rows);
-				} catch {
-					// Ignore resize errors during rapid resize
-				}
-			}, RESIZE_DEBOUNCE_MS);
-		},
-		[],
-	);
 
 	// Expose search methods via ref
 	useImperativeHandle(
@@ -462,16 +534,28 @@ function ConnectedTerminalComponent({
 			fontSize,
 			scrollback: bufferSize,
 		};
-		const terminal = new Terminal(terminalOptions);
+
+		// Check for a cached terminal preserved across project switches.
+		// If found, reuse it (preserves scrollback, alt buffer, cursor, etc.)
+		// and skip both terminal.open() and transcript replay.
+		const cacheKey = externalTerminalId || undefined;
+		const cachedTerminal = cacheKey ? takeCachedTerminal(cacheKey) : undefined;
+
+		let terminal: Terminal;
+		if (cachedTerminal) {
+			devLog(`[ConnectedTerminal] RESTORED cached terminal`, {
+				cacheKey,
+			});
+			terminal = cachedTerminal;
+		} else {
+			terminal = new Terminal(terminalOptions);
+		}
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
 
 		const fitAddon = new FitAddon();
 		fitAddonRef.current = fitAddon;
 		terminal.loadAddon(fitAddon);
-
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
 
 		const handleFilePathActivate = async (
 			event: MouseEvent,
@@ -500,10 +584,35 @@ function ConnectedTerminalComponent({
 			}
 		};
 
+		const handleUrlActivate = async (
+			event: MouseEvent,
+			url: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			if (!isSupportedTerminalUrl(url)) {
+				toast.error("Only http/https URLs are supported from terminal output.");
+				return;
+			}
+
+			try {
+				await openTerminalUrl(url);
+			} catch (error) {
+				console.error("[Terminal URL Link Open Failed]", error);
+				toast.error("Failed to open URL from terminal output.");
+			}
+		};
+
 		fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
 			provideLinks(y, callback) {
 				const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-				callback(buildTerminalPathLinks(line, y, handleFilePathActivate));
+				const pathLinks = buildTerminalPathLinks(line, y, handleFilePathActivate);
+				const urlLinks = buildTerminalUrlLinks(line, y, handleUrlActivate);
+				callback([...urlLinks, ...pathLinks]);
 			},
 		});
 
@@ -512,34 +621,40 @@ function ConnectedTerminalComponent({
 		searchAddonRef.current = searchAddon;
 		terminal.loadAddon(searchAddon);
 
-		terminal.open(containerRef.current);
+		if (cachedTerminal) {
+			// Reattach the preserved xterm element to the new container.
+			// This avoids losing scrollback, alt-buffer, and cursor state.
+			if (containerRef.current && terminal.element) {
+				containerRef.current.appendChild(terminal.element);
+			}
+			// Force a full refresh so the renderer repaints after DOM reattachment.
+			terminal.refresh(0, terminal.rows - 1);
+		} else {
+			terminal.open(containerRef.current);
+		}
 
 		// Intercept keyboard shortcuts before xterm processes them
 		// Return false to prevent xterm from handling, true to let xterm handle
 		terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 			if (event.type !== "keydown") return true;
 
-			const normalized = normalizeKeyEvent(event);
 			const shortcuts = shortcutsRef.current;
 
 			// Check if this key matches any app shortcut
 			// On macOS: Ctrl+key shortcuts should pass through to the shell (not intercepted by app)
 			// Only ⌘+key shortcuts are intercepted by the app on macOS
-			for (const shortcut of Object.values(shortcuts)) {
-				const activeKey = shortcut.customKey ?? shortcut.defaultKey;
-				if (normalized === activeKey) {
-					// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
-					// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
-					// The ⌘ equivalent is handled by the clipboardModifier block above.
-					if (isMac && event.ctrlKey && !event.metaKey) {
-						// Passthrough: let xterm send the raw ctrl sequence to the shell
-						return true;
-					}
-
-					// Don't call stopPropagation() - let event bubble to window handler
-					// Return false to prevent xterm from handling the event
-					return false;
+			if (isAppOwnedTerminalShortcut(event, shortcuts)) {
+				// On macOS inside a terminal, don't intercept ctrl+... shortcuts from the app config.
+				// These are ctrl-key combos that should go to the shell (e.g., ctrl+r = reverse-i-search).
+				// The ⌘ equivalent is handled by the clipboardModifier block above.
+				if (isMac && event.ctrlKey && !event.metaKey) {
+					// Passthrough: let xterm send the raw ctrl sequence to the shell
+					return true;
 				}
+
+				// Don't call stopPropagation() - let event bubble to window handler
+				// Return false to prevent xterm from handling the event
+				return false;
 			}
 
 			// Handle copy/paste/select all keyboard shortcuts
@@ -603,7 +718,7 @@ function ConnectedTerminalComponent({
 			}
 			if (webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
 				console.warn(
-					"WebGL recovery attempts exhausted, falling back to canvas renderer",
+					"WebGL recovery attempts exhausted, falling back to DOM renderer",
 				);
 				recordTerminalContinuityEvent({
 					name: "renderer-recovery-exhausted",
@@ -668,7 +783,7 @@ function ConnectedTerminalComponent({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				console.warn(
-					"WebGL addon failed to load, falling back to canvas renderer:",
+					"WebGL addon failed to load, falling back to DOM renderer:",
 					error,
 				);
 				webglAddonRef.current = null;
@@ -705,24 +820,16 @@ function ConnectedTerminalComponent({
 		}
 
 		// Set up resize observer
-		const resizeObserver = new ResizeObserver(() => {
-			requestAnimationFrame(() => {
-				performFit();
-			});
-		});
-		resizeObserver.observe(containerRef.current);
+
 
 		// Listen for input from xterm
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-			handleResize(cols, rows);
-		});
 
 		// Set up IPC listeners BEFORE spawning to avoid missing data
 		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
 		let cachedTerminalId: string | null = null;
 		cleanupDataListenerRef.current = terminalApi.onData(
-			(id: string, data: string) => {
+			(id: string, data: Uint8Array) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
@@ -904,9 +1011,14 @@ function ConnectedTerminalComponent({
 						);
 						try {
 							if (transcript) {
-								terminal.write(transcript);
 								if (transcriptLooksPartial) {
+									if (!transcript.startsWith("\u001b[?1049h")) {
+										terminal.write("\u001b[?1049h");
+									}
+									terminal.write(transcript);
 									terminal.write(PARTIAL_RESTORE_NOTE);
+								} else {
+									terminal.write(transcript);
 								}
 								terminalStoreState.consumeTranscript(result.data.id);
 								recordReplayEvent(
@@ -1005,6 +1117,15 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					},
 				);
+				// Set ptyIdRef so that resize/recovery operations (performFit, terminalApi.resize)
+				// work for external terminals just like spawned ones. Without this, the TUI app
+				// never receives SIGWINCH on project-switch restore and can't redraw.
+				ptyIdRef.current = externalTerminalId;
+				// Renderer-attached tracking is handled by the externalTerminalId effect
+				// above (with proper lifecycle cleanup). The effect also calls
+				// setRendererAttached, so we avoid duplicating it here. The backend ref
+				// (addRendererRef) is still registered here since it is async and not
+				// managed by the effect's lifecycle.
 				void addRendererRef(externalTerminalId, instanceIdRef.current);
 				registerTerminal(externalTerminalId, terminal);
 				const terminalStoreState = useTerminalStore.getState();
@@ -1024,10 +1145,30 @@ function ConnectedTerminalComponent({
 					externalTerminalId,
 				);
 				try {
-					if (transcript) {
-						terminal.write(transcript);
+					if (cachedTerminal) {
+						// Cached terminal already has full state — skip transcript/scrollback replay.
+						// Still consume the transcript to prevent unbounded growth.
+						if (transcript) {
+							terminalStoreState.consumeTranscript(externalTerminalId);
+						}
+						recordReplayEvent(
+							"restore-replay-skipped",
+							{
+								reason: "cached-terminal",
+								source: "external-terminal",
+							},
+							storeTerminalId,
+							externalTerminalId,
+						);
+					} else if (transcript) {
 						if (transcriptLooksPartial) {
+							if (!transcript.startsWith("\u001b[?1049h")) {
+								terminal.write("\u001b[?1049h");
+							}
+							terminal.write(transcript);
 							terminal.write(PARTIAL_RESTORE_NOTE);
+						} else {
+							terminal.write(transcript);
 						}
 						terminalStoreState.consumeTranscript(externalTerminalId);
 						recordReplayEvent(
@@ -1114,9 +1255,7 @@ function ConnectedTerminalComponent({
 			const terminalId = ptyIdRef.current || externalTerminalId;
 			if (terminalId && terminalRef.current) {
 				captureScrollPosition(terminalId);
-				if (!externalTerminalId) {
-					useTerminalStore.getState().setRendererAttached(terminalId, false);
-				}
+				useTerminalStore.getState().setRendererAttached(terminalId, false);
 				void removeRendererRef(terminalId, instanceId);
 			}
 
@@ -1128,9 +1267,7 @@ function ConnectedTerminalComponent({
 			}
 
 			// PTY lifecycle is handled by explicit terminal close, not component unmount
-			resizeObserver.disconnect();
 			dataDisposable.dispose();
-			resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) {
 				cleanupDataListenerRef.current();
 				cleanupDataListenerRef.current = null;
@@ -1139,10 +1276,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current();
 				cleanupExitListenerRef.current = null;
 			}
-			// Clean up resize debounce timer
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
+
 			// Clean up activity timeout timer
 			if (activityTimeoutRef.current) {
 				clearTimeout(activityTimeoutRef.current);
@@ -1170,7 +1304,18 @@ function ConnectedTerminalComponent({
 				fileLinkProviderDisposableRef.current = null;
 			}
 
-			terminal.dispose();
+			// Cache the terminal for reuse on project-switch-back instead of
+			// disposing it. This preserves all xterm internal state (scrollback,
+			// alt buffer, cursor position). Only cache if the terminal is still
+			// alive in the store (not closed/exited) — otherwise dispose.
+			const cacheKey = terminalId;
+			const terminalStillInStore = cacheKey &&
+				useTerminalStore.getState().findTerminalByPtyId(cacheKey);
+			if (terminalStillInStore) {
+				cacheTerminal(cacheKey, terminal);
+			} else {
+				terminal.dispose();
+			}
 			terminalRef.current = null;
 			setTerminalInstance(null);
 			fitAddonRef.current = null;
@@ -1215,13 +1360,16 @@ function ConnectedTerminalComponent({
 	}, [disposeWebglAddon, rendererPreference]);
 
 	// Trigger fit + PTY resize when terminal becomes visible
-	// Uses double requestAnimationFrame for proper timing after pane transitions
+	// Uses the two-stage resize pipeline via forceResizeFit,
+	// which skips both debounces for immediate responsiveness.
 	useEffect(() => {
 		if (isVisible && fitAddonRef.current && terminalRef.current) {
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					const didFit = performFit();
+					// Use forceResizeFit for immediate fit + PTY resize
+					// This bypasses both debounce stages for visibility changes
+					forceResizeFit();
 
 					const terminal = terminalRef.current;
 					if (!terminal) return;
@@ -1243,18 +1391,6 @@ function ConnectedTerminalComponent({
 
 					const ptyId = ptyIdRef.current;
 					if (ptyId) {
-						// Always sync PTY dimensions on visibility change for safety,
-						// but only trigger fit when container dimensions actually changed.
-						const resizePromise = terminalApi.resize(
-							ptyId,
-							terminal.cols,
-							terminal.rows,
-						);
-						if (resizePromise && typeof resizePromise.catch === "function") {
-							resizePromise.catch(() => {
-								// Ignore resize errors when toggling visibility
-							});
-						}
 						// Restore scroll position after fit (in case of pane transition)
 						restoreScrollPosition(ptyId, terminal);
 					} else {
@@ -1264,7 +1400,7 @@ function ConnectedTerminalComponent({
 				});
 			});
 		}
-	}, [isVisible]);
+	}, [isVisible, forceResizeFit]);
 
 	// Shared terminal recovery logic - re-fit and check WebGL health
 	const performTerminalRecovery = useCallback((): void => {
@@ -1357,6 +1493,14 @@ function ConnectedTerminalComponent({
 			cleanup();
 		};
 	}, [performTerminalRecovery]);
+
+	// NOTE: xterm.write() is NOT paused during minimize anymore. With xterm 6.1
+	// the scrollback limit (10,000 lines) bounds the internal character buffer,
+	// and the GH-133 retention policy bounds the app's renderer-side buffers
+	// (transcript, detachedOutput, pendingScrollback). Removing the write-skip
+	// preserves TUI alt-buffer state and scrollback history across minimize/restore.
+	// The bounded transcript in terminal-store is still used for the detached case
+	// (project switch) where no ConnectedTerminal renderer exists.
 
 	// Handle Select All
 	const handleSelectAll = useCallback((): void => {

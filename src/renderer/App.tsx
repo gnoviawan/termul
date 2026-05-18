@@ -20,11 +20,12 @@ import { useExitCode } from './hooks/use-exit-code'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 
-// PRODUCTION GUARDRAIL: The current xterm 6.0 migration branch is explicitly
-// excluded from production rollout. Phase 1 stabilization targets xterm 5.5.
-// Any future renderer upgrade must start from a fresh xterm 6.1 validation track
-// and meet ADR-defined benchmark and adoption criteria before replacing the 5.5
-// baseline. See _bmad-output/planning-artifacts/epics.md for the roadmap.
+// PRODUCTION GUARDRAIL: This branch targets xterm 6.1-beta (the line VS Code
+// ships in production). The 6.1 beta track includes memory leak fixes
+// (IntersectionObserver retention, dispose-registration gaps) and TUI stability
+// (alt-buffer teleport fix, currentRow OOM fix) not present in 6.0 stable.
+// WebGL is preserved as the GPU renderer with DOM fallback ("canvas" removed in 6.0).
+// See _bmad-output/implementation-artifacts/spec-gh133-xterm-6-1-upgrade-memory-leak-fix.md.
 
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
@@ -67,9 +68,10 @@ function usePreventAltMenu(): void {
 
 const queryClient = new QueryClient()
 
-// TODO(renderer-upgrade-adrs / ADR-xterm-renderer-upgrade): enforce the xterm 5.5
-// production baseline and require explicit validation for xterm 6.1 via a durable
-// build/CI/runtime gate (for example a checkRendererVersion helper wired during app
+// TODO(renderer-upgrade-adrs / ADR-xterm-renderer-upgrade): enforce the xterm 6.1
+// production baseline and ensure the DOM renderer fallback path works correctly.
+// A build/CI/runtime gate (e.g. checkRendererVersion helper) should verify the
+// installed @xterm/xterm version is on the expected 6.1 line.
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 
 // Component to handle app-level effects like auto-save

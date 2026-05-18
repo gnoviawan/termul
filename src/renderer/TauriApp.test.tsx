@@ -97,8 +97,12 @@ vi.mock('./components/UpdateAvailableToast', () => ({
   useUpdateToast: () => undefined
 }))
 
+const { mockUseVisibilityState } = vi.hoisted(() => ({
+  mockUseVisibilityState: vi.fn(() => undefined)
+}))
+
 vi.mock('./hooks/use-visibility-state', () => ({
-  useVisibilityState: () => undefined
+  useVisibilityState: mockUseVisibilityState
 }))
 
 beforeEach(() => {
@@ -121,5 +125,10 @@ describe('TauriApp', () => {
     await waitFor(() => {
       expect(mockPersistenceRead).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY)
     })
+  })
+
+  it('wires app visibility tracking at app scope', () => {
+    render(<TauriApp />)
+    expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)
   })
 })

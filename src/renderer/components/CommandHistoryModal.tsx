@@ -56,7 +56,11 @@ export function CommandHistoryModal({
       setQuery('')
       setSelectedIndex(0)
       setFilterMode('this-project')
-      setTimeout(() => inputRef.current?.focus(), 50)
+      // Blur terminal first so xterm doesn't hold focus, then focus the input
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur()
+      }
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
     // Always reset confirmation state on any isOpen change
     setShowClearConfirm(false)

@@ -53,20 +53,21 @@ Feature requests are welcome! Please:
 
 #### Development Workflow
 
-1. Make your changes
-2. Run tests:
+1. Before making architectural or implementation changes, review the AI agent project context at `docs/project-context.md` for repo-specific rules, boundaries, and anti-patterns.
+2. Make your changes
+3. Run tests:
    ```bash
    npm test
    ```
-3. Run type checking:
+4. Run type checking:
    ```bash
    npm run typecheck
    ```
-4. Run linting:
+5. Run linting:
    ```bash
    npm run lint
    ```
-5. Test the app manually:
+6. Test the app manually:
    ```bash
    npm run dev
    ```
@@ -173,6 +174,26 @@ npm run build:tauri:mac-arm    # macOS (Apple Silicon)
 npm run build:tauri:mac-x64    # macOS (Intel)
 npm run build:tauri:linux      # Linux (x64)
 ```
+
+## Release Management (Maintainers Only)
+
+### Creating a Release
+
+Releases are automated via GitHub Actions when a version tag is pushed:
+
+1. Ensure version numbers match in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`
+2. Push a version tag: `git tag v0.3.7 && git push origin v0.3.7`
+3. CI will build, sign, and publish a draft release
+4. Verify the release assets include `.sig` files and `latest.json`
+5. Publish the draft release
+
+### Signing Key Management
+
+Update signing is secured with a minisign keypair. The public key is embedded in the app at `src-tauri/tauri.conf.json` (line 39), and the private key is stored in the GitHub secret `TAURI_SIGNING_PRIVATE_KEY`.
+
+**Important**: If you need to rotate signing keys, follow the procedure documented in [docs/auto-update-release-verification.md](docs/auto-update-release-verification.md#key-rotation-procedure). The key rotation must ship the new public key in a release signed with the old key BEFORE rotating the private key in CI, otherwise existing users will fail to verify future updates.
+
+Current key ID: `6E47FAD95783D992`
 
 ## Questions?
 

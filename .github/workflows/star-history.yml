@@ -1,0 +1,41 @@
+name: Update Star History
+
+on:
+  schedule:
+    # Runs every day at midnight UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: update-star-history
+  cancel-in-progress: false
+
+jobs:
+  update-star-history:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Generate Star History SVG
+        uses: star-history/star-history@04301c64f801e6fcfde8a1d0da021825ec6100af
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repo: gnoviawan/termul
+          output: img/star-history.svg
+
+      - name: Commit Star History SVG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add img/star-history.svg
+          git diff --staged --quiet || git commit -m "docs: update star history chart"
+          git push

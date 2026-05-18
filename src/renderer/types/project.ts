@@ -48,8 +48,10 @@ export interface Terminal {
   detachedOutput?: string // Raw PTY output captured while no renderer is mounted
   rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status
-  isHidden?: boolean // Whether terminal is currently hidden (on another route)
-  hiddenSince?: number // Timestamp when terminal was hidden (for buffer truncation)
+  isHidden?: boolean // Whether terminal is currently hidden within the workspace/pane model
+  hiddenSince?: number // Timestamp when terminal became hidden within the workspace/pane model
+  isAppHidden?: boolean // Whether the entire app/window is currently hidden or minimized
+  appHiddenSince?: number // Timestamp when the app-hidden retention window started
   hasActivity?: boolean // Whether terminal has recent output activity
   lastActivityTimestamp?: number // Timestamp when last activity occurred
 }

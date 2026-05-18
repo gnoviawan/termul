@@ -160,7 +160,7 @@ describe('useTerminalAutoSave', () => {
       expect(extractScrollback).toHaveBeenCalledWith('pty-1')
     })
 
-    it('should prefer transcript for serialized scrollback and persistence', () => {
+    it('should prefer extracted scrollback over transcript when available', () => {
       const terminals: Terminal[] = [
         {
           id: '1',
@@ -174,7 +174,8 @@ describe('useTerminalAutoSave', () => {
 
       const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
 
-      expect(result.terminals[0].scrollback).toEqual(['line 3', 'line 4'])
+      // mergeScrollback prefers extracted scrollback (live xterm state) over transcript
+      expect(result.terminals[0].scrollback).toEqual(['line 1', 'line 2'])
       expect(result.terminals[0].transcript).toBe('line 3\nline 4\n')
     })
   })

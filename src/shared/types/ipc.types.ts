@@ -34,7 +34,9 @@ export type TerminalIpcChannels = {
 };
 
 // Event types for main -> renderer communication
-export type TerminalDataCallback = (terminalId: string, data: string) => void;
+// Terminal data callback — receives binary data as Uint8Array (via Tauri Channel)
+// Previously received string via event emitter; migrated to binary Channel API in ADR-002.2
+export type TerminalDataCallback = (terminalId: string, data: Uint8Array) => void;
 export type TerminalExitCallback = (
 	terminalId: string,
 	exitCode: number,
@@ -220,6 +222,7 @@ import type {
 	FileContent,
 	FileInfo,
 	FileChangeEvent,
+	FileSearchResponse,
 } from "./filesystem.types";
 
 export type FileChangeCallback = (event: FileChangeEvent) => void;
@@ -229,6 +232,36 @@ export interface FilesystemApi {
 	readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>;
 	readFile: (filePath: string) => Promise<IpcResult<FileContent>>;
 	getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>;
+	searchContent: (
+		rootPath: string,
+		query: string,
+	) => Promise<IpcResult<FileSearchResponse>>;
+	searchContentStreamStart: (
+		searchId: string,
+		rootPath: string,
+		query: string,
+	) => Promise<IpcResult<void>>;
+	searchContentStreamCancel: (searchId: string) => Promise<IpcResult<void>>;
+	onSearchContentBatch: (
+		callback: (event: {
+			searchId: string;
+			results: FileSearchResponse["results"];
+			truncated: boolean;
+		}) => void,
+	) => () => void;
+	onSearchContentDone: (
+		callback: (event: {
+			searchId: string;
+			truncated: boolean;
+			scannedFiles: number;
+			failedFiles: number;
+			error?: string;
+		}) => void,
+	) => () => void;
+	searchFileNames: (
+		rootPath: string,
+		query: string,
+	) => Promise<IpcResult<{ files: string[]; truncated: boolean }>>;
 	writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>;
 	createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>;
 	createDirectory: (dirPath: string) => Promise<IpcResult<void>>;
@@ -244,7 +277,13 @@ export interface FilesystemApi {
 	onFileDeleted: (callback: FileChangeCallback) => () => void;
 }
 
-export type { DirectoryEntry, FileContent, FileInfo, FileChangeEvent };
+export type {
+	DirectoryEntry,
+	FileContent,
+	FileInfo,
+	FileChangeEvent,
+	FileSearchResponse,
+};
 
 // ============================================================================
 // Session Persistence Types

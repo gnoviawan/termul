@@ -17,7 +17,7 @@ export interface UseXtermReturn {
   terminalRef: React.RefObject<Terminal | null>
   containerRef: React.RefObject<HTMLDivElement | null>
   isReady: boolean
-  write: (data: string) => void
+  write: (data: string | Uint8Array) => void
   writeln: (data: string) => void
   clear: () => void
   focus: () => void
@@ -42,7 +42,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isReadyRef = useRef(false)
 
-  const write = useCallback((data: string): void => {
+  const write = useCallback((data: string | Uint8Array): void => {
     terminalRef.current?.write(data)
   }, [])
 
@@ -116,7 +116,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       })
       terminal.loadAddon(webglAddon)
     } catch {
-      console.warn('WebGL addon failed to load, falling back to canvas renderer')
+      console.warn('WebGL addon failed to load, falling back to DOM renderer')
     }
 
     fitAddon.fit()

@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
@@ -43,6 +43,8 @@ import {
 	useWorkspaceStore,
 	useActiveTab,
 	usePaneRoot,
+	useFullscreenPaneId,
+	findPaneById,
 	editorTabId,
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
@@ -68,6 +70,7 @@ import {
 import {
 	useKeyboardShortcutsStore,
 	matchesShortcut,
+	formatKeyForDisplay,
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac } from "@/lib/platform";
 import {
@@ -88,10 +91,32 @@ import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 
+function getShortcutTargetContext(target: EventTarget | null): {
+	isInEditor: boolean;
+	isInTerminal: boolean;
+	isInInput: boolean;
+} {
+	const element = target instanceof HTMLElement ? target : document.body;
+	const isInEditor = !!(
+		element.closest(".cm-content") || element.closest(".bn-editor")
+	);
+	const isInTerminal = !!element.closest(".xterm");
+	const isInInput =
+		!isInTerminal &&
+		(element.tagName === "INPUT" ||
+			element.tagName === "TEXTAREA" ||
+			element.isContentEditable ||
+			!!element.closest('[contenteditable="true"]'));
+
+	return { isInEditor, isInTerminal, isInInput };
+}
+
 export default function WorkspaceLayout(): React.JSX.Element {
 	const location = useLocation();
+	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+	const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
 		useState(false);
 	const [closeConfirmTerminal, setCloseConfirmTerminal] = useState<{
@@ -133,14 +158,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const isExplorerVisible = useFileExplorerVisible();
 	const isSidebarVisible = useSidebarVisible();
 	const activeTab = useActiveTab();
+	const fullscreenPaneId = useFullscreenPaneId();
 	const paneRoot = usePaneRoot();
+	const fullscreenPane = useMemo(() => {
+		if (!fullscreenPaneId) return null;
+		const pane = findPaneById(paneRoot, fullscreenPaneId);
+		return pane?.type === "leaf" ? pane : null;
+	}, [fullscreenPaneId, paneRoot]);
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
 
 	// Ref for terminal close handler — used inside keydown effect to avoid
 	// declaration-order dependency. The ref is updated each render.
-	const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null);
+	const handleCloseTerminalRef = useRef<
+		((id: string, tabId: string) => void) | null
+	>(null);
 
 	// File watcher hook
 	useFileWatcher();
@@ -259,12 +292,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 		const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
 
-		console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
-			terminalCount: terminalIds.length,
-			terminalIds,
-			prevCount: prevIds.length,
-			callCount: ensureCallCountRef.current,
-		});
+		if (import.meta.env.DEV) {
+			console.log(`[WorkspaceLayout] ensureTerminalTabs CALL [${ensureId}]`, {
+				terminalCount: terminalIds.length,
+				terminalIds,
+				prevCount: prevIds.length,
+				callCount: ensureCallCountRef.current,
+			});
+		}
+
+		// SKIP when app is hidden to prevent respawn loop when terminals
+		// die during minimize (ConPTY lifecycle issue on Windows).
+		// Terminals will be restored when the app becomes visible again.
+		if (terminals.some((t) => t.isAppHidden)) {
+			if (import.meta.env.DEV) {
+				console.log(
+					`[WorkspaceLayout] ensureTerminalTabs SKIP [${ensureId}]: app is hidden, deferring tab creation`,
+				);
+			}
+			return;
+		}
 
 		lastEnsuredTerminalIdsRef.current = terminalIds;
 		const workspaceStore = useWorkspaceStore.getState();
@@ -370,6 +417,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		setIsCreateSnapshotModalOpen(true);
 	}, []);
 
+	const handleOpenProjectSettings = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/settings");
+	}, [navigate]);
+
+	const handleOpenAppPreferences = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		navigate("/preferences");
+	}, [navigate]);
+
+	const handleOpenCommandHistory = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsCommandHistoryOpen(true);
+	}, []);
+
+	const handleOpenShortcutMenu = useCallback(() => {
+		setIsCommandPaletteOpen(false);
+		setIsShortcutMenuOpen(true);
+	}, []);
+
 	// Keyboard shortcuts
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
 	const fontSize = useTerminalFontSize();
@@ -386,6 +453,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		},
 		[shortcuts],
 	);
+
+	const getShortcutLabel = useCallback(
+		(id: string): string | undefined => {
+			const key = getActiveKey(id);
+			return key ? formatKeyForDisplay(key) : undefined;
+		},
+		[getActiveKey],
+	);
+
+	const getProjectShortcutLabel = useCallback((index: number): string | undefined => {
+		if (index < 0 || index > 8) return undefined;
+		return formatKeyForDisplay(`ctrl+${index + 1}`);
+	}, []);
 
 	// Determine if we should show the terminal area (only on workspace dashboard)
 	const isWorkspaceRoute = location.pathname === "/";
@@ -468,15 +548,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
-	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
-		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
-		if (!targetPaneId) return;
-		if (shell) {
-			handleCreateTerminalInPane(targetPaneId, shell.path);
-		} else {
-			handleCreateTerminalInPane(targetPaneId);
-		}
-	}, [handleCreateTerminalInPane]);
+	const handleAddTerminal = useCallback(
+		(paneId: string | undefined, shell?: ShellInfo) => {
+			const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+			if (!targetPaneId) return;
+			if (shell) {
+				handleCreateTerminalInPane(targetPaneId, shell.path);
+			} else {
+				handleCreateTerminalInPane(targetPaneId);
+			}
+		},
+		[handleCreateTerminalInPane],
+	);
 
 	const handleNewBrowserTab = useCallback((paneId?: string) => {
 		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
@@ -489,16 +572,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
-			// Skip if typing in an input/textarea/editable element
-			const target = e.target instanceof HTMLElement ? e.target : document.body;
-			const isInEditor =
-				target.closest(".cm-content") || target.closest(".bn-editor");
-			const isInTerminal = !!target.closest(".xterm");
-			const isInInput =
-				target.tagName === "INPUT" ||
-				target.tagName === "TEXTAREA" ||
-				target.isContentEditable ||
-				target.closest('[contenteditable="true"]');
+			// Safety net: skip workspace handling when an earlier handler has already
+			// processed this event by calling preventDefault() — e.g. xterm clipboard
+			// ops or ConnectedTerminal's customKeyEventHandler for terminal-owned keys.
+			if (e.defaultPrevented) return;
+
+			const { isInEditor, isInTerminal, isInInput } = getShortcutTargetContext(
+				e.target,
+			);
 
 			// Save File (Ctrl+S / ⌘+S) — should work even in editors
 			if (matchesShortcut(e, getActiveKey("saveFile"))) {
@@ -513,11 +594,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
 			// On Windows/Linux: Ctrl+W closes tab
 			if (matchesShortcut(e, getActiveKey("closeTab"))) {
-				// On macOS, don't intercept Ctrl+W in terminal — let it go to the shell
-				if (isMac && e.ctrlKey && isInTerminal) {
-					return;
-				}
-
 				e.preventDefault();
 				if (activeTab?.type === "editor") {
 					const fileState = useEditorStore
@@ -526,7 +602,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					if (fileState?.isDirty) {
 						setDirtyCloseFilePath(activeTab.filePath);
 					} else {
-						const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath);
+						const didClose = useEditorStore
+							.getState()
+							.closeFileIfIdle(activeTab.filePath);
 						if (didClose) {
 							useWorkspaceStore.getState().removeTab(activeTab.id);
 						}
@@ -575,34 +653,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Skip other shortcuts if typing in input or editor
-			if (isInInput || isInEditor) {
-				return;
-			}
+			// ── Global shortcuts — work from any focus context ────────────────
+			// These must be checked before the isInInput/isInEditor guard.
+			// They open overlays or perform workspace actions that should be
+			// reachable while typing in the editor, browser, or terminal.
 
-			// Command palette (Ctrl+K)
-			if (matchesShortcut(e, getActiveKey("commandPalette"))) {
+			// Command palette (Ctrl+K / Ctrl+Shift+P)
+			if (
+				matchesShortcut(e, getActiveKey("commandPalette")) ||
+				matchesShortcut(e, getActiveKey("commandPaletteAlt"))
+			) {
 				e.preventDefault();
 				e.stopPropagation();
-				setIsCommandPaletteOpen(true);
-				return;
-			}
-
-			// Command palette alt (Ctrl+Shift+P)
-			if (matchesShortcut(e, getActiveKey("commandPaletteAlt"))) {
-				e.preventDefault();
-				e.stopPropagation();
-				setIsCommandPaletteOpen(true);
-				return;
-			}
-
-			// Terminal search (Ctrl+F) - handled at pane level now
-			if (matchesShortcut(e, getActiveKey("terminalSearch"))) {
-				if (isWorkspaceRoute) {
-					e.preventDefault();
-					e.stopPropagation();
-					// Terminal search is now handled per-pane
+				if (document.activeElement instanceof HTMLElement) {
+					document.activeElement.blur();
 				}
+				setIsCommandPaletteOpen(true);
 				return;
 			}
 
@@ -611,6 +677,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				e.preventDefault();
 				e.stopPropagation();
 				if (activeProjectId) {
+					if (document.activeElement instanceof HTMLElement) {
+						document.activeElement.blur();
+					}
 					setIsCommandHistoryOpen(true);
 				}
 				return;
@@ -620,11 +689,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			if (matchesShortcut(e, getActiveKey("newProject"))) {
 				e.preventDefault();
 				e.stopPropagation();
+				if (document.activeElement instanceof HTMLElement) {
+					document.activeElement.blur();
+				}
 				setIsNewProjectModalOpen(true);
 				return;
 			}
 
-			// New terminal (Ctrl+T) - only on workspace routes
+			// New terminal (Ctrl+T) - workspace only
 			if (matchesShortcut(e, getActiveKey("newTerminal"))) {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
@@ -638,29 +710,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// New browser tab (Ctrl+Shift+N) - only on workspace routes
+			// New browser tab (Ctrl+Shift+N) - workspace only
 			if (matchesShortcut(e, getActiveKey("newBrowserTab"))) {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
 				e.stopPropagation();
-				const paneId = useWorkspaceStore.getState().activePaneId;
-				if (paneId) {
-					const browserTabId = crypto.randomUUID();
-					useBrowserSessionStore.getState().createTab(browserTabId);
-					useWorkspaceStore.getState().addBrowserTab(browserTabId, paneId);
-				}
+				handleNewBrowserTab();
 				return;
 			}
 
-			// Next terminal/tab (default: Ctrl+PageDown)
+			// Tab cycling (Ctrl+PageDown / Ctrl+PageUp)
 			if (matchesShortcut(e, getActiveKey("nextTerminal"))) {
 				e.preventDefault();
 				e.stopPropagation();
 				cycleTab("next");
 				return;
 			}
-
-			// Previous terminal/tab (default: Ctrl+PageUp)
 			if (matchesShortcut(e, getActiveKey("prevTerminal"))) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -668,29 +733,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Zoom in (Ctrl+=)
+			// Zoom in/out/reset
 			if (matchesShortcut(e, getActiveKey("zoomIn"))) {
 				e.preventDefault();
 				e.stopPropagation();
 				const newSize = Math.min(fontSize + 1, 24);
-				if (newSize !== fontSize) {
-					updateAppSetting("terminalFontSize", newSize);
-				}
+				if (newSize !== fontSize) updateAppSetting("terminalFontSize", newSize);
 				return;
 			}
-
-			// Zoom out (Ctrl+-)
 			if (matchesShortcut(e, getActiveKey("zoomOut"))) {
 				e.preventDefault();
 				e.stopPropagation();
 				const newSize = Math.max(fontSize - 1, 10);
-				if (newSize !== fontSize) {
-					updateAppSetting("terminalFontSize", newSize);
-				}
+				if (newSize !== fontSize) updateAppSetting("terminalFontSize", newSize);
 				return;
 			}
-
-			// Zoom reset (Ctrl+0)
 			if (matchesShortcut(e, getActiveKey("zoomReset"))) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -703,13 +760,27 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Cmd/Ctrl + 1-9 for project switching (keep hardcoded - not customizable)
-			if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+			// Cmd/Ctrl + 1-9 for project switching
+			if (
+				(e.metaKey || e.ctrlKey) &&
+				!e.shiftKey &&
+				!e.altKey &&
+				/^[1-9]$/.test(e.key)
+			) {
 				e.preventDefault();
 				const index = parseInt(e.key) - 1;
-				if (projects[index]) {
-					selectProject(projects[index].id);
+				if (projects[index]) selectProject(projects[index].id);
+				return;
+			}
+
+			// ── Below this: only runs when NOT in input/editor ────────────────
+			// Terminal search (Ctrl+F) - handled at pane level
+			if (matchesShortcut(e, getActiveKey("terminalSearch"))) {
+				if (isWorkspaceRoute) {
+					e.preventDefault();
+					e.stopPropagation();
 				}
+				return;
 			}
 		};
 
@@ -733,6 +804,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		cycleTab,
 		activeTab,
 		handleCreateTerminalInPane,
+		handleNewBrowserTab,
 		updatePanelVisibility,
 		isExplorerVisible,
 		isSidebarVisible,
@@ -914,7 +986,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Dirty file close handlers
 	const handleCloseEditorTab = useCallback((filePath: string) => {
 		const fileState = useEditorStore.getState().openFiles.get(filePath);
-		if (fileState?.operationStatus === "saving" || fileState?.operationStatus === "reloading") {
+		if (
+			fileState?.operationStatus === "saving" ||
+			fileState?.operationStatus === "reloading"
+		) {
 			return;
 		}
 		if (fileState?.isDirty) {
@@ -1010,7 +1085,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
-				<TitleBar />
+				<TitleBar
+					isShortcutsOpen={isShortcutMenuOpen}
+					onShortcutsOpenChange={setIsShortcutMenuOpen}
+				/>
 				<div className="flex-1 flex items-center justify-center">
 					<div className="text-muted-foreground text-sm">Loading...</div>
 				</div>
@@ -1020,7 +1098,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
-			<TitleBar />
+			<TitleBar
+				isShortcutsOpen={isShortcutMenuOpen}
+				onShortcutsOpenChange={setIsShortcutMenuOpen}
+			/>
 
 			<div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
 				{/* Sidebar */}
@@ -1075,9 +1156,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							) : (
 								<>
 									{isWorkspaceRoute ? (
-										<div className="flex-1 min-h-0 h-full overflow-hidden">
+										<motion.div
+											key={fullscreenPaneId ? "fullscreen" : "normal"}
+											initial={{ opacity: 0.85, scale: 0.97 }}
+											animate={{ opacity: 1, scale: 1 }}
+											transition={{ duration: 0.2, ease: "easeOut" }}
+											className="flex-1 min-h-0 h-full overflow-hidden"
+										>
 											<PaneRenderer
-												node={paneRoot}
+												node={fullscreenPane ?? paneRoot}
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
 												onCloseTerminal={handleCloseTerminal}
@@ -1088,7 +1175,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 													activeProject?.defaultShell || appDefaultShell
 												}
 											/>
-										</div>
+										</motion.div>
 									) : (
 										<div className="flex-1 overflow-hidden bg-background relative rounded-xl">
 											<div className="w-full h-full">
@@ -1106,7 +1193,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						{/* File Explorer - separate floating panel */}
 						{isExplorerVisible && activeProject?.path && (
 							<div className="flex-shrink-0 ml-2">
-								<FileExplorer />
+								<FileExplorer side="right" />
 							</div>
 						)}
 					</div>
@@ -1128,6 +1215,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
+				onOpenProjectSettings={handleOpenProjectSettings}
+				onOpenAppPreferences={handleOpenAppPreferences}
+				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+				onOpenShortcutMenu={handleOpenShortcutMenu}
+				getShortcutLabel={getShortcutLabel}
+				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
 
 			<CreateSnapshotModal

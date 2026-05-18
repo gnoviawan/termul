@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   changelog:
@@ -22,13 +22,14 @@ jobs:
       normalized_version: ${{ steps.version.outputs.normalized_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Generate changelog
         id: cliff
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -63,12 +64,19 @@ jobs:
     name: Create Draft Release
     needs: changelog
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.release.outputs.releaseId }}
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
       - name: Create or update draft release
         id: release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
           IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
@@ -120,6 +128,8 @@ jobs:
     name: Build (${{ matrix.platform }})
     needs: [changelog, create_release]
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -140,8 +150,16 @@ jobs:
             args: --target aarch64-apple-darwin
 
     steps:
+      - name: Harden runner
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
@@ -155,18 +173,18 @@ jobs:
             patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
@@ -212,7 +230,7 @@ jobs:
           NODE
 
       - name: Build and publish release artifacts
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
@@ -232,9 +250,16 @@ jobs:
     name: Publish Release
     needs: [changelog, create_release, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
       - name: Verify updater assets before publish
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
           RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
@@ -294,7 +319,7 @@ jobs:
             }
 
       - name: Publish draft release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
           IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
