@@ -153,7 +153,7 @@ export interface ConnectedTerminalProps {
 }
 
 const PARTIAL_RESTORE_NOTE =
-	"\x1b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\x1b[0m\r\n";
+	"\x1b[33m\r\n[Restore mode: transcript replay. Alternate-screen or redraw-heavy output may be partial]\x1b[0m\r\n";
 
 function getInstrumentationProjectId(
 	spawnOptions?: TerminalSpawnOptions,
@@ -1302,55 +1302,60 @@ function ConnectedTerminalComponent({
 
 	// Trigger fit + PTY resize when terminal becomes visible
 	// Uses double requestAnimationFrame for proper timing after pane transitions
-	useEffect(() => {
-		if (isVisible && fitAddonRef.current && terminalRef.current) {
-			// Double RAF ensures DOM is fully rendered after pane transition
+	const runVisibilityRestore = useCallback((): void => {
+		if (!fitAddonRef.current || !terminalRef.current) return;
+		// Double RAF ensures DOM is fully rendered after pane transition
+		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
-				requestAnimationFrame(() => {
-					const didFit = performFit();
+				performFit();
 
-					const terminal = terminalRef.current;
-					if (!terminal) return;
+				const terminal = terminalRef.current;
+				if (!terminal) return;
 
-					// Only focus if no interactive element (button, input, etc.) currently has focus.
-					// This prevents stealing focus from TitleBar window controls when tab switch happens.
-					const active = document.activeElement;
-					const isInteractiveElementFocused =
-						active &&
-						active !== document.body &&
-						(active.tagName === "BUTTON" ||
-							active.tagName === "INPUT" ||
-							active.tagName === "TEXTAREA" ||
-							active.tagName === "SELECT" ||
-							active.tagName === "A");
-					if (!isInteractiveElementFocused) {
-						terminal.focus();
+				const active = document.activeElement;
+				const isInteractiveElementFocused =
+					active &&
+					active !== document.body &&
+					(active.tagName === "BUTTON" ||
+						active.tagName === "INPUT" ||
+						active.tagName === "TEXTAREA" ||
+						active.tagName === "SELECT" ||
+						active.tagName === "A");
+				if (!isInteractiveElementFocused) {
+					terminal.focus();
+				}
+
+				const ptyId = ptyIdRef.current;
+				if (ptyId) {
+					const resizePromise = terminalApi.resize(ptyId, terminal.cols, terminal.rows);
+					if (resizePromise && typeof resizePromise.catch === "function") {
+						resizePromise.catch(() => {});
 					}
-
-					const ptyId = ptyIdRef.current;
-					if (ptyId) {
-						// Always sync PTY dimensions on visibility change for safety,
-						// but only trigger fit when container dimensions actually changed.
-						const resizePromise = terminalApi.resize(
-							ptyId,
-							terminal.cols,
-							terminal.rows,
-						);
-						if (resizePromise && typeof resizePromise.catch === "function") {
-							resizePromise.catch(() => {
-								// Ignore resize errors when toggling visibility
-							});
-						}
-						// Restore scroll position after fit (in case of pane transition)
-						restoreScrollPosition(ptyId, terminal);
-					} else {
-						// PTY not ready yet — defer resize until spawn completes
-						needsResizeOnReadyRef.current = true;
-					}
-				});
+					restoreScrollPosition(ptyId, terminal);
+				} else {
+					needsResizeOnReadyRef.current = true;
+				}
 			});
+		});
+	}, []);
+
+	useEffect(() => {
+		if (isVisible) {
+			runVisibilityRestore();
 		}
-	}, [isVisible]);
+	}, [isVisible, runVisibilityRestore]);
+
+	useEffect(() => {
+		const handleRestorePulse = (): void => {
+			if (isVisible) {
+				runVisibilityRestore();
+			}
+		};
+		window.addEventListener("termul:terminal-restore-visibility-pulse", handleRestorePulse as EventListener);
+		return () => {
+			window.removeEventListener("termul:terminal-restore-visibility-pulse", handleRestorePulse as EventListener);
+		};
+	}, [isVisible, runVisibilityRestore]);
 
 	// Shared terminal recovery logic - re-fit and check WebGL health
 	const performTerminalRecovery = useCallback((): void => {

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Copy, Play, Square, Plus } from 'lucide-react'
+import { AlertTriangle, Copy, Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { tunnelApi } from '@/lib/api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTunnelStore } from '@/stores/tunnel-store'
 import type { TunnelConfig } from '@shared/types/ipc.types'
+import { TunnelConfigForm } from './TunnelConfigForm'
 
 function getTunnelErrorHelp(message: string): string {
   const normalized = message.toLowerCase()
-
   if (normalized.includes('cloudflared is not installed')) {
     return 'Install cloudflared and make sure it is available on PATH.'
   }
@@ -68,12 +68,15 @@ export function TunnelPanel(): React.JSX.Element {
     }
   }, [activeProject?.id, activeProject?.tunnelPresets])
 
-  const activeSession = useMemo(() => sessions.find((session) => session.status === 'running' || session.status === 'starting') ?? null, [sessions])
+  const activeSession = useMemo(() =>
+    sessions.find((session) => session.status === 'running' || session.status === 'starting') ?? null,
+    [sessions]
+  )
 
   const handleStart = useCallback(async () => {
     const parsedPort = Number.parseInt(localPort, 10)
     if (!Number.isFinite(parsedPort) || parsedPort <= 0) {
-      setError('Port lokal tidak valid')
+      setError('Invalid port')
       return
     }
     const config: TunnelConfig = {
@@ -87,7 +90,7 @@ export function TunnelPanel(): React.JSX.Element {
     }
     const session = await startTunnel(config)
     if (session) toast.success('Tunnel started')
-    else toast.error('Gagal start tunnel')
+    else toast.error('Failed to start tunnel')
 
     if (activeProject) {
       const presets = activeProject.tunnelPresets ?? []
@@ -102,14 +105,19 @@ export function TunnelPanel(): React.JSX.Element {
     if (!activeSession) return
     const ok = await stopTunnel(activeSession.id)
     if (ok) toast.success('Tunnel stopped')
-    else toast.error('Gagal stop tunnel')
+    else toast.error('Failed to stop tunnel')
   }, [activeSession, stopTunnel])
 
   const copyUrl = useCallback(async () => {
     if (!activeSession?.publicUrl) return
     await navigator.clipboard.writeText(activeSession.publicUrl)
-    toast.success('URL disalin')
+    toast.success('URL copied')
   }, [activeSession])
+
+  const sessionLogs = useMemo(
+    () => activeSession ? logs.filter((log) => log.tunnelId === activeSession.id) : [],
+    [logs, activeSession]
+  )
 
   return (
     <div className="rounded-lg border border-border bg-background p-4 space-y-4">
@@ -162,28 +170,20 @@ export function TunnelPanel(): React.JSX.Element {
       </div>
 
       {showAdvanced && (
-        <div className="grid gap-3 p-3 bg-muted/20 rounded-md border border-dashed animate-in fade-in slide-in-from-top-2">
-          <div className="grid gap-2">
-            <label className="text-[10px] font-bold uppercase text-muted-foreground">Custom Hostname (Optional)</label>
-            <input
-              className="rounded border px-3 py-1.5 text-sm bg-background disabled:bg-muted"
-              value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
-              placeholder="dev.yourdomain.com"
-              disabled={!!activeSession}
-            />
-          </div>
-          <div className="grid gap-2">
-            <label className="text-[10px] font-bold uppercase text-muted-foreground">Cloudflare Token (Optional)</label>
-            <input
-              className="rounded border px-3 py-1.5 text-sm bg-background disabled:bg-muted"
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="eyJhIjoi..."
-              disabled={!!activeSession}
-            />
-          </div>
+        <div className="p-3 bg-muted/20 rounded-md border border-dashed animate-in fade-in slide-in-from-top-2">
+          <TunnelConfigForm
+            name={name}
+            localPort={localPort}
+            hostname={hostname}
+            token={token}
+            disabled={!!activeSession}
+            showAdvanced={false}
+            onNameChange={setName}
+            onPortChange={setLocalPort}
+            onHostnameChange={setHostname}
+            onTokenChange={setToken}
+            onToggleAdvanced={() => {}}
+          />
         </div>
       )}
 
@@ -215,8 +215,8 @@ export function TunnelPanel(): React.JSX.Element {
         <div className="rounded border bg-muted/30 p-3 text-xs space-y-2">
           <div className="font-medium text-foreground">Live logs</div>
           <div className="max-h-44 overflow-auto rounded bg-background p-2 font-mono text-[11px] leading-5 text-muted-foreground">
-            {logs.filter((log) => log.tunnelId === activeSession.id).length > 0 ? (
-              logs.filter((log) => log.tunnelId === activeSession.id).map((log, index) => (
+            {sessionLogs.length > 0 ? (
+              sessionLogs.map((log, index) => (
                 <div key={`${log.tunnelId}-${log.timestamp}-${index}`} className="whitespace-pre-wrap break-words">
                   {log.line}
                 </div>

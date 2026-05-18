@@ -401,6 +401,7 @@ export function useTerminalRestore(): void {
 
           const workspaceStore = useWorkspaceStore.getState()
           reconcilePersistedHistoryIntoLiveTerminals(liveProjectTerminals, layout)
+          await rehydrateLiveTerminalMetadata(liveProjectTerminals)
           const terminalIdToSelect = selectTerminalForProject(liveProjectTerminals, layout)
 
           for (const terminal of liveProjectTerminals) {
@@ -434,6 +435,8 @@ export function useTerminalRestore(): void {
             useTerminalStore.getState().selectTerminal(terminalIdToSelect)
           }
 
+          scheduleRestoreResizePulse()
+
           emitTerminalContinuityEvent({
             name: 'restore-complete',
             correlationId: continuityCorrelationId,
@@ -442,7 +445,8 @@ export function useTerminalRestore(): void {
             details: {
               path: 'live-pty',
               liveTerminalCount: liveProjectTerminals.length,
-              persistedLayoutLoaded: layout !== null
+              persistedLayoutLoaded: layout !== null,
+              metadataRehydrated: true
             }
           })
           return
@@ -685,6 +689,46 @@ function reconcilePersistedHistoryIntoLiveTerminals(
   })
 
   store.setTerminals(nextTerminals)
+}
+
+async function rehydrateLiveTerminalMetadata(
+  terminals: Array<{ id: string; ptyId?: string }>
+): Promise<void> {
+  const store = useTerminalStore.getState()
+
+  await Promise.all(
+    terminals.map(async (terminal) => {
+      if (!terminal.ptyId) return
+
+      const [cwdResult, branchResult, statusResult, exitCodeResult] = await Promise.all([
+        terminalApi.getCwd(terminal.ptyId),
+        terminalApi.getGitBranch(terminal.ptyId),
+        terminalApi.getGitStatus(terminal.ptyId),
+        terminalApi.getExitCode(terminal.ptyId)
+      ])
+
+      if (cwdResult.success && cwdResult.data) {
+        store.updateTerminalCwd(terminal.id, cwdResult.data)
+      }
+      if (branchResult.success) {
+        store.updateTerminalGitBranch(terminal.id, branchResult.data ?? null)
+      }
+      if (statusResult.success) {
+        store.updateTerminalGitStatus(terminal.id, statusResult.data ?? null)
+      }
+      if (exitCodeResult.success) {
+        store.updateTerminalExitCode(terminal.id, exitCodeResult.data ?? null)
+      }
+    })
+  )
+}
+
+function scheduleRestoreResizePulse(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('termul:terminal-restore-visibility-pulse'))
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent('termul:terminal-restore-visibility-pulse'))
+  }, 80)
 }
 
 function selectTerminalForProject(
@@ -959,6 +1003,8 @@ async function restoreFromLayout(
       totalSpawnCalls: SPAWN_CALL_COUNT
     })
 
+    scheduleRestoreResizePulse()
+
     return {
       status: 'completed',
       path: 'persisted-replay',
@@ -1112,7 +1158,10 @@ async function createDefaultTerminal(
     SPAWN_CALL_COUNT++
 
     // Create default terminal - addTerminal also sets it as active
-    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
+    const newTerminalName = existingTerminals.length > 0
+      ? `Terminal ${existingTerminals.length + 1}`
+      : 'Terminal 1'
+    const newTerminal = terminalStore.addTerminal(newTerminalName, projectId, shell, project?.path)
     terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
 
     // Explicitly select to ensure activeTerminalId is set correctly
@@ -1127,6 +1176,8 @@ async function createDefaultTerminal(
       totalTerminalsInStore: freshTerminalStore.terminals.length,
       totalSpawnCalls: SPAWN_CALL_COUNT
     })
+
+    scheduleRestoreResizePulse()
 
     return {
       status: 'completed',

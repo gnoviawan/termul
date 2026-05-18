@@ -91,6 +91,7 @@ import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { wsServerApi } from "@/lib/ws-server-api";
+import { listen } from "@tauri-apps/api/event";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -282,11 +283,48 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			void wsServerApi.setActiveProject(
 				activeProject.name,
 				activeProject.path,
-				activeProject.defaultShell
+				activeProject.defaultShell,
+				activeProject.color
 			);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [activeProject?.name, activeProject?.path, activeProject?.defaultShell]);
+	}, [activeProject?.name, activeProject?.path, activeProject?.defaultShell, activeProject?.color]);
+
+	useEffect(() => {
+		if (projects && projects.length > 0) {
+			void wsServerApi.setProjects(
+				projects.map(p => ({
+					id: p.id,
+					name: p.name,
+					color: p.color,
+					path: p.path,
+					isActive: p.id === activeProjectId
+				})),
+				activeProjectId || undefined
+			);
+		}
+	}, [projects, activeProjectId]);
+
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		async function setup() {
+			try {
+				unlisten = await listen<{ projectId: string }>("ws-active-project-changed", (event) => {
+					if (event.payload.projectId && event.payload.projectId !== activeProjectId) {
+						selectProject(event.payload.projectId);
+					}
+				});
+			} catch (e) {
+				console.warn("Failed to listen to ws-active-project-changed:", e);
+			}
+		}
+		void setup();
+		return () => {
+			if (unlisten) {
+				unlisten();
+			}
+		};
+	}, [activeProjectId, selectProject]);
 
 	useEffect(() => {
 		return () => {

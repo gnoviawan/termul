@@ -93,4 +93,28 @@ describe('wsServerApi', () => {
     const token = await wsServerApi.generateToken()
     expect(token).toBe('')
   })
+
+  it('setActiveProject invokes tauri command', async () => {
+    mockInvoke.mockResolvedValueOnce(undefined)
+
+    const result = await wsServerApi.setActiveProject('My Project', '/path/to/project', '/bin/bash', 'blue')
+    expect(result.success).toBe(true)
+    expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_active_project', {
+      projectName: 'My Project',
+      projectPath: '/path/to/project',
+      defaultShell: '/bin/bash',
+      color: 'blue',
+    })
+  })
+
+  it('setProjects invokes tauri command', async () => {
+    mockInvoke.mockResolvedValueOnce(undefined)
+
+    const result = await wsServerApi.setProjects([{ id: '1', name: 'Proj' }], '1')
+    expect(result.success).toBe(true)
+    expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_projects', {
+      projects: [{ id: '1', name: 'Proj' }],
+      activeProjectId: '1',
+    })
+  })
 })

@@ -27,6 +27,17 @@ pub struct ActiveProjectInfo {
     pub name: String,
     pub path: String,
     pub default_shell: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub path: Option<String>,
+    pub is_active: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -154,6 +165,7 @@ pub struct WsServer {
     token_ttl_secs: AtomicU64,
     auth_attempts: Mutex<HashMap<String, (u32, Instant)>>,
     active_project: Mutex<Option<ActiveProjectInfo>>,
+    projects: Mutex<Vec<ProjectInfo>>,
 }
 
 const DEFAULT_TOKEN_TTL_SECS: u64 = 3600;
@@ -183,6 +195,7 @@ impl WsServer {
             token_ttl_secs: AtomicU64::new(DEFAULT_TOKEN_TTL_SECS),
             auth_attempts: Mutex::new(HashMap::new()),
             active_project: Mutex::new(None),
+            projects: Mutex::new(Vec::new()),
         }
     }
 
@@ -245,12 +258,40 @@ impl WsServer {
         self.audit_log.lock().await.clone()
     }
 
-    pub async fn set_active_project(&self, name: String, path: String, default_shell: Option<String>) {
+    pub async fn set_active_project(&self, name: String, path: String, default_shell: Option<String>, color: Option<String>) {
         let mut active_proj = self.active_project.lock().await;
         *active_proj = Some(ActiveProjectInfo {
             name,
             path,
             default_shell,
+            color,
+        });
+    }
+
+    pub async fn set_projects(&self, projects: Vec<ProjectInfo>, active_project_id: Option<String>) {
+        let mut projs = self.projects.lock().await;
+        *projs = projects.clone();
+        
+        let mut active_proj = self.active_project.lock().await;
+        if let Some(active_id) = &active_project_id {
+            if let Some(proj) = projs.iter().find(|p| p.id == *active_id) {
+                *active_proj = Some(ActiveProjectInfo {
+                    name: proj.name.clone(),
+                    path: proj.path.clone().unwrap_or_default(),
+                    default_shell: None,
+                    color: Some(proj.color.clone()),
+                });
+            }
+        }
+        
+        // Broadcast the update to all connected WebSocket clients
+        let event_payload = serde_json::json!({
+            "projects": projects,
+            "activeProjectId": active_project_id,
+        });
+        let _ = self.event_tx.send(WsOutbound::Event {
+            event: "projects-changed".to_string(),
+            payload: Some(event_payload),
         });
     }
 
@@ -314,13 +355,18 @@ impl WsServer {
         self.running.store(true, Ordering::SeqCst);
 
         let server = self.clone_for_audit();
+        let app_handle_for_server = app_handle.clone();
+        let app_handle_for_emit = app_handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = server.clone().run_server(app_handle, port, auth_token, use_https).await {
+            if let Err(e) = server.clone().run_server(app_handle_for_server, port, auth_token, use_https).await {
                 log::error!("[WsServer] Server error: {}", e);
             }
             server.running.store(false, Ordering::SeqCst);
             let mut status = server.status.lock().await;
             status.is_running = false;
+            status.client_count = 0;
+            use tauri::Emitter;
+            let _ = app_handle_for_emit.emit("ws-server-status-changed", status.clone());
         });
 
         let scheme = if use_https { "https" } else { "http" };
@@ -337,6 +383,9 @@ impl WsServer {
         log::info!("[WsServer] Server started on {}://{}:{}", scheme, local_ip, port);
         log::info!("[WsServer] Local URL: {}://localhost:{}", scheme, port);
         log::info!("[WsServer] Network URL: {}://{}:{}", scheme, local_ip, port);
+
+        use tauri::Emitter;
+        let _ = app_handle.emit("ws-server-status-changed", status.clone());
 
         Ok(status.clone())
     }
@@ -468,247 +517,548 @@ fn get_index_html() -> &'static str {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Termul Manager - Remote Portal</title>
-    <meta name="theme-color" content="#0c0c0c" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: #0c0c0c; 
-            color: #e0e0e0; 
-            font-family: 'Inter', system-ui, sans-serif; 
-            overflow: hidden; 
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0c0c0c;
+            color: #cdd6f4;
+            overflow: hidden;
             height: 100vh;
         }
-        #root { 
-            height: 100vh; 
-            display: grid; 
-            grid-template-rows: 44px 1fr 22px; 
-            grid-template-columns: 240px 1fr;
-            grid-template-areas: 
-                "header header"
-                "sidebar main"
-                "statusbar statusbar";
+        #root {
+            height: 100vh;
+            display: grid;
+            grid-template-rows: 32px 1fr 26px;
+            grid-template-columns: 240px minmax(0,1fr) 280px minmax(0,1fr);
+            grid-template-areas:
+                "header header header header"
+                "sidebar main explorer editor"
+                "statusbar statusbar statusbar statusbar";
         }
-        
-        /* Header style matching Desktop */
-        .header { 
+        .header {
             grid-area: header;
-            display: flex; 
-            align-items: center; 
-            justify-content: space-between; 
-            padding: 0 16px; 
-            background: #181825; 
-            border-bottom: 1px solid #2a2b3c;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            background: #0c0c0c;
+            border-bottom: 1px solid #1f1f1f;
             user-select: none;
+            height: 32px;
         }
         .header-title {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 600;
-            color: #cdd6f4;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #888888;
         }
-        .header-title i {
-            color: #3b82f6;
-            width: 16px;
-            height: 16px;
+        .header-right {
+            display: flex;
+            align-items: center;
+            height: 100%;
         }
-        .header-controls { 
-            display: flex; 
-            align-items: center; 
-            gap: 16px; 
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 12px;
         }
-        .token-expiry { 
-            font-size: 11px; 
+        .token-expiry {
             font-family: 'JetBrains Mono', monospace;
-            color: #a6adc8;
-            background: #1e1e2e;
+            background: rgba(255, 255, 255, 0.05);
             padding: 2px 8px;
             border-radius: 4px;
-            border: 1px solid #313244;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #f38ba8;
+            font-size: 11px;
         }
-        .status { 
-            display: flex; 
-            align-items: center; 
-            gap: 6px; 
-            font-size: 11px; 
-            color: #bac2de; 
-        }
-        .dot { width: 6px; height: 6px; border-radius: 50%; }
-        .dot.green { background: #a6e3a1; animation: pulse 2s infinite; }
-        .dot.red { background: #f38ba8; }
-        .dot.yellow { background: #f9e2af; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        
-        /* Sidebar styling matching Desktop ProjectSidebar */
-        .sidebar {
-            grid-area: sidebar;
-            background: #171717;
-            border-right: 1px solid #222222;
-            display: flex;
-            flex-direction: column;
-            padding: 12px;
-            gap: 16px;
-            overflow-y: auto;
-            user-select: none;
-        }
-        .sidebar-section-title {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #888888;
-            font-weight: 700;
-            margin-bottom: 6px;
+        .status {
             display: flex;
             align-items: center;
             gap: 6px;
-        }
-        .sidebar-section-title i {
-            width: 12px;
-            height: 12px;
-        }
-        .sidebar-list {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .sidebar-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            font-size: 12px;
             color: #a6adc8;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.15s ease;
         }
-        .sidebar-item:hover {
-            background: #262626;
-            color: #cdd6f4;
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
         }
-        .sidebar-item.active {
-            background: #2e2e2e;
-            color: #ffffff;
-            font-weight: 500;
-            border-left: 3px solid #3b82f6;
-        }
-        .sidebar-item i {
-            width: 14px;
-            height: 14px;
-        }
-        
-        /* Main area & Tab bar styling */
-        .main-content {
-            grid-area: main;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            background: #0c0c0c;
-        }
-        
-        .tab-bar { 
-            display: flex; 
-            align-items: flex-end;
-            gap: 4px; 
-            padding: 6px 12px 0; 
-            background: #171717; 
-            border-bottom: 1px solid #222222; 
-            height: 38px;
-            user-select: none;
-        }
-        .tab { 
-            padding: 6px 12px; 
-            background: #1c1c1c; 
-            border: 1px solid #222222; 
-            border-bottom: none; 
-            border-radius: 6px 6px 0 0; 
-            cursor: pointer; 
-            font-size: 12px; 
-            color: #888888; 
-            display: flex; 
-            align-items: center; 
-            gap: 8px; 
-            height: 32px;
-            transition: background 0.15s ease, color 0.15s ease;
-        }
-        .tab.active { 
-            background: #0c0c0c; 
-            color: #ffffff; 
-            font-weight: 500;
-            border-color: #222222;
-            box-shadow: inset 0 2px 0 0 #3b82f6;
-        }
-        .tab:hover:not(.active) { 
-            background: #262626; 
-            color: #cdd6f4;
-        }
-        .tab-close { 
-            width: 14px; 
-            height: 14px; 
-            border-radius: 4px; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-size: 9px; 
-            opacity: 0.5; 
-            transition: all 0.15s ease;
-        }
-        .tab-close:hover { 
-            opacity: 1; 
-            background: #f38ba8; 
-            color: #1e1e2e; 
-        }
-        .add-tab { 
-            padding: 6px 10px; 
-            cursor: pointer; 
-            color: #888888; 
-            background: none; 
-            border: none; 
+        .dot.green { background: #a6e3a1; box-shadow: 0 0 8px #a6e3a1; }
+        .dot.orange { background: #f9e2af; box-shadow: 0 0 8px #f9e2af; }
+        .header-icon-btn {
+            background: transparent;
+            border: none;
+            color: #888888;
+            width: 32px;
             height: 32px;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            transition: all 0.15s ease;
         }
-        .add-tab:hover { 
-            color: #3b82f6; 
+        .header-icon-btn:hover {
             background: #262626;
+            color: #ffffff;
+        }
+        .header-icon-btn i {
+            width: 14px;
+            height: 14px;
+        }
+        .window-controls {
+            display: flex;
+            align-items: center;
+            height: 100%;
+        }
+        .win-btn {
+            background: transparent;
+            border: none;
+            color: #888888;
+            width: 36px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .win-btn:hover {
+            background: #262626;
+            color: #ffffff;
+        }
+        .win-btn.close:hover {
+            background: #dc2626;
+            color: #ffffff;
+        }
+        .win-btn i {
+            width: 14px;
+            height: 14px;
+        }
+        .sidebar {
+            grid-area: sidebar;
+            background: #171717;
+            border-right: 1px solid #1f1f1f;
+            display: flex;
+            flex-direction: column;
+            padding: 12px 6px;
+            overflow-y: auto;
+            user-select: none;
+        }
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 6px 6px;
+            border-bottom: 1px solid #222222;
+            margin-bottom: 12px;
+        }
+        .sidebar-header span {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #888888;
+        }
+        .sidebar-header button {
+            background: transparent;
+            border: none;
+            color: #888888;
+            cursor: pointer;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s ease;
+        }
+        .sidebar-header button:hover {
+            background: #262626;
+            color: #ffffff;
+        }
+        .project-item {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            padding: 8px 10px;
+            font-size: 13px;
+            color: #a6adc8;
+            background: transparent;
+            border: none;
+            border-left: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: left;
+            border-radius: 0 4px 4px 0;
+            margin-bottom: 2px;
+        }
+        .project-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            color: #ffffff;
+        }
+        .project-item.active {
+            background: #262626;
+            color: #ffffff;
+            font-weight: 500;
+        }
+        .project-avatar {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+        .project-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .project-shortcut {
+            font-family: monospace;
+            font-size: 10px;
+            color: #666666;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+        .project-item:hover .project-shortcut,
+        .project-item.active .project-shortcut {
+            opacity: 1;
         }
         
-        /* Terminal panels */
-        .terminal-container { 
-            flex: 1; 
-            padding: 8px; 
-            display: none; 
-            width: 100%; 
-            height: 100%; 
-            min-height: 0; 
-            background: #0c0c0c; 
-        }
-        .terminal-container.active { 
-            display: flex; 
-            flex-direction: column; 
-        }
-        .terminal-screen { 
-            width: 100%; 
-            height: 100%; 
-            flex: 1; 
-            min-height: 0; 
-        }
-        .xterm { 
-            width: 100%; 
-            height: 100%; 
-            flex: 1; 
-            min-height: 0; 
-        }
-        .xterm-viewport { overflow-y: auto !important; }
+        /* Project Colors */
+        .bg-proj-blue { background-color: #2563eb; }
+        .bg-proj-purple { background-color: #9333ea; }
+        .bg-proj-green { background-color: #16a34a; }
+        .bg-proj-yellow { background-color: #ca8a04; }
+        .bg-proj-red { background-color: #dc2626; }
+        .bg-proj-cyan { background-color: #0891b2; }
+        .bg-proj-pink { background-color: #db2777; }
+        .bg-proj-orange { background-color: #ea580c; }
+        .bg-proj-gray { background-color: #4b5563; }
         
-        /* Bottom status bar matching Desktop */
+        .border-proj-blue { border-left-color: #2563eb; }
+        .border-proj-purple { border-left-color: #9333ea; }
+        .border-proj-green { border-left-color: #16a34a; }
+        .border-proj-yellow { border-left-color: #ca8a04; }
+        .border-proj-red { border-left-color: #dc2626; }
+        .border-proj-cyan { border-left-color: #0891b2; }
+        .border-proj-pink { border-left-color: #db2777; }
+        .border-proj-orange { border-left-color: #ea580c; }
+        .border-proj-gray { border-left-color: #4b5563; }
+
+        .main-content {
+            grid-area: main;
+            background: #0c0c0c;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+        .explorer-panel {
+            grid-area: explorer;
+            background: #111111;
+            border-left: 1px solid #1f1f1f;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+        .explorer-panel.hidden {
+            display: none;
+        }
+        .explorer-header {
+            height: 35px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            border-bottom: 1px solid #1f1f1f;
+            color: #888888;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            background: #171717;
+        }
+        .explorer-body {
+            flex: 1;
+            overflow: auto;
+            padding: 8px 0;
+        }
+        .explorer-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 24px;
+            text-align: center;
+            color: #666666;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .explorer-node {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            color: #a6adc8;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .explorer-node:hover {
+            background: rgba(255,255,255,0.04);
+            color: #ffffff;
+        }
+        .explorer-node.active {
+            background: rgba(59,130,246,0.12);
+            color: #ffffff;
+        }
+        .explorer-children {
+            display: none;
+        }
+        .explorer-children.open {
+            display: block;
+        }
+        .explorer-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .explorer-search {
+            width: 100%;
+            padding: 4px 8px;
+            background: #0c0c0c;
+            border: none;
+            color: #cdd6f4;
+            font-size: 12px;
+            outline: none;
+            font-family: inherit;
+        }
+        .explorer-search::placeholder {
+            color: #555;
+        }
+        .context-menu {
+            position: fixed;
+            z-index: 9999;
+            background: #171717;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 4px;
+            min-width: 160px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+        }
+        .context-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            color: #cdd6f4;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            background: transparent;
+            border: none;
+            width: 100%;
+            text-align: left;
+            font-family: inherit;
+        }
+        .context-menu-item:hover {
+            background: rgba(59,130,246,0.2);
+            color: #ffffff;
+        }
+        .context-menu-separator {
+            height: 1px;
+            background: #2a2a2a;
+            margin: 4px 0;
+        }
+        .explorer-resize-handle {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            cursor: ew-resize;
+            z-index: 10;
+        }
+        .explorer-resize-handle:hover {
+            background: rgba(59,130,246,0.3);
+        }
+        .editor-panel {
+            grid-area: editor;
+            background: #0c0c0c;
+            border-left: 1px solid #1f1f1f;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .editor-panel.hidden {
+            display: none;
+        }
+        .editor-header {
+            height: 35px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            border-bottom: 1px solid #1f1f1f;
+            background: #171717;
+            gap: 8px;
+        }
+        .editor-header span {
+            font-size: 12px;
+            color: #cdd6f4;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .editor-header button {
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        .editor-header button:hover {
+            background: #262626;
+            color: #fff;
+        }
+        .editor-content {
+            flex: 1;
+            overflow: auto;
+        }
+        .editor-content textarea {
+            width: 100%;
+            height: 100%;
+            background: #0c0c0c;
+            color: #cdd6f4;
+            border: none;
+            outline: none;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            resize: none;
+        }
+        .editor-close-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+        }
+        .editor-close-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .tab-bar {
+            height: 35px;
+            background: #171717;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #1f1f1f;
+            user-select: none;
+            padding: 0 4px;
+        }
+        .tab {
+            height: 35px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 16px;
+            background: #1c1c1c;
+            border-right: 1px solid #171717;
+            font-size: 13px;
+            color: #888888;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+        .tab:hover {
+            background: #222222;
+            color: #a6adc8;
+        }
+        .tab.active {
+            background: #0c0c0c;
+            color: #ffffff;
+            font-weight: 500;
+        }
+        .tab-close {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            border-radius: 30%;
+            transition: all 0.1s ease;
+            opacity: 0.5;
+        }
+        .tab-close:hover {
+            background: rgba(255,255,255,0.1);
+            opacity: 1;
+        }
+        .add-tab {
+            background: transparent;
+            border: none;
+            color: #888888;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-left: 4px;
+            transition: all 0.15s ease;
+        }
+        .add-tab:hover {
+            background: #262626;
+            color: #ffffff;
+        }
+        .terminal-container {
+            flex: 1;
+            display: none;
+            padding: 8px;
+            background: #0c0c0c;
+            height: calc(100% - 35px);
+            position: relative;
+        }
+        .terminal-container.active {
+            display: block;
+        }
+        .terminal-screen {
+            width: 100%;
+            height: 100%;
+        }
         .status-bar {
             grid-area: statusbar;
+            height: 26px;
             background: #007acc;
             color: #ffffff;
             display: flex;
@@ -716,8 +1066,8 @@ fn get_index_html() -> &'static str {
             justify-content: space-between;
             padding: 0 12px;
             font-size: 11px;
-            font-weight: 500;
             user-select: none;
+            transition: background 0.25s ease;
         }
         .status-bar-left, .status-bar-right {
             display: flex;
@@ -727,179 +1077,159 @@ fn get_index_html() -> &'static str {
         .status-bar-item {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
+            opacity: 0.9;
+            transition: opacity 0.15s ease;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .status-bar-item:hover {
+            opacity: 1;
+            background: rgba(255, 255, 255, 0.1);
         }
         .status-bar-item i {
             width: 12px;
             height: 12px;
         }
-        
-        /* Loading and error panels */
-        .connecting { 
-            grid-column: 1 / -1;
-            grid-row: 1 / -1;
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            flex-direction: column; 
-            gap: 16px; 
-            background: #0c0c0c;
-            z-index: 1000;
-        }
-        .spinner { 
-            width: 32px; 
-            height: 32px; 
-            border: 3px solid #1c1c1c; 
-            border-top-color: #3b82f6; 
-            border-radius: 50%; 
-            animation: spin 1s linear infinite; 
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .error { 
-            grid-column: 1 / -1;
-            grid-row: 1 / -1;
+        .error {
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
-            flex-direction: column;
-            gap: 12px;
+            height: 100vh;
             background: #0c0c0c;
-            color: #f38ba8; 
-            font-size: 14px; 
-            text-align: center; 
-            padding: 20px; 
-            z-index: 1000;
+            color: #cdd6f4;
+            padding: 24px;
+            text-align: center;
         }
-        .retry-btn { 
-            padding: 8px 20px; 
-            background: #3b82f6; 
-            color: #ffffff; 
-            border: none; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-weight: 600; 
-            font-size: 12px;
+        .retry-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
             transition: background 0.15s ease;
         }
-        .retry-btn:hover { background: #2563eb; }
-        .toast { 
-            position: fixed; 
-            bottom: 30px; 
-            right: 20px; 
-            padding: 10px 16px; 
-            background: #1c1c1c; 
-            color: #ffffff;
-            border: 1px solid #222222;
-            border-radius: 6px; 
-            font-size: 12px; 
-            animation: slideIn 0.2s ease; 
-            z-index: 2000; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        .retry-btn:hover {
+            background: #2563eb;
         }
-        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .toast {
+            position: fixed;
+            bottom: 38px;
+            right: 12px;
+            background: #313244;
+            color: #cdd6f4;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            border: 1px solid #45475a;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            animation: slideIn 0.2s ease, fadeOut 0.2s ease 1.8s forwards;
+            z-index: 1000;
+        }
+        @keyframes slideIn {
+            from { transform: translateY(12px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            to { opacity: 0; }
+        }
     </style>
 </head>
 <body>
     <div id="root">
-        <div class="connecting" id="loading">
-            <div class="spinner"></div>
-            <p style="font-size:13px;color:#888888">Connecting to Termul server...</p>
+        <div class="error">
+            <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">Connecting to remote portal...</h2>
+            <p style="font-size:13px;color:#888888">Establishing secure websocket terminal session</p>
         </div>
     </div>
-    <script type="module">
-        // Jika diakses lewat Cloudflare Tunnel (https://*.trycloudflare.com), browser akan melihat protokol https,
-        // sehingga WebSocket harus dipaksa menggunakan wss:// agar tidak diblokir oleh mixed content policy.
-        let wsProto = "ws://";
-        if (window.location.protocol === "https:" || window.location.hostname.endsWith("trycloudflare.com")) {
-            wsProto = "wss://";
-        }
-        
-        // Cek jika link di-route lewat Cloudflare Tunnel, port local (:9876) tidak boleh dimasukkan karena port HTTPS Cloudflare
-        // adalah standard 443. Jika localhost / IP local biasa, port wajib ada.
-        let wsHost = window.location.host;
-        if (window.location.hostname.endsWith("trycloudflare.com")) {
-            wsHost = window.location.hostname;
-        }
-        
-        
-        const WS_URL = wsProto + wsHost + "/ws";
-        const WS_TOKEN = "__TERMUL_TOKEN__";
-        const TOKEN_EXPIRES_AT = parseInt("__TERMUL_TOKEN_EXPIRES__") || 0;
 
+    <script>
+        const AUTH_TOKEN = "__TERMUL_TOKEN__";
+        const TOKEN_EXPIRES_AT = __TERMUL_TOKEN_EXPIRES__;
+        
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        const pendingRequests = new Map();
+        const eventListeners = new Map();
+        
         let terminals = [];
         let activeTerminalId = null;
-        let ws = null;
-        let pendingRequests = new Map();
-        let eventListeners = new Map();
-        let reconnectAttempts = 0;
-        let maxReconnectAttempts = 10;
-        let sessionTerminals = null;
+        const lastActiveTerminalByProject = {};
+        const editorTabs = [];
+        let activeEditorId = null;
+        
+        let activeProjectId = null;
+        let isExplorerVisible = true;
+        const explorerDirectoryCache = new Map();
+        const explorerExpandedDirs = new Set();
+        let explorerSelectedPath = null;
+        let explorerSearchQuery = "";
+        let explorerContextMenu = { visible: false, x: 0, y: 0, path: null, type: null };
+        let projects = [
+            { id: "1", name: "RCity", color: "green", path: "D:\\backup from pc asus\\Documents Development\\RudyCity" },
+            { id: "2", name: "huge-files", color: "green", path: "" }
+        ]; // Fallback mock projects matching photo!
 
-        try {
-            const saved = sessionStorage.getItem("termul-terminals");
-            if (saved) sessionTerminals = JSON.parse(saved);
-        } catch {}
+        const sessionData = sessionStorage.getItem("termul-terminals");
+        const sessionTerminals = sessionData ? JSON.parse(sessionData) : null;
 
-        function generateId() {
-            return "req-" + Date.now() + "-" + Math.random().toString(36).slice(2, 9);
+        function listen(event, cb) {
+            if (!eventListeners.has(event)) eventListeners.set(event, []);
+            eventListeners.get(event).push(cb);
+        }
+        
+        function emitEvent(event, payload) {
+            const list = eventListeners.get(event);
+            if (list) list.forEach(cb => cb(payload));
         }
 
-        function invoke(method, params) {
+        function invoke(method, params = {}) {
             return new Promise((resolve, reject) => {
-                const id = generateId();
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    return reject(new Error("WebSocket not connected"));
+                }
+                const id = "req-" + Math.random().toString(36).substr(2, 9);
+                const msg = { type: "request", id, method, params };
+                
                 const timeout = setTimeout(() => {
                     pendingRequests.delete(id);
-                    reject(new Error("Request timeout: " + method));
-                }, 30000);
+                    reject(new Error("Request timeout"));
+                }, 15000);
+                
                 pendingRequests.set(id, { resolve, reject, timeout });
-                ws.send(JSON.stringify({ type: "request", id, method, params }));
+                ws.send(JSON.stringify(msg));
             });
         }
 
-        function listen(event, callback) {
-            if (!eventListeners.has(event)) eventListeners.set(event, []);
-            eventListeners.get(event).push(callback);
-            return () => {
-                const listeners = eventListeners.get(event);
-                if (listeners) {
-                    const idx = listeners.indexOf(callback);
-                    if (idx >= 0) listeners.splice(idx, 1);
-                }
-            };
-        }
-
-        function emitEvent(eventName, payload) {
-            const listeners = eventListeners.get(eventName);
-            if (listeners) {
-                for (const cb of listeners) cb(payload);
-            }
-        }
-
-        async function connect() {
+        function connect() {
             return new Promise((resolve, reject) => {
-                console.log("Connecting to WebSocket URL:", WS_URL);
-                ws = new WebSocket(WS_URL);
+                const loc = window.location;
+                const wsScheme = loc.protocol === "https:" ? "wss:" : "ws:";
+                const wsUrl = wsScheme + "//" + loc.host + "/ws";
                 
-                const timeout = setTimeout(() => {
-                    if (ws.readyState !== WebSocket.OPEN) {
-                        console.error("WebSocket connection timed out");
-                        ws.close();
-                        reject(new Error("Connection timeout"));
-                    }
-                }, 30000); // 30s timeout to allow cold tunnel connections
+                ws = new WebSocket(wsUrl);
+                
+                const authTimeout = setTimeout(() => {
+                    ws.close();
+                    reject(new Error("Auth timeout"));
+                }, 5000);
 
                 ws.onopen = () => {
-                    console.log("WebSocket connection opened. Sending auth token...");
-                    ws.send(JSON.stringify({ type: "auth", token: WS_TOKEN }));
+                    ws.send(JSON.stringify({ type: "auth", token: AUTH_TOKEN }));
                 };
 
-                ws.onmessage = async (event) => {
-                    console.log("WebSocket received message:", event.data);
+                ws.onmessage = (event) => {
                     try {
                         const msg = JSON.parse(event.data);
                         if (msg.type === "response") {
                             if (msg.id === "auth") {
-                                clearTimeout(timeout);
+                                clearTimeout(authTimeout);
                                 if (msg.success) {
                                     console.log("WebSocket authenticated successfully");
                                     reconnectAttempts = 0;
@@ -949,7 +1279,6 @@ fn get_index_html() -> &'static str {
         }
 
         async function loadXterm() {
-            // Load xterm.js stylesheet agar tidak hancur berantakan
             const link = document.createElement("link");
             link.rel = "stylesheet";
             link.href = "https://esm.sh/@xterm/xterm@5.5.0/css/xterm.css";
@@ -961,7 +1290,7 @@ fn get_index_html() -> &'static str {
             return { Terminal: xtermModule.Terminal, FitAddon: fitModule.FitAddon, WebLinksAddon: webLinksModule.WebLinksAddon };
         }
 
-        async function initTerminal(terminalObj, isRestore = false) {
+        async function initTerminal(terminalObj, isRestore = false, initialOptions = {}) {
             const { Terminal, FitAddon, WebLinksAddon } = await loadXterm();
 
             const term = new Terminal({
@@ -969,7 +1298,7 @@ fn get_index_html() -> &'static str {
                 fontSize: 14,
                 fontFamily: "monospace",
                 theme: {
-                    background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc",
+                    background: "#0c0c0c", foreground: "#cdd6f4", cursor: "#f5e0dc",
                     selectionBackground: "#585b7066",
                     black: "#45475a", red: "#f38ba8", green: "#a6e3a1", yellow: "#f9e2af",
                     blue: "#89b4fa", magenta: "#f5c2e7", cyan: "#94e2d5", white: "#bac2de",
@@ -1020,7 +1349,6 @@ fn get_index_html() -> &'static str {
                 return true;
             });
 
-            // Buffer data that arrives before remoteId is assigned (race between spawn response and PTY output)
             const earlyDataBuffer = [];
             let earlyExited = false;
 
@@ -1029,7 +1357,6 @@ fn get_index_html() -> &'static str {
                 if (terminalObj.remoteId) {
                     if (payloadId === terminalObj.remoteId) term.write(payload.data || "");
                 } else {
-                    // remoteId not yet set — buffer by payload id so we can flush after spawn resolves
                     earlyDataBuffer.push(payload);
                 }
             });
@@ -1047,44 +1374,117 @@ fn get_index_html() -> &'static str {
                 if (payload.terminalId === terminalObj.remoteId) {
                     if (terminalObj.metadata) terminalObj.metadata.cwd = payload.cwd;
                     updateStatusBar();
-                    renderSidebar();
                 }
             });
-            listen("terminal-git-branch-changed", () => {});
-            listen("terminal-git-status-changed", () => {});
-            listen("terminal-exit-code-changed", () => {});
 
-            if (isRestore && terminalObj.remoteId) {
-                term.write("\r\n\x1b[33mSession restored. Terminal ID: " + terminalObj.remoteId + "\x1b[0m\r\n");
-            } else {
+            listen("terminal-git-branch-changed", (payload) => {
+                if (payload.terminalId === terminalObj.remoteId) {
+                    terminalObj.gitBranch = payload.branch;
+                    updateStatusBar();
+                }
+            });
+
+            listen("terminal-git-status-changed", (payload) => {
+                if (payload.terminalId === terminalObj.remoteId) {
+                    terminalObj.gitStatus = payload.status;
+                    updateStatusBar();
+                }
+            });
+
+            listen("terminal-exit-code-changed", (payload) => {
+                if (payload.terminalId === terminalObj.remoteId) {
+                    terminalObj.exitCode = payload.exitCode;
+                    updateStatusBar();
+                }
+            });
+
+            let resolvedRemoteId = terminalObj.remoteId;
+            let shouldAttemptRestore = isRestore && !!resolvedRemoteId;
+
+            if (shouldAttemptRestore) {
                 try {
-                    const spawnData = await invoke("terminal_spawn", { options: {} });
+                    const probe = await invoke("terminal_probe", { terminalId: resolvedRemoteId });
+                    if (!probe || probe.exists !== true || probe.alive !== true) {
+                        throw new Error("Terminal is no longer alive");
+                    }
+
+                    terminalObj.metadata = {
+                        ...(terminalObj.metadata || {}),
+                        cwd: probe.cwd || terminalObj.metadata?.cwd || null,
+                        shell: probe.shell || terminalObj.metadata?.shell || null,
+                        pid: probe.pid || terminalObj.metadata?.pid || null,
+                    };
+                    term.write("\r\n\x1b[33mLive session reattached. Terminal ID: " + resolvedRemoteId + "\x1b[0m\r\n");
+                    setTimeout(() => {
+                        try {
+                            fitAddon.fit();
+                            if (terminalObj.remoteId) {
+                                invoke("terminal_resize", {
+                                    terminalId: terminalObj.remoteId,
+                                    cols: term.cols,
+                                    rows: term.rows,
+                                }).catch(() => {});
+                            }
+                        } catch {}
+                    }, 50);
+                } catch (restoreErr) {
+                    console.warn("Restore failed, spawning new terminal:", restoreErr);
+                    terminalObj.remoteId = null;
+                    terminalObj.metadata = null;
+                    try { saveSession(); } catch {}
+                }
+            }
+
+            if (!terminalObj.remoteId) {
+                try {
+                    const spawnData = await invoke("terminal_spawn", { options: initialOptions });
                     terminalObj.remoteId = spawnData.id;
                     terminalObj.metadata = spawnData;
                     saveSession();
                     updateStatusBar();
-                    renderSidebar();
-                    // Flush buffered data that arrived before remoteId was set
+                    
+                    try {
+                        const branchData = await invoke("terminal_get_git_branch", { terminalId: spawnData.id });
+                        if (branchData) terminalObj.gitBranch = branchData;
+                        
+                        const statusData = await invoke("terminal_get_git_status", { terminalId: spawnData.id });
+                        if (statusData) terminalObj.gitStatus = statusData;
+                        
+                        updateStatusBar();
+                    } catch (e) {
+                        console.warn("Failed to fetch initial git info:", e);
+                    }
+                    
                     for (const p of earlyDataBuffer) {
                         if ((p.id || p.terminalId) === terminalObj.remoteId) term.write(p.data || "");
                     }
                     earlyDataBuffer.length = 0;
                     if (earlyExited) term.write("\r\n\x1b[33mProcess exited.\x1b[0m\r\n");
                 } catch (err) {
-                    term.write("\r\n\x1b[31mFailed to spawn terminal: " + (err?.message || String(err) || "Unknown") + "\x1b[0m\r\n");
+                    term.write("\r\n\x1b[31mRestore miss. Spawn failed: " + (err?.message || String(err) || "Unknown") + "\x1b[0m\r\n");
                 }
             }
         }
 
-        async function addTerminal() {
+        async function addTerminal(projectIdOverride = null) {
+            const targetProjectId = projectIdOverride || activeProjectId || null;
             const id = "tab-" + Date.now();
-            const terminalObj = { id, remoteId: null, term: null, fitAddon: null, metadata: null };
+            const terminalObj = { id, remoteId: null, term: null, fitAddon: null, metadata: null, projectId: targetProjectId };
+            
+            const options = {};
+            if (targetProjectId) {
+                const proj = projects.find(p => p.id === targetProjectId);
+                if (proj && proj.path) {
+                    options.cwd = proj.path;
+                }
+            }
+            
             terminals.push(terminalObj);
             renderTabs();
             renderSidebar();
             await createTerminalContainer(terminalObj);
             setActiveTerminal(id);
-            await initTerminal(terminalObj);
+            await initTerminal(terminalObj, false, options);
             saveSession();
         }
 
@@ -1094,7 +1494,6 @@ fn get_index_html() -> &'static str {
             container.className = "terminal-container";
             container.id = "term-" + terminalObj.id;
             
-            // Tambahkan inner div khusus untuk xterm agar sizing height 100% didukung browser remote
             const xtermDiv = document.createElement("div");
             xtermDiv.className = "terminal-screen";
             xtermDiv.style.width = "100%";
@@ -1103,6 +1502,136 @@ fn get_index_html() -> &'static str {
             
             mainContent.appendChild(container);
         }
+
+        function renderEmptyState() {
+            const mainContent = document.getElementById("main-content");
+            if (!mainContent) return;
+            let emptyState = mainContent.querySelector("#empty-project-terminal-state");
+            if (!emptyState) {
+                emptyState = document.createElement("div");
+                emptyState.id = "empty-project-terminal-state";
+                emptyState.style.display = "none";
+                emptyState.style.flex = "1";
+                emptyState.style.alignItems = "center";
+                emptyState.style.justifyContent = "center";
+                emptyState.style.flexDirection = "column";
+                emptyState.style.gap = "12px";
+                emptyState.style.color = "#888888";
+                emptyState.innerHTML = "<div style='text-align:center;max-width:360px;padding:24px'>" +
+                    "<div style='font-size:16px;font-weight:600;color:#cdd6f4;margin-bottom:6px'>No terminals in this project</div>" +
+                    "<div style='font-size:13px;line-height:1.5;margin-bottom:14px'>Each project keeps its own terminal list. Create a new terminal for current project.</div>" +
+                    "<button id='empty-state-new-terminal' class='retry-btn'>New Terminal</button>" +
+                    "</div>";
+                mainContent.appendChild(emptyState);
+            }
+
+            const visibleTerminals = terminals.filter(t => (t.projectId || null) === (activeProjectId || null));
+            emptyState.style.display = visibleTerminals.length === 0 ? "flex" : "none";
+
+            const createBtn = document.getElementById("empty-state-new-terminal");
+            if (createBtn) {
+                createBtn.onclick = () => { void addTerminal(activeProjectId || null); };
+            }
+        }
+
+        function renderEditorEmptyState() {
+            const editorBody = document.getElementById("editor-body");
+            if (!editorBody) return;
+            if (editorTabs.length === 0) {
+                editorBody.innerHTML = "<div class='explorer-empty'>No file open. Double click file to open editor.</div>";
+            }
+        }
+
+        function closeEditorTab(id) {
+            const idx = editorTabs.findIndex((t) => t.id === id);
+            if (idx === -1) return;
+            editorTabs.splice(idx, 1);
+            if (activeEditorId === id) {
+                activeEditorId = editorTabs[0]?.id || null;
+            }
+            renderEditor();
+        }
+
+        async function openFileInEditor(filePath) {
+            const normalizedPath = filePath.replace(/\\/g, "/");
+            let tab = editorTabs.find((t) => t.path === normalizedPath);
+            if (!tab) {
+                const result = await invoke("read_file", { filePath: normalizedPath });
+                const content = result?.content ?? "";
+                tab = {
+                    id: "editor-" + Date.now(),
+                    path: normalizedPath,
+                    name: normalizedPath.split("/").pop() || normalizedPath,
+                    content,
+                    dirty: false,
+                };
+                editorTabs.unshift(tab);
+            }
+            activeEditorId = tab.id;
+            await renderEditor();
+        }
+
+        async function saveActiveEditor() {
+            const tab = editorTabs.find((t) => t.id === activeEditorId);
+            if (!tab) return;
+            const textarea = document.getElementById("editor-textarea");
+            if (!(textarea instanceof HTMLTextAreaElement)) return;
+            const content = textarea.value;
+            const result = await invoke("write_file", { filePath: tab.path, content });
+            if (result) {
+                tab.content = content;
+                tab.dirty = false;
+                await renderEditor();
+            }
+        }
+
+        async function renderEditor() {
+            const panel = document.getElementById("editor-panel");
+            const body = document.getElementById("editor-body");
+            if (!panel || !body) return;
+            panel.classList.toggle("hidden", editorTabs.length === 0);
+            if (editorTabs.length === 0) {
+                renderEditorEmptyState();
+                return;
+            }
+            const tab = editorTabs.find((t) => t.id === activeEditorId) || editorTabs[0];
+            activeEditorId = tab.id;
+            body.innerHTML = "<div class='editor-header'>" +
+                editorTabs.map((t) => "<button class='editor-tab" + (t.id === tab.id ? " active" : "") + "' data-editor-id='" + t.id + "'>" + t.name + (t.dirty ? " *" : "") + "</button>").join("") +
+                "<button id='editor-save-btn'>Save</button>" +
+                "<button id='editor-close-btn' class='editor-close-btn'><i data-lucide='x'></i></button>" +
+                "</div>" +
+                "<div class='editor-content'><textarea id='editor-textarea'>" + tab.content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</textarea></div>";
+            const textarea = document.getElementById("editor-textarea");
+            if (textarea) {
+                textarea.addEventListener("input", () => {
+                    tab.dirty = true;
+                });
+            }
+            body.querySelectorAll(".editor-tab").forEach((btn) => {
+                btn.addEventListener("click", () => {
+                    activeEditorId = btn.dataset.editorId;
+                    void renderEditor();
+                });
+            });
+            const saveBtn = document.getElementById("editor-save-btn");
+            if (saveBtn) saveBtn.addEventListener("click", () => { void saveActiveEditor(); });
+            const closeBtn = document.getElementById("editor-close-btn");
+            if (closeBtn) closeBtn.addEventListener("click", () => closeEditorTab(tab.id));
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        const ST_COLORS = {
+            blue: "#2563eb",
+            purple: "#9333ea",
+            green: "#16a34a",
+            yellow: "#ca8a04",
+            red: "#dc2626",
+            cyan: "#0891b2",
+            pink: "#db2777",
+            orange: "#ea580c",
+            gray: "#4b5563"
+        };
 
         function renderTabs() {
             const mainContent = document.getElementById("main-content");
@@ -1113,10 +1642,20 @@ fn get_index_html() -> &'static str {
                 mainContent.prepend(tabBar);
             }
             
-            tabBar.innerHTML = terminals.map(t => {
+            const visibleTerminals = terminals.filter(t => (t.projectId || null) === (activeProjectId || null));
+            const activeProj = projects.find(p => p.id === activeProjectId);
+            const colorHex = activeProj ? (ST_COLORS[activeProj.color] || "#3b82f6") : "#3b82f6";
+
+            tabBar.innerHTML = visibleTerminals.map(t => {
                 const isActive = t.id === activeTerminalId;
-                const icon = "<i data-lucide='terminal' style='width:13px;height:13px;color:" + (isActive ? "#3b82f6" : "#888888") + "'></i>";
-                return "<div class='tab" + (isActive ? " active" : "") + "' data-id='" + t.id + "'>" +
+                
+                let activeStyle = "";
+                if (isActive) {
+                    activeStyle = " style='box-shadow: inset 0 2px 0 0 " + colorHex + "; background: #0c0c0c; color: #ffffff;'";
+                }
+                
+                const icon = "<i data-lucide='terminal' style='width:13px;height:13px;color:" + (isActive ? colorHex : "#888888") + "'></i>";
+                return "<div class='tab" + (isActive ? " active" : "") + "' data-id='" + t.id + "' data-project-id='" + (t.projectId || "") + "'" + activeStyle + ">" +
                     icon +
                     "<span>" + (t.metadata?.shell ? t.metadata.shell.split(/[\\/]/).pop() : "Terminal") + "</span>" +
                     "<div class='tab-close' data-close='" + t.id + "'><i data-lucide='x' style='width:10px;height:10px'></i></div>" +
@@ -1143,6 +1682,230 @@ fn get_index_html() -> &'static str {
                 addTabBtn.addEventListener("click", () => addTerminal());
             }
             
+            renderEmptyState();
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        async function selectProject(id) {
+            activeProjectId = id;
+            renderSidebar();
+            updateStatusBar();
+            renderTabs();
+            invoke("set_active_project", { projectId: id }).catch(e => {
+                console.error("Failed to select project:", e);
+            });
+
+            const existingProjectTerminal = getPreferredTerminalForProject(id);
+            if (existingProjectTerminal) {
+                setActiveTerminal(existingProjectTerminal.id);
+                return;
+            }
+
+            activeTerminalId = null;
+            document.querySelectorAll(".terminal-container").forEach(el => el.classList.remove("active"));
+            renderTabs();
+            renderSidebar();
+            updateStatusBar();
+        }
+
+        async function loadDirectory(dirPath) {
+            if (!dirPath) return [];
+            const normalizedDirPath = dirPath.replace(/\\/g, "/");
+            if (explorerDirectoryCache.has(normalizedDirPath)) {
+                return explorerDirectoryCache.get(normalizedDirPath);
+            }
+            try {
+                const entries = await invoke("read_directory", { dirPath: normalizedDirPath });
+                explorerDirectoryCache.set(normalizedDirPath, entries || []);
+                return entries || [];
+            } catch (error) {
+                console.error("Failed to read directory:", normalizedDirPath, error);
+                return [];
+            }
+        }
+
+        async function toggleExplorerDirectory(dirPath) {
+            const normalizedDirPath = dirPath.replace(/\\/g, "/");
+            if (explorerExpandedDirs.has(normalizedDirPath)) {
+                explorerExpandedDirs.delete(normalizedDirPath);
+            } else {
+                explorerExpandedDirs.add(normalizedDirPath);
+                await loadDirectory(normalizedDirPath);
+            }
+            await renderExplorer();
+        }
+
+        function hideExplorerContextMenu() {
+            explorerContextMenu.visible = false;
+            explorerContextMenu.path = null;
+            explorerContextMenu.type = null;
+            const menu = document.getElementById("explorer-context-menu");
+            if (menu) menu.remove();
+        }
+
+        async function showExplorerContextMenu(x, y, path, type) {
+            hideExplorerContextMenu();
+            explorerContextMenu.visible = true;
+            explorerContextMenu.x = x;
+            explorerContextMenu.y = y;
+            explorerContextMenu.path = path;
+            explorerContextMenu.type = type;
+            const menu = document.createElement("div");
+            menu.id = "explorer-context-menu";
+            menu.className = "context-menu";
+            menu.style.left = x + "px";
+            menu.style.top = y + "px";
+            menu.innerHTML = `
+                <button class="context-menu-item" data-action="open">Open</button>
+                <button class="context-menu-item" data-action="rename">Rename</button>
+                <button class="context-menu-item" data-action="delete">Delete</button>
+                <div class="context-menu-separator"></div>
+                <button class="context-menu-item" data-action="new-file">New File</button>
+                <button class="context-menu-item" data-action="new-folder">New Folder</button>
+            `;
+            document.body.appendChild(menu);
+            menu.querySelectorAll(".context-menu-item").forEach((btn) => {
+                btn.addEventListener("click", async () => {
+                    const action = btn.dataset.action;
+                    const targetPath = explorerContextMenu.path;
+                    const targetType = explorerContextMenu.type;
+                    hideExplorerContextMenu();
+                    if (!targetPath && action !== "new-file" && action !== "new-folder") return;
+                    const normalizedTarget = targetPath ? targetPath.replace(/\\/g, "/") : null;
+                    if (action === "open" && normalizedTarget) {
+                        await openFileInEditor(normalizedTarget);
+                    } else if (action === "rename" && normalizedTarget) {
+                        const nextName = prompt("New name:", normalizedTarget.split("/").pop() || "");
+                        if (!nextName) return;
+                        const parent = normalizedTarget.split("/").slice(0, -1).join("/");
+                        const nextPath = (parent ? parent + "/" : "") + nextName;
+                        await invoke("rename_path", { oldPath: normalizedTarget, newPath: nextPath });
+                        explorerDirectoryCache.clear();
+                        await renderExplorer();
+                    } else if (action === "delete" && normalizedTarget) {
+                        if (!confirm("Delete this " + targetType + "?")) return;
+                        await invoke("delete_path", { path: normalizedTarget, isDir: targetType === "directory" });
+                        explorerDirectoryCache.clear();
+                        await renderExplorer();
+                    } else if (action === "new-file") {
+                        const base = normalizedTarget && targetType === "directory" ? normalizedTarget : (normalizedTarget ? normalizedTarget.split("/").slice(0, -1).join("/") : (projects.find(p => p.id === activeProjectId)?.path || ""));
+                        const name = prompt("File name:", "new-file.txt");
+                        if (!name) return;
+                        const filePath = (base ? base + "/" : "") + name;
+                        await invoke("write_file", { filePath, content: "" });
+                        explorerDirectoryCache.clear();
+                        await renderExplorer();
+                    } else if (action === "new-folder") {
+                        const base = normalizedTarget && targetType === "directory" ? normalizedTarget : (normalizedTarget ? normalizedTarget.split("/").slice(0, -1).join("/") : (projects.find(p => p.id === activeProjectId)?.path || ""));
+                        const name = prompt("Folder name:", "new-folder");
+                        if (!name) return;
+                        const dirPath = (base ? base + "/" : "") + name;
+                        await invoke("create_directory", { dirPath });
+                        explorerDirectoryCache.clear();
+                        await renderExplorer();
+                    }
+                });
+            });
+            setTimeout(() => {
+                const cleanup = () => hideExplorerContextMenu();
+                document.addEventListener("click", cleanup, { once: true });
+                document.addEventListener("contextmenu", cleanup, { once: true });
+            }, 0);
+        }
+
+        async function renderExplorerNode(entry, depth = 0) {
+            const lowerQuery = explorerSearchQuery.trim().toLowerCase();
+            if (lowerQuery && !entry.name.toLowerCase().includes(lowerQuery) && entry.type !== "directory") {
+                return "";
+            }
+            const isDir = entry.type === "directory";
+            const normalizedPath = entry.path.replace(/\\/g, "/");
+            const isOpen = isDir && explorerExpandedDirs.has(normalizedPath);
+            const paddingLeft = 10 + depth * 14;
+            const icon = isDir
+                ? (isOpen ? "<i data-lucide='folder-open' style='width:13px;height:13px;color:#eab308'></i>" : "<i data-lucide='folder' style='width:13px;height:13px;color:#eab308'></i>")
+                : "<i data-lucide='file' style='width:13px;height:13px;color:#888888'></i>";
+
+            let html = "<div class='explorer-node" + (explorerSelectedPath === normalizedPath ? " active" : "") + "' data-path='" + normalizedPath + "' data-type='" + entry.type + "' style='padding-left:" + paddingLeft + "px'>" +
+                icon +
+                "<span class='explorer-label'>" + entry.name + "</span>" +
+                "</div>";
+
+            if (isDir && isOpen) {
+                const children = await loadDirectory(normalizedPath);
+                html += "<div class='explorer-children open'>";
+                for (const child of children) {
+                    html += await renderExplorerNode(child, depth + 1);
+                }
+                html += "</div>";
+            }
+
+            return html;
+        }
+
+        async function renderExplorer() {
+            const panel = document.getElementById("explorer-panel");
+            const body = document.getElementById("explorer-body");
+            if (!panel || !body) return;
+
+            panel.classList.toggle("hidden", !isExplorerVisible);
+            if (!isExplorerVisible) return;
+
+            const activeProj = projects.find(p => p.id === activeProjectId);
+            if (!activeProj || !activeProj.path) {
+                body.innerHTML = "<div class='explorer-empty'>No active project path available.</div>";
+                if (window.lucide) window.lucide.createIcons();
+                return;
+            }
+
+            const rootPath = activeProj.path.replace(/\\/g, "/");
+            const rootEntries = await loadDirectory(rootPath);
+            const searchBox = document.getElementById("explorer-search");
+            if (searchBox) {
+                searchBox.value = explorerSearchQuery;
+                searchBox.oninput = async (e) => {
+                    explorerSearchQuery = e.target.value || "";
+                    await renderExplorer();
+                };
+            }
+            if (!rootEntries.length) {
+                body.innerHTML = "<div class='explorer-empty'>Project folder empty or cannot be read.</div>";
+                if (window.lucide) window.lucide.createIcons();
+                return;
+            }
+
+            let html = "";
+            for (const entry of rootEntries) {
+                html += await renderExplorerNode(entry, 0);
+            }
+            body.innerHTML = html;
+
+            body.querySelectorAll(".explorer-node").forEach((node) => {
+                node.addEventListener("click", async () => {
+                    const path = node.dataset.path;
+                    const type = node.dataset.type;
+                    explorerSelectedPath = path;
+                    if (type === "directory") {
+                        await toggleExplorerDirectory(path);
+                    } else {
+                        await openFileInEditor(path);
+                    }
+                });
+                node.addEventListener("dblclick", async () => {
+                    const path = node.dataset.path;
+                    const type = node.dataset.type;
+                    explorerSelectedPath = path;
+                    if (type === "file") {
+                        await openFileInEditor(path);
+                    }
+                });
+                node.addEventListener("contextmenu", async (e) => {
+                    e.preventDefault();
+                    explorerSelectedPath = node.dataset.path;
+                    await showExplorerContextMenu(e.clientX, e.clientY, node.dataset.path, node.dataset.type);
+                });
+            });
+
             if (window.lucide) window.lucide.createIcons();
         }
 
@@ -1150,31 +1913,43 @@ fn get_index_html() -> &'static str {
             const sidebar = document.getElementById("sidebar");
             if (!sidebar) return;
             
-            let html = "<div class='sidebar-section-title'>" +
-                "<i data-lucide='folder-kanban'></i>" +
-                "<span>Workspaces</span>" +
+            let html = "<div class='sidebar-header'>" +
+                "<span>Projects</span>" +
+                "<button id='sidebar-new-project' title='New Project'><i data-lucide='plus' style='width:12px;height:12px'></i></button>" +
                 "</div>" +
-                "<div class='sidebar-list'>";
+                "<div class='sidebar-list' style='flex: 1'>";
                 
-            html += terminals.map(t => {
-                const isActive = t.id === activeTerminalId;
-                const shellName = t.metadata?.shell ? t.metadata.shell.split(/[\\/]/).pop() : "Connecting...";
-                const pidText = t.metadata?.pid ? "PID: " + t.metadata.pid : "Starting";
-                return "<div class='sidebar-item" + (isActive ? " active" : "") + "' data-id='" + t.id + "'>" +
-                    "<i data-lucide='terminal'></i>" +
-                    "<div style='display:flex;flex-direction:column;gap:2px'>" +
-                    "<span style='font-size:12px;font-weight:500'>" + shellName + "</span>" +
-                    "<span style='font-size:10px;color:#888888'>" + pidText + "</span>" +
-                    "</div>" +
-                    "</div>";
+            html += projects.map((p, idx) => {
+                const isActive = p.id === activeProjectId;
+                const activeClass = isActive ? " active border-proj-" + p.color : "";
+                const firstLetter = p.name ? p.name.charAt(0).toUpperCase() : "?";
+                const shortcut = idx < 9 ? "Ctrl+" + (idx + 1) : "";
+                
+                return "<button class='project-item" + activeClass + "' data-id='" + p.id + "'>" +
+                    "<div class='project-avatar bg-proj-" + p.color + "'>" + firstLetter + "</div>" +
+                    "<span class='project-name'>" + p.name + "</span>" +
+                    (shortcut ? "<span class='project-shortcut'>" + shortcut + "</span>" : "") +
+                    "</button>";
             }).join("");
             
             html += "</div>";
+            
+            html += "<div style='margin-top: auto; padding-top: 12px; border-top: 1px solid #222222;'>" +
+                "<button class='project-item active' style='border-left-color: #3b82f6; background: rgba(59, 130, 246, 0.08); color: #3b82f6; border-radius: 6px; margin-bottom: 12px;'>" +
+                "<i data-lucide='smartphone' style='width: 14px; height: 14px; margin-right: 8px;'></i>" +
+                "<span style='font-size: 13px; font-weight: 500;'>Remote Coding</span>" +
+                "</button>" +
+                "</div>";
+                
+            html += "<div style='display:flex; justify-content:center; align-items:center; height:24px;'>" +
+                "<span style='font-size:11px; color:#555555'>Termul v0.3.6</span>" +
+                "</div>";
+                
             sidebar.innerHTML = html;
             
-            sidebar.querySelectorAll(".sidebar-item").forEach(el => {
+            sidebar.querySelectorAll(".project-item[data-id]").forEach(el => {
                 el.addEventListener("click", () => {
-                    setActiveTerminal(el.dataset.id);
+                    selectProject(el.dataset.id);
                 });
             });
             
@@ -1184,6 +1959,13 @@ fn get_index_html() -> &'static str {
         function updateStatusBar() {
             const statusBar = document.getElementById("status-bar");
             if (!statusBar) return;
+            
+            let bgStyle = "#007acc";
+            let activeProj = projects.find(p => p.id === activeProjectId);
+            if (activeProj) {
+                bgStyle = ST_COLORS[activeProj.color] || "#007acc";
+            }
+            statusBar.style.background = bgStyle;
             
             const activeTab = terminals.find(t => t.id === activeTerminalId);
             if (!activeTab || !activeTab.metadata) {
@@ -1197,15 +1979,59 @@ fn get_index_html() -> &'static str {
             
             const meta = activeTab.metadata;
             const shellName = meta.shell ? meta.shell.split(/[\\/]/).pop() : "shell";
-            const cwd = meta.cwd || "C:\\Users\\USER";
+            
+            let projItem = "";
+            if (activeProj) {
+                projItem = "<div class='status-bar-item'><i data-lucide='server'></i><span>" + 
+                    activeProj.name.toLowerCase().replace(/\s+/g, '-') + 
+                    "</span></div>";
+            } else {
+                projItem = "<div class='status-bar-item'><i data-lucide='terminal'></i><span>" + shellName + "</span></div>";
+            }
+            
+            let gitBranchItem = "";
+            if (activeTab.gitBranch) {
+                gitBranchItem = "<div class='status-bar-item' style='cursor:pointer'><i data-lucide='git-branch'></i><span>" + 
+                    activeTab.gitBranch + "</span></div>";
+            }
+            
+            let gitStatusItem = "";
+            if (activeTab.gitStatus && activeTab.gitStatus.hasChanges) {
+                const gs = activeTab.gitStatus;
+                gitStatusItem = "<div class='status-bar-item' style='display:flex;gap:8px;'>";
+                if (gs.modified > 0) {
+                    gitStatusItem += "<span style='color:#facc15;display:flex;align-items:center;gap:2px;'><i data-lucide='pencil' style='width:11px;height:11px;'></i>" + gs.modified + "</span>";
+                }
+                if (gs.staged > 0) {
+                    gitStatusItem += "<span style='color:#4ade80;display:flex;align-items:center;gap:2px;'><i data-lucide='plus' style='width:11px;height:11px;'></i>" + gs.staged + "</span>";
+                }
+                if (gs.untracked > 0) {
+                    gitStatusItem += "<span style='color:#e2e8f0;display:flex;align-items:center;gap:2px;'><i data-lucide='file-question' style='width:11px;height:11px;'></i>" + gs.untracked + "</span>";
+                }
+                gitStatusItem += "</div>";
+            }
+            
+            const cwd = meta.cwd || (activeProj ? activeProj.path : "C:\\Users\\USER");
             const sizeText = activeTab.term ? activeTab.term.cols + "x" + activeTab.term.rows : "80x24";
             
+            let exitCodeItem = "";
+            if (activeTab.exitCode !== undefined && activeTab.exitCode !== null) {
+                const dotColor = activeTab.exitCode === 0 ? "#4ade80" : "#f87171";
+                exitCodeItem = "<div class='status-bar-item'><span style='width:8px;height:8px;border-radius:50%;background-color:" + dotColor + ";margin-right:2px;'></span>Exit: " + activeTab.exitCode + "</div>";
+            }
+
             statusBar.innerHTML = "<div class='status-bar-left'>" +
-                "<div class='status-bar-item'><i data-lucide='terminal'></i><span>" + shellName + "</span></div>" +
+                projItem +
+                gitBranchItem +
+                gitStatusItem +
                 "<div class='status-bar-item'><i data-lucide='folder'></i><span>" + cwd + "</span></div>" +
                 "<div class='status-bar-item'><i data-lucide='cpu'></i><span>PID: " + meta.pid + "</span></div>" +
                 "</div>" +
                 "<div class='status-bar-right'>" +
+                exitCodeItem +
+                "<div class='status-bar-item'><i data-lucide='bell'></i></div>" +
+                "<div class='status-bar-item'><i data-lucide='settings'></i></div>" +
+                "<div class='status-bar-item'><i data-lucide='sliders'></i></div>" +
                 "<div class='status-bar-item'><i data-lucide='activity'></i><span>" + sizeText + "</span></div>" +
                 "</div>";
                 
@@ -1214,22 +2040,39 @@ fn get_index_html() -> &'static str {
 
         function setActiveTerminal(id) {
             activeTerminalId = id;
+            const activeTerminal = terminals.find(t => t.id === id);
+            if (activeTerminal && activeTerminal.projectId) {
+                lastActiveTerminalByProject[activeTerminal.projectId] = activeTerminal.id;
+            }
             document.querySelectorAll(".terminal-container").forEach(el => el.classList.remove("active"));
-            const container = document.getElementById("term-" + id);
-            if (container) container.classList.add("active");
-            const terminalObj = terminals.find(t => t.id === id);
-            if (terminalObj && terminalObj.fitAddon) {
-                setTimeout(() => terminalObj.fitAddon.fit(), 50);
+            if (activeTerminal && (activeTerminal.projectId || null) === (activeProjectId || null)) {
+                const container = document.getElementById("term-" + id);
+                if (container) container.classList.add("active");
+            }
+            if (activeTerminal && activeTerminal.fitAddon) {
+                setTimeout(() => activeTerminal.fitAddon.fit(), 50);
             }
             renderTabs();
             renderSidebar();
             updateStatusBar();
         }
 
+        function getPreferredTerminalForProject(projectId) {
+            const projectTerminals = terminals.filter(t => (t.projectId || null) === (projectId || null));
+            if (projectTerminals.length === 0) return null;
+            const lastActiveId = lastActiveTerminalByProject[projectId] || null;
+            if (lastActiveId) {
+                const remembered = projectTerminals.find(t => t.id === lastActiveId);
+                if (remembered) return remembered;
+            }
+            return projectTerminals[0] || null;
+        }
+
         function closeTerminal(id) {
             const idx = terminals.findIndex(t => t.id === id);
             if (idx === -1) return;
             const terminalObj = terminals[idx];
+            const closingProjectId = terminalObj.projectId || null;
             if (terminalObj.term) {
                 terminalObj.term.dispose();
             }
@@ -1237,21 +2080,24 @@ fn get_index_html() -> &'static str {
             if (container) container.remove();
             terminals.splice(idx, 1);
             if (activeTerminalId === id) {
-                if (terminals.length > 0) {
-                    setActiveTerminal(terminals[Math.max(0, idx - 1)].id);
+                const remainingProjectTerminal = getPreferredTerminalForProject(closingProjectId);
+                if (remainingProjectTerminal) {
+                    setActiveTerminal(remainingProjectTerminal.id);
                 } else {
                     activeTerminalId = null;
+                    if (closingProjectId) delete lastActiveTerminalByProject[closingProjectId];
                 }
             }
             saveSession();
             renderTabs();
             renderSidebar();
             updateStatusBar();
+            void renderExplorer();
         }
 
         function saveSession() {
             try {
-                const data = terminals.map(t => ({ id: t.id, remoteId: t.remoteId, metadata: t.metadata }));
+                const data = terminals.map(t => ({ id: t.id, remoteId: t.remoteId, metadata: t.metadata, projectId: t.projectId || null }));
                 sessionStorage.setItem("termul-terminals", JSON.stringify(data));
             } catch {}
         }
@@ -1267,17 +2113,97 @@ fn get_index_html() -> &'static str {
         async function start() {
             try {
                 await connect();
+                
+                try {
+                    const res = await invoke("get_projects");
+                    if (res && res.projects && res.projects.length > 0) {
+                        projects = res.projects;
+                        activeProjectId = res.activeProjectId || projects[0].id;
+                    }
+                } catch (e) {
+                    console.error("Failed to get projects:", e);
+                }
+
                 const root = document.getElementById("root");
                 root.innerHTML = "<div class='header'>" +
-                    "<div class='header-title'><i data-lucide='terminal'></i><span>Termul Manager</span></div>" +
+                    "<div class='header-title'><span style='color:#3b82f6;font-weight:700;'>&gt;_</span><span>termul</span></div>" +
+                    "<div class='header-right'>" +
                     "<div class='header-controls'>" +
                     "<span class='token-expiry' id='token-expiry'></span>" +
                     "<div class='status'><div class='dot green'></div><span>Connected</span></div>" +
                     "</div>" +
+                    "<div style='width: 1px; height: 16px; background: #222222; margin: 0 12px;'></div>" +
+                    "<button class='header-icon-btn' title='Toggle sidebar'><i data-lucide='panel-left'></i></button>" +
+                    "<button class='header-icon-btn' title='Toggle file explorer'><i data-lucide='panel-right'></i></button>" +
+                    "<button class='header-icon-btn' title='Keyboard shortcuts'><i data-lucide='keyboard'></i></button>" +
+                    "<button class='header-icon-btn' title='Settings'><i data-lucide='settings'></i></button>" +
+                    "<button class='header-icon-btn' title='Preferences'><i data-lucide='sliders-horizontal'></i></button>" +
+                    "<div style='width: 1px; height: 16px; background: #222222; margin: 0 12px;'></div>" +
+                    "<div class='window-controls'>" +
+                    "<div class='win-btn'><i data-lucide='minus'></i></div>" +
+                    "<div class='win-btn'><i data-lucide='square'></i></div>" +
+                    "<div class='win-btn close'><i data-lucide='x'></i></div>" +
+                    "</div>" +
+                    "</div>" +
                     "</div>" +
                     "<div class='sidebar' id='sidebar'></div>" +
                     "<div class='main-content' id='main-content'></div>" +
+                    "<div class='explorer-panel' id='explorer-panel'>" +
+                    "<div class='explorer-resize-handle' id='explorer-resize-handle'></div>" +
+                    "<div class='explorer-header'><span>Files</span><button id='explorer-refresh-btn' class='header-icon-btn' title='Refresh file explorer'><i data-lucide='refresh-cw'></i></button></div>" +
+                    "<input id='explorer-search' class='explorer-search' placeholder='Search files...' />" +
+                    "<div class='explorer-body' id='explorer-body'></div>" +
+                    "</div>" +
+                    "<div class='editor-panel hidden' id='editor-panel'><div id='editor-body' style='flex:1;overflow:hidden'></div></div>" +
                     "<div class='status-bar' id='status-bar'></div>";
+
+                const explorerRefreshBtn = document.getElementById("explorer-refresh-btn");
+                if (explorerRefreshBtn) {
+                    explorerRefreshBtn.addEventListener("click", async () => {
+                        const activeProj = projects.find(p => p.id === activeProjectId);
+                        if (activeProj?.path) {
+                            const rootPath = activeProj.path.replace(/\\/g, "/");
+                            explorerDirectoryCache.delete(rootPath);
+                        }
+                        await renderExplorer();
+                    });
+                }
+
+                const explorerToggleBtn = document.querySelector(".header-icon-btn[title='Toggle file explorer']");
+                if (explorerToggleBtn) {
+                    explorerToggleBtn.addEventListener("click", async () => {
+                        isExplorerVisible = !isExplorerVisible;
+                        await renderExplorer();
+                    });
+                }
+
+                const resizeHandle = document.getElementById("explorer-resize-handle");
+                if (resizeHandle) {
+                    let resizing = false;
+                    let startX = 0;
+                    let startWidth = 0;
+                    const onMove = (ev) => {
+                        if (!resizing) return;
+                        const delta = ev.clientX - startX;
+                        const nextWidth = Math.max(220, Math.min(560, startWidth - delta));
+                        const panel = document.getElementById("explorer-panel");
+                        if (panel) panel.style.width = nextWidth + "px";
+                    };
+                    const stop = () => {
+                        resizing = false;
+                        document.removeEventListener("mousemove", onMove);
+                        document.removeEventListener("mouseup", stop);
+                    };
+                    resizeHandle.addEventListener("mousedown", (ev) => {
+                        resizing = true;
+                        startX = ev.clientX;
+                        const panel = document.getElementById("explorer-panel");
+                        startWidth = panel?.getBoundingClientRect().width || 280;
+                        document.addEventListener("mousemove", onMove);
+                        document.addEventListener("mouseup", stop);
+                        ev.preventDefault();
+                    });
+                }
 
                 if (TOKEN_EXPIRES_AT > 0) {
                     const expiryEl = document.getElementById("token-expiry");
@@ -1295,21 +2221,55 @@ fn get_index_html() -> &'static str {
                     setInterval(updateExpiry, 1000);
                 }
 
+                listen("projects-changed", async (payload) => {
+                    if (payload && payload.projects) {
+                        projects = payload.projects;
+                        activeProjectId = payload.activeProjectId || (projects.length > 0 ? projects[0].id : null);
+                        renderSidebar();
+                        updateStatusBar();
+                        renderTabs();
+                        await renderExplorer();
+
+                        if (activeProjectId) {
+                            const existingProjectTerminal = getPreferredTerminalForProject(activeProjectId);
+                            if (existingProjectTerminal) {
+                                setActiveTerminal(existingProjectTerminal.id);
+                            } else {
+                                activeTerminalId = null;
+                                document.querySelectorAll(".terminal-container").forEach(el => el.classList.remove("active"));
+                                renderTabs();
+                                renderSidebar();
+                                updateStatusBar();
+                            }
+                        }
+                    }
+                });
+
                 if (sessionTerminals && sessionTerminals.length > 0) {
                     for (const saved of sessionTerminals) {
-                        const terminalObj = { id: saved.id, remoteId: saved.remoteId, term: null, fitAddon: null, metadata: saved.metadata || null };
+                        const terminalObj = { id: saved.id, remoteId: saved.remoteId, term: null, fitAddon: null, metadata: saved.metadata || null, projectId: saved.projectId || null };
                         terminals.push(terminalObj);
                         await createTerminalContainer(terminalObj);
                     }
                     renderTabs();
                     renderSidebar();
                     updateStatusBar();
-                    if (terminals.length > 0) setActiveTerminal(terminals[0].id);
+                    await renderExplorer();
+                    for (const terminal of terminals) {
+                        if (terminal.projectId && !lastActiveTerminalByProject[terminal.projectId]) {
+                            lastActiveTerminalByProject[terminal.projectId] = terminal.id;
+                        }
+                    }
+                    const initialProjectTerminal = getPreferredTerminalForProject(activeProjectId);
+                    if (initialProjectTerminal) setActiveTerminal(initialProjectTerminal.id);
                     for (const t of terminals) {
                         await initTerminal(t, true);
                     }
                 } else {
-                    await addTerminal();
+                    renderTabs();
+                    renderSidebar();
+                    updateStatusBar();
+                    await renderExplorer();
                 }
             } catch (err) {
                 const root = document.getElementById("root");
@@ -1362,6 +2322,8 @@ async fn handle_ws(
         });
         let mut status = server.status.lock().await;
         status.client_count = clients.len();
+        use tauri::Emitter;
+        let _ = app_handle.emit("ws-server-status-changed", status.clone());
     }
 
     let mut event_rx = server.event_tx.subscribe();
@@ -1514,6 +2476,8 @@ async fn handle_ws(
             log::info!("[WsServer] Client {} disconnected after {:.1}s", addr, duration.as_secs_f64());
             server.log_connection(&addr, "disconnected");
         }
+        use tauri::Emitter;
+        let _ = app_handle.emit("ws-server-status-changed", status.clone());
     }
 }
 
@@ -1525,11 +2489,17 @@ async fn handle_command(
 ) -> Result<IpcResult<serde_json::Value>, String> {
     match method {
         "terminal_spawn" => {
-            let mut options: SpawnOptions = params
-                .map(|p| serde_json::from_value(p))
-                .transpose()
-                .map_err(|e| format!("Invalid params: {}", e))?
-                .unwrap_or_default();
+            let mut options: SpawnOptions = if let Some(p) = params {
+                if let Some(opt_val) = p.get("options") {
+                    serde_json::from_value(opt_val.clone())
+                        .map_err(|e| format!("Invalid options field: {}", e))?
+                } else {
+                    serde_json::from_value(p)
+                        .map_err(|e| format!("Invalid params: {}", e))?
+                }
+            } else {
+                SpawnOptions::default()
+            };
 
             // Merge with active project from the Tauri context
             if let Some(active_proj) = &*server.active_project.lock().await {
@@ -1610,6 +2580,46 @@ async fn handle_command(
             let cwd = cwd_tracker.get_cwd(&terminal_id);
             Ok(IpcResult::success(serde_json::to_value(&cwd).map_err(|e| e.to_string())?))
         }
+        "terminal_probe" => {
+            let params = params.ok_or("Missing params")?;
+            let terminal_id: String = serde_json::from_value(params["terminalId"].clone())
+                .map_err(|e| format!("Invalid terminalId: {}", e))?;
+
+            let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
+                .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
+
+            let probe = if let Some(instance) = pty_manager.get(&terminal_id) {
+                let alive = {
+                    let mut child_guard = instance.child.lock().await;
+                    if let Some(child) = child_guard.as_mut() {
+                        match child.try_wait() {
+                            Ok(None) => true,
+                            Ok(Some(_)) => false,
+                            Err(_) => false,
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                serde_json::json!({
+                    "exists": true,
+                    "alive": alive,
+                    "cwd": instance.cwd,
+                    "shell": instance.shell,
+                    "pid": instance.pid,
+                    "cols": *instance.cols.read(),
+                    "rows": *instance.rows.read()
+                })
+            } else {
+                serde_json::json!({
+                    "exists": false,
+                    "alive": false
+                })
+            };
+
+            Ok(IpcResult::success(probe))
+        }
         "terminal_get_git_branch" => {
             let params = params.ok_or("Missing params")?;
             let terminal_id: String = serde_json::from_value(params["terminalId"].clone())
@@ -1655,6 +2665,138 @@ async fn handle_command(
                 Err(e) => Ok(IpcResult::error(e.to_string(), "CLIPBOARD_READ_FAILED")),
             }
         }
+        "read_directory" => {
+            let params = params.ok_or("Missing params")?;
+            let dir_path: String = serde_json::from_value(params["dirPath"].clone())
+                .map_err(|e| format!("Invalid dirPath: {}", e))?;
+
+            let ignored = [
+                "node_modules", ".git", ".next", ".cache", ".turbo", "dist", "build", ".output",
+                ".nuxt", ".svelte-kit", "__pycache__", ".pytest_cache", "venv", ".env", "coverage", ".nyc_output"
+            ];
+
+            let mut entries = Vec::new();
+            let read_dir = std::fs::read_dir(&dir_path)
+                .map_err(|e| format!("Failed to read directory {}: {}", dir_path, e))?;
+
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                };
+                if ignored.contains(&name.as_str()) {
+                    continue;
+                }
+
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                let is_dir = metadata.is_dir();
+                let extension = if is_dir {
+                    None
+                } else {
+                    path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_string())
+                };
+                let modified_at = metadata.modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as u64)
+                    .unwrap_or(0);
+
+                entries.push(serde_json::json!({
+                    "name": name,
+                    "path": path.to_string_lossy().replace('\\', "/"),
+                    "type": if is_dir { "directory" } else { "file" },
+                    "extension": extension,
+                    "size": metadata.len(),
+                    "modifiedAt": modified_at
+                }));
+            }
+
+            entries.sort_by(|a, b| {
+                let a_type = a.get("type").and_then(|v| v.as_str()).unwrap_or("file");
+                let b_type = b.get("type").and_then(|v| v.as_str()).unwrap_or("file");
+                match (a_type, b_type) {
+                    ("directory", "file") => std::cmp::Ordering::Less,
+                    ("file", "directory") => std::cmp::Ordering::Greater,
+                    _ => {
+                        let a_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                        let b_name = b.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                        a_name.cmp(&b_name)
+                    }
+                }
+            });
+
+            Ok(IpcResult::success(serde_json::json!(entries)))
+        }
+        "read_file" => {
+            let params = params.ok_or("Missing params")?;
+            let file_path: String = serde_json::from_value(params["filePath"].clone())
+                .map_err(|e| format!("Invalid filePath: {}", e))?;
+
+            let content = std::fs::read_to_string(&file_path)
+                .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
+            let metadata = std::fs::metadata(&file_path)
+                .map_err(|e| format!("Failed to stat file: {}", e))?;
+
+            Ok(IpcResult::success(serde_json::json!({
+                "content": content,
+                "size": metadata.len(),
+                "modifiedAt": metadata.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            })))
+        }
+        "write_file" => {
+            let params = params.ok_or("Missing params")?;
+            let file_path: String = serde_json::from_value(params["filePath"].clone())
+                .map_err(|e| format!("Invalid filePath: {}", e))?;
+            let content: String = serde_json::from_value(params["content"].clone())
+                .map_err(|e| format!("Invalid content: {}", e))?;
+
+            std::fs::write(&file_path, &content)
+                .map_err(|e| format!("Failed to write file {}: {}", file_path, e))?;
+            Ok(IpcResult::success(serde_json::json!(true)))
+        }
+        "create_directory" => {
+            let params = params.ok_or("Missing params")?;
+            let dir_path: String = serde_json::from_value(params["dirPath"].clone())
+                .map_err(|e| format!("Invalid dirPath: {}", e))?;
+
+            std::fs::create_dir_all(&dir_path)
+                .map_err(|e| format!("Failed to create directory {}: {}", dir_path, e))?;
+            Ok(IpcResult::success(serde_json::json!(true)))
+        }
+        "delete_path" => {
+            let params = params.ok_or("Missing params")?;
+            let target_path: String = serde_json::from_value(params["path"].clone())
+                .map_err(|e| format!("Invalid path: {}", e))?;
+            let is_dir: bool = params.get("isDir").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            if is_dir {
+                std::fs::remove_dir_all(&target_path)
+                    .map_err(|e| format!("Failed to remove directory {}: {}", target_path, e))?;
+            } else {
+                std::fs::remove_file(&target_path)
+                    .map_err(|e| format!("Failed to delete file {}: {}", target_path, e))?;
+            }
+            Ok(IpcResult::success(serde_json::json!(true)))
+        }
+        "rename_path" => {
+            let params = params.ok_or("Missing params")?;
+            let old_path: String = serde_json::from_value(params["oldPath"].clone())
+                .map_err(|e| format!("Invalid oldPath: {}", e))?;
+            let new_path: String = serde_json::from_value(params["newPath"].clone())
+                .map_err(|e| format!("Invalid newPath: {}", e))?;
+
+            std::fs::rename(&old_path, &new_path)
+                .map_err(|e| format!("Failed to rename {} -> {}: {}", old_path, new_path, e))?;
+            Ok(IpcResult::success(serde_json::json!(true)))
+        }
         "tunnel_start" => {
             let config = params.ok_or("Missing params")?;
             let tunnel_config: crate::tunnel::TunnelConfig =
@@ -1681,6 +2823,58 @@ async fn handle_command(
             let new_token = server.rotate_token().await;
             Ok(IpcResult::success(serde_json::json!({ "token": new_token })))
         }
+        "get_projects" => {
+            let projs = server.projects.lock().await;
+            let active_proj = server.active_project.lock().await;
+            
+            // Let's find which project is active based on path/name matching
+            let mut active_id = String::new();
+            if let Some(ap) = &*active_proj {
+                for p in projs.iter() {
+                    if p.name == ap.name {
+                        active_id = p.id.clone();
+                        break;
+                    }
+                }
+            }
+            
+            Ok(IpcResult::success(serde_json::json!({
+                "projects": *projs,
+                "activeProjectId": if active_id.is_empty() { None } else { Some(active_id) }
+            })))
+        }
+        "set_active_project" => {
+            let params = params.ok_or("Missing params")?;
+            let project_id: String = serde_json::from_value(params["projectId"].clone())
+                .map_err(|e| format!("Invalid projectId: {}", e))?;
+
+            let projs = server.projects.lock().await;
+            if let Some(proj) = projs.iter().find(|p| p.id == project_id) {
+                server.set_active_project(
+                    proj.name.clone(),
+                    proj.path.clone().unwrap_or_default(),
+                    None,
+                    Some(proj.color.clone()),
+                ).await;
+
+                use tauri::Emitter;
+                let _ = app_handle.emit("ws-active-project-changed", serde_json::json!({
+                    "projectId": project_id
+                }));
+
+                let _ = server.event_tx.send(WsOutbound::Event {
+                    event: "projects-changed".to_string(),
+                    payload: Some(serde_json::json!({
+                        "projects": *projs,
+                        "activeProjectId": Some(project_id.clone()),
+                    })),
+                });
+
+                Ok(IpcResult::success(serde_json::json!(true)))
+            } else {
+                Ok(IpcResult::error(format!("Project not found: {}", project_id), "PROJECT_NOT_FOUND"))
+            }
+        }
         other => {
             Ok(IpcResult::error(format!("Unknown method: {}", other), "METHOD_NOT_FOUND"))
         }
@@ -1699,3 +2893,4 @@ fn get_local_ip() -> Option<String> {
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|addr| addr.ip().to_string())
 }
+

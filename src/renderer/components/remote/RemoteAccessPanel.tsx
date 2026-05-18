@@ -62,6 +62,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   useEffect(() => {
     void refreshWsStatus()
+    const unsubWs = wsServerApi.onStatusChanged((status) => {
+      useWsServerStore.setState({ status })
+    })
     const unsub = tunnelApi.onStatusChanged((event) => {
       if (event.tunnelId === TUNNEL_ID) {
         if (event.status === 'running' && event.publicUrl) {
@@ -80,7 +83,10 @@ export function RemoteAccessPanel(): React.JSX.Element {
         }
       }
     })
-    return () => unsub()
+    return () => {
+      unsubWs()
+      unsub()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -163,8 +169,8 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   const handleLoadAuditLog = async () => {
     const result = await wsServerApi.getAuditLog()
-    if (result.success && result.logs) {
-      setAuditLog(result.logs)
+    if (result.success && result.data) {
+      setAuditLog(result.data)
       setShowAuditLog(true)
     } else {
       toast.error(result.error || 'Failed to load audit log')

@@ -4,15 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 lazy_static::lazy_static! {
-    static ref URL_REGEX: Regex = Regex::new(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com(?:/[^\s]*)?").unwrap();
-    static ref URL_REGEX_FALLBACK: Regex = Regex::new(r#"(https://[^\s"']+\.trycloudflare\.com(?:/[^\s"']*)?)"#).unwrap();
+    static ref URL_REGEX: Regex =
+        Regex::new(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com(?:/[^\s]*)?").unwrap();
+    static ref URL_REGEX_FALLBACK: Regex =
+        Regex::new(r#"(https://[^\s"']+\.trycloudflare\.com(?:/[^\s"']*)?)"#).unwrap();
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -63,25 +64,271 @@ pub struct TunnelLogEvent {
     pub line: String,
 }
 
-static TUNNELS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
-static SESSIONS: OnceLock<Mutex<HashMap<String, TunnelSession>>> = OnceLock::new();
+static TUNNEL_MANAGER: std::sync::OnceLock<TunnelManager> = std::sync::OnceLock::new();
 
-fn tunnels() -> &'static Mutex<HashMap<String, Child>> {
-    TUNNELS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-fn sessions() -> &'static Mutex<HashMap<String, TunnelSession>> {
-    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn cloudflared_command() -> Command {
-    Command::new("cloudflared")
+fn manager() -> &'static TunnelManager {
+    TUNNEL_MANAGER.get_or_init(|| TunnelManager {
+        tunnels: RwLock::new(HashMap::new()),
+        sessions: RwLock::new(HashMap::new()),
+    })
 }
 
-async fn is_cloudflared_available() -> bool {
+struct TunnelManager {
+    tunnels: RwLock<HashMap<String, Child>>,
+    sessions: RwLock<HashMap<String, TunnelSession>>,
+}
+
+// ==================== Public API (called from commands.rs / lib.rs) ====================
+
+pub async fn tunnel_start(
+    config: TunnelConfig,
+    app_handle: AppHandle,
+) -> Result<IpcResult<TunnelSession>, String> {
+    manager().start(&config, &app_handle).await
+}
+
+pub async fn tunnel_stop(
+    tunnel_id: String,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    manager().stop(&tunnel_id, &app_handle).await
+}
+
+pub async fn tunnel_get_status(
+    tunnel_id: String,
+) -> Result<IpcResult<Option<TunnelSession>>, String> {
+    let session = manager().sessions.read().await.get(&tunnel_id).cloned();
+    Ok(IpcResult::success(session))
+}
+
+pub async fn tunnel_list() -> Result<IpcResult<Vec<TunnelSession>>, String> {
+    let sessions = manager().sessions.read().await.values().cloned().collect();
+    Ok(IpcResult::success(sessions))
+}
+
+pub async fn kill_all_tunnels() {
+    let tunnels = &manager().tunnels;
+    let sessions = &manager().sessions;
+    for (_, mut child) in tunnels.write().await.drain() {
+        let _ = child.kill().await;
+    }
+    sessions.write().await.clear();
+}
+
+// ==================== TunnelManager implementation ====================
+
+impl TunnelManager {
+    async fn start(
+        &self,
+        config: &TunnelConfig,
+        app_handle: &AppHandle,
+    ) -> Result<IpcResult<TunnelSession>, String> {
+        if !cloudflared_available().await {
+            return Ok(IpcResult::error(
+                "cloudflared is not installed or not available on PATH",
+                "CLOUDFLARED_NOT_FOUND",
+            ));
+        }
+
+        self.stop_existing(config, app_handle).await;
+
+        let mut cmd = Command::new("cloudflared");
+        let initial_public_url = config.hostname.as_ref().map(|hostname| {
+            if hostname.starts_with("http://") || hostname.starts_with("https://") {
+                hostname.clone()
+            } else {
+                format!("https://{}", hostname)
+            }
+        });
+
+        if let Some(token) = &config.cloudflare_token {
+            cmd.args(["tunnel", "--no-autoupdate", "run", "--token", token]);
+        } else {
+            cmd.args([
+                "tunnel",
+                "--url",
+                &format!("http://127.0.0.1:{}", config.local_port),
+            ]);
+        }
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|error| format!("Failed to start cloudflared: {}", error))?;
+        let pid = child.id();
+        let session = TunnelSession {
+            id: config.id.clone(),
+            config_id: config.id.clone(),
+            status: "starting".to_string(),
+            public_url: initial_public_url,
+            pid,
+            last_error: None,
+        };
+
+        self.sessions
+            .write()
+            .await
+            .insert(config.id.clone(), session.clone());
+
+        let stdout = child.stdout.take().expect("Failed to capture stdout");
+        let stderr = child.stderr.take().expect("Failed to capture stderr");
+        self.tunnels.write().await.insert(config.id.clone(), child);
+
+        let tunnel_id = config.id.clone();
+        let app = app_handle.clone();
+        let tunnel_id2 = tunnel_id.clone();
+        let app2 = app.clone();
+
+        tokio::spawn(async move {
+            read_cloudflared_output(stdout, tunnel_id, app, false).await;
+        });
+        tokio::spawn(async move {
+            read_cloudflared_output(stderr, tunnel_id2, app2, true).await;
+        });
+
+        Ok(IpcResult::success(session))
+    }
+
+    async fn stop_existing(&self, config: &TunnelConfig, app_handle: &AppHandle) {
+        if let Some(mut old_child) = self.tunnels.write().await.remove(&config.id) {
+            let _ = old_child.kill().await;
+        }
+        if let Some(session) = self.sessions.write().await.get_mut(&config.id) {
+            session.status = "stopped".to_string();
+        }
+        let _ = app_handle.emit(
+            "tunnel-status-changed",
+            TunnelStatusEvent {
+                tunnel_id: config.id.clone(),
+                status: "stopped".to_string(),
+                public_url: None,
+                last_error: None,
+            },
+        );
+    }
+
+    async fn stop(
+        &self,
+        tunnel_id: &str,
+        app_handle: &AppHandle,
+    ) -> Result<IpcResult<()>, String> {
+        let mut tunnels = self.tunnels.write().await;
+        if let Some(mut child) = tunnels.remove(tunnel_id) {
+            let _ = child.kill().await;
+            drop(tunnels);
+            if let Some(session) = self.sessions.write().await.get_mut(tunnel_id) {
+                session.status = "stopped".to_string();
+            }
+            let _ = app_handle.emit(
+                "tunnel-status-changed",
+                TunnelStatusEvent {
+                    tunnel_id: tunnel_id.to_string(),
+                    status: "stopped".to_string(),
+                    public_url: None,
+                    last_error: None,
+                },
+            );
+            Ok(IpcResult::success(()))
+        } else {
+            Ok(IpcResult::error("Tunnel not found", "TUNNEL_NOT_FOUND"))
+        }
+    }
+}
+
+// ==================== cloudflared output reader (shared by stdout + stderr) ====================
+
+async fn read_cloudflared_output<R: AsyncRead + Unpin + Send + 'static>(
+    reader: R,
+    tunnel_id: String,
+    app_handle: AppHandle,
+    is_stderr: bool,
+) {
+    let mut buf_reader = BufReader::new(reader).lines();
+    while let Ok(Some(line)) = buf_reader.next_line().await {
+        let line_trimmed = line.trim().to_string();
+        if line_trimmed.is_empty() {
+            continue;
+        }
+        emit_log(&app_handle, &tunnel_id, &line_trimmed);
+
+        if let Some(url) = extract_url(&line_trimmed) {
+            update_session(&tunnel_id, "running", Some(url.clone()), None).await;
+            emit_status(&app_handle, &tunnel_id, "running", Some(url), None);
+        } else if is_connection_established(&line_trimmed) {
+            let public_url = get_session_public_url(&tunnel_id).await;
+            update_session(&tunnel_id, "running", public_url.clone(), None).await;
+            emit_status(&app_handle, &tunnel_id, "running", public_url, None);
+        }
+
+        if is_stderr {
+            if let Some((message, code)) = classify_cloudflared_error(&line_trimmed) {
+                update_session(
+                    &tunnel_id,
+                    "error",
+                    None,
+                    Some(format!("{} ({})", message, code)),
+                )
+                .await;
+                emit_status(&app_handle, &tunnel_id, "error", None, Some(message));
+            }
+        }
+    }
+
+    if is_stderr {
+        cleanup_tunnel(&app_handle, &tunnel_id).await;
+    }
+}
+
+async fn update_session(
+    tunnel_id: &str,
+    status: &str,
+    public_url: Option<String>,
+    last_error: Option<String>,
+) {
+    let mut sessions = manager().sessions.write().await;
+    if let Some(session) = sessions.get_mut(tunnel_id) {
+        session.status = status.to_string();
+        if public_url.is_some() {
+            session.public_url = public_url;
+        }
+        if last_error.is_some() {
+            session.last_error = last_error;
+        }
+    }
+}
+
+async fn get_session_public_url(tunnel_id: &str) -> Option<String> {
+    manager()
+        .sessions
+        .read()
+        .await
+        .get(tunnel_id)
+        .and_then(|s| s.public_url.clone())
+}
+
+async fn cleanup_tunnel(app_handle: &AppHandle, tunnel_id: &str) {
+    let mut tunnels = manager().tunnels.write().await;
+    if let Some(mut child) = tunnels.remove(tunnel_id) {
+        let _ = child.kill().await;
+    }
+    drop(tunnels);
+
+    let mut sessions = manager().sessions.write().await;
+    if let Some(session) = sessions.get_mut(tunnel_id) {
+        if session.status != "stopped" && session.status != "error" {
+            session.status = "stopped".to_string();
+            emit_status(app_handle, tunnel_id, "stopped", None, None);
+        }
+    }
+}
+
+// ==================== Helper functions ====================
+
+async fn cloudflared_available() -> bool {
     if Path::new("cloudflared").exists() {
         return true;
     }
-
     Command::new("cloudflared")
         .arg("--version")
         .stdout(Stdio::null())
@@ -92,17 +339,14 @@ async fn is_cloudflared_available() -> bool {
         .unwrap_or(false)
 }
 
-async fn set_session_status(
-    tunnel_id: &str,
-    status: &str,
-    public_url: Option<String>,
-    last_error: Option<String>,
-) {
-    if let Some(session) = sessions().lock().await.get_mut(tunnel_id) {
-        session.status = status.to_string();
-        session.public_url = public_url;
-        session.last_error = last_error;
-    }
+fn emit_log(app_handle: &AppHandle, tunnel_id: &str, line: &str) {
+    let _ = app_handle.emit(
+        "tunnel-log",
+        TunnelLogEvent {
+            tunnel_id: tunnel_id.to_string(),
+            line: line.to_string(),
+        },
+    );
 }
 
 fn emit_status(
@@ -123,6 +367,32 @@ fn emit_status(
     );
 }
 
+fn is_connection_established(line: &str) -> bool {
+    line.contains("Registered tunnel connection") || line.contains("Connection established")
+}
+
+fn extract_url(line: &str) -> Option<String> {
+    if let Some(m) = URL_REGEX.find(line) {
+        return Some(
+            m.as_str()
+                .trim_matches(',')
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string(),
+        );
+    }
+    URL_REGEX_FALLBACK
+        .captures(line)
+        .and_then(|cap| cap.get(1))
+        .map(|m| {
+            m.as_str()
+                .trim_matches(',')
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+}
+
 fn classify_cloudflared_error(line: &str) -> Option<(String, String)> {
     let lower = line.to_ascii_lowercase();
     if lower.contains("no such host") || lower.contains("could not resolve") {
@@ -140,7 +410,8 @@ fn classify_cloudflared_error(line: &str) -> Option<(String, String)> {
             "PERMISSION_DENIED".to_string(),
         ));
     }
-    if lower.contains("unauthorized") || lower.contains("invalid token") || lower.contains("token") {
+    if lower.contains("unauthorized") || lower.contains("invalid token") || lower.contains("token")
+    {
         return Some((
             "Cloudflare authentication failed".to_string(),
             "CLOUDFLARE_AUTH_FAILED".to_string(),
@@ -166,225 +437,3 @@ fn classify_cloudflared_error(line: &str) -> Option<(String, String)> {
     }
     None
 }
-
-pub async fn tunnel_start(
-    config: TunnelConfig,
-    app_handle: AppHandle,
-) -> Result<IpcResult<TunnelSession>, String> {
-    if !is_cloudflared_available().await {
-        return Ok(IpcResult::error(
-            "cloudflared is not installed or not available on PATH",
-            "CLOUDFLARED_NOT_FOUND",
-        ));
-    }
-
-    if tunnels().lock().await.contains_key(&config.id) {
-        // Auto-stop tunnel lama jika ID yang sama masih running agar tidak nyangkut
-        if let Some(mut old_child) = tunnels().lock().await.remove(&config.id) {
-            let _ = old_child.kill().await;
-        }
-        if let Some(session) = sessions().lock().await.get_mut(&config.id) {
-            session.status = "stopped".to_string();
-        }
-        let _ = app_handle.emit(
-            "tunnel-status-changed",
-            TunnelStatusEvent {
-                tunnel_id: config.id.clone(),
-                status: "stopped".to_string(),
-                public_url: None,
-                last_error: None,
-            },
-        );
-    }
-
-    let mut cmd = cloudflared_command();
-    let initial_public_url = config.hostname.as_ref().map(|hostname| {
-        if hostname.starts_with("http://") || hostname.starts_with("https://") {
-            hostname.clone()
-        } else {
-            format!("https://{}", hostname)
-        }
-    });
-    
-    if let Some(token) = &config.cloudflare_token {
-        // Mode Named Tunnel (Pakai Token)
-        // URL publik biasanya muncul dari hostname tunnel / log cloudflared
-        cmd.args(["tunnel", "--no-autoupdate", "run", "--token", token]);
-    } else {
-        // Mode Quick Tunnel (Random URL)
-        cmd.args(["tunnel", "--url", &format!("http://127.0.0.1:{}", config.local_port)]);
-    }
-
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("Failed to start cloudflared: {}", error))?;
-    let pid = child.id();
-    let session = TunnelSession {
-        id: config.id.clone(),
-        config_id: config.id.clone(),
-        status: "starting".to_string(),
-        public_url: initial_public_url,
-        pid,
-        last_error: None,
-    };
-
-    sessions()
-        .lock()
-        .await
-        .insert(config.id.clone(), session.clone());
-
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    let stderr = child.stderr.take().expect("Failed to capture stderr");
-
-    tunnels().lock().await.insert(config.id.clone(), child);
-
-    let tunnel_id = config.id.clone();
-    let app = app_handle.clone();
-
-    // Process STDOUT
-    let app_stdout = app.clone();
-    let id_stdout = tunnel_id.clone();
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            let line_trimmed = line.trim().to_string();
-            if line_trimmed.is_empty() { continue; }
-
-            let _ = app_stdout.emit(
-                "tunnel-log",
-                TunnelLogEvent {
-                    tunnel_id: id_stdout.clone(),
-                    line: line_trimmed.clone(),
-                },
-            );
-            if let Some(url) = extract_url(&line_trimmed) {
-                set_session_status(&id_stdout, "running", Some(url.clone()), None).await;
-                emit_status(&app_stdout, &id_stdout, "running", Some(url), None);
-            } else if line_trimmed.contains("Registered tunnel connection") || line_trimmed.contains("Connection established") {
-                let public_url = sessions().lock().await.get(&id_stdout).and_then(|session| session.public_url.clone());
-                set_session_status(&id_stdout, "running", public_url.clone(), None).await;
-                emit_status(&app_stdout, &id_stdout, "running", public_url, None);
-            }
-        }
-    });
-
-    // Process STDERR
-    let app_stderr = app.clone();
-    let id_stderr = tunnel_id.clone();
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            let line_trimmed = line.trim().to_string();
-            if line_trimmed.is_empty() { continue; }
-
-            let _ = app_stderr.emit(
-                "tunnel-log",
-                TunnelLogEvent {
-                    tunnel_id: id_stderr.clone(),
-                    line: line_trimmed.clone(),
-                },
-            );
-
-            if let Some(url) = extract_url(&line_trimmed) {
-                set_session_status(&id_stderr, "running", Some(url.clone()), None).await;
-                emit_status(&app_stderr, &id_stderr, "running", Some(url), None);
-            } else if line_trimmed.contains("Registered tunnel connection") || line_trimmed.contains("Connection established") {
-                let public_url = sessions().lock().await.get(&id_stderr).and_then(|session| session.public_url.clone());
-                set_session_status(&id_stderr, "running", public_url.clone(), None).await;
-                emit_status(&app_stderr, &id_stderr, "running", public_url, None);
-            }
-
-            if let Some((message, code)) = classify_cloudflared_error(&line_trimmed) {
-                set_session_status(
-                    &id_stderr,
-                    "error",
-                    None,
-                    Some(format!("{} ({})", message, code)),
-                )
-                .await;
-                emit_status(&app_stderr, &id_stderr, "error", None, Some(message));
-            }
-        }
-
-        // Cleanup when child process ends
-        let mut tunnels_guard = tunnels().lock().await;
-        if let Some(mut child) = tunnels_guard.remove(&id_stderr) {
-            let _ = child.kill().await;
-        }
-
-        let mut sessions_guard = sessions().lock().await;
-        if let Some(session) = sessions_guard.get_mut(&id_stderr) {
-            if session.status != "stopped" && session.status != "error" {
-                session.status = "stopped".to_string();
-                emit_status(&app_stderr, &id_stderr, "stopped", None, None);
-            }
-        }
-    });
-
-    Ok(IpcResult::success(session))
-}
-
-fn extract_url(line: &str) -> Option<String> {
-    if let Some(m) = URL_REGEX.find(line) {
-        return Some(m.as_str().trim_matches(',').trim_matches('"').trim_matches('\'').to_string());
-    }
-    
-    // Fallback if the standard regex fails
-    URL_REGEX_FALLBACK
-        .captures(line)
-        .and_then(|cap| cap.get(1))
-        .map(|m| m.as_str().trim_matches(',').trim_matches('"').trim_matches('\'').to_string())
-}
-
-pub async fn tunnel_stop(
-    tunnel_id: String,
-    app_handle: AppHandle,
-) -> Result<IpcResult<()>, String> {
-    if let Some(mut child) = tunnels().lock().await.remove(&tunnel_id) {
-        let _ = child.kill().await;
-        if let Some(session) = sessions().lock().await.get_mut(&tunnel_id) {
-            session.status = "stopped".to_string();
-        }
-        let _ = app_handle.emit(
-            "tunnel-status-changed",
-            TunnelStatusEvent {
-                tunnel_id,
-                status: "stopped".to_string(),
-                public_url: None,
-                last_error: None,
-            },
-        );
-        Ok(IpcResult::success(()))
-    } else {
-        Ok(IpcResult::error("Tunnel not found", "TUNNEL_NOT_FOUND"))
-    }
-}
-
-pub async fn tunnel_get_status(
-    tunnel_id: String,
-) -> Result<IpcResult<Option<TunnelSession>>, String> {
-    Ok(IpcResult::success(
-        sessions().lock().await.get(&tunnel_id).cloned(),
-    ))
-}
-
-pub async fn tunnel_list() -> Result<IpcResult<Vec<TunnelSession>>, String> {
-    Ok(IpcResult::success(
-        sessions()
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect(),
-    ))
-}
-
-pub async fn kill_all_tunnels() {
-    let mut tunnels_guard = tunnels().lock().await;
-    for (_, mut child) in tunnels_guard.drain() {
-        let _ = child.kill().await;
-    }
-}
-

@@ -1,5 +1,5 @@
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import type {
   IpcResult,
   TunnelApi,
@@ -10,14 +10,14 @@ import type {
 } from '@shared/types/ipc.types'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
-const IPC_COMMANDS = {
+const CMD = {
   START: 'tunnel_start',
   STOP: 'tunnel_stop',
   GET_STATUS: 'tunnel_get_status',
   LIST: 'tunnel_list'
 } as const
 
-const IPC_EVENTS = {
+const EVT = {
   STATUS_CHANGED: 'tunnel-status-changed',
   LOG: 'tunnel-log'
 } as const
@@ -32,7 +32,7 @@ async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResu
 
 function createListener<T>(eventName: string, callback: (payload: T) => void): () => void {
   if (!isTauriContext()) return () => {}
-  let unlisten: Promise<UnlistenFn> | undefined
+  let unlisten: Promise<() => void> | undefined
   try {
     unlisten = listen<T>(eventName, ({ payload }) => callback(payload))
   } catch {
@@ -43,21 +43,21 @@ function createListener<T>(eventName: string, callback: (payload: T) => void): (
 
 export const tunnelApi: TunnelApi = {
   start(config: TunnelConfig): Promise<IpcResult<TunnelSession>> {
-    return invokeIpc<TunnelSession>(IPC_COMMANDS.START, { config })
+    return invokeIpc<TunnelSession>(CMD.START, { config })
   },
   stop(tunnelId: string): Promise<IpcResult<void>> {
-    return invokeIpc<void>(IPC_COMMANDS.STOP, { tunnelId })
+    return invokeIpc<void>(CMD.STOP, { tunnelId })
   },
   getStatus(tunnelId: string): Promise<IpcResult<TunnelSession | null>> {
-    return invokeIpc<TunnelSession | null>(IPC_COMMANDS.GET_STATUS, { tunnelId })
+    return invokeIpc<TunnelSession | null>(CMD.GET_STATUS, { tunnelId })
   },
   list(): Promise<IpcResult<TunnelSession[]>> {
-    return invokeIpc<TunnelSession[]>(IPC_COMMANDS.LIST)
+    return invokeIpc<TunnelSession[]>(CMD.LIST)
   },
   onStatusChanged(callback: (event: TunnelStatusEvent) => void): () => void {
-    return createListener<TunnelStatusEvent>(IPC_EVENTS.STATUS_CHANGED, callback)
+    return createListener<TunnelStatusEvent>(EVT.STATUS_CHANGED, callback)
   },
   onLog(callback: (event: TunnelLogEvent) => void): () => void {
-    return createListener<TunnelLogEvent>(IPC_EVENTS.LOG, callback)
+    return createListener<TunnelLogEvent>(EVT.LOG, callback)
   }
 }

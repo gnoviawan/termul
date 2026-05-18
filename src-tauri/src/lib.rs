@@ -623,9 +623,20 @@ async fn ws_server_set_active_project(
     project_name: String,
     project_path: String,
     default_shell: Option<String>,
+    color: Option<String>,
     ws_server: State<'_, Arc<ws_server::WsServer>>,
 ) -> Result<(), String> {
-    ws_server.set_active_project(project_name, project_path, default_shell).await;
+    ws_server.set_active_project(project_name, project_path, default_shell, color).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn ws_server_set_projects(
+    projects: Vec<ws_server::ProjectInfo>,
+    active_project_id: Option<String>,
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<(), String> {
+    ws_server.set_projects(projects, active_project_id).await;
     Ok(())
 }
 
@@ -710,48 +721,23 @@ pub fn run() {
             let ws_server = ws_server::WsServer::init_arc();
             app.manage(ws_server.clone());
 
-            // Setup event forwarding from Tauri to WS clients
-            let ws_for_data = ws_server.clone();
-            let _ = handle.listen("terminal-data", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_data.emit_event("terminal-data", payload);
-                }
-            });
-
-            let ws_for_exit = ws_server.clone();
-            let _ = handle.listen("terminal-exit", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_exit.emit_event("terminal-exit", payload);
-                }
-            });
-
-            let ws_for_cwd = ws_server.clone();
-            let _ = handle.listen("terminal-cwd-changed", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_cwd.emit_event("terminal-cwd-changed", payload);
-                }
-            });
-
-            let ws_for_git_branch = ws_server.clone();
-            let _ = handle.listen("terminal-git-branch-changed", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_git_branch.emit_event("terminal-git-branch-changed", payload);
-                }
-            });
-
-            let ws_for_git_status = ws_server.clone();
-            let _ = handle.listen("terminal-git-status-changed", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_git_status.emit_event("terminal-git-status-changed", payload);
-                }
-            });
-
-            let ws_for_exit_code = ws_server.clone();
-            let _ = handle.listen("terminal-exit-code-changed", move |event| {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload()) {
-                    ws_for_exit_code.emit_event("terminal-exit-code-changed", payload);
-                }
-            });
+            // Forward Tauri events to WebSocket clients
+            for event_name in &[
+                "terminal-data",
+                "terminal-exit",
+                "terminal-cwd-changed",
+                "terminal-git-branch-changed",
+                "terminal-git-status-changed",
+                "terminal-exit-code-changed",
+            ] {
+                let ws = ws_server.clone();
+                let name = event_name.to_string();
+                let _ = handle.listen(name.clone(), move |event| {
+                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+                        ws.emit_event(&name, payload);
+                    }
+                });
+            }
 
             // Register default migrations
             register_default_migrations(migration_manager.as_ref());
@@ -868,6 +854,7 @@ pub fn run() {
             ws_rotate_token,
             ws_get_audit_log,
             ws_server_set_active_project,
+            ws_server_set_projects,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

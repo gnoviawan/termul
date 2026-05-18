@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 export interface WsServerStatus {
   isRunning: boolean
@@ -17,65 +19,62 @@ export interface ConnectionAudit {
   clientId: string | null
 }
 
+async function invokeRaw<T>(command: string, args?: Record<string, unknown>): Promise<{ success: boolean; data?: T; error?: string }> {
+  try {
+    const data = args !== undefined ? await invoke<T>(command, args) : await invoke<T>(command)
+    return { success: true, data }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function createListener<T>(eventName: string, callback: (payload: T) => void): () => void {
+  if (!isTauriContext()) return () => {}
+  let unlisten: Promise<() => void> | undefined
+  try {
+    unlisten = listen<T>(eventName, ({ payload }) => callback(payload))
+  } catch {
+    return () => {}
+  }
+  return () => cleanupTauriListener(unlisten)
+}
+
 export const wsServerApi = {
-  async start(port: number, authToken: string, useHttps = false): Promise<{ success: boolean; data?: WsServerStatus; error?: string }> {
-    try {
-      const data = await invoke<WsServerStatus>('ws_server_start', { port, authToken, useHttps })
-      return { success: true, data }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+  start(port: number, authToken: string, useHttps = false) {
+    return invokeRaw<WsServerStatus>('ws_server_start', { port, authToken, useHttps })
   },
 
-  async stop(): Promise<{ success: boolean; error?: string }> {
-    try {
-      await invoke('ws_server_stop')
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+  stop() {
+    return invokeRaw<void>('ws_server_stop')
   },
 
   async getStatus(): Promise<WsServerStatus> {
-    try {
-      return await invoke<WsServerStatus>('ws_server_get_status')
-    } catch {
-      return { isRunning: false, port: 9876, clientCount: 0, httpUrl: '', wsUrl: '', useHttps: false }
-    }
+    const result = await invokeRaw<WsServerStatus>('ws_server_get_status')
+    return result.data ?? { isRunning: false, port: 9876, clientCount: 0, httpUrl: '', wsUrl: '', useHttps: false }
   },
 
   async generateToken(): Promise<string> {
-    try {
-      return await invoke<string>('ws_server_get_token')
-    } catch {
-      return ''
-    }
+    const result = await invokeRaw<string>('ws_server_get_token')
+    return result.data ?? ''
   },
 
-  async rotateToken(): Promise<{ success: boolean; token?: string; error?: string }> {
-    try {
-      const result = await invoke<{ token: string }>('ws_rotate_token')
-      return { success: true, token: result.token }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+  rotateToken() {
+    return invokeRaw<{ token: string }>('ws_rotate_token')
   },
 
-  async getAuditLog(): Promise<{ success: boolean; logs?: ConnectionAudit[]; error?: string }> {
-    try {
-      const logs = await invoke<ConnectionAudit[]>('ws_get_audit_log')
-      return { success: true, logs }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+  getAuditLog() {
+    return invokeRaw<ConnectionAudit[]>('ws_get_audit_log')
   },
 
-  async setActiveProject(projectName: string, projectPath: string, defaultShell?: string): Promise<{ success: boolean; error?: string }> {
-    try {
-      await invoke('ws_server_set_active_project', { projectName, projectPath, defaultShell })
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+  setActiveProject(projectName: string, projectPath: string, defaultShell?: string, color?: string) {
+    return invokeRaw<void>('ws_server_set_active_project', { projectName, projectPath, defaultShell, color })
   },
+
+  setProjects(projects: Array<Record<string, unknown>>, activeProjectId?: string) {
+    return invokeRaw<void>('ws_server_set_projects', { projects, activeProjectId })
+  },
+
+  onStatusChanged(callback: (status: WsServerStatus) => void): () => void {
+    return createListener<WsServerStatus>('ws-server-status-changed', callback)
+  }
 }

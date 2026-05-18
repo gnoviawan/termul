@@ -8,12 +8,30 @@ interface WsServerState {
   authToken: string | null
   tokenExpiry: number | null
 
-  startServer: (port: number, authToken: string, useHttps?: boolean) => Promise<{ success: boolean; data?: WsServerStatus; error?: string }>
-  stopServer: () => Promise<{ success: boolean; error?: string }>
+  startServer: (port: number, authToken: string, useHttps?: boolean) => Promise<WsServerStartResult>
+  stopServer: () => Promise<WsServerActionResult>
   refreshStatus: () => Promise<void>
   generateToken: () => Promise<string>
-  rotateToken: () => Promise<{ success: boolean; token?: string; error?: string }>
+  rotateToken: () => Promise<WsServerRotateResult>
   setAuthToken: (token: string, expirySecs?: number) => void
+  clearError: () => void
+}
+
+interface WsServerStartResult {
+  success: boolean
+  data?: WsServerStatus
+  error?: string
+}
+
+interface WsServerActionResult {
+  success: boolean
+  error?: string
+}
+
+interface WsServerRotateResult {
+  success: boolean
+  token?: string
+  error?: string
 }
 
 export const useWsServerStore = create<WsServerState>((set, get) => ({
@@ -41,6 +59,8 @@ export const useWsServerStore = create<WsServerState>((set, get) => ({
     set({ isLoading: false })
     if (result.success) {
       set((state) => ({ status: { ...state.status, isRunning: false, clientCount: 0 } }))
+    } else {
+      set({ error: result.error || 'Failed to stop server' })
     }
     return result
   },
@@ -57,12 +77,19 @@ export const useWsServerStore = create<WsServerState>((set, get) => ({
   },
 
   rotateToken: async () => {
+    set({ isLoading: true, error: null })
     const result = await wsServerApi.rotateToken()
-    if (result.success && result.token) {
-      set({ authToken: result.token, tokenExpiry: Date.now() / 1000 + 3600 })
+    set({ isLoading: false })
+    if (result.success && result.data?.token) {
+      set({ authToken: result.data.token, tokenExpiry: Date.now() / 1000 + 3600 })
+    } else {
+      set({ error: result.error || 'Failed to rotate token' })
     }
     return result
   },
 
-  setAuthToken: (token, expirySecs = 3600) => set({ authToken: token, tokenExpiry: Date.now() / 1000 + expirySecs }),
+  setAuthToken: (token, expirySecs = 3600) =>
+    set({ authToken: token, tokenExpiry: Date.now() / 1000 + expirySecs }),
+
+  clearError: () => set({ error: null })
 }))
