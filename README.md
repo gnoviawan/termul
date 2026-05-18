@@ -169,6 +169,24 @@ npm install
 npm run dev
 ```
 
+### Landing Page
+
+This repository also includes a standalone Vite landing page under `landing/`.
+
+```bash
+# Install landing page dependencies
+npm install --prefix landing
+
+# Start the landing page dev server
+npm run landing:dev
+
+# Lint the landing page
+npm run landing:lint
+
+# Build the landing page for production
+npm run landing:build
+```
+
 ### Building for Production
 
 ```bash
