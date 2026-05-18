@@ -20,6 +20,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 fn resolve_executable_from_path(command: &str) -> Option<String> {
@@ -70,6 +71,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use tauri::ipc::{Channel, Response};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "windows")]
@@ -132,6 +134,12 @@ const GLOBAL_TERMINAL_LIMIT: usize = 30;
 const ORPHAN_TIMEOUT_MS: u64 = 300_000; // 5 minutes
 const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
 
+// ADR-002.3: Flusher thread constants
+pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
+pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
+pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
+pub const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
+
 /// Public information about a spawned terminal
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -174,6 +182,7 @@ pub struct TerminalInstance {
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
     pub reader_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
+    pub flusher_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub shell: String,
     pub cwd: String,
     pub pid: u32,
@@ -215,14 +224,6 @@ impl TerminalInstance {
     pub fn is_orphan(&self) -> bool {
         self.renderer_refs.read().is_empty()
     }
-}
-
-/// Event emitted when terminal data is received
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TerminalDataEvent {
-    id: String,
-    data: String,
 }
 
 /// Event emitted when a terminal exits
@@ -326,19 +327,26 @@ impl PtyManager {
         // a) Drop writer first to close PTY input stream cleanly.
         let _ = instance.writer.blocking_lock().take();
 
-        // b) Wait reader thread to finish naturally (max 3s)
+        // b) Wait flusher thread to finish naturally (max 2s)
+        if let Some(flusher_handle) = instance.flusher_handle.blocking_lock().take() {
+            if wait_reader_thread {
+                Self::join_reader_with_timeout(flusher_handle, Duration::from_secs(2));
+            }
+        }
+
+        // c) Wait reader thread to finish naturally (max 3s)
         if let Some(reader_handle) = instance.reader_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(reader_handle, Duration::from_secs(3));
             }
         }
 
-        // c) Kill child process
+        // d) Kill child process
         if let Some(mut child) = instance.child.blocking_lock().take() {
             let _ = child.kill();
         }
 
-        // d) Drop ConPTY handles last
+        // e) Drop ConPTY handles last
         #[cfg(target_os = "windows")]
         if let Some(conpty_handles) = &instance.conpty_handles {
             let mut guard = conpty_handles.lock();
@@ -437,8 +445,12 @@ impl PtyManager {
         format!("terminal-{}-{}", timestamp, counter)
     }
 
-    /// Spawn a new terminal
-    pub async fn spawn(&self, options: SpawnOptions) -> Result<TerminalInfo, String> {
+    /// Spawn a new terminal (with binary channel IPC)
+    pub async fn spawn(
+        &self,
+        options: SpawnOptions,
+        on_data: Option<Channel<Response>>,
+    ) -> Result<TerminalInfo, String> {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
@@ -510,6 +522,7 @@ impl PtyManager {
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
+                flusher_handle: Arc::new(AsyncMutex::new(None)),
                 shell: shell_path.clone(),
                 cwd: cwd.clone(),
                 pid,
@@ -520,27 +533,45 @@ impl PtyManager {
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
-            // Start reader task
+            // Start reader + flusher threads
+            let pending_buf = Arc::new(Mutex::new(Vec::with_capacity(READ_BUF)));
+            let done_flag = Arc::new(AtomicBool::new(false));
+
             let reader_instance = instance.clone();
             let app_handle = self.app_handle.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
 
+            // Spawn flusher thread first (it references pending_buf and done_flag)
+            let flusher_pending = pending_buf.clone();
+            let flusher_done = done_flag.clone();
+            let flusher_channel = on_data.clone();
+            let flusher_id = id.clone();
+
+            let flusher_task = std::thread::spawn(move || {
+                log::info!("[PTY {}] Flusher thread starting", flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+            });
+
+            // Spawn reader thread
             let reader_task = std::thread::spawn(move || {
                 log::info!(
                     "[PTY {}] Windows ConPTY reader thread starting",
                     terminal_id
                 );
-                Self::reader_loop_sync(
+                Self::reader_loop(
                     reader_instance,
                     reader,
                     app_handle,
                     exit_code_tracker,
                     terminal_id,
+                    pending_buf,
+                    done_flag,
                 );
             });
 
             *instance.reader_handle.lock().await = Some(reader_task);
+            *instance.flusher_handle.lock().await = Some(flusher_task);
 
             // Store the terminal
             self.terminals.write().insert(id.clone(), instance.clone());
@@ -609,6 +640,7 @@ impl PtyManager {
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
+                flusher_handle: Arc::new(AsyncMutex::new(None)),
                 shell: shell_path.clone(),
                 cwd: cwd.clone(),
                 pid,
@@ -620,22 +652,41 @@ impl PtyManager {
                 conpty_handles: None,
             });
 
+            // Start reader + flusher threads
+            let pending_buf = Arc::new(Mutex::new(Vec::with_capacity(READ_BUF)));
+            let done_flag = Arc::new(AtomicBool::new(false));
+
+            // Spawn flusher thread first
+            let flusher_pending = pending_buf.clone();
+            let flusher_done = done_flag.clone();
+            let flusher_channel = on_data.clone();
+            let flusher_id = id.clone();
+
+            let flusher_task = std::thread::spawn(move || {
+                log::info!("[PTY {}] Flusher thread starting", flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+            });
+
+            // Spawn reader thread
             let reader_instance = instance.clone();
             let app_handle = self.app_handle.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
 
             let reader_task = std::thread::spawn(move || {
-                Self::reader_loop_sync(
+                Self::reader_loop(
                     reader_instance,
                     reader,
                     app_handle,
                     exit_code_tracker,
                     terminal_id,
+                    pending_buf,
+                    done_flag,
                 );
             });
 
             *instance.reader_handle.lock().await = Some(reader_task);
+            *instance.flusher_handle.lock().await = Some(flusher_task);
 
             self.terminals.write().insert(id.clone(), instance.clone());
 
@@ -656,45 +707,72 @@ impl PtyManager {
         }
     }
 
-    /// Reader loop that continuously reads from PTY and emits events
-    fn reader_loop_sync(
+    /// ADR-002.3: Reader thread — reads PTY data into pending buffer, no direct IPC.
+    /// Pushes raw bytes to pending_buf, handles overflow protection.
+    /// Sets done_flag to true on EOF or error so flusher can finalize.
+    /// ADR-002.5: Intercepts DA queries via DaFilter and responds directly to PTY writer.
+    fn reader_loop(
         instance: Arc<TerminalInstance>,
         mut reader: Box<dyn Read + Send>,
         app_handle: AppHandle,
         exit_code_tracker: Arc<ExitCodeTracker>,
         terminal_id: String,
+        pending_buf: Arc<Mutex<Vec<u8>>>,
+        done_flag: Arc<AtomicBool>,
     ) {
-        let mut buffer = [0u8; 8192];
+        let mut buffer = [0u8; READ_BUF];
         let id = terminal_id.clone();
+        // ADR-002.5: DA filter — intercepts DA queries and responds to PTY writer
+        let mut da_filter = crate::pty::DaFilter::new();
+        // Clone writer Arc for the DA filter respond closure
+        let da_writer = instance.writer.clone();
 
-        log::info!("[PTY {}] Reader loop started", id);
+        log::info!("[PTY {}] Reader thread starting", id);
 
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
-                    // EOF - process has exited
-                    log::info!("[PTY {}] EOF reached, exiting reader loop", id);
+                    log::info!("[PTY {}] EOF reached, reader thread exiting", id);
                     break;
                 }
                 Ok(n) => {
                     instance.update_activity();
 
-                    // Convert bytes to UTF-8 string, replacing invalid sequences
-                    let data = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    // Parse exit codes from output
+                    let data_str = String::from_utf8_lossy(&buffer[..n]);
+                    exit_code_tracker.process_data(&id, &data_str);
 
                     log::trace!("[PTY {}] Read {} bytes", id, n);
 
-                    // Parse exit codes from output
-                    exit_code_tracker.process_data(&id, &data);
+                    // ADR-002.5: Run DA filter to intercept DA queries.
+                    // Responds directly to PTY writer so the shell gets immediate feedback
+                    // without waiting for xterm.js to initialize.
+                    let mut filtered = Vec::with_capacity(n);
+                    let w = da_writer.clone();
+                    da_filter.process(&buffer[..n], &mut filtered, move |reply| {
+                        let mut writer_guard = w.blocking_lock();
+                        if let Some(writer) = writer_guard.as_mut() {
+                            let _ = writer.write_all(reply);
+                            let _ = writer.flush();
+                        }
+                    });
 
-                    // Emit terminal-data event
-                    let event = TerminalDataEvent {
-                        id: id.clone(),
-                        data,
+                    // Push filtered (DA-processed) bytes to pending buffer
+                    let mut guard = match pending_buf.lock() {
+                        Ok(g) => g,
+                        Err(e) => {
+                            log::error!("[PTY {}] Pending buffer mutex poisoned: {}", id, e);
+                            break;
+                        }
                     };
 
-                    if let Err(e) = app_handle.emit("terminal-data", event) {
-                        log::error!("[PTY {}] Failed to emit terminal-data event: {}", id, e);
+                    if guard.len() + filtered.len() > MAX_PENDING {
+                        // Overflow: clear buffer and insert notice
+                        guard.clear();
+                        guard.extend_from_slice(OVERFLOW_NOTICE);
+                        log::warn!("[PTY {}] Output buffer overflow — dropped data", id);
+                    } else {
+                        guard.extend_from_slice(&filtered);
                     }
                 }
                 Err(e) => {
@@ -704,8 +782,10 @@ impl PtyManager {
             }
         }
 
+        // Signal flusher that reader is done
+        done_flag.store(true, Ordering::Release);
+
         // Get real child exit status where possible.
-        // If we observed a PTY read error and cannot retrieve a child status, do not report success.
         let exit_code = match instance.child.try_lock() {
             Ok(mut guard) => match guard.as_mut() {
                 Some(child) => match child.try_wait() {
@@ -724,7 +804,7 @@ impl PtyManager {
             Err(_) => None,
         };
 
-        // Process has exited - emit terminal-exit event
+        // Emit terminal-exit event via app_handle (backward compat)
         let exit_event = TerminalExitEvent {
             id: id.clone(),
             exit_code,
@@ -735,7 +815,90 @@ impl PtyManager {
             log::error!("[PTY {}] Failed to emit terminal-exit event: {}", id, e);
         }
 
-        log::info!("[PTY {}] Reader loop ended", id);
+        log::info!("[PTY {}] Reader thread ended", id);
+    }
+
+    /// ADR-002.3: Flusher thread — batched Channel output at FLUSH_INTERVAL.
+    /// Takes pending buffer via std::mem::take every 4ms and sends via binary channel.
+    /// If on_data is None, skips sending (just drains).
+    fn flusher_loop(
+        pending_buf: Arc<Mutex<Vec<u8>>>,
+        done_flag: Arc<AtomicBool>,
+        on_data: Option<Channel<Response>>,
+        terminal_id: String,
+    ) {
+        let id = terminal_id;
+        log::info!("[PTY {}] Flusher thread starting", id);
+
+        if on_data.is_none() {
+            // No binary channel — read and discard flusher
+            loop {
+                std::thread::sleep(FLUSH_INTERVAL);
+                if done_flag.load(Ordering::Acquire) {
+                    break;
+                }
+                // Drain pending buffer silently
+                if let Ok(mut guard) = pending_buf.lock() {
+                    guard.clear();
+                }
+            }
+            // Final drain
+            if let Ok(mut guard) = pending_buf.lock() {
+                guard.clear();
+            }
+            log::info!("[PTY {}] Flusher thread ended (no channel)", id);
+            return;
+        }
+
+        let channel = on_data.unwrap();
+
+        loop {
+            std::thread::sleep(FLUSH_INTERVAL);
+
+            if done_flag.load(Ordering::Acquire) {
+                // One final flush before exiting
+                let chunk = match pending_buf.lock() {
+                    Ok(mut guard) => {
+                        if guard.is_empty() {
+                            None
+                        } else {
+                            Some(std::mem::take(&mut *guard))
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
+                        break;
+                    }
+                };
+                if let Some(data) = chunk {
+                    if let Err(e) = channel.send(Response::new(data)) {
+                        log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                    }
+                }
+                break;
+            }
+
+            let chunk = match pending_buf.lock() {
+                Ok(mut guard) => {
+                    if guard.is_empty() {
+                        continue;
+                    }
+                    Some(std::mem::take(&mut *guard))
+                }
+                Err(e) => {
+                    log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
+                    break;
+                }
+            };
+
+            if let Some(data) = chunk {
+                if let Err(e) = channel.send(Response::new(data)) {
+                    log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                }
+            }
+        }
+
+        log::info!("[PTY {}] Flusher thread ended", id);
     }
 
     /// Write data to a terminal

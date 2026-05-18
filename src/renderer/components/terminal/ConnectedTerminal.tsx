@@ -15,7 +15,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { getTerminalOptions } from "./terminal-config";
+import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -241,11 +242,11 @@ function ConnectedTerminalComponent({
 	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
 	const terminalInitializedForRef = useRef<string | undefined>(undefined);
 	const needsResizeOnReadyRef = useRef<boolean>(false);
-	// Resize debounce timer ref
-	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 	// Track last fitted container dimensions to avoid redundant fit() calls
 	const lastContainerWidthRef = useRef<number>(0);
 	const lastContainerHeightRef = useRef<number>(0);
+
 	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Debounced activity tracking refs
@@ -254,6 +255,28 @@ function ConnectedTerminalComponent({
 
 	// Rate limiting for clipboard operations
 	const lastClipboardOpRef = useRef<number>(0);
+
+	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
+	const handlePtyResize = useCallback(
+		async (cols: number, rows: number): Promise<void> => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+			try {
+				await terminalApi.resize(ptyId, cols, rows);
+			} catch {
+				// Ignore resize errors during rapid resize
+			}
+		},
+		[],
+	);
+
+	const { forceFit: forceResizeFit } = useTerminalResizeV2({
+		onPtyResize: handlePtyResize,
+		terminalRef,
+		fitAddonRef,
+		containerRef,
+		isVisible,
+	});
 
 	// State to track terminal instance for clipboard hook
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
@@ -406,31 +429,7 @@ function ConnectedTerminalComponent({
 		[onError],
 	);
 
-	// Handle resize events with debouncing to prevent IPC flooding
-	const handleResize = useCallback(
-		async (cols: number, rows: number): Promise<void> => {
-			const ptyId = ptyIdRef.current;
-			if (!ptyId) return;
 
-			// Clear existing timeout
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
-
-			// Debounce resize IPC calls - re-read ptyId inside timeout to avoid stale closure
-			resizeTimeoutRef.current = setTimeout(async () => {
-				const currentPtyId = ptyIdRef.current;
-				if (!currentPtyId) return;
-
-				try {
-					await terminalApi.resize(currentPtyId, cols, rows);
-				} catch {
-					// Ignore resize errors during rapid resize
-				}
-			}, RESIZE_DEBOUNCE_MS);
-		},
-		[],
-	);
 
 	// Expose search methods via ref
 	useImperativeHandle(
@@ -821,24 +820,16 @@ function ConnectedTerminalComponent({
 		}
 
 		// Set up resize observer
-		const resizeObserver = new ResizeObserver(() => {
-			requestAnimationFrame(() => {
-				performFit();
-			});
-		});
-		resizeObserver.observe(containerRef.current);
+
 
 		// Listen for input from xterm
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-			handleResize(cols, rows);
-		});
 
 		// Set up IPC listeners BEFORE spawning to avoid missing data
 		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
 		let cachedTerminalId: string | null = null;
 		cleanupDataListenerRef.current = terminalApi.onData(
-			(id: string, data: string) => {
+			(id: string, data: Uint8Array) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
@@ -1276,9 +1267,7 @@ function ConnectedTerminalComponent({
 			}
 
 			// PTY lifecycle is handled by explicit terminal close, not component unmount
-			resizeObserver.disconnect();
 			dataDisposable.dispose();
-			resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) {
 				cleanupDataListenerRef.current();
 				cleanupDataListenerRef.current = null;
@@ -1287,10 +1276,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current();
 				cleanupExitListenerRef.current = null;
 			}
-			// Clean up resize debounce timer
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
+
 			// Clean up activity timeout timer
 			if (activityTimeoutRef.current) {
 				clearTimeout(activityTimeoutRef.current);
@@ -1374,13 +1360,16 @@ function ConnectedTerminalComponent({
 	}, [disposeWebglAddon, rendererPreference]);
 
 	// Trigger fit + PTY resize when terminal becomes visible
-	// Uses double requestAnimationFrame for proper timing after pane transitions
+	// Uses the two-stage resize pipeline via forceResizeFit,
+	// which skips both debounces for immediate responsiveness.
 	useEffect(() => {
 		if (isVisible && fitAddonRef.current && terminalRef.current) {
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					const didFit = performFit();
+					// Use forceResizeFit for immediate fit + PTY resize
+					// This bypasses both debounce stages for visibility changes
+					forceResizeFit();
 
 					const terminal = terminalRef.current;
 					if (!terminal) return;
@@ -1402,18 +1391,6 @@ function ConnectedTerminalComponent({
 
 					const ptyId = ptyIdRef.current;
 					if (ptyId) {
-						// Always sync PTY dimensions on visibility change for safety,
-						// but only trigger fit when container dimensions actually changed.
-						const resizePromise = terminalApi.resize(
-							ptyId,
-							terminal.cols,
-							terminal.rows,
-						);
-						if (resizePromise && typeof resizePromise.catch === "function") {
-							resizePromise.catch(() => {
-								// Ignore resize errors when toggling visibility
-							});
-						}
 						// Restore scroll position after fit (in case of pane transition)
 						restoreScrollPosition(ptyId, terminal);
 					} else {
@@ -1423,7 +1400,7 @@ function ConnectedTerminalComponent({
 				});
 			});
 		}
-	}, [isVisible]);
+	}, [isVisible, forceResizeFit]);
 
 	// Shared terminal recovery logic - re-fit and check WebGL health
 	const performTerminalRecovery = useCallback((): void => {
