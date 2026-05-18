@@ -20,7 +20,15 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
+    margin: 0;
+    overflow: hidden;
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
@@ -32,6 +40,18 @@
   :root {
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  }
+
+  .os-theme-termul {
+    --os-size: 10px;
+    --os-padding-perpendicular: 3px;
+    --os-padding-axis: 8px;
+    --os-handle-bg: rgba(255, 255, 255, 0.32);
+    --os-handle-bg-hover: rgba(255, 255, 255, 0.54);
+    --os-handle-bg-active: rgba(255, 255, 255, 0.72);
+    --os-handle-border-radius: 999px;
+    --os-track-bg: transparent;
+    --os-track-bg-hover: rgba(255, 255, 255, 0.04);
   }
 }
 
