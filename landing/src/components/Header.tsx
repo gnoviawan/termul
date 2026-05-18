@@ -6,23 +6,30 @@ import { Logo } from "./Logo";
 import { cn } from "../lib/utils";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
 
-const Header = () => {
-  const [isScrolled, setIsScrolled] = useState(false);
+export type HeaderProps = {
+  /** Scroll offset of the real scroll container (e.g. OverlayScrollbars viewport). When omitted, uses `window`. */
+  scrollTop?: number;
+};
+
+const SCROLLED_PX = 50;
+
+const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
+  const [windowScrollY, setWindowScrollY] = useState(0);
+  const isControlled = scrollTopProp !== undefined;
+  const scrollTop = scrollTopProp ?? windowScrollY;
+  const isScrolled = scrollTop > SCROLLED_PX;
 
   useEffect(() => {
+    if (isControlled) return;
+
     const handleScroll = () => {
-      // Change state when scrolled past a certain threshold (e.g., 50px)
-      if (window.scrollY > 50) {
-        setIsScrolled(true);
-      } else {
-        setIsScrolled(false);
-      }
+      setWindowScrollY(window.scrollY);
     };
 
-    window.addEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { passive: true });
     handleScroll();
     return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [isControlled]);
 
   return (
     <header 
