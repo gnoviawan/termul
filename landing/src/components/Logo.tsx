@@ -16,7 +16,7 @@ export const Logo = ({ className, iconClassName, textClassName }: LogoProps) => 
         height={24}
         decoding="async"
         className={cn("h-6 w-auto max-h-6 shrink-0 object-contain object-left", iconClassName)}
-        aria-hidden
+        aria-hidden={true}
       />
       <span className={cn("text-xl font-semibold tracking-tight", textClassName)}>Termul</span>
     </div>

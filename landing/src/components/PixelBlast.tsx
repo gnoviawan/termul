@@ -96,6 +96,7 @@ const createTouchTexture = () => {
     texture,
     addTouch,
     update,
+    dispose: () => texture.dispose(),
     set radiusScale(v: number) {
       radius = 0.1 * size * v;
     },
@@ -186,7 +187,7 @@ type PixelBlastThree = {
   quad: THREE.Mesh | undefined;
   timeOffset: number;
   composer: EffectComposer | undefined;
-  touch: ReturnType<typeof createTouchTexture> | undefined;
+  touch: ReturnType<typeof createTouchTexture> | undefined | null;
   liquidEffect: Effect | undefined;
 };
 
@@ -227,6 +228,32 @@ const PixelBlast = ({
 
   useEffect(() => {
     const container = containerRef.current;
+    let isIntersecting = true;
+
+    const syncVisibility = () => {
+      visibilityRef.current.visible = !document.hidden && isIntersecting;
+    };
+
+    const observer =
+      container && typeof IntersectionObserver !== 'undefined'
+        ? new IntersectionObserver(([entry]) => {
+            isIntersecting = entry?.isIntersecting ?? true;
+            syncVisibility();
+          })
+        : undefined;
+
+    if (container) observer?.observe(container);
+    document.addEventListener('visibilitychange', syncVisibility);
+    syncVisibility();
+
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener('visibilitychange', syncVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
     if (!container) return;
     speedRef.current = speed;
     const needsReinitKeys = ['antialias', 'liquid', 'noiseAmount'] as const;
@@ -249,6 +276,8 @@ const PixelBlast = ({
         t.quad?.geometry.dispose();
         t.material.dispose();
         t.composer?.dispose();
+        t.touch?.dispose();
+        t.touch = null;
         t.renderer.dispose();
         t.renderer.forceContextLoss();
         if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);
@@ -404,9 +433,14 @@ const PixelBlast = ({
       });
 
       let raf: number;
+      const scheduleNextFrame = () => {
+        raf = requestAnimationFrame(animate);
+        if (threeRef.current) threeRef.current.raf = raf;
+      };
+
       const animate = () => {
         if (autoPauseOffscreen && !visibilityRef.current.visible) {
-          requestAnimationFrame(animate);
+          scheduleNextFrame();
           return;
         }
         uniforms.uTime.value = timeOffset + clock.getElapsedTime() * speedRef.current;
@@ -422,7 +456,7 @@ const PixelBlast = ({
           });
           composer.render();
         } else renderer.render(scene, camera);
-        raf = requestAnimationFrame(animate);
+        scheduleNextFrame();
       };
       raf = requestAnimationFrame(animate);
 
@@ -478,6 +512,8 @@ const PixelBlast = ({
       t.quad?.geometry.dispose();
       t.material.dispose();
       t.composer?.dispose();
+      t.touch?.dispose();
+      t.touch = null;
       t.renderer.dispose();
       t.renderer.forceContextLoss();
       if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);

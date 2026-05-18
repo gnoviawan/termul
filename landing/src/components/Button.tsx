@@ -1,17 +1,27 @@
 import React from 'react';
 import { cn } from '../lib/utils';
 
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+type ButtonOwnProps<E extends React.ElementType> = {
   variant?: 'primary' | 'secondary' | 'dark' | 'outline';
   size?: 'sm' | 'md' | 'lg';
-  as?: React.ElementType;
-  href?: string;
-  target?: string;
-  rel?: string;
-}
+  as?: E;
+};
 
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'primary', size = 'md', as: Component = 'button', children, ...props }, ref) => {
+export type ButtonProps<E extends React.ElementType = 'button'> =
+  ButtonOwnProps<E> &
+  Omit<React.ComponentPropsWithRef<E>, keyof ButtonOwnProps<E>>;
+
+type ButtonComponent = (<E extends React.ElementType = 'button'>(
+  props: ButtonProps<E> & { ref?: React.ComponentPropsWithRef<E>['ref'] }
+) => React.ReactElement | null) & {
+  displayName?: string;
+};
+
+const renderButton = <E extends React.ElementType = 'button'>(
+  { className, variant = 'primary', size = 'md', as, children, ...props }: ButtonProps<E>,
+  ref: React.ComponentPropsWithRef<E>['ref']
+) => {
+    const Component = as ?? 'button';
     return (
       <Component
         ref={ref}
@@ -59,7 +69,13 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {children}
       </Component>
     );
-  }
-);
+};
+
+export const Button = React.forwardRef(
+  renderButton as unknown as React.ForwardRefRenderFunction<
+    unknown,
+    ButtonProps<React.ElementType>
+  >
+) as ButtonComponent;
 
 Button.displayName = 'Button';
