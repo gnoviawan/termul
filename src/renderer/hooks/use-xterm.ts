@@ -42,7 +42,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isReadyRef = useRef(false)
 
-  const write = useCallback((data: string): void => {
+  const write = useCallback((data: string | Uint8Array): void => {
     terminalRef.current?.write(data)
   }, [])
 

@@ -2,9 +2,14 @@
 //!
 //! This module handles terminal spawning, data I/O, and lifecycle management.
 
+pub mod da_filter;
 pub mod manager;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+pub use da_filter::DaFilter;
 pub use manager::{PtyManager, SpawnOptions, TerminalInfo};
+
+// ADR-002.3: Flusher thread constants
+pub use manager::{FLUSH_INTERVAL, MAX_PENDING, OVERFLOW_NOTICE, READ_BUF};
