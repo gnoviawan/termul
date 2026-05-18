@@ -77,12 +77,12 @@ export function useSessionRecovery(): void {
     void flushSession()
 
     return () => {
-      cancelled = true
+      void flushSession()
       unsubscribeProject()
       unsubscribeTerminal()
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       if (intervalRef.current) clearInterval(intervalRef.current)
-      void flushSession()
+      cancelled = true
     }
   }, [])
 }

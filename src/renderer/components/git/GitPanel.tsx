@@ -45,7 +45,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   }, [isVisible, cwd, refreshStatus]);
 
   useEffect(() => {
-    if (isVisible && selectedFile && !diffs[`${cwd}:${selectedFile}`]) {
+    if (!isVisible || !selectedFile) {
+      return;
+    }
+
+    const key = `${cwd}:${selectedFile}`;
+    if (!Object.prototype.hasOwnProperty.call(diffs, key)) {
       fetchDiff(cwd, selectedFile);
     }
   }, [isVisible, selectedFile, cwd, diffs, fetchDiff]);
@@ -160,10 +165,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <span className="text-sm font-medium truncate">{selectedFile}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="h-8 text-xs gap-2">
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-2" disabled aria-disabled="true" title="Not implemented yet">
                    Discard
                 </Button>
-                <Button variant="default" size="sm" className="h-8 text-xs gap-2">
+                <Button variant="default" size="sm" className="h-8 text-xs gap-2" disabled aria-disabled="true" title="Not implemented yet">
                    Stage
                 </Button>
               </div>
@@ -225,9 +230,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   );
 }
 
-function FileItem({ file, isSelected, onClick, icon }: { 
-  file: { path: string, status: GitFileStatus }, 
-  isSelected: boolean, 
+function FileItem({ file, isSelected, onClick, icon }: {
+  file: { path: string, status: GitFileStatus },
+  isSelected: boolean,
   onClick: () => void,
   icon: React.ReactNode
 }) {
@@ -235,10 +240,12 @@ function FileItem({ file, isSelected, onClick, icon }: {
   const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
+      aria-pressed={isSelected}
       className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors group",
+        "flex w-full items-center gap-3 px-3 py-2 rounded-md border-0 bg-transparent text-left cursor-pointer transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
         isSelected 
           ? "bg-primary/10 text-primary" 
           : "hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
@@ -258,6 +265,6 @@ function FileItem({ file, isSelected, onClick, icon }: {
       )}>
         {file.status === 'modified' ? 'M' : file.status.charAt(0).toUpperCase()}
       </div>
-    </div>
+    </button>
   );
 }

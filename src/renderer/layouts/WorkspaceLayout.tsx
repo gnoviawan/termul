@@ -610,6 +610,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							useWorkspaceStore.getState().removeTab(activeTab.id);
 						}
 					}
+				} else if (activeTab?.type === "git") {
+					useWorkspaceStore.getState().removeTab(activeTab.id);
 				} else if (activeTab?.type === "terminal") {
 					handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id);
 				} else if (activeTab?.type === "browser") {
@@ -661,6 +663,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 			// Command palette (Ctrl+K / Ctrl+Shift+P)
 			if (matchesShortcut(e, getActiveKey("commandPalette")) || matchesShortcut(e, getActiveKey("commandPaletteAlt"))) {
+				if (isInTerminal) {
+					return;
+				}
 				e.preventDefault();
 				e.stopPropagation();
 				if (document.activeElement instanceof HTMLElement) {
@@ -672,6 +677,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 			// Command history (Ctrl+R)
 			if (matchesShortcut(e, getActiveKey("commandHistory"))) {
+				if (isInTerminal) {
+					return;
+				}
 				e.preventDefault();
 				e.stopPropagation();
 				if (activeProjectId) {

@@ -669,7 +669,16 @@ fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDetail> {
 
         let index_status = line.chars().next().unwrap_or(' ');
         let work_tree_status = line.chars().nth(1).unwrap_or(' ');
-        let path = line[3..].to_string();
+        let raw_path = &line[3..];
+        let path = if index_status == 'R' || work_tree_status == 'R' {
+            raw_path
+                .rsplit_once(" -> ")
+                .map(|(_, new_path)| new_path)
+                .unwrap_or(raw_path)
+                .to_string()
+        } else {
+            raw_path.to_string()
+        };
 
         if index_status != ' ' && index_status != '?' {
             details.push(GitStatusDetail {
@@ -1225,6 +1234,18 @@ mod tests {
         assert_eq!(details[3].path, "deleted.txt");
         assert_eq!(details[3].status, "deleted");
         assert!(!details[3].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_uses_rename_destination_path() {
+        let details = git_get_status_detail_from_output("RM old.txt -> new.txt\n");
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].path, "new.txt");
+        assert_eq!(details[0].status, "renamed");
+        assert!(details[0].staged);
+        assert_eq!(details[1].path, "new.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
     }
 
     // ========== Windows-specific tests for CWD dedupe and throttling ==========

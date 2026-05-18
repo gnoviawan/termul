@@ -271,14 +271,17 @@ export function ProjectSidebar({
 	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
 
 	const handleSaveSettings = useCallback(() => {
-		if (settingsDialog.projectId) {
-			onUpdateProject(settingsDialog.projectId, {
-				name: settingsName.trim(),
-				path: settingsPath.trim() || undefined,
-				defaultShell: settingsShell || undefined,
-				color: settingsColor,
-			});
+		const name = settingsName.trim();
+		if (!name || !settingsDialog.projectId) {
+			return;
 		}
+
+		onUpdateProject(settingsDialog.projectId, {
+			name,
+			path: settingsPath.trim() || undefined,
+			defaultShell: settingsShell || undefined,
+			color: settingsColor,
+			});
 		handleCloseSettings();
 	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
 

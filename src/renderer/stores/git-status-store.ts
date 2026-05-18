@@ -9,6 +9,7 @@ export interface GitStatusState {
   diffs: Record<string, string>;
   selectedFile: string | null;
   isFetchingStatus: boolean;
+  statusFetchCount: number;
   
   setSelectedFile: (path: string | null) => void;
   refreshStatus: (cwd: string) => Promise<void>;
@@ -20,18 +21,28 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   diffs: {},
   selectedFile: null,
   isFetchingStatus: false,
+  statusFetchCount: 0,
 
   setSelectedFile: (path) => set({ selectedFile: path }),
 
   refreshStatus: async (cwd) => {
-    set({ isFetchingStatus: true });
+    set((state) => ({
+      statusFetchCount: state.statusFetchCount + 1,
+      isFetchingStatus: true
+    }));
     try {
       const status = await gitApi.getStatus(cwd);
       set((state) => ({
         statuses: { ...state.statuses, [cwd]: status }
       }));
     } finally {
-      set({ isFetchingStatus: false });
+      set((state) => {
+        const statusFetchCount = Math.max(0, state.statusFetchCount - 1);
+        return {
+          statusFetchCount,
+          isFetchingStatus: statusFetchCount > 0
+        };
+      });
     }
   },
 

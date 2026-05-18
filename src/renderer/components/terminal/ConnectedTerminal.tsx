@@ -961,7 +961,7 @@ function ConnectedTerminalComponent({
 								result.data.id,
 							);
 							console.error("[Terminal Replay Failed]", replayError);
-							if (onError) onError(replayError);
+							if (onErrorRef.current) onErrorRef.current(replayError);
 						}
 						// Write one-time info line if project env vars were applied
 						if (
@@ -975,8 +975,8 @@ function ConnectedTerminalComponent({
 						}
 						// Restore scroll position if cached from previous pane
 						restoreScrollPosition(result.data.id, terminal);
-						if (onSpawned) {
-							onSpawned(result.data.id);
+						if (onSpawnedRef.current) {
+							onSpawnedRef.current(result.data.id);
 						}
 						if (onBoundToStoreTerminalRef.current) {
 							onBoundToStoreTerminalRef.current(result.data.id);
@@ -987,7 +987,7 @@ function ConnectedTerminalComponent({
 						terminal.write(
 							`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`,
 						);
-						if (onError) onError(errorMsg);
+						if (onErrorRef.current) onErrorRef.current(errorMsg);
 					}
 				} catch (err) {
 					const errorMsg = err instanceof Error ? err.message : "Spawn failed";
@@ -995,7 +995,7 @@ function ConnectedTerminalComponent({
 					terminal.write(
 						`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`,
 					);
-					if (onError) onError(errorMsg);
+						if (onErrorRef.current) onErrorRef.current(errorMsg);
 				} finally {
 					spawnInFlightRef.current = false;
 				}
@@ -1111,7 +1111,7 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					);
 					console.error("[Terminal Replay Failed]", replayError);
-					if (onError) onError(replayError);
+						if (onErrorRef.current) onErrorRef.current(replayError);
 				}
 				// Write one-time info line if project env vars were applied
 				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
