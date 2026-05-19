@@ -29,6 +29,12 @@ import { listen } from '@tauri-apps/api/event'
 
 const WS_PORT = 9876
 const TUNNEL_ID = 'termul-web-tunnel'
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g')
+const CONTROL_CHAR_PATTERN = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`, 'g')
+
+function sanitizeRuntimeText(text: string): string {
+  return text.replace(ANSI_ESCAPE_PATTERN, '').replace(CONTROL_CHAR_PATTERN, '').replace(/\s+$/gm, '')
+}
 
 export function RemoteAccessPanel(): React.JSX.Element {
   const {
@@ -104,7 +110,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
   useEffect(() => {
     const unlistenPromise = listen<{ id: string; data: string }>('terminal-data', ({ payload }) => {
       setRuntimeStream((prev) => {
-        const next = [...prev, { type: 'data' as const, text: `[${payload.id}] ${payload.data}` }]
+        const next = [...prev, { type: 'data' as const, text: `[${payload.id}] ${sanitizeRuntimeText(payload.data)}` }]
         return next.slice(-120)
       })
     })
@@ -684,7 +690,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
                         line.type === 'git' && 'text-cyan-300',
                       )}
                     >
-                      {line.text}
+                      {sanitizeRuntimeText(line.text)}
                     </div>
                   </div>
                 ))
