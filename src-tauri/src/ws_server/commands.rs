@@ -42,7 +42,7 @@ pub(crate) async fn handle_command(
             let pty_manager = app_handle.try_state::<Arc<PtyManager>>()
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
-            match pty_manager.spawn(options).await {
+            match pty_manager.spawn(options, None).await {
                 Ok(info) => Ok(IpcResult::success(serde_json::to_value(&info).map_err(|e| e.to_string())?)),
                 Err(e) => {
                     log::error!("[WsServer] Spawn terminal failed: {}", e);
