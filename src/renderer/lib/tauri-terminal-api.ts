@@ -1,4 +1,4 @@
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
+import { invoke, type InvokeArgs, Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   IpcResult,
@@ -196,6 +196,35 @@ function captureStackTrace(): string {
  * It maintains the same interface as the Electron preload script for easy migration.
  */
 export function createTauriTerminalApi(): TerminalApi {
+  // Per-terminal data callback stored between onData registration and spawn
+  const dataCallbacks = new Set<TerminalDataCallback>()
+  const registerListener = <T>(
+    eventName: string,
+    callback: (payload: T) => void,
+    debugLabel: string
+  ): (() => void) => {
+    if (!isTauriContext()) {
+      if (import.meta.env.DEV) {
+        devLog(`[TauriTerminalAPI] Skipping ${debugLabel} listener outside Tauri runtime`)
+      }
+      return () => {}
+    }
+
+    let unlisten: Promise<UnlistenFn> | undefined
+
+    try {
+      unlisten = listen<T>(eventName, ({ payload }) => {
+        callback(payload)
+      })
+    } catch (error) {
+      console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+      return () => {}
+    }
+
+    return () => {
+      cleanupTauriListener(unlisten)
+    }
+  }
   return {
     /**
      * Spawn a new terminal PTY
@@ -251,7 +280,64 @@ export function createTauriTerminalApi(): TerminalApi {
         }
       }
 
-      return invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options })
+      // Create a binary data channel for this terminal session.
+      // PTY output arrives as ArrayBuffer with no JSON encoding overhead.
+      const on_data = new Channel<ArrayBuffer>()
+
+      // Capture terminal ID from the invoke response once available.
+      // We pass the channel to Rust synchronously. The channel's onmessage
+      // fires with ArrayBuffer chunks as they arrive. We dispatch to all
+      // registered TerminalDataCallback instances, but we need the terminal ID
+      // which we get from the spawn result.
+      //
+      // We handle this by buffering data in-flight before the spawn result
+      // arrives (unlikely but possible with fast PTY output).
+      let pendingBuffer: Uint8Array[] = []
+      let capturedTerminalId: string | null = null
+
+      on_data.onmessage = (buf: ArrayBuffer) => {
+        const bytes = new Uint8Array(buf)
+        
+        if (capturedTerminalId) {
+          // Normal path: we know the terminal ID
+          for (const callback of dataCallbacks) {
+            try {
+              callback(capturedTerminalId, bytes)
+            } catch (err) {
+              console.error('[BinaryChannel] Error in data callback:', err)
+            }
+          }
+        } else {
+          // Data arrived before spawn result — buffer it
+          pendingBuffer.push(bytes)
+        }
+      }
+
+      const result = await invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options, onData: on_data })
+
+      if (result.success && result.data) {
+        capturedTerminalId = result.data.id
+
+        // Flush any buffered data that arrived before we knew the terminal ID
+        if (pendingBuffer.length > 0) {
+          for (const bytes of pendingBuffer) {
+            for (const callback of dataCallbacks) {
+              try {
+                callback(capturedTerminalId, bytes)
+              } catch (err) {
+                console.error('[BinaryChannel] Error in buffered data callback:', err)
+              }
+            }
+          }
+          pendingBuffer = []
+        }
+      } else {
+        // Spawn failed — clean up channel to prevent memory leaks
+        pendingBuffer = []
+        on_data.onmessage = () => {}
+      }
+
+      return result
     },
 
     /**
@@ -276,14 +362,17 @@ export function createTauriTerminalApi(): TerminalApi {
     },
 
     /**
-     * Subscribe to terminal data events
-     * Returns cleanup function (UnlistenFn)
+     * Subscribe to terminal data events (binary channel)
+     * Each callback receives (terminalId, data as Uint8Array).
+     *
+     * Data arrives via per-terminal Tauri Channels created during spawn(),
+     * then dispatched to registered callbacks.
      */
     onData(callback: TerminalDataCallback): () => void {
       return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_DATA,
         (payload) => {
-          callback(payload.id, payload.data)
+          callback(payload.id, new TextEncoder().encode(payload.data))
         },
         'terminal-data'
       )

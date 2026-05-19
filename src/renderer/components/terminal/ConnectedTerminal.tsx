@@ -19,7 +19,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { getTerminalOptions } from "./terminal-config";
+import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -121,6 +122,7 @@ const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100;
 const VISIBILITY_RECOVERY_DELAY_MS = 150;
 const POWER_RESUME_RECOVERY_DELAY_MS = 300;
 const ACTIVITY_DEBOUNCE_MS = 1000;
+const RESIZE_DEBOUNCE_MS = 100;
 const CLIPBOARD_RATE_LIMIT_MS = 100;
 const WRITE_BUFFER_FLUSH_MS = 16; // ~60fps - batch rapid writes into single render frame
 const RESIZE_DEBOUNCE_OBSERVER_MS = 100; // debounce ResizeObserver to prevent rapid re-renders
@@ -799,24 +801,16 @@ function ConnectedTerminalComponent({
 		}
 
 		// Set up resize observer
-		const resizeObserver = new ResizeObserver(() => {
-			requestAnimationFrame(() => {
-				performFit();
-			});
-		});
-		resizeObserver.observe(containerRef.current);
+
 
 		// Listen for input from xterm
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-			handleResize(cols, rows);
-		});
 
 		// Set up IPC listeners BEFORE spawning to avoid missing data
 		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
 		let cachedTerminalId: string | null = null;
 		cleanupDataListenerRef.current = terminalApi.onData(
-			(id: string, data: string) => {
+			(id: string, data: Uint8Array) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
@@ -1254,9 +1248,7 @@ function ConnectedTerminalComponent({
 			}
 
 			// PTY lifecycle is handled by explicit terminal close, not component unmount
-			resizeObserver.disconnect();
 			dataDisposable.dispose();
-			resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) {
 				cleanupDataListenerRef.current();
 				cleanupDataListenerRef.current = null;
@@ -1265,10 +1257,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current();
 				cleanupExitListenerRef.current = null;
 			}
-			// Clean up resize debounce timer
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
+
 			// Clean up activity timeout timer
 			if (activityTimeoutRef.current) {
 				clearTimeout(activityTimeoutRef.current);
@@ -1394,19 +1383,7 @@ function ConnectedTerminalComponent({
 		if (isVisible) {
 			runVisibilityRestore();
 		}
-	}, [isVisible, runVisibilityRestore]);
-
-	useEffect(() => {
-		const handleRestorePulse = (): void => {
-			if (isVisible) {
-				runVisibilityRestore();
-			}
-		};
-		window.addEventListener("termul:terminal-restore-visibility-pulse", handleRestorePulse as EventListener);
-		return () => {
-			window.removeEventListener("termul:terminal-restore-visibility-pulse", handleRestorePulse as EventListener);
-		};
-	}, [isVisible, runVisibilityRestore]);
+		}, [isVisible, runVisibilityRestore]);
 
 	// Shared terminal recovery logic - re-fit and check WebGL health
 	const performTerminalRecovery = useCallback((): void => {
@@ -1558,9 +1535,9 @@ function ConnectedTerminalComponent({
 		resizeObserver.observe(containerRef.current);
 		const dataDisposable = terminal.onData(handleTerminalData);
 		const resizeDisposable = terminal.onResize(({ cols, rows }) => handleResize(cols, rows));
-		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: string) => {
+		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
-				bufferWrite(data);
+				bufferWrite(new TextDecoder().decode(data));
 				const now = Date.now();
 				const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id);
 				if (terminalRecord) {

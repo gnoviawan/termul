@@ -38,10 +38,10 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
     }
   }
 
-  const onData = (callback: (terminalId: string, data: string) => void): (() => void) => {
+  const onData = (callback: (terminalId: string, data: Uint8Array) => void): (() => void) => {
     return ws.listen('terminal-data', (payload) => {
       const terminalId = (payload.id || payload.terminalId) as string
-      const data = payload.data as string
+      const data = payload.data as Uint8Array
       if (terminalId && data) callback(terminalId, data)
     })
   }

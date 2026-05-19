@@ -118,16 +118,16 @@ describe('createWsTerminalApi', () => {
     
     api.onData((termId, data) => {
       receivedTerminalId = termId
-      receivedData = data
+      receivedData = new TextDecoder().decode(data)
     })
 
     const handler = vi.mocked(mockWs.listen).mock.calls[0][1]
     
-    handler({ id: 't1', data: 'hello' })
+    handler({ id: 't1', data: new TextEncoder().encode('hello') })
     expect(receivedTerminalId).toBe('t1')
     expect(receivedData).toBe('hello')
 
-    handler({ terminalId: 't2', data: 'world' })
+    handler({ terminalId: 't2', data: new TextEncoder().encode('world') })
     expect(receivedTerminalId).toBe('t2')
     expect(receivedData).toBe('world')
   })

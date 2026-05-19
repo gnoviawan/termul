@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.8] - 2026-05-18
+
+### Features
+- **Terminal** — Ctrl/Cmd+click URLs open in internal browser, respecting default browser preference (#125)
+- **Terminal** — Upgrade xterm.js to 6.1-beta; fix terminal truncation on minimize/project-switch and memory leaks (#135)
+- **UI** — Pane-level fullscreen toggle with smooth animation (#141)
+- **UI** — Redesigned command palette power tools (#142)
+- **UI** — Shortcut reference menu for quick keyboard shortcut lookup (#145)
+- **Search** — Ripgrep-powered sidecar file search with explorer resize handles and tooltip UX (#124)
+
+### Bug Fixes
+- **Shortcuts** — App shortcuts now work consistently from terminal, editor, and browser focus (#128)
+- **Terminal** — Shortcut passthrough: app shortcuts fire correctly from terminal focus (#138)
+- **Editor** — Fix visibility hidden for editor panels + window permissions (#116)
+
+### CI & Chores
+- **GitHub** — Add community templates & CI security hardening (#144)
+
+### Documentation
+- Professionalize README with extended feature list and star tracking (#136, #137)
+- Add project context documentation and docs index updates (#132)
+
 ## [0.3.6] - 2026-05-08
 
 ### Features

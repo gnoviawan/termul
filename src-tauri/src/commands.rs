@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
 
 /// IPC Result pattern
@@ -101,13 +102,19 @@ pub async fn tunnel_list() -> Result<IpcResult<Vec<TunnelSession>>, String> {
 
 // ==================== Terminal Commands ====================
 
-/// Spawn a new terminal
+/// Spawn a new terminal with binary data channel
+///
+/// The `on_data` channel uses Tauri 2's Channel API for
+/// zero-overhead binary IPC. PTY output is sent as raw `Vec<u8>` via
+/// `Response::new(bytes)`, arriving in JS as `ArrayBuffer` with no JSON
+/// serialization overhead.
 #[tauri::command]
 pub async fn terminal_spawn(
     options: SpawnOptions,
+    on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<TerminalInfo>, String> {
-    match pty_manager.spawn(options).await {
+    match pty_manager.spawn(options, Some(on_data)).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
     }

@@ -110,7 +110,7 @@ export function createWsAdapter(config: WsAdapterConfig): WsAdapter {
       }
 
       socket.onmessage = (event: MessageEvent) => {
-        const raw = event.data as string
+        const raw = typeof event.data === 'string' ? event.data : String(event.data)
 
         if (!isAuthenticated) {
           try {

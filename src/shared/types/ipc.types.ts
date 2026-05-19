@@ -34,7 +34,9 @@ export type TerminalIpcChannels = {
 };
 
 // Event types for main -> renderer communication
-export type TerminalDataCallback = (terminalId: string, data: string) => void;
+// Terminal data callback — receives binary data as Uint8Array (via Tauri Channel)
+// Previously received string via event emitter; migrated to binary Channel API in ADR-002.2
+export type TerminalDataCallback = (terminalId: string, data: Uint8Array) => void;
 export type TerminalExitCallback = (
 	terminalId: string,
 	exitCode: number,
