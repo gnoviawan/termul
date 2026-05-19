@@ -193,12 +193,12 @@ describe('RemoteAccessPanel', () => {
   it('starts the web server and tunnel with a generated token', async () => {
     render(<RemoteAccessPanel />)
 
+    fireEvent.change(screen.getByLabelText(/Web Lite Password/i), { target: { value: 'generated-token' } })
     fireEvent.click(screen.getAllByRole('checkbox')[1])
 
     fireEvent.click(screen.getByRole('button', { name: /Start Web Server & Tunnel/i }))
 
     await waitFor(() => {
-      expect(mockGenerateToken).toHaveBeenCalledTimes(1)
       expect(mockStartServer).toHaveBeenCalledWith(9876, 'generated-token', false)
       expect(mockStartTunnel).toHaveBeenCalledWith({
         id: 'termul-web-tunnel',
@@ -208,6 +208,35 @@ describe('RemoteAccessPanel', () => {
       })
       expect(mockToast.success).toHaveBeenCalledWith('Termul Web ready at https://example.trycloudflare.com')
     })
+  })
+
+  it('uses web lite password and persists it for browser access', async () => {
+    render(<RemoteAccessPanel />)
+
+    const passwordInput = screen.getByLabelText(/Web Lite Password/i)
+    fireEvent.change(passwordInput, { target: { value: 'secret-pass' } })
+    fireEvent.click(screen.getByRole('button', { name: /Show password/i }))
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: /Start Web Server & Tunnel/i }))
+
+    await waitFor(() => {
+      expect(mockStartServer).toHaveBeenCalledWith(9876, 'secret-pass', false)
+      expect(localStorage.getItem('termul-web-lite-password')).toBe('secret-pass')
+    })
+  })
+
+  it('rejects empty web lite password', async () => {
+    render(<RemoteAccessPanel />)
+
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: /Start Web Server & Tunnel/i }))
+
+    await waitFor(() => {
+      expect(mockToast.error).toHaveBeenCalledWith('Web Lite Password required')
+    })
+
+    expect(mockStartServer).not.toHaveBeenCalled()
+    expect(mockGenerateToken).not.toHaveBeenCalled()
   })
 
   it('renders active tunnel controls and wires stop/open/copy actions', async () => {

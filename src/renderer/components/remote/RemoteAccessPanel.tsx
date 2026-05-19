@@ -13,7 +13,9 @@ import {
   ExternalLink,
   Zap,
   Activity,
-  Layers
+  Layers,
+  Eye,
+  EyeOff
 } from 'lucide-react'
 import { useWsServerStore } from '@/stores/ws-server-store'
 import { useActiveProject } from '@/stores/project-store'
@@ -28,6 +30,7 @@ const WS_PORT = 9876
 const TUNNEL_ID = 'termul-web-tunnel'
 
 export function RemoteAccessPanel(): React.JSX.Element {
+  const WEB_LITE_PASSWORD_KEY = 'termul-web-lite-password'
   const {
     status: wsStatus,
     isLoading: wsLoading,
@@ -47,6 +50,8 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   const [useHttps, setUseHttps] = useState(false)
   const [acknowledgeRemoteAccess, setAcknowledgeRemoteAccess] = useState(false)
+  const [webLitePassword, setWebLitePassword] = useState(authToken ?? '')
+  const [showWebLitePassword, setShowWebLitePassword] = useState(false)
   const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [isTunnelStarting, setIsTunnelStarting] = useState(false)
@@ -115,7 +120,13 @@ export function RemoteAccessPanel(): React.JSX.Element {
   }, [tokenRemaining])
 
   const handleStartWsServer = async () => {
-    const token = authToken || await generateToken()
+    const token = webLitePassword.trim()
+    if (!token.trim()) {
+      toast.error('Web Lite Password required')
+      return
+    }
+    localStorage.setItem(WEB_LITE_PASSWORD_KEY, token)
+    useWsServerStore.setState({ authToken: token })
     const result = await startWsServer(WS_PORT, token, useHttps)
     if (result.success) {
       setIsTunnelStarting(true)
@@ -146,6 +157,8 @@ export function RemoteAccessPanel(): React.JSX.Element {
     await stopTunnel(TUNNEL_ID)
     await stopWsServer()
     useWsServerStore.setState({ authToken: null, tokenExpiry: null })
+    localStorage.removeItem(WEB_LITE_PASSWORD_KEY)
+    setWebLitePassword('')
     setAcknowledgeRemoteAccess(false)
     setIsTunnelStarting(false)
     toast.success('Remote session revoked')
@@ -176,6 +189,11 @@ export function RemoteAccessPanel(): React.JSX.Element {
   const handleRotateToken = async () => {
     const result = await rotateToken()
     if (result.success) {
+      const token = result.token || ''
+      setWebLitePassword(token)
+      if (token) {
+        localStorage.setItem(WEB_LITE_PASSWORD_KEY, token)
+      }
       toast.success('Token rotated')
     } else {
       toast.error(result.error || 'Failed to rotate token')
@@ -301,6 +319,26 @@ export function RemoteAccessPanel(): React.JSX.Element {
                 <div className="rounded-xl border bg-background/60 px-3 py-2">Project: {activeProject?.name || wsStatus.activeProjectId || 'None'}</div>
                 <div className="rounded-xl border bg-background/60 px-3 py-2">Session: {wsStatus.sessionId || 'Pending'}</div>
                 <div className="rounded-xl border bg-background/60 px-3 py-2">TTL: {Math.round((wsStatus.tokenTtlSecs || 900) / 60)}m</div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest px-1">Web Lite Password</label>
+                <input
+                  type={showWebLitePassword ? 'text' : 'password'}
+                  value={webLitePassword}
+                  onChange={(e) => setWebLitePassword(e.target.value)}
+                  placeholder="Set password for web lite access"
+                  aria-label="Web Lite Password"
+                  className="w-full rounded-xl border bg-background/60 px-3 py-2 text-sm outline-none ring-0 focus:border-primary"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowWebLitePassword((value) => !value)}
+                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                >
+                  {showWebLitePassword ? <EyeOff size={12} /> : <Eye size={12} />}
+                  {showWebLitePassword ? 'Hide' : 'Show'} password
+                </button>
+                <p className="text-[11px] text-muted-foreground px-1">Same password used for `webdev` / remote browser access.</p>
               </div>
             </div>
 
@@ -535,3 +573,5 @@ export function RemoteAccessPanel(): React.JSX.Element {
     </div>
   )
 }
+
+

@@ -588,6 +588,9 @@ async fn ws_server_start(
     app_handle: AppHandle,
     ws_server: State<'_, Arc<ws_server::WsServer>>,
 ) -> Result<ws_server::WsServerStatus, String> {
+    if auth_token.trim().is_empty() {
+        return Err("Web Lite Password required".to_string());
+    }
     ws_server.start(app_handle, port, auth_token, use_https.unwrap_or(false)).await
 }
 
