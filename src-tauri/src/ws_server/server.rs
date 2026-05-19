@@ -5,10 +5,9 @@ use crate::ws_server::utils::{is_port_in_use, get_local_ip};
 use axum::{
     Router,
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    extract::{Request, State},
+    extract::{Form, State},
     response::{Html, IntoResponse, Response},
-    routing::get,
-    middleware::{self, Next},
+    routing::{get, post},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,28 +16,109 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use crate::ws_server::handler::{ws_handler, shutdown_signal};
 use crate::ws_server::utils::generate_self_signed_cert;
-use base64::Engine;
+#[derive(serde::Deserialize)]
+struct LoginForm {
+    password: String,
+}
 
-async fn basic_auth_guard(
-    State(state): State<super::AppState>,
-    headers: HeaderMap,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn http_route_handler(State(state): State<super::AppState>, headers: HeaderMap) -> Response {
     let connection_context = state.server.get_connection_context().await;
-    let expected_token = connection_context.0;
-
-    let authorized = is_basic_auth_valid(headers.get(header::AUTHORIZATION), &expected_token);
-
-    if authorized {
-        next.run(request).await
+    if is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0) {
+        index_handler(State(state)).await
     } else {
-        (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Basic realm=\"Termul Web\"")], "Authentication required").into_response()
+        Html(login_page_html()).into_response()
     }
 }
 
-async fn http_route_handler(State(state): State<super::AppState>) -> impl axum::response::IntoResponse {
-    index_handler(State(state)).await
+async fn login_handler(
+    State(state): State<super::AppState>,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    let connection_context = state.server.get_connection_context().await;
+    if form.password != connection_context.0 {
+        return Html(login_page_html_with_error("Invalid password")).into_response();
+    }
+
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/"));
+    if let Some(cookie) = session_cookie_header(&connection_context.0, connection_context.2, state.server.get_status().await.use_https) {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    response
+}
+
+fn login_page_html() -> &'static str {
+    login_page_html_with_error("")
+}
+
+fn login_page_html_with_error(error: &str) -> &'static str {
+    if error.is_empty() {
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Termul Web Login</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, #1f2937, #020617 58%); color: #e5e7eb; font-family: Inter, Arial, sans-serif; }
+    .card { width: min(420px, calc(100vw - 32px)); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 20px; padding: 28px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35); }
+    .eyebrow { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #38bdf8; margin-bottom: 12px; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    p { margin: 0 0 20px; color: #94a3b8; line-height: 1.5; }
+    label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+    input { width: 100%; border: 1px solid rgba(148, 163, 184, 0.22); background: #020617; color: #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 15px; outline: none; }
+    input:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15); }
+    button { width: 100%; margin-top: 16px; border: 0; border-radius: 12px; background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; padding: 14px 16px; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .error { min-height: 20px; margin-top: 14px; color: #fca5a5; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/login">
+    <div class="eyebrow">Termul Remote</div>
+    <h1>Enter Web Lite Password</h1>
+    <p>Use password from remote access panel to open this session.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+    <button type="submit">Open Session</button>
+    <div class="error"></div>
+  </form>
+</body>
+</html>"#
+    } else {
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Termul Web Login</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, #1f2937, #020617 58%); color: #e5e7eb; font-family: Inter, Arial, sans-serif; }
+    .card { width: min(420px, calc(100vw - 32px)); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 20px; padding: 28px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35); }
+    .eyebrow { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #38bdf8; margin-bottom: 12px; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    p { margin: 0 0 20px; color: #94a3b8; line-height: 1.5; }
+    label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+    input { width: 100%; border: 1px solid rgba(148, 163, 184, 0.22); background: #020617; color: #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 15px; outline: none; }
+    input:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15); }
+    button { width: 100%; margin-top: 16px; border: 0; border-radius: 12px; background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; padding: 14px 16px; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .error { min-height: 20px; margin-top: 14px; color: #fca5a5; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/login">
+    <div class="eyebrow">Termul Remote</div>
+    <h1>Enter Web Lite Password</h1>
+    <p>Use password from remote access panel to open this session.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+    <button type="submit">Open Session</button>
+    <div class="error">Invalid password</div>
+  </form>
+</body>
+</html>"#
+    }
 }
 
 fn session_cookie_header(token: &str, ttl_secs: u64, secure: bool) -> Option<HeaderValue> {
@@ -60,13 +140,11 @@ fn allowed_origins(port: u16) -> [HeaderValue; 4] {
     ]
 }
 
-fn is_basic_auth_valid(header_value: Option<&HeaderValue>, expected_token: &str) -> bool {
+fn is_session_cookie_valid(header_value: Option<&HeaderValue>, expected_token: &str) -> bool {
     header_value
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Basic "))
-        .and_then(|value| base64::engine::general_purpose::STANDARD.decode(value).ok())
-        .and_then(|decoded| String::from_utf8(decoded).ok())
-        .map(|credentials| credentials.rsplit_once(':').map(|(_, password)| password == expected_token).unwrap_or(false))
+        .and_then(|value| value.split(';').find_map(|part| part.trim().strip_prefix("termul_web_lite_password=")))
+        .map(|token| token == expected_token)
         .unwrap_or(false)
 }
 
@@ -407,8 +485,8 @@ impl WsServer {
         let ws_app = Router::new().route("/ws", get(ws_handler));
         let http_app = Router::new()
             .route("/", get(http_route_handler))
-            .fallback(get(http_route_handler))
-            .layer(middleware::from_fn_with_state(app_state.clone(), basic_auth_guard));
+            .route("/login", post(login_handler))
+            .fallback(get(http_route_handler));
 
         let app = ws_app
             .merge(http_app)
@@ -445,9 +523,8 @@ impl WsServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_basic_auth_valid, session_cookie_header, WsServer};
+    use super::{is_session_cookie_valid, session_cookie_header, WsServer};
     use axum::http::HeaderValue;
-    use base64::Engine;
 
     #[test]
     fn generated_credentials_have_expected_lengths() {
@@ -505,22 +582,12 @@ mod tests {
     }
 
     #[test]
-    fn basic_auth_validation_accepts_and_rejects() {
-        let valid = HeaderValue::from_str(
-            &format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode("user:secret-token")
-            )
-        ).expect("valid header");
-        let invalid = HeaderValue::from_str(
-            &format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode("user:wrong-token")
-            )
-        ).expect("invalid header");
+    fn session_cookie_validation_accepts_and_rejects() {
+        let valid = HeaderValue::from_static("termul_web_lite_password=secret-token; other=value");
+        let invalid = HeaderValue::from_static("other=value");
 
-        assert!(is_basic_auth_valid(Some(&valid), "secret-token"));
-        assert!(!is_basic_auth_valid(Some(&invalid), "secret-token"));
-        assert!(!is_basic_auth_valid(None, "secret-token"));
+        assert!(is_session_cookie_valid(Some(&valid), "secret-token"));
+        assert!(!is_session_cookie_valid(Some(&invalid), "secret-token"));
+        assert!(!is_session_cookie_valid(None, "secret-token"));
     }
 }
