@@ -284,6 +284,12 @@ function ConnectedTerminalComponent({
 		const term = terminalRef.current;
 		const buf = writeBufferRef.current;
 		if (term && buf.length > 0) {
+			console.log("[ConnectedTerminal] flushWriteBuffer", {
+				instanceId,
+				ptyId: ptyIdRef.current,
+				length: buf.length,
+				preview: JSON.stringify(buf.slice(0, 80)),
+			});
 			writeBufferRef.current = "";
 			if (writeBufferFlushRef.current) {
 				clearTimeout(writeBufferFlushRef.current);
@@ -295,10 +301,16 @@ function ConnectedTerminalComponent({
 			}
 			term.write(buf);
 		}
-	}, []);
+	}, [instanceId]);
 
 	// Buffer incoming PTY data to prevent flicker from rapid small writes
 	const bufferWrite = useCallback((data: string): void => {
+		console.log("[ConnectedTerminal] bufferWrite enqueue", {
+			instanceId,
+			ptyId: ptyIdRef.current,
+			length: data.length,
+			preview: JSON.stringify(data.slice(0, 80)),
+		});
 		writeBufferRef.current += data;
 		// Schedule flush if not already scheduled
 		if (writeBufferRafRef.current === null && writeBufferFlushRef.current === null) {
@@ -316,7 +328,7 @@ function ConnectedTerminalComponent({
 				flushWriteBuffer();
 			}, WRITE_BUFFER_FLUSH_MS);
 		}
-	}, [flushWriteBuffer]);
+	}, [flushWriteBuffer, instanceId]);
 
 	const performFit = (force = false): boolean => {
 		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
@@ -1596,7 +1608,14 @@ function ConnectedTerminalComponent({
 		const resizeDisposable = terminal.onResize(({ cols, rows }) => handleResize(cols, rows));
 		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
-				bufferWrite(new TextDecoder().decode(data));
+				const decoded = new TextDecoder().decode(data);
+				console.log("[ConnectedTerminal] terminalApi.onData", {
+					instanceId,
+					id,
+					length: decoded.length,
+					preview: JSON.stringify(decoded.slice(0, 80)),
+				});
+				bufferWrite(decoded);
 				const now = Date.now();
 				const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id);
 				if (terminalRecord) {

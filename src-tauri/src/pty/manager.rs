@@ -578,10 +578,11 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_app_handle = self.app_handle.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id, flusher_app_handle);
             });
 
             // Spawn reader thread
@@ -693,10 +694,11 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_app_handle = self.app_handle.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id, flusher_app_handle);
             });
 
             // Spawn reader thread
@@ -858,9 +860,20 @@ impl PtyManager {
         done_flag: Arc<AtomicBool>,
         on_data: Option<Channel<Response>>,
         terminal_id: String,
+        app_handle: AppHandle,
     ) {
         let id = terminal_id;
         log::info!("[PTY {}] Flusher thread starting", id);
+
+        let emit_terminal_data = |data: &[u8]| {
+            let payload = serde_json::json!({
+                "id": id,
+                "data": String::from_utf8_lossy(data),
+            });
+            if let Err(e) = app_handle.emit("terminal-data", payload) {
+                log::error!("[PTY {}] Failed to emit terminal-data event: {}", id, e);
+            }
+        };
 
         if on_data.is_none() {
             // No binary channel — read and discard flusher
@@ -903,6 +916,7 @@ impl PtyManager {
                     }
                 };
                 if let Some(data) = chunk {
+                    emit_terminal_data(&data);
                     if let Err(e) = channel.send(Response::new(data)) {
                         log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
                     }
@@ -924,6 +938,7 @@ impl PtyManager {
             };
 
             if let Some(data) = chunk {
+                emit_terminal_data(&data);
                 if let Err(e) = channel.send(Response::new(data)) {
                     log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
                 }
