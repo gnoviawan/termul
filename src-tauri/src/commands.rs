@@ -113,9 +113,16 @@ pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<IpcResult<TerminalInfo>, String> {
     match pty_manager.spawn(options, Some(on_data)).await {
-        Ok(info) => Ok(IpcResult::success(info)),
+        Ok(info) => {
+            let _ = app_handle.emit("terminal-list-changed", serde_json::json!({
+                "reason": "spawn",
+                "terminalId": info.id,
+            }));
+            Ok(IpcResult::success(info))
+        }
         Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
     }
 }
@@ -152,9 +159,16 @@ pub async fn terminal_resize(
 pub async fn terminal_kill(
     terminal_id: String,
     pty_manager: State<'_, Arc<PtyManager>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<IpcResult<()>, String> {
     match pty_manager.kill(&terminal_id).await {
-        Ok(()) => Ok(IpcResult::success(())),
+        Ok(()) => {
+            let _ = app_handle.emit("terminal-list-changed", serde_json::json!({
+                "reason": "kill",
+                "terminalId": terminal_id,
+            }));
+            Ok(IpcResult::success(()))
+        }
         Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
     }
 }

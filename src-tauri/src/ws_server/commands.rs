@@ -43,7 +43,13 @@ pub(crate) async fn handle_command(
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.spawn(options, None).await {
-                Ok(info) => Ok(IpcResult::success(serde_json::to_value(&info).map_err(|e| e.to_string())?)),
+                Ok(info) => {
+                    let _ = app_handle.emit("terminal-list-changed", serde_json::json!({
+                        "reason": "spawn",
+                        "terminalId": info.id,
+                    }));
+                    Ok(IpcResult::success(serde_json::to_value(&info).map_err(|e| e.to_string())?))
+                }
                 Err(e) => {
                     log::error!("[WsServer] Spawn terminal failed: {}", e);
                     Ok(IpcResult::error(e, "SPAWN_FAILED"))
@@ -123,7 +129,13 @@ pub(crate) async fn handle_command(
                 .ok_or_else(|| "PtyManager state not registered in Tauri app context".to_string())?;
 
             match pty_manager.kill(&terminal_id).await {
-                Ok(()) => Ok(IpcResult::success(serde_json::json!(null))),
+                Ok(()) => {
+                    let _ = app_handle.emit("terminal-list-changed", serde_json::json!({
+                        "reason": "kill",
+                        "terminalId": terminal_id,
+                    }));
+                    Ok(IpcResult::success(serde_json::json!(null)))
+                }
                 Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
             }
         }
@@ -393,7 +405,7 @@ pub(crate) async fn handle_command(
             let mut active_id = String::new();
             if let Some(ap) = &*active_proj {
                 for p in projs.iter() {
-                    if p.name == ap.name {
+                    if p.name == ap.name && p.path == Some(ap.path.clone()) {
                         active_id = p.id.clone();
                         break;
                     }

@@ -77,6 +77,10 @@ interface DirectoryEntry {
   modifiedAt?: number
 }
 
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
 export function WebApp(): React.JSX.Element {
   const [ws, setWs] = useState<WsAdapter | null>(null)
   const [isConnected, setIsConnected] = useState(false)
@@ -201,6 +205,31 @@ export function WebApp(): React.JSX.Element {
     })
   }, [ws])
 
+  useEffect(() => {
+    if (!ws) return
+
+    let refreshTimer: number | null = null
+    return ws.listen('terminal-list-changed', (payload) => {
+      console.log('[RemoteCoding] terminal-list-changed', payload)
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        void ws.invoke('terminal_list').catch((err) => {
+          console.error('[RemoteCoding] refresh terminal_list failed', err)
+        })
+      }, 150)
+    })
+  }, [ws])
+
+  useEffect(() => {
+    if (!ws) return
+
+    const interval = window.setInterval(() => {
+      void ws.invoke('terminal_list').catch(() => {})
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [ws])
+
   if (isConnecting) {
     return (
       <div className="flex items-center justify-center h-screen bg-[#0f0f15] text-zinc-300">
@@ -320,6 +349,9 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
   const [sessions, setSessions] = useState<WebTerminalSession[]>([])
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  const terminalContainerRefs = useRef(new Map<string, HTMLDivElement | null>())
+  const terminalWrapRefs = useRef(new Map<string, HTMLDivElement | null>())
+  const pendingProjectSpawnRef = useRef<string | null>(null)
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [terminalDeps, setTerminalDeps] = useState<{
@@ -327,6 +359,14 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     FitAddon: any
     api: any
   } | null>(null)
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    const activeStillExists = sessions.some((session) => session.id === activeSessionId)
+    if (!activeStillExists && sessions.length > 0) {
+      setActiveSessionId(sessions[0].id)
+    }
+  }, [activeSessionId, sessions])
 
   // Remote Workspace State
   const [projects, setProjects] = useState<Project[]>([])
@@ -345,6 +385,21 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [isPreviewLoading, setIsPreviewLoading] = useState(false)
   const [copiedFile, setCopiedFile] = useState(false)
+  const totalRemoteTerminalCount = sessions.filter((session) => Boolean(session.remoteId)).length
+  const aliveRemoteTerminalCount = useCallback(
+    (projectId?: string | null) => {
+      return sessions.filter((session) => {
+        if (!session.remoteId) return false
+        if (projectId && session.projectId !== projectId) return false
+        return true
+      }).length
+    },
+    [sessions],
+  )
+  const projectTerminalCount = useCallback(
+    (projectId: string) => sessions.filter((session) => session.projectId === projectId && Boolean(session.remoteId)).length,
+    [sessions],
+  )
 
 
   // Fetch projects list
@@ -369,6 +424,57 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     }
   }, [ws])
 
+  const reconcileRemoteTerminals = useCallback(async (): Promise<void> => {
+    try {
+      const activeTerminals = await ws.invoke<any[]>('terminal_list')
+      console.log('[RemoteCoding] reconcile terminal_list', {
+        count: activeTerminals?.length ?? 0,
+        sessionCount: sessionsRef.current.length,
+        activeProjectId,
+      })
+
+      const projectsByPath = new Map(
+        projects
+          .filter((project) => project.path)
+          .map((project) => [normalizePath(project.path as string), project.id] as const),
+      )
+      const remoteIds = new Set((activeTerminals ?? []).map((terminal) => terminal.id))
+      setSessions((prev) => {
+        const prevByRemoteId = new Map(prev.map((session) => [session.remoteId, session]))
+        const nextSessions: WebTerminalSession[] = []
+
+        for (const terminal of activeTerminals ?? []) {
+          const existing = prevByRemoteId.get(terminal.id)
+          if (existing) {
+            nextSessions.push(existing)
+            continue
+          }
+
+          const terminalProjectId = terminal.cwd ? projectsByPath.get(normalizePath(terminal.cwd)) ?? activeProjectId : activeProjectId
+          nextSessions.push({
+            id: `remote-${terminal.id}`,
+            remoteId: terminal.id,
+            term: null,
+            fitAddon: null,
+            projectId: terminalProjectId,
+            shellName: terminal.shell || 'Terminal',
+            isAttached: true,
+          })
+        }
+
+        for (const session of prev) {
+          if (!session.remoteId || remoteIds.has(session.remoteId)) {
+            nextSessions.push(session)
+          }
+        }
+
+        return nextSessions
+      })
+    } catch (err) {
+      console.error('[RemoteCoding] reconcile failed', err)
+    }
+  }, [activeProjectId, projects, ws])
+
   // Synchronize on active project changes
   useEffect(() => {
     void fetchProjects()
@@ -383,10 +489,17 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       setActiveProject(active)
     })
 
+    const unsubTerminalList = ws.listen('terminal-list-changed', () => {
+      void reconcileRemoteTerminals()
+    })
+
+    void reconcileRemoteTerminals()
+
     return () => {
       unsubProjects()
+      unsubTerminalList()
     }
-  }, [ws, fetchProjects])
+  }, [ws, fetchProjects, reconcileRemoteTerminals])
 
 
   // Load directory items recursively/lazily
@@ -525,12 +638,15 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     }
 
     setSessions(prev => [...prev, newSession])
+    pendingProjectSpawnRef.current = targetProjId
     setActiveSessionId(id)
   }, [activeProjectId, terminalDeps])
 
   // Initialize xterm.js inside the mounted container element
   const initSessionTerminal = useCallback(async (session: WebTerminalSession, el: HTMLDivElement) => {
     if (!terminalDeps) return
+
+    let disposed = false
 
     const { Terminal, FitAddon, api } = terminalDeps
     
@@ -566,12 +682,17 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     term.loadAddon(fitAddon)
     term.open(el)
     
-    // Slight delay to ensure element dimensions are calculated properly
-    setTimeout(() => {
+    // Delay fit until layout settles.
+    requestAnimationFrame(() => {
       try {
         fitAddon.fit()
       } catch {}
-    }, 50)
+      setTimeout(() => {
+        try {
+          fitAddon.fit()
+        } catch {}
+      }, 75)
+    })
 
     session.term = term
     session.fitAddon = fitAddon
@@ -624,6 +745,11 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
 
     try {
       const proj = projects.find(p => p.id === session.projectId)
+      console.log('[RemoteCoding] initSessionTerminal', {
+        sessionId: session.id,
+        projectId: session.projectId,
+        projectPath: proj?.path || null,
+      })
       
       // Query for an existing unmapped terminal session on the desktop that we can mirror
       let existingPtyId: string | null = null
@@ -633,6 +759,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       if (ws) {
         try {
           const activeTerminals = await ws.invoke<any[]>('terminal_list')
+          if (disposed) return
           console.log(`[RemoteCoding] Queried terminal_list. Found ${activeTerminals?.length || 0} active terminals on desktop:`, activeTerminals)
           
           if (activeTerminals && activeTerminals.length > 0) {
@@ -682,6 +809,8 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       }
 
       if (result.success) {
+        if (disposed) return
+        pendingProjectSpawnRef.current = null
         session.remoteId = result.data.id
         session.isAttached = isAttached
         const name = result.data.shell ? result.data.shell.split(/[\\/]/).pop() || 'Terminal' : 'Terminal'
@@ -691,12 +820,19 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
         setSessions(prev => prev.map(s => s.id === session.id ? { ...s, remoteId: result.data.id, shellName: name, isAttached } : s))
         
         // Fit after spawn to match dimensions
-        setTimeout(() => {
+        requestAnimationFrame(() => {
+          if (disposed) return
           try {
+            console.log('[RemoteCoding] fit after spawn', {
+              sessionId: session.id,
+              cols: term.cols,
+              rows: term.rows,
+              remoteId: result.data.id,
+            })
             fitAddon.fit()
             void api.resize(result.data.id, term.cols, term.rows)
           } catch {}
-        }, 100)
+        })
       } else {
         term.write(`\r\n\x1b[31mSpawn failed: ${result.error}\x1b[0m\r\n`)
       }
@@ -706,6 +842,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     }
 
     (session as any).cleanup = () => {
+      disposed = true
       try {
         unsubData()
         unsubExit()
@@ -719,7 +856,15 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     const session = sessions.find(s => s.id === id)
     if (!session) return
 
-    setSessions(prev => prev.filter(s => s.id !== id))
+    console.log('[RemoteCoding] closeSession', {
+      sessionId: session.id,
+      projectId: session.projectId,
+      remoteId: session.remoteId,
+      isAttached: session.isAttached,
+      activeSessionId,
+    })
+
+    const cleanup = (session as any).cleanup as (() => void) | undefined
 
     if (activeSessionId === id) {
       const sibling = sessions.find(s => s.id !== id && s.projectId === session.projectId)
@@ -727,10 +872,16 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     }
 
     try {
-      if ((session as any).cleanup) {
-        (session as any).cleanup()
-      }
+      cleanup?.()
     } catch {}
+
+    setSessions(prev => prev.filter(s => s.id !== id))
+
+    if (!sessions.some(s => s.id !== id && s.projectId === session.projectId)) {
+      if (pendingProjectSpawnRef.current === session.projectId) {
+        pendingProjectSpawnRef.current = null
+      }
+    }
 
     if (session.remoteId && terminalDeps?.api && !session.isAttached) {
       try {
@@ -745,8 +896,11 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
 
     const projectSessions = sessions.filter(s => s.projectId === activeProjectId)
     if (projectSessions.length === 0) {
+      if (pendingProjectSpawnRef.current === activeProjectId) return
+      pendingProjectSpawnRef.current = activeProjectId
       void addSession(activeProjectId)
     } else {
+      pendingProjectSpawnRef.current = null
       const activeInProject = projectSessions.find(s => s.id === activeSessionId)
       if (!activeInProject) {
         setActiveSessionId(projectSessions[0].id)
@@ -760,6 +914,14 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     if (activeSession && activeSession.fitAddon) {
       setTimeout(() => {
         try {
+          console.log('[RemoteCoding] fit on active session change', {
+            sessionId: activeSession.id,
+            projectId: activeSession.projectId,
+            remoteId: activeSession.remoteId,
+            cols: activeSession.term?.cols,
+            rows: activeSession.term?.rows,
+          })
+          if ((activeSession.term.cols || 0) < 2 || (activeSession.term.rows || 0) < 2) return
           activeSession.fitAddon.fit()
           if (activeSession.remoteId && terminalDeps?.api) {
             void terminalDeps.api.resize(activeSession.remoteId, activeSession.term.cols, activeSession.term.rows)
@@ -768,6 +930,43 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       }, 50)
     }
   }, [activeSessionId, sessions, terminalDeps])
+
+  // Re-fit after project switch so xterm repaints on newly visible container.
+  useEffect(() => {
+    const activeSession = sessions.find(s => s.id === activeSessionId && s.projectId === activeProjectId)
+    if (!activeSession?.fitAddon) return
+
+    const timer = window.setTimeout(() => {
+      try {
+        console.log('[RemoteCoding] refit after project switch', {
+          sessionId: activeSession.id,
+          projectId: activeProjectId,
+          remoteId: activeSession.remoteId,
+          cols: activeSession.term?.cols,
+          rows: activeSession.term?.rows,
+        })
+        if ((activeSession.term.cols || 0) < 2 || (activeSession.term.rows || 0) < 2) return
+        activeSession.fitAddon.fit()
+        if (activeSession.remoteId && terminalDeps?.api) {
+          void terminalDeps.api.resize(activeSession.remoteId, activeSession.term.cols, activeSession.term.rows)
+        }
+      } catch {}
+    }, 100)
+
+    return () => window.clearTimeout(timer)
+  }, [activeProjectId, activeSessionId, sessions, terminalDeps])
+
+  useEffect(() => {
+    const activeSession = sessions.find(s => s.id === activeSessionId && s.projectId === activeProjectId)
+    if (!activeSession) return
+
+    console.log('[RemoteCoding] active terminal visible', {
+      sessionId: activeSession.id,
+      projectId: activeSession.projectId,
+      shellName: activeSession.shellName,
+      remoteId: activeSession.remoteId,
+    })
+  }, [activeProjectId, activeSessionId, sessions])
 
   // Observe active terminal container resize dynamically
   useEffect(() => {
@@ -779,17 +978,18 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
     const resizeObserver = new ResizeObserver(() => {
       requestAnimationFrame(() => {
         try {
+          const cols = activeSession.term.cols || 0
+          const rows = activeSession.term.rows || 0
+          if (cols < 2 || rows < 2) return
           activeSession.fitAddon.fit()
           if (activeSession.remoteId && terminalDeps.api) {
-            const cols = activeSession.term.cols || 80
-            const rows = activeSession.term.rows || 24
             void terminalDeps.api.resize(activeSession.remoteId, cols, rows)
           }
         } catch {}
       })
     })
 
-    const activeEl = document.querySelector(`.xterm-container`)
+    const activeEl = terminalWrapRefs.current.get(activeSession.id)
     if (activeEl) {
       resizeObserver.observe(activeEl)
     }
@@ -798,6 +998,27 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
       resizeObserver.disconnect()
     }
   }, [terminalDeps, sessions, activeSessionId])
+
+  useEffect(() => {
+    const activeSession = sessions.find(s => s.id === activeSessionId && s.projectId === activeProjectId)
+    if (!activeSession?.remoteId || !activeSession.fitAddon || !terminalDeps?.api) return
+
+    const timer = window.setTimeout(() => {
+      try {
+        console.log('[RemoteCoding] post-project-switch resize', {
+          sessionId: activeSession.id,
+          projectId: activeProjectId,
+          remoteId: activeSession.remoteId,
+          cols: activeSession.term?.cols,
+          rows: activeSession.term?.rows,
+        })
+        activeSession.fitAddon.fit()
+        void terminalDeps.api.resize(activeSession.remoteId!, activeSession.term.cols, activeSession.term.rows)
+      } catch {}
+    }, 180)
+
+    return () => window.clearTimeout(timer)
+  }, [activeProjectId, activeSessionId, sessions, terminalDeps])
 
   // Auto-collapse explorer on mobile screens
   useEffect(() => {
@@ -830,11 +1051,11 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
         </div>
 
         {/* Project Selector Switcher */}
-        {projects.length > 0 && (
-          <div className="flex items-center gap-2.5 max-w-xs md:max-w-md shrink px-2">
-            <span className="hidden sm:inline text-xs text-zinc-500 font-semibold select-none shrink-0 uppercase tracking-wider">Workspace:</span>
-            <div className="flex items-center gap-2 relative">
-              {activeProject && (
+              {projects.length > 0 && (
+            <div className="flex items-center gap-2.5 max-w-xs md:max-w-md shrink px-2">
+              <span className="hidden sm:inline text-xs text-zinc-500 font-semibold select-none shrink-0 uppercase tracking-wider">Workspace:</span>
+              <div className="flex items-center gap-2 relative">
+                {activeProject && (
                 <span
                   className="w-2 h-2 rounded-full shrink-0 shadow-sm transition-all"
                   style={{
@@ -868,11 +1089,11 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
                     })()}80`
                   }}
                 />
-              )}
-              <div className="relative">
-                <select
-                  value={activeProjectId || ''}
-                  onChange={(e) => handleSelectProject(e.target.value)}
+                )}
+                <div className="relative">
+                  <select
+                    value={activeProjectId || ''}
+                    onChange={(e) => handleSelectProject(e.target.value)}
                   className="w-full appearance-none bg-zinc-900 border border-zinc-800 rounded-xl pl-4 pr-9 py-1.5 text-xs text-zinc-200 font-medium focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500 outline-none cursor-pointer hover:bg-zinc-800/80 hover:text-white transition-all shadow-inner"
                 >
                   {projects.map((p) => (
@@ -880,14 +1101,20 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
                       {p.name}
                     </option>
                   ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-zinc-500">
-                  <ChevronDown size={14} />
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-zinc-500">
+                    <ChevronDown size={14} />
+                  </div>
                 </div>
+                <span className="rounded-full border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 text-[10px] font-bold text-zinc-300" title="Alive in active project">
+                  {activeProjectId ? aliveRemoteTerminalCount(activeProjectId) : 0}
+                </span>
+                <span className="rounded-full border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 text-[10px] font-bold text-zinc-300" title="Mapped in web lite">
+                  {totalRemoteTerminalCount}
+                </span>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         <div className="flex items-center gap-3 shrink-0">
           {/* File Explorer Toggle */}
@@ -910,6 +1137,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
             </span>
             <span className="text-[10px] text-green-400 font-bold uppercase tracking-wider hidden sm:inline">Connected</span>
+            <span className="ml-1 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-bold text-green-300">{totalRemoteTerminalCount}</span>
           </div>
         </div>
       </header>
@@ -1000,21 +1228,24 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
                   .map(s => {
                     const isActive = s.id === activeSessionId
                     return (
-                      <div
-                        key={s.id}
-                        onClick={() => setActiveSessionId(s.id)}
-                        className={`h-full px-4 border-r border-zinc-900 flex items-center gap-2 cursor-pointer transition-all ${
+                        <div
+                          key={s.id}
+                          onClick={() => setActiveSessionId(s.id)}
+                          className={`h-full px-4 border-r border-zinc-900 flex items-center gap-2 cursor-pointer transition-all ${
                           isActive
                             ? 'bg-[#0a0a0f] text-white font-medium border-t-2 border-t-blue-500'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/30'
                         }`}
-                      >
-                        <TerminalIcon size={12} className={isActive ? 'text-blue-400' : 'text-zinc-500'} />
-                        <span className="text-xs truncate max-w-[100px]">{s.shellName}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void closeSession(s.id)
+                        >
+                          <TerminalIcon size={12} className={isActive ? 'text-blue-400' : 'text-zinc-500'} />
+                          <span className="text-xs truncate max-w-[100px]">{s.shellName}</span>
+                          <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
+                            {s.projectId ? projectTerminalCount(s.projectId) : 0}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void closeSession(s.id)
                           }}
                           className="p-0.5 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors cursor-pointer"
                         >
@@ -1034,7 +1265,7 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
             </div>
 
             {/* Terminal Containers */}
-            <div className="flex-1 min-h-0 relative p-3">
+            <div className="flex-1 min-h-0 relative overflow-hidden">
               {sessions.filter(s => s.projectId === activeProjectId).length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
                   <TerminalIcon size={24} className="text-zinc-600 animate-pulse" />
@@ -1054,11 +1285,15 @@ function TerminalWorkspace({ ws }: { ws: WsAdapter }): React.JSX.Element {
                     return (
                       <div
                         key={s.id}
-                        style={{ display: isActive ? 'block' : 'none' }}
-                        className="h-full w-full"
+                        style={{ visibility: isActive ? 'visible' : 'hidden', pointerEvents: isActive ? 'auto' : 'none' }}
+                        className="absolute inset-0 h-full w-full"
+                        ref={(el) => {
+                          terminalWrapRefs.current.set(s.id, el)
+                        }}
                       >
                         <div
                           ref={(el) => {
+                            terminalContainerRefs.current.set(s.id, el)
                             if (el && !s.term) {
                               void initSessionTerminal(s, el)
                             }
