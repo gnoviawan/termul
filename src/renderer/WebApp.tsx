@@ -28,7 +28,10 @@ import {
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:9876'
-const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || localStorage.getItem('termul-web-lite-password') || ''
+const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || (() => {
+  const match = document.cookie.match(/(?:^|; )termul_web_lite_password=([^;]+)/)
+  return match ? decodeURIComponent(match[1]) : ''
+})()
 const WS_PROJECT_ID = import.meta.env.VITE_WS_PROJECT_ID || ''
 const WS_SESSION_ID = import.meta.env.VITE_WS_SESSION_ID || ''
 

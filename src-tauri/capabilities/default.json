@@ -34,15 +34,8 @@
       "allow": [
         { "path": "$APPDATA/termul/**" },
         { "path": "$HOME/.termul/**" },
-        { "path": "$HOME/**" },
-        { "path": "$HOME/Documents/**" },
-        { "path": "$HOME/Downloads/**" },
-        { "path": "$HOME/Desktop/**" },
         { "path": "$RESOURCE/**" },
-        { "path": "$TEMP/**" },
-        { "path": "C:/**" },
-        { "path": "D:/**" },
-        { "path": "E:/**" }
+        { "path": "$TEMP/**" }
       ]
     },
     "dialog:default",

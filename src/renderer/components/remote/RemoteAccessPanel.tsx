@@ -30,7 +30,6 @@ const WS_PORT = 9876
 const TUNNEL_ID = 'termul-web-tunnel'
 
 export function RemoteAccessPanel(): React.JSX.Element {
-  const WEB_LITE_PASSWORD_KEY = 'termul-web-lite-password'
   const {
     status: wsStatus,
     isLoading: wsLoading,
@@ -125,7 +124,6 @@ export function RemoteAccessPanel(): React.JSX.Element {
       toast.error('Web Lite Password required')
       return
     }
-    localStorage.setItem(WEB_LITE_PASSWORD_KEY, token)
     useWsServerStore.setState({ authToken: token })
     const result = await startWsServer(WS_PORT, token, useHttps)
     if (result.success) {
@@ -157,7 +155,6 @@ export function RemoteAccessPanel(): React.JSX.Element {
     await stopTunnel(TUNNEL_ID)
     await stopWsServer()
     useWsServerStore.setState({ authToken: null, tokenExpiry: null })
-    localStorage.removeItem(WEB_LITE_PASSWORD_KEY)
     setWebLitePassword('')
     setAcknowledgeRemoteAccess(false)
     setIsTunnelStarting(false)
@@ -192,7 +189,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
       const token = result.token || ''
       setWebLitePassword(token)
       if (token) {
-        localStorage.setItem(WEB_LITE_PASSWORD_KEY, token)
+        document.cookie = `termul_web_lite_password=${encodeURIComponent(token)}; Path=/; Max-Age=900; SameSite=Lax`
       }
       toast.success('Token rotated')
     } else {

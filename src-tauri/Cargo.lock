@@ -5287,6 +5287,7 @@ version = "0.3.8"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "env_logger",
  "futures-util",

@@ -210,7 +210,7 @@ describe('RemoteAccessPanel', () => {
     })
   })
 
-  it('uses web lite password and persists it for browser access', async () => {
+  it('uses web lite password and persists it in cookie for browser access', async () => {
     render(<RemoteAccessPanel />)
 
     const passwordInput = screen.getByLabelText(/Web Lite Password/i)
@@ -221,7 +221,7 @@ describe('RemoteAccessPanel', () => {
 
     await waitFor(() => {
       expect(mockStartServer).toHaveBeenCalledWith(9876, 'secret-pass', false)
-      expect(localStorage.getItem('termul-web-lite-password')).toBe('secret-pass')
+      expect(document.cookie).toContain('termul_web_lite_password=secret-pass')
     })
   })
 

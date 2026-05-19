@@ -4,9 +4,11 @@ use crate::ws_server::html::get_index_html;
 use crate::ws_server::utils::{is_port_in_use, get_local_ip};
 use axum::{
     Router,
-    extract::State,
-    response::Html,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    extract::{Request, State},
+    response::{Html, IntoResponse, Response},
     routing::get,
+    middleware::{self, Next},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,8 +17,60 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use crate::ws_server::handler::{ws_handler, shutdown_signal};
 use crate::ws_server::utils::generate_self_signed_cert;
+use base64::Engine;
 
-pub(crate) async fn index_handler(State(state): State<super::AppState>) -> impl axum::response::IntoResponse {
+async fn basic_auth_guard(
+    State(state): State<super::AppState>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Response {
+    let connection_context = state.server.get_connection_context().await;
+    let expected_token = connection_context.0;
+
+    let authorized = is_basic_auth_valid(headers.get(header::AUTHORIZATION), &expected_token);
+
+    if authorized {
+        next.run(request).await
+    } else {
+        (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Basic realm=\"Termul Web\"")], "Authentication required").into_response()
+    }
+}
+
+async fn http_route_handler(State(state): State<super::AppState>) -> impl axum::response::IntoResponse {
+    index_handler(State(state)).await
+}
+
+fn session_cookie_header(token: &str, ttl_secs: u64, secure: bool) -> Option<HeaderValue> {
+    let value = format!(
+        "termul_web_lite_password={}; Path=/; Max-Age={}; SameSite=Lax; HttpOnly{}",
+        token,
+        ttl_secs,
+        if secure { "; Secure" } else { "" }
+    );
+    HeaderValue::from_str(&value).ok()
+}
+
+fn allowed_origins(port: u16) -> [HeaderValue; 4] {
+    [
+        HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+        HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+        HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+        HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+    ]
+}
+
+fn is_basic_auth_valid(header_value: Option<&HeaderValue>, expected_token: &str) -> bool {
+    header_value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Basic "))
+        .and_then(|value| base64::engine::general_purpose::STANDARD.decode(value).ok())
+        .and_then(|decoded| String::from_utf8(decoded).ok())
+        .map(|credentials| credentials.rsplit_once(':').map(|(_, password)| password == expected_token).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+pub(crate) async fn index_handler(State(state): State<super::AppState>) -> Response {
     let connection_context = state.server.get_connection_context().await;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let token_expired = now >= connection_context.1 + connection_context.2;
@@ -32,7 +86,11 @@ pub(crate) async fn index_handler(State(state): State<super::AppState>) -> impl 
         .replace("__TERMUL_TOKEN_EXPIRES__", &(connection_context.1 + connection_context.2).to_string())
         .replace("__TERMUL_SESSION_ID__", &connection_context.3)
         .replace("__TERMUL_ACTIVE_PROJECT_ID__", connection_context.4.as_deref().unwrap_or(""));
-    Html(html)
+    let mut response = Html(html).into_response();
+    if let Some(cookie) = session_cookie_header(&connection_context.0, connection_context.2, state.server.get_status().await.use_https) {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    response
 }
 
 impl WsServer {
@@ -335,7 +393,7 @@ impl WsServer {
         use_https: bool,
     ) -> Result<(), String> {
         let cors = tower_http::cors::CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
+            .allow_origin(allowed_origins(port))
             .allow_methods(tower_http::cors::Any)
             .allow_headers(tower_http::cors::Any);
         let index_html = get_index_html();
@@ -346,14 +404,18 @@ impl WsServer {
             server: self.clone(),
         };
 
-        let app = Router::new()
-            .route("/ws", get(ws_handler))
-            .route("/", get(index_handler))
-            .fallback(get(index_handler))
+        let ws_app = Router::new().route("/ws", get(ws_handler));
+        let http_app = Router::new()
+            .route("/", get(http_route_handler))
+            .fallback(get(http_route_handler))
+            .layer(middleware::from_fn_with_state(app_state.clone(), basic_auth_guard));
+
+        let app = ws_app
+            .merge(http_app)
             .layer(cors)
             .with_state(app_state);
 
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
         if use_https {
             let _ = generate_self_signed_cert(port);
@@ -383,7 +445,9 @@ impl WsServer {
 
 #[cfg(test)]
 mod tests {
-    use super::WsServer;
+    use super::{is_basic_auth_valid, session_cookie_header, WsServer};
+    use axum::http::HeaderValue;
+    use base64::Engine;
 
     #[test]
     fn generated_credentials_have_expected_lengths() {
@@ -400,5 +464,63 @@ mod tests {
 
         assert_eq!(token.len(), 32);
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn session_cookie_has_expected_shape() {
+        let cookie = session_cookie_header("secret-token", 900, false).expect("cookie header");
+        let value = cookie.to_str().expect("cookie str");
+
+        assert!(value.contains("termul_web_lite_password=secret-token"));
+        assert!(value.contains("Path=/"));
+        assert!(value.contains("Max-Age=900"));
+        assert!(value.contains("SameSite=Lax"));
+        assert!(value.contains("HttpOnly"));
+        assert!(!value.contains("Secure"));
+    }
+
+    #[test]
+    fn secure_cookie_adds_secure_flag() {
+        let cookie = session_cookie_header("secret-token", 900, true).expect("cookie header");
+        let value = cookie.to_str().expect("cookie str");
+
+        assert!(value.contains("HttpOnly"));
+        assert!(value.contains("Secure"));
+    }
+
+    #[test]
+    fn allowed_origins_are_localhost_only() {
+        let origins = super::allowed_origins(9876);
+        let rendered = origins
+            .iter()
+            .map(|value| value.to_str().expect("origin str"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec![
+            "http://localhost:9876",
+            "http://127.0.0.1:9876",
+            "https://localhost:9876",
+            "https://127.0.0.1:9876",
+        ]);
+    }
+
+    #[test]
+    fn basic_auth_validation_accepts_and_rejects() {
+        let valid = HeaderValue::from_str(
+            &format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("user:secret-token")
+            )
+        ).expect("valid header");
+        let invalid = HeaderValue::from_str(
+            &format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("user:wrong-token")
+            )
+        ).expect("invalid header");
+
+        assert!(is_basic_auth_valid(Some(&valid), "secret-token"));
+        assert!(!is_basic_auth_valid(Some(&invalid), "secret-token"));
+        assert!(!is_basic_auth_valid(None, "secret-token"));
     }
 }
