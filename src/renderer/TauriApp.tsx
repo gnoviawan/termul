@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -82,6 +82,11 @@ const router = createHashRouter(
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
   const [isLocked, setIsLocked] = useState(false)
+  const isLockedRef = useRef(false)
+
+  useEffect(() => {
+    isLockedRef.current = isLocked
+  }, [isLocked])
 
   useEffect(() => {
     if (!isWindowStateReady) return
@@ -102,6 +107,9 @@ export default function TauriApp(): React.JSX.Element {
 
   useEffect(() => {
     const handlePointerDown = (): void => {
+      // Don't send handover while desktop is locked — the overlay button click
+      // would otherwise immediately re-lock the web side.
+      if (isLockedRef.current) return
       console.log('[TauriApp] pointerdown -> handover web')
       void wsServerApi.lockHandover('web')
     }
@@ -139,7 +147,7 @@ export default function TauriApp(): React.JSX.Element {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    window.location.reload()
+                    setIsLocked(false)
                   }}
                   className="mt-6 w-full rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500"
                 >

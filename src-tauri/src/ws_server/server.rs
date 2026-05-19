@@ -23,13 +23,26 @@ struct LoginForm {
 
 async fn http_route_handler(State(state): State<super::AppState>, headers: HeaderMap) -> Response {
     let connection_context = state.server.get_connection_context().await;
+    let cookie_valid = is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0);
     log::info!(
-        "[WsServer][http_route] session_active client_count={} session_id={} active_project_id={:?}",
+        "[WsServer][http] request cookie_valid={} client_count={} session_id={} active_project_id={:?}",
+        cookie_valid,
         state.server.get_status().await.client_count,
         connection_context.3,
         connection_context.4
     );
-    if is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0) {
+    if !cookie_valid {
+        let cookie_present = headers.get(header::COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("termul_web_lite_password="))
+            .unwrap_or(false);
+        log::warn!(
+            "[WsServer][http] cookie invalid — cookie_present={} expected_token_prefix={}",
+            cookie_present,
+            &connection_context.0[..4.min(connection_context.0.len())]
+        );
+    }
+    if cookie_valid {
         index_handler(State(state)).await
     } else {
         Html(login_page_html()).into_response()
@@ -42,8 +55,15 @@ async fn login_handler(
 ) -> Response {
     let connection_context = state.server.get_connection_context().await;
     if form.password != connection_context.0 {
+        log::warn!(
+            "[WsServer][login] Invalid password attempt — submitted_len={} expected_len={} token_prefix={}",
+            form.password.len(),
+            connection_context.0.len(),
+            &connection_context.0[..4.min(connection_context.0.len())]
+        );
         return Html(login_page_html_with_error("Invalid password")).into_response();
     }
+    log::info!("[WsServer][login] Login successful");
 
     let mut response = StatusCode::SEE_OTHER.into_response();
     response.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/"));
@@ -247,10 +267,21 @@ impl WsServer {
         let active_project_id = self.active_project_id.lock().await.clone();
         let token_ttl_secs = self.token_ttl_secs.load(Ordering::SeqCst);
         let mut status = self.status.lock().await;
-        status.session_id = new_session_id;
-        status.active_project_id = active_project_id;
+        status.session_id = new_session_id.clone();
+        status.active_project_id = active_project_id.clone();
         status.token_ttl_secs = token_ttl_secs;
         log::info!("[WsServer] Token rotated");
+        // Notify all authenticated WS clients so they can update their cookie
+        // and reconnect without hitting the login page.
+        let _ = self.event_tx.send(WsOutbound::Event {
+            event: "token-rotated".to_string(),
+            payload: Some(serde_json::json!({
+                "token": new_token.clone(),
+                "sessionId": new_session_id,
+                "activeProjectId": active_project_id,
+                "ttlSecs": token_ttl_secs,
+            })),
+        });
         new_token
     }
 
@@ -296,8 +327,8 @@ impl WsServer {
         let mut active_proj = self.active_project.lock().await;
         let project_binding = format!("{}::{}", name, path);
         *active_proj = Some(super::ActiveProjectInfo {
-            name,
-            path,
+            name: name.clone(),
+            path: path.clone(),
             default_shell,
             color,
         });
@@ -305,7 +336,9 @@ impl WsServer {
             let mut active_project_id = self.active_project_id.lock().await;
             *active_project_id = Some(project_binding);
         }
-        let _ = self.rotate_token().await;
+        log::info!("[WsServer] set_active_project name={} (token unchanged)", name);
+        // NOTE: do NOT rotate token here — rotating on every project switch
+        // invalidates the browser cookie and forces the user to re-login.
     }
 
     pub async fn set_projects(&self, projects: Vec<super::ProjectInfo>, active_project_id: Option<String>) {
@@ -334,7 +367,9 @@ impl WsServer {
 
         drop(active_proj);
         drop(projs);
-        let _ = self.rotate_token().await;
+        log::info!("[WsServer] set_projects count={} active_id={:?} (token unchanged)", projects.len(), active_project_id);
+        // NOTE: do NOT rotate token here — rotating on every project sync
+        // invalidates the browser cookie and forces the user to re-login.
 
         let event_payload = serde_json::json!({
             "projects": projects,

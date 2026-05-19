@@ -28,12 +28,18 @@ import {
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:9876'
-const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || (window as typeof window & { AUTH_TOKEN?: string }).AUTH_TOKEN || (() => {
-  const match = document.cookie.match(/(?:^|; )termul_web_lite_password=([^;]+)/)
-  return match ? decodeURIComponent(match[1]) : ''
-})()
 const WS_PROJECT_ID = import.meta.env.VITE_WS_PROJECT_ID || ''
 const WS_SESSION_ID = import.meta.env.VITE_WS_SESSION_ID || ''
+
+// Read token lazily at connect time so it always picks up the latest cookie value.
+// A module-level constant would be stale after the cookie expires or is refreshed.
+function getWsToken(): string {
+  if (import.meta.env.VITE_WS_TOKEN) return import.meta.env.VITE_WS_TOKEN as string
+  const win = window as typeof window & { AUTH_TOKEN?: string }
+  if (win.AUTH_TOKEN) return win.AUTH_TOKEN
+  const match = document.cookie.match(/(?:^|; )termul_web_lite_password=([^;]+)/)
+  return match ? decodeURIComponent(match[1]) : ''
+}
 
 interface WsContextValue {
   ws: WsAdapter | null
@@ -78,20 +84,49 @@ export function WebApp(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
 
+  const wsRef = useRef<WsAdapter | null>(null)
+
+  // Clear session cookie and reload to login page
+  const handleLogout = useCallback(() => {
+    console.log('[WebApp] logout — clearing session cookie')
+    document.cookie = 'termul_web_lite_password=; Path=/; Max-Age=0; SameSite=Lax'
+    wsRef.current?.disconnect()
+    wsRef.current = null
+    window.location.reload()
+  }, [])
+
   const connect = useCallback(async () => {
+    // Disconnect any existing adapter before creating a new one so that a
+    // reconnect after unlock always authenticates with the latest token from
+    // the cookie (the old adapter captured a potentially stale token).
+    if (wsRef.current) {
+      wsRef.current.disconnect()
+      wsRef.current = null
+      setWs(null)
+    }
+
     setIsConnecting(true)
     setError(null)
 
-      const adapter = createWsAdapter({
-        url: WS_URL,
-        authToken: WS_TOKEN,
-        projectId: WS_PROJECT_ID || undefined,
-        sessionId: WS_SESSION_ID || undefined,
-        reconnectInterval: 3000,
-        maxReconnectAttempts: 20,
-      })
+    const token = getWsToken()
+    const maskedToken = token ? `${token.slice(0, 4)}...${token.slice(-4)}` : '(empty)'
+    console.log('[WebApp] connect() token from cookie:', maskedToken, '| url:', WS_URL)
+
+    if (!token) {
+      console.warn('[WebApp] connect() no token found in cookie — will likely fail auth')
+    }
+
+    const adapter = createWsAdapter({
+      url: WS_URL,
+      authToken: token,
+      projectId: WS_PROJECT_ID || undefined,
+      sessionId: WS_SESSION_ID || undefined,
+      reconnectInterval: 3000,
+      maxReconnectAttempts: 20,
+    })
 
     adapter.onDisconnect(() => {
+      console.log('[WebApp] adapter disconnected')
       setIsConnected(false)
     })
 
@@ -101,12 +136,16 @@ export function WebApp(): React.JSX.Element {
         url: WS_URL,
         projectId: WS_PROJECT_ID || null,
         sessionId: WS_SESSION_ID || null,
+        tokenMasked: maskedToken,
       })
+      wsRef.current = adapter
       setWs(adapter)
       setIsConnected(true)
       setIsConnecting(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to connect')
+      const msg = err instanceof Error ? err.message : 'Failed to connect'
+      console.error('[WebApp] connect() failed:', msg, '| token was:', maskedToken)
+      setError(msg)
       setIsConnecting(false)
     }
   }, [])
@@ -114,7 +153,8 @@ export function WebApp(): React.JSX.Element {
   useEffect(() => {
     void connect()
     return () => {
-      ws?.disconnect()
+      wsRef.current?.disconnect()
+      wsRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -144,6 +184,19 @@ export function WebApp(): React.JSX.Element {
       if (payload.target === 'web') {
         console.log('[WebApp] locked web')
         setIsLocked(true)
+      }
+    })
+  }, [ws])
+
+  useEffect(() => {
+    if (!ws) return
+
+    return ws.listen('token-rotated', (payload) => {
+      const newToken = payload.token as string | undefined
+      const ttlSecs = (payload.ttlSecs as number | undefined) ?? 900
+      if (newToken) {
+        console.log('[WebApp] token-rotated — updating cookie, ttl:', ttlSecs)
+        document.cookie = `termul_web_lite_password=${encodeURIComponent(newToken)}; Path=/; Max-Age=${ttlSecs}; SameSite=Lax`
       }
     })
   }, [ws])
@@ -202,6 +255,12 @@ export function WebApp(): React.JSX.Element {
           >
             Reconnect Session
           </button>
+          <button
+            onClick={handleLogout}
+            className="w-full py-3 bg-transparent border border-zinc-700 hover:border-zinc-500 active:scale-[0.98] text-zinc-400 hover:text-zinc-200 font-semibold rounded-2xl transition-all"
+          >
+            Logout
+          </button>
         </div>
       </div>
     )
@@ -227,6 +286,15 @@ export function WebApp(): React.JSX.Element {
                 className="mt-6 w-full rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500"
               >
                 Open Web Lite
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleLogout()
+                }}
+                className="mt-3 w-full rounded-2xl border border-zinc-700 hover:border-zinc-500 px-4 py-3 font-semibold text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                Logout
               </button>
             </div>
           </div>

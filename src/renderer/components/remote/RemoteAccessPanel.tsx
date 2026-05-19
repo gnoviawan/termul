@@ -201,6 +201,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
       return
     }
     useWsServerStore.setState({ authToken: token })
+    // Persist token to cookie so WebApp can re-authenticate after a page
+    // reload (e.g. when unlocking the desktop). Max-Age matches token TTL.
+    document.cookie = `termul_web_lite_password=${encodeURIComponent(token)}; Path=/; Max-Age=900; SameSite=Lax`
     const result = await startWsServer(WS_PORT, token, useHttps)
     if (result.success) {
       setIsTunnelStarting(true)
