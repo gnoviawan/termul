@@ -28,7 +28,7 @@ import {
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:9876'
-const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || (() => {
+const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || (window as typeof window & { AUTH_TOKEN?: string }).AUTH_TOKEN || (() => {
   const match = document.cookie.match(/(?:^|; )termul_web_lite_password=([^;]+)/)
   return match ? decodeURIComponent(match[1]) : ''
 })()
