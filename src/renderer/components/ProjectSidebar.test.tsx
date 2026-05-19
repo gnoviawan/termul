@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
@@ -67,17 +67,19 @@ const defaultProps = {
   onReorderProjects: vi.fn()
 }
 
-const renderWithRouter = (props = {}) => {
-  return render(
-    <MemoryRouter>
-      <ProjectSidebar {...defaultProps} {...props} />
-    </MemoryRouter>
-  )
+const renderWithRouter = async (props = {}) => {
+  await act(async () => {
+    render(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} {...props} />
+      </MemoryRouter>
+    )
+  })
 }
 
 describe('ProjectSidebar Context Menu', () => {
-  it('should open context menu on right-click', () => {
-    renderWithRouter()
+  it('should open context menu on right-click', async () => {
+    await renderWithRouter()
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -89,7 +91,7 @@ describe('ProjectSidebar Context Menu', () => {
   })
 
   it('should close context menu on escape', async () => {
-    renderWithRouter()
+    await renderWithRouter()
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -104,7 +106,7 @@ describe('ProjectSidebar Context Menu', () => {
   })
 
   it('should start inline editing when Rename is clicked', async () => {
-    renderWithRouter()
+    await renderWithRouter()
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -120,7 +122,7 @@ describe('ProjectSidebar Context Menu', () => {
 
   it('should save rename on Enter key', async () => {
     const onUpdateProject = vi.fn()
-    renderWithRouter({ onUpdateProject })
+    await renderWithRouter({ onUpdateProject })
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -135,7 +137,7 @@ describe('ProjectSidebar Context Menu', () => {
 
   it('should cancel rename on Escape key', async () => {
     const onUpdateProject = vi.fn()
-    renderWithRouter({ onUpdateProject })
+    await renderWithRouter({ onUpdateProject })
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -151,9 +153,9 @@ describe('ProjectSidebar Context Menu', () => {
     expect(onUpdateProject).not.toHaveBeenCalled()
   })
 
-  it('should call onArchiveProject when Archive is clicked', () => {
+  it('should call onArchiveProject when Archive is clicked', async () => {
     const onArchiveProject = vi.fn()
-    renderWithRouter({ onArchiveProject })
+    await renderWithRouter({ onArchiveProject })
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -163,7 +165,7 @@ describe('ProjectSidebar Context Menu', () => {
   })
 
   it('should show delete confirmation dialog when Delete is clicked', async () => {
-    renderWithRouter()
+    await renderWithRouter()
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -177,7 +179,7 @@ describe('ProjectSidebar Context Menu', () => {
 
   it('should call onDeleteProject when delete is confirmed', async () => {
     const onDeleteProject = vi.fn()
-    renderWithRouter({ onDeleteProject })
+    await renderWithRouter({ onDeleteProject })
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -197,7 +199,7 @@ describe('ProjectSidebar Context Menu', () => {
 
   it('should close delete dialog when cancelled', async () => {
     const onDeleteProject = vi.fn()
-    renderWithRouter({ onDeleteProject })
+    await renderWithRouter({ onDeleteProject })
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -216,7 +218,7 @@ describe('ProjectSidebar Context Menu', () => {
   })
 
   it('should open color picker when Change Color is clicked', async () => {
-    renderWithRouter()
+    await renderWithRouter()
 
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
@@ -229,15 +231,15 @@ describe('ProjectSidebar Context Menu', () => {
 })
 
 describe('ProjectSidebar', () => {
-  it('should render project list', () => {
-    renderWithRouter()
+  it('should render project list', async () => {
+    await renderWithRouter()
 
     expect(screen.getByText('Project One')).toBeInTheDocument()
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
-  it('should render project avatars with first letter', () => {
-    renderWithRouter()
+  it('should render project avatars with first letter', async () => {
+    await renderWithRouter()
 
     const activeProjectsContainer = screen.getByTestId('active-projects-container')
     const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
@@ -246,18 +248,18 @@ describe('ProjectSidebar', () => {
     expect(letters).toStrictEqual(['P', 'P'])
   })
 
-  it('should call onSelectProject when project is clicked', () => {
+  it('should call onSelectProject when project is clicked', async () => {
     const onSelectProject = vi.fn()
-    renderWithRouter({ onSelectProject })
+    await renderWithRouter({ onSelectProject })
 
     fireEvent.click(screen.getByText('Project Two'))
 
     expect(onSelectProject).toHaveBeenCalledWith('2')
   })
 
-  it('should call onNewProject when header + button is clicked', () => {
+  it('should call onNewProject when header + button is clicked', async () => {
     const onNewProject = vi.fn()
-    renderWithRouter({ onNewProject })
+    await renderWithRouter({ onNewProject })
 
     // Use data-testid for robust button selection
     const headerButton = screen.getByTestId('header-new-project')
@@ -266,20 +268,20 @@ describe('ProjectSidebar', () => {
     expect(onNewProject).toHaveBeenCalled()
   })
 
-  it('should show version label at the bottom', () => {
-    renderWithRouter({})
+  it('should show version label at the bottom', async () => {
+    await renderWithRouter({})
 
     expect(screen.getByText(/Termul v/)).toBeInTheDocument()
   })
 
-  it('should show empty state when no projects', () => {
-    renderWithRouter({ projects: [] })
+  it('should show empty state when no projects', async () => {
+    await renderWithRouter({ projects: [] })
 
     expect(screen.getByText('No projects yet')).toBeInTheDocument()
   })
 
-  it('should not render removed navigation items', () => {
-    renderWithRouter()
+  it('should not render removed navigation items', async () => {
+    await renderWithRouter()
 
     // These items were removed from the sidebar
     expect(screen.queryByText('Workspace')).not.toBeInTheDocument()
@@ -288,41 +290,41 @@ describe('ProjectSidebar', () => {
     expect(screen.queryByText('Preferences')).not.toBeInTheDocument()
   })
 
-  it('should not render removed action items', () => {
-    renderWithRouter()
+  it('should not render removed action items', async () => {
+    await renderWithRouter()
 
     // These actions were removed from the sidebar
     expect(screen.queryByText('Scan Directories')).not.toBeInTheDocument()
     expect(screen.queryByText('Import Config')).not.toBeInTheDocument()
   })
 
-  it('should handle project with empty name gracefully', () => {
+  it('should handle project with empty name gracefully', async () => {
     const projectsWithEmptyName: Project[] = [
       { id: '1', name: '', color: 'blue', gitBranch: 'main' }
     ]
-    renderWithRouter({ projects: projectsWithEmptyName })
+    await renderWithRouter({ projects: projectsWithEmptyName })
 
     // Should show fallback character '?' for empty name
     const avatar = screen.getByTestId('project-avatar-letter')
     expect(avatar).toHaveTextContent('?')
   })
 
-  it('should extract first alphabetic character for emoji project names', () => {
+  it('should extract first alphabetic character for emoji project names', async () => {
     const projectsWithEmoji: Project[] = [
       { id: '1', name: '🚀Rocket', color: 'blue', gitBranch: 'main' }
     ]
-    renderWithRouter({ projects: projectsWithEmoji })
+    await renderWithRouter({ projects: projectsWithEmoji })
 
     // Should extract 'R' from Rocket, not the emoji
     const avatar = screen.getByTestId('project-avatar-letter')
     expect(avatar).toHaveTextContent('R')
   })
 
-  it('should preserve emoji-only project names in avatar fallback', () => {
+  it('should preserve emoji-only project names in avatar fallback', async () => {
     const projectsWithEmojiOnlyName: Project[] = [
       { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
     ]
-    renderWithRouter({ projects: projectsWithEmojiOnlyName })
+    await renderWithRouter({ projects: projectsWithEmojiOnlyName })
 
     // Should keep full emoji grapheme as fallback, not a surrogate fragment
     const avatar = screen.getByTestId('project-avatar-letter')
@@ -336,21 +338,21 @@ describe('ProjectSidebar Archived Projects', () => {
     { id: '2', name: 'Archived Project', color: 'green', gitBranch: 'develop', isArchived: true }
   ]
 
-  it('should show archived section toggle when there are archived projects', () => {
-    renderWithRouter({ projects: projectsWithArchived })
+  it('should show archived section toggle when there are archived projects', async () => {
+    await renderWithRouter({ projects: projectsWithArchived })
 
     expect(screen.getByText(/Archived \(1\)/)).toBeInTheDocument()
   })
 
-  it('should not show archived projects by default', () => {
-    renderWithRouter({ projects: projectsWithArchived })
+  it('should not show archived projects by default', async () => {
+    await renderWithRouter({ projects: projectsWithArchived })
 
     expect(screen.getByText('Active Project')).toBeInTheDocument()
     expect(screen.queryByText('Archived Project')).not.toBeInTheDocument()
   })
 
   it('should show archived projects when toggle is clicked', async () => {
-    renderWithRouter({ projects: projectsWithArchived })
+    await renderWithRouter({ projects: projectsWithArchived })
 
     fireEvent.click(screen.getByText(/Archived \(1\)/))
 
@@ -360,7 +362,7 @@ describe('ProjectSidebar Archived Projects', () => {
   })
 
   it('should show Restore option in context menu for archived projects', async () => {
-    renderWithRouter({ projects: projectsWithArchived })
+    await renderWithRouter({ projects: projectsWithArchived })
 
     // Expand archived section
     fireEvent.click(screen.getByText(/Archived \(1\)/))
@@ -379,7 +381,7 @@ describe('ProjectSidebar Archived Projects', () => {
 
   it('should call onRestoreProject when Restore is clicked', async () => {
     const onRestoreProject = vi.fn()
-    renderWithRouter({ projects: projectsWithArchived, onRestoreProject })
+    await renderWithRouter({ projects: projectsWithArchived, onRestoreProject })
 
     // Expand archived section
     fireEvent.click(screen.getByText(/Archived \(1\)/))
@@ -395,8 +397,8 @@ describe('ProjectSidebar Archived Projects', () => {
     expect(onRestoreProject).toHaveBeenCalledWith('2')
   })
 
-  it('should not show archived section when there are no archived projects', () => {
-    renderWithRouter({ projects: mockProjects })
+  it('should not show archived section when there are no archived projects', async () => {
+    await renderWithRouter({ projects: mockProjects })
 
     expect(screen.queryByText(/Archived/)).not.toBeInTheDocument()
   })
@@ -404,7 +406,7 @@ describe('ProjectSidebar Archived Projects', () => {
 
 describe('ProjectSidebar Default Shell Submenu', () => {
   it('should show Set Default Shell menu item with submenu', async () => {
-    renderWithRouter()
+    await renderWithRouter()
 
     // Wait for shells to be fetched
     await waitFor(() => {
@@ -421,7 +423,7 @@ describe('ProjectSidebar Default Shell Submenu', () => {
 
   it('should call onUpdateProject when shell is selected from submenu', async () => {
     const onUpdateProject = vi.fn()
-    renderWithRouter({ onUpdateProject })
+    await renderWithRouter({ onUpdateProject })
 
     // Wait for shells to be fetched
     await waitFor(() => {
@@ -446,17 +448,25 @@ describe('ProjectSidebar Default Shell Submenu', () => {
 })
 
 describe('ProjectSidebar Terminal Activity Indicator', () => {
-  it('should not show activity indicator when hasActivity is false', () => {
+  it('should not show activity indicator when hasActivity is false', async () => {
     mockUseProjectsWithActivity.mockReturnValue([])
-    renderWithRouter()
+    await renderWithRouter()
+
+    await waitFor(() => {
+      expect(screen.getByText('Project One')).toBeInTheDocument()
+    })
 
     const projectItem = screen.getByText('Project One')
     expect(projectItem.closest('button')).not.toContainHTML('animate-spin')
   })
 
-  it('should show activity indicator when hasActivity is true and project is not active', () => {
+  it('should show activity indicator when hasActivity is true and project is not active', async () => {
     mockUseProjectsWithActivity.mockReturnValue(['2'])
-    renderWithRouter()
+    await renderWithRouter()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-2')).toBeInTheDocument()
+    })
 
     const item = screen.getByTestId('project-item-2')
     const spinner = item.querySelector('svg.animate-spin')
@@ -466,9 +476,13 @@ describe('ProjectSidebar Terminal Activity Indicator', () => {
     expect(wrapper).toHaveAttribute('title', 'Terminal activity')
   })
 
-  it('should show activity indicator even when project is active if hasActivity is true', () => {
+  it('should show activity indicator even when project is active if hasActivity is true', async () => {
     mockUseProjectsWithActivity.mockReturnValue(['1'])
-    renderWithRouter()
+    await renderWithRouter()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-1')).toBeInTheDocument()
+    })
 
     const item = screen.getByTestId('project-item-1')
     const spinner = item.querySelector('svg.animate-spin')

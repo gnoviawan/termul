@@ -4,19 +4,22 @@ import { render, cleanup } from '@testing-library/react'
 import { toast } from 'sonner'
 
 // Mock Tauri APIs BEFORE importing the component
+const mockListen = vi.fn((eventName, handler) => Promise.resolve(vi.fn()))
+const mockInvoke = vi.fn(() =>
+  Promise.resolve({
+    id: 'terminal-123',
+    shell: 'bash',
+    cwd: '/home/user'
+  })
+)
+
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(() => Promise.resolve(vi.fn())),
+  listen: mockListen,
   emit: vi.fn()
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() =>
-    Promise.resolve({
-      id: 'terminal-123',
-      shell: 'bash',
-      cwd: '/home/user'
-    })
-  )
+  invoke: mockInvoke
 }))
 
 vi.mock('sonner', () => ({

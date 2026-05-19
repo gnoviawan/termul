@@ -16,6 +16,7 @@ import {
   Layers
 } from 'lucide-react'
 import { useWsServerStore } from '@/stores/ws-server-store'
+import { useActiveProject } from '@/stores/project-store'
 import { useTunnelStore } from '@/stores/tunnel-store'
 import { tunnelApi } from '@/lib/tunnel-api'
 import { wsServerApi } from '@/lib/ws-server-api'
@@ -38,12 +39,14 @@ export function RemoteAccessPanel(): React.JSX.Element {
     rotateToken,
     refreshStatus: refreshWsStatus
   } = useWsServerStore()
+  const activeProject = useActiveProject()
   const tunnelSessions = useTunnelStore((state) => state.sessions)
   const startTunnel = useTunnelStore((state) => state.startTunnel)
   const stopTunnel = useTunnelStore((state) => state.stopTunnel)
   const tunnelError = useTunnelStore((state) => state.error)
 
   const [useHttps, setUseHttps] = useState(false)
+  const [acknowledgeRemoteAccess, setAcknowledgeRemoteAccess] = useState(false)
   const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [isTunnelStarting, setIsTunnelStarting] = useState(false)
@@ -137,9 +140,21 @@ export function RemoteAccessPanel(): React.JSX.Element {
     }
   }
 
+  const handleRevokeSession = async () => {
+    setIsTunnelStarting(true)
+    await rotateToken()
+    await stopTunnel(TUNNEL_ID)
+    await stopWsServer()
+    useWsServerStore.setState({ authToken: null, tokenExpiry: null })
+    setAcknowledgeRemoteAccess(false)
+    setIsTunnelStarting(false)
+    toast.success('Remote session revoked')
+  }
+
   const handleStopWsServer = async () => {
     await stopTunnel(TUNNEL_ID)
     const result = await stopWsServer()
+    setAcknowledgeRemoteAccess(false)
     if (result.success) {
       toast.success('Termul Web server stopped')
     } else {
@@ -262,12 +277,31 @@ export function RemoteAccessPanel(): React.JSX.Element {
               ) : (
                 <button
                   onClick={handleStartWsServer}
-                  disabled={wsLoading}
+                  disabled={wsLoading || !acknowledgeRemoteAccess}
                   className="flex-1 py-4 px-6 bg-primary text-primary-foreground rounded-2xl font-semibold flex items-center justify-center gap-2 hover:bg-primary/95 hover:shadow-lg transition-all active:scale-[0.99] disabled:opacity-50"
                 >
                   <Zap size={16} /> Start Web Server & Tunnel
                 </button>
               )}
+            </div>
+
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+              <label className="flex items-start gap-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={acknowledgeRemoteAccess}
+                  onChange={(e) => setAcknowledgeRemoteAccess(e.target.checked)}
+                  className="mt-1 rounded border-border bg-background text-primary focus:ring-primary/20"
+                />
+                <span className="text-xs leading-relaxed text-foreground/90">
+                  I understand remote coding exposes terminal and workspace control to remote clients, is bound to the active project/session, and expires automatically.
+                </span>
+              </label>
+              <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
+                <div className="rounded-xl border bg-background/60 px-3 py-2">Project: {activeProject?.name || wsStatus.activeProjectId || 'None'}</div>
+                <div className="rounded-xl border bg-background/60 px-3 py-2">Session: {wsStatus.sessionId || 'Pending'}</div>
+                <div className="rounded-xl border bg-background/60 px-3 py-2">TTL: {Math.round((wsStatus.tokenTtlSecs || 900) / 60)}m</div>
+              </div>
             </div>
 
             {/* Connection Information */}
@@ -352,6 +386,13 @@ export function RemoteAccessPanel(): React.JSX.Element {
                       </button>
                     </div>
                   )}
+                  <button
+                    onClick={handleRevokeSession}
+                    disabled={wsLoading}
+                    className="w-full py-2.5 text-xs bg-destructive/10 hover:bg-destructive/15 border border-destructive/20 text-destructive font-semibold rounded-xl transition-all disabled:opacity-50"
+                  >
+                    Revoke Session
+                  </button>
                 </div>
               </div>
             )}

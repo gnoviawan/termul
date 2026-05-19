@@ -33,9 +33,6 @@ pub struct ProjectInfo {
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub auth_token: String,
-    pub token_expiry_secs: u64,
-    pub token_created_at: u64,
     pub index_html: String,
     pub app_handle: AppHandle,
     pub server: Arc<WsServer>,
@@ -44,7 +41,13 @@ pub(crate) struct AppState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum WsInbound {
-    Auth { token: String },
+    Auth {
+        token: String,
+        #[serde(rename = "projectId", default)]
+        project_id: Option<String>,
+        #[serde(rename = "sessionId", default)]
+        session_id: Option<String>,
+    },
     Request {
         id: String,
         method: String,
@@ -80,6 +83,9 @@ pub struct WsServerStatus {
     pub is_running: bool,
     pub port: u16,
     pub client_count: usize,
+    pub session_id: String,
+    pub active_project_id: Option<String>,
+    pub token_ttl_secs: u64,
     pub http_url: String,
     pub ws_url: String,
     pub use_https: bool,
@@ -110,11 +116,13 @@ pub struct WsServer {
     pub(crate) self_weak: std::sync::Mutex<Option<std::sync::Weak<WsServer>>>,
     pub(crate) audit_log: Mutex<Vec<ConnectionAudit>>,
     pub(crate) current_token: Mutex<String>,
+    pub(crate) session_id: Mutex<String>,
     pub(crate) token_created_at: AtomicU64,
     pub(crate) token_ttl_secs: AtomicU64,
     pub(crate) auth_attempts: Mutex<HashMap<String, (u32, Instant)>>,
     pub(crate) active_project: Mutex<Option<ActiveProjectInfo>>,
+    pub(crate) active_project_id: Mutex<Option<String>>,
     pub(crate) projects: Mutex<Vec<ProjectInfo>>,
 }
 
-pub(crate) const DEFAULT_TOKEN_TTL_SECS: u64 = 3600;
+pub(crate) const DEFAULT_TOKEN_TTL_SECS: u64 = 900;

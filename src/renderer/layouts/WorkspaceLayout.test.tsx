@@ -48,6 +48,9 @@ const mockUseTerminalActions = vi.fn(() => ({
 }))
 
 vi.mock('@/stores/project-store', () => ({
+  useProjectStore: vi.fn((selector) =>
+    selector ? selector({ projects: [], activeProjectId: '', isLoaded: true }) : { projects: [], activeProjectId: '', isLoaded: true }
+  ),
   useProjectsLoaded: () => mockUseProjectsLoaded(),
   useProjects: () => mockUseProjects(),
   useActiveProject: () => mockUseActiveProject(),
@@ -144,6 +147,50 @@ vi.mock('@/hooks/use-app-settings', () => ({
 
 vi.mock('@/hooks/use-file-watcher', () => ({
   useFileWatcher: vi.fn()
+}))
+
+vi.mock('@/hooks/use-pane-dnd', () => ({
+  PaneDndProvider: ({ children }: { children?: unknown }) => <>{children}</>
+}))
+
+vi.mock('@/components/ProjectSidebar', () => ({
+  ProjectSidebar: () => <div data-testid="project-sidebar" />
+}))
+
+vi.mock('@/components/remote/RemoteAccessPanel', () => ({
+  RemoteAccessPanel: () => null
+}))
+
+vi.mock('@/components/workspace/PaneRenderer', () => ({
+  PaneRenderer: () => <div data-testid="pane-renderer" />
+}))
+
+vi.mock('@/components/StatusBar', () => ({
+  StatusBar: () => <div data-testid="status-bar" />
+}))
+
+vi.mock('@/components/NewProjectModal', () => ({
+  NewProjectModal: () => null
+}))
+
+vi.mock('@/components/CreateSnapshotModal', () => ({
+  CreateSnapshotModal: () => null
+}))
+
+vi.mock('@/components/CommandPalette', () => ({
+  CommandPalette: () => null
+}))
+
+vi.mock('@/components/CommandHistoryModal', () => ({
+  CommandHistoryModal: () => null
+}))
+
+vi.mock('@/components/ConfirmDialog', () => ({
+  ConfirmDialog: () => null
+}))
+
+vi.mock('@/components/TitleBar', () => ({
+  TitleBar: () => <div data-testid="title-bar" />
 }))
 
 vi.mock('@/hooks/use-editor-persistence', () => ({
@@ -305,7 +352,10 @@ afterEach(() => {
 const renderWithRouter = (initialEntries = ['/']) => {
   return render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={initialEntries}>
+      <MemoryRouter
+        initialEntries={initialEntries}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <WorkspaceLayout />
       </MemoryRouter>
     </TooltipProvider>

@@ -22,6 +22,8 @@ export function createWsAdapter(config: WsAdapterConfig): WsAdapter {
   const {
     url,
     authToken,
+    projectId,
+    sessionId,
     reconnectInterval = 3000,
     maxReconnectAttempts = 10,
   } = config
@@ -104,7 +106,7 @@ export function createWsAdapter(config: WsAdapterConfig): WsAdapter {
       }
 
       socket.onopen = () => {
-        send({ type: 'auth', token: authToken })
+        send({ type: 'auth', token: authToken, projectId, sessionId })
       }
 
       socket.onmessage = (event: MessageEvent) => {

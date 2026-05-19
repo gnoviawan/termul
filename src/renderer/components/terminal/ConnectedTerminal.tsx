@@ -60,6 +60,7 @@ import {
 	isSupportedTerminalUrl,
 } from "@/lib/terminal-url-links";
 import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
+import { resolveTerminalTakeoverState } from "@/lib/terminal-takeover";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import {
@@ -1589,20 +1590,14 @@ function ConnectedTerminalComponent({
 		const unsubPromise = (async () => {
 			try {
 				const { listen } = await import("@tauri-apps/api/event");
-				return await listen<{ terminalId: string; clientType: string }>(
+				return await listen<{ terminalId: string; clientType: "web" | "tauri" }>(
 					"terminal-takeover",
 					(event) => {
 						const currentId = ptyIdRef.current || externalTerminalId;
-						if (currentId && event.payload.terminalId === currentId) {
-							if (event.payload.clientType === "web") {
-								// Web typed first — lock this Tauri window
-								isOwnerRef.current = false;
-								setIsSuspended(true);
-							} else if (event.payload.clientType === "tauri") {
-								// Tauri reclaimed — this fires from our own claim too, so just ensure correct state
-								isOwnerRef.current = true;
-								setIsSuspended(false);
-							}
+						const takeoverState = resolveTerminalTakeoverState(currentId, event.payload);
+						if (takeoverState) {
+							isOwnerRef.current = takeoverState.isOwner;
+							setIsSuspended(takeoverState.isSuspended);
 						}
 					}
 				);

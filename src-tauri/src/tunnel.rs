@@ -437,3 +437,51 @@ fn classify_cloudflared_error(line: &str) -> Option<(String, String)> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_url_handles_plain_and_fallback_matches() {
+        assert_eq!(
+            extract_url("route available at https://demo.trycloudflare.com/path, ready").as_deref(),
+            Some("https://demo.trycloudflare.com/path")
+        );
+        assert_eq!(
+            extract_url("public tunnel \"https://demo.trycloudflare.com\" online").as_deref(),
+            Some("https://demo.trycloudflare.com")
+        );
+    }
+
+    #[test]
+    fn classify_cloudflared_error_maps_common_failures() {
+        assert_eq!(
+            classify_cloudflared_error("lookup api.cloudflare.com: no such host"),
+            Some(("DNS resolution failed".to_string(), "DNS_FAILED".to_string()))
+        );
+        assert_eq!(
+            classify_cloudflared_error("connection refused while connecting to 127.0.0.1"),
+            Some(("Unable to connect to local service".to_string(), "LOCAL_SERVICE_UNAVAILABLE".to_string()))
+        );
+        assert_eq!(
+            classify_cloudflared_error("invalid token provided"),
+            Some(("Cloudflare authentication failed".to_string(), "CLOUDFLARE_AUTH_FAILED".to_string()))
+        );
+        assert_eq!(
+            classify_cloudflared_error("tunnel not found in account"),
+            Some(("Tunnel not found in Cloudflare account".to_string(), "TUNNEL_NOT_FOUND".to_string()))
+        );
+        assert_eq!(
+            classify_cloudflared_error("address already in use"),
+            Some(("Local port is already in use".to_string(), "PORT_IN_USE".to_string()))
+        );
+    }
+
+    #[test]
+    fn connection_established_detection_matches_expected_messages() {
+        assert!(is_connection_established("Registered tunnel connection"));
+        assert!(is_connection_established("Connection established"));
+        assert!(!is_connection_established("still starting up"));
+    }
+}

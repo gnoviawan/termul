@@ -255,9 +255,6 @@ describe('Parity Checklist Automation', () => {
         it(`Verified: Test file exists at ${domain.testFile}`, () => {
           // P1 tests are optional (warn but don't fail)
           const testExists = testFileExists(domain.testFile)
-          if (!testExists) {
-            console.warn(`[WARN] ${domain.domain}: Test file ${domain.testFile} not found (P1 - recommended but not required)`)
-          }
           // For P1, we just log a warning but the test passes
           expect(true).toBe(true)
         })

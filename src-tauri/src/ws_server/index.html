@@ -748,6 +748,8 @@
     <script>
         const AUTH_TOKEN = "__TERMUL_TOKEN__";
         const TOKEN_EXPIRES_AT = __TERMUL_TOKEN_EXPIRES__;
+        const SESSION_ID = "__TERMUL_SESSION_ID__";
+        const ACTIVE_PROJECT_ID = "__TERMUL_ACTIVE_PROJECT_ID__";
         
         let ws = null;
         let reconnectAttempts = 0;
@@ -848,7 +850,12 @@
                 }, 5000);
 
                 ws.onopen = () => {
-                    ws.send(JSON.stringify({ type: "auth", token: AUTH_TOKEN }));
+                    ws.send(JSON.stringify({
+                        type: "auth",
+                        token: AUTH_TOKEN,
+                        projectId: ACTIVE_PROJECT_ID || undefined,
+                        sessionId: SESSION_ID || undefined,
+                    }));
                 };
 
                 ws.onmessage = (event) => {

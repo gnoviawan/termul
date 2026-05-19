@@ -293,7 +293,7 @@ vi.mock('sonner', () => ({
 function renderLayout() {
   return render(
     <TooltipProvider>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <WorkspaceLayout />
       </MemoryRouter>
     </TooltipProvider>

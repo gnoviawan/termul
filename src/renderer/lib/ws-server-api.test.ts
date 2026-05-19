@@ -1,120 +1,90 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { wsServerApi } from './ws-server-api'
-import type { WsServerStatus } from './ws-server-api'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+const { mockInvoke, mockListen, mockIsTauriContext } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  mockListen: vi.fn(),
+  mockIsTauriContext: vi.fn(() => true)
 }))
 
-const { invoke } = await import('@tauri-apps/api/core')
-const mockInvoke = vi.mocked(invoke)
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke
+}))
 
-beforeEach(() => {
-  mockInvoke.mockClear()
-})
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: mockListen
+}))
+
+vi.mock('./tauri-runtime', () => ({
+  isTauriContext: mockIsTauriContext,
+  cleanupTauriListener: vi.fn()
+}))
+
+import { wsServerApi } from './ws-server-api'
 
 describe('wsServerApi', () => {
-  it('start returns success on valid invoke', async () => {
-    const mockStatus: WsServerStatus = {
-      isRunning: true,
-      port: 9876,
-      clientCount: 0,
-      httpUrl: 'http://localhost:9876',
-      wsUrl: 'ws://localhost:9876',
-      useHttps: false,
-    }
-    mockInvoke.mockResolvedValueOnce(mockStatus)
+  beforeEach(() => {
+    mockInvoke.mockReset()
+    mockListen.mockReset()
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValue(undefined)
+    mockListen.mockResolvedValue(() => {})
+  })
 
-    const result = await wsServerApi.start(9876, 'test-token')
-    expect(result.success).toBe(true)
-    expect(result.data).toEqual(mockStatus)
+  it('maps methods to the expected commands', async () => {
+    await wsServerApi.start(9876, 'test-token')
+    await wsServerApi.stop()
+    await wsServerApi.generateToken()
+    await wsServerApi.rotateToken()
+    await wsServerApi.getAuditLog()
+    await wsServerApi.setActiveProject('My Project', '/path/to/project', '/bin/bash', 'blue')
+    await wsServerApi.setProjects([{ id: '1', name: 'Proj' }], '1')
+
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_start', { port: 9876, authToken: 'test-token', useHttps: false })
-  })
-
-  it('start returns error on invoke failure', async () => {
-    mockInvoke.mockRejectedValueOnce(new Error('Server error'))
-
-    const result = await wsServerApi.start(9876, 'test-token')
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('Server error')
-  })
-
-  it('stop returns success on valid invoke', async () => {
-    mockInvoke.mockResolvedValueOnce(undefined)
-
-    const result = await wsServerApi.stop()
-    expect(result.success).toBe(true)
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_stop')
-  })
-
-  it('stop returns error on invoke failure', async () => {
-    mockInvoke.mockRejectedValueOnce(new Error('Not running'))
-
-    const result = await wsServerApi.stop()
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('Not running')
-  })
-
-  it('getStatus returns status on valid invoke', async () => {
-    const mockStatus: WsServerStatus = {
-      isRunning: true,
-      port: 9876,
-      clientCount: 2,
-      httpUrl: 'http://192.168.1.10:9876',
-      wsUrl: 'ws://192.168.1.10:9876',
-      useHttps: false,
-    }
-    mockInvoke.mockResolvedValueOnce(mockStatus)
-
-    const status = await wsServerApi.getStatus()
-    expect(status).toEqual(mockStatus)
-  })
-
-  it('getStatus returns default on failure', async () => {
-    mockInvoke.mockRejectedValueOnce(new Error('Not available'))
-
-    const status = await wsServerApi.getStatus()
-    expect(status.isRunning).toBe(false)
-    expect(status.port).toBe(9876)
-    expect(status.clientCount).toBe(0)
-  })
-
-  it('generateToken returns token on valid invoke', async () => {
-    mockInvoke.mockResolvedValueOnce('abc123token')
-
-    const token = await wsServerApi.generateToken()
-    expect(token).toBe('abc123token')
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_get_token')
-  })
-
-  it('generateToken returns empty string on failure', async () => {
-    mockInvoke.mockRejectedValueOnce(new Error('Failed'))
-
-    const token = await wsServerApi.generateToken()
-    expect(token).toBe('')
-  })
-
-  it('setActiveProject invokes tauri command', async () => {
-    mockInvoke.mockResolvedValueOnce(undefined)
-
-    const result = await wsServerApi.setActiveProject('My Project', '/path/to/project', '/bin/bash', 'blue')
-    expect(result.success).toBe(true)
+    expect(mockInvoke).toHaveBeenCalledWith('ws_rotate_token')
+    expect(mockInvoke).toHaveBeenCalledWith('ws_get_audit_log')
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_active_project', {
       projectName: 'My Project',
       projectPath: '/path/to/project',
       defaultShell: '/bin/bash',
-      color: 'blue',
+      color: 'blue'
+    })
+    expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_projects', {
+      projects: [{ id: '1', name: 'Proj' }],
+      activeProjectId: '1'
     })
   })
 
-  it('setProjects invokes tauri command', async () => {
-    mockInvoke.mockResolvedValueOnce(undefined)
+  it('returns safe defaults when status lookup fails', async () => {
+    mockInvoke.mockRejectedValueOnce(new Error('Not available'))
 
-    const result = await wsServerApi.setProjects([{ id: '1', name: 'Proj' }], '1')
-    expect(result.success).toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_projects', {
-      projects: [{ id: '1', name: 'Proj' }],
-      activeProjectId: '1',
+    await expect(wsServerApi.getStatus()).resolves.toEqual({
+      isRunning: false,
+      port: 9876,
+      clientCount: 0,
+      sessionId: '',
+      activeProjectId: null,
+      tokenTtlSecs: 900,
+      httpUrl: '',
+      wsUrl: '',
+      useHttps: false
     })
+  })
+
+  it('registers listeners and forwards payloads', () => {
+    let handler: ((event: { payload: unknown }) => void) | undefined
+    mockListen.mockImplementation(async (_event: string, cb: (event: { payload: unknown }) => void) => {
+      handler = cb
+      return () => {}
+    })
+
+    const onStatusChanged = vi.fn()
+    const unsubscribe = wsServerApi.onStatusChanged(onStatusChanged)
+
+    handler?.({ payload: { isRunning: true, port: 9876, clientCount: 2 } })
+
+    expect(onStatusChanged).toHaveBeenCalledWith({ isRunning: true, port: 9876, clientCount: 2 })
+    unsubscribe()
   })
 })

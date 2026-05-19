@@ -6,6 +6,9 @@ export interface WsServerStatus {
   isRunning: boolean
   port: number
   clientCount: number
+  sessionId: string
+  activeProjectId: string | null
+  tokenTtlSecs: number
   httpUrl: string
   wsUrl: string
   useHttps: boolean
@@ -50,7 +53,7 @@ export const wsServerApi = {
 
   async getStatus(): Promise<WsServerStatus> {
     const result = await invokeRaw<WsServerStatus>('ws_server_get_status')
-    return result.data ?? { isRunning: false, port: 9876, clientCount: 0, httpUrl: '', wsUrl: '', useHttps: false }
+    return result.data ?? { isRunning: false, port: 9876, clientCount: 0, sessionId: '', activeProjectId: null, tokenTtlSecs: 900, httpUrl: '', wsUrl: '', useHttps: false }
   },
 
   async generateToken(): Promise<string> {

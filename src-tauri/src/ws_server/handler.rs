@@ -10,12 +10,16 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
+const SESSION_IDLE_TIMEOUT_SECS: u64 = 900;
+const SESSION_MAX_DURATION_SECS: u64 = 28_800;
+
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    let connection_context = state.server.get_connection_context().await;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let token_expired = now >= state.token_created_at + state.token_expiry_secs;
+    let token_expired = now >= connection_context.1 + connection_context.2;
 
     if token_expired {
         log::warn!("[WsServer] Rejecting WS connection: token expired");
@@ -25,13 +29,15 @@ pub(crate) async fn ws_handler(
     }
 
     let server = state.server;
-    let token = state.auth_token;
+    let token = connection_context.0;
+    let expected_project_id = connection_context.4;
+    let expected_session_id = connection_context.3;
     let app = state.app_handle;
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     server.log_connection(&addr, "connecting");
 
-    ws.on_upgrade(move |socket| handle_ws(socket, server, token, app, addr))
+    ws.on_upgrade(move |socket| handle_ws(socket, server, token, expected_project_id, expected_session_id, app, addr))
 }
 
 pub(crate) async fn shutdown_signal(server: Arc<WsServer>) {
@@ -44,6 +50,8 @@ async fn handle_ws(
     socket: WebSocket,
     server: Arc<WsServer>,
     auth_token: String,
+    expected_project_id: Option<String>,
+    expected_session_id: String,
     app_handle: AppHandle,
     addr: SocketAddr,
 ) {
@@ -99,107 +107,137 @@ async fn handle_ws(
         }
     });
 
-    while let Some(Ok(msg)) = ws_read.next().await {
-        match msg {
-            Message::Text(text) => {
-                if let Ok(ws_msg) = serde_json::from_str::<WsInbound>(&text) {
-                    match ws_msg {
-                        WsInbound::Auth { token } => {
-                            let success = token == auth_token;
-                            let resp = if success {
-                                let mut clients = server.clients.lock().await;
-                                if let Some(client) = clients.get_mut(&client_id) {
-                                    client.authenticated = true;
-                                }
-                                server.log_connection(&addr, "authenticated");
-                                WsOutbound::Response {
-                                    id: "auth".to_string(),
-                                    success: true,
-                                    data: None,
-                                    error: None,
-                                    code: None,
-                                }
-                            } else {
-                                server.log_connection(&addr, "auth_failed");
-                                WsOutbound::Response {
-                                    id: "auth".to_string(),
-                                    success: false,
-                                    data: None,
-                                    error: Some("Invalid auth token".to_string()),
-                                    code: Some("AUTH_FAILED".to_string()),
-                                }
-                            };
-                            let _ = tx.send(resp);
-                            if !success {
-                                log::warn!("[WsServer] Auth failed for {}", addr);
-                                break;
-                            }
-                            log::info!("[WsServer] WS client authenticated: {}", addr);
-                        }
-                        WsInbound::Request { id, method, params } => {
-                            let is_authenticated = {
-                                let clients = server.clients.lock().await;
-                                clients.get(&client_id).map(|c| c.authenticated).unwrap_or(false)
-                            };
+    let connected_at = Instant::now();
+    let mut last_activity = connected_at;
 
-                            if !is_authenticated {
-                                let _ = tx.send(WsOutbound::Response {
-                                    id,
-                                    success: false,
-                                    data: None,
-                                    error: Some("Not authenticated".to_string()),
-                                    code: Some("NOT_AUTHENTICATED".to_string()),
-                                });
-                                continue;
-                            }
+    loop {
+        let idle_deadline = tokio::time::Instant::from_std(last_activity + std::time::Duration::from_secs(SESSION_IDLE_TIMEOUT_SECS));
+        let max_deadline = tokio::time::Instant::from_std(connected_at + std::time::Duration::from_secs(SESSION_MAX_DURATION_SECS));
 
-                            let app_handle_clone = app_handle.clone();
-                            let server_clone = server.clone();
-                            let tx_clone = tx.clone();
-                            let method_string = method.clone();
-                            let id_string = id.clone();
+        tokio::select! {
+            _ = tokio::time::sleep_until(idle_deadline) => {
+                log::warn!("[WsServer] Closing idle websocket client: {}", addr);
+                break;
+            }
+            _ = tokio::time::sleep_until(max_deadline) => {
+                log::warn!("[WsServer] Closing expired websocket session: {}", addr);
+                break;
+            }
+            msg = ws_read.next() => {
+                let Some(Ok(msg)) = msg else { break; };
+                last_activity = Instant::now();
 
-                            tokio::spawn(async move {
-                                let result = handle_command(&method_string, params, &app_handle_clone, &server_clone).await;
-                                let resp = match result {
-                                    Ok(ipc_result) => {
-                                        if ipc_result.success {
-                                            WsOutbound::Response {
-                                                id: id_string,
-                                                success: true,
-                                                data: ipc_result.data,
-                                                error: None,
-                                                code: None,
+                match msg {
+                    Message::Text(text) => {
+                        if let Ok(ws_msg) = serde_json::from_str::<WsInbound>(&text) {
+                            match ws_msg {
+                                WsInbound::Auth { token, project_id, session_id } => {
+                                    let project_ok = match &project_id {
+                                        Some(id) => expected_project_id.as_ref() == Some(id),
+                                        None => true,
+                                    };
+                                    let session_ok = match &session_id {
+                                        Some(id) => id == &expected_session_id,
+                                        None => true,
+                                    };
+                                    let context_ok = project_ok && session_ok;
+                                    let success = token == auth_token && context_ok;
+                                    let resp = if success {
+                                        let mut clients = server.clients.lock().await;
+                                        if let Some(client) = clients.get_mut(&client_id) {
+                                            client.authenticated = true;
+                                        }
+                                        server.log_connection(&addr, "authenticated");
+                                        WsOutbound::Response {
+                                            id: "auth".to_string(),
+                                            success: true,
+                                            data: None,
+                                            error: None,
+                                            code: None,
+                                        }
+                                    } else {
+                                        server.log_connection(&addr, "auth_failed");
+                                        WsOutbound::Response {
+                                            id: "auth".to_string(),
+                                            success: false,
+                                            data: None,
+                                            error: Some(if !context_ok { "Invalid auth context".to_string() } else { "Invalid auth token".to_string() }),
+                                            code: Some(if !context_ok { "AUTH_CONTEXT_MISMATCH".to_string() } else { "AUTH_FAILED".to_string() }),
+                                        }
+                                    };
+                                    let _ = tx.send(resp);
+                                    if !success {
+                                        log::warn!("[WsServer] Auth failed for {}", addr);
+                                        break;
+                                    }
+                                    log::info!("[WsServer] WS client authenticated: {}", addr);
+                                }
+                                WsInbound::Request { id, method, params } => {
+                                    let is_authenticated = {
+                                        let clients = server.clients.lock().await;
+                                        clients.get(&client_id).map(|c| c.authenticated).unwrap_or(false)
+                                    };
+
+                                    if !is_authenticated {
+                                        let _ = tx.send(WsOutbound::Response {
+                                            id,
+                                            success: false,
+                                            data: None,
+                                            error: Some("Not authenticated".to_string()),
+                                            code: Some("NOT_AUTHENTICATED".to_string()),
+                                        });
+                                        continue;
+                                    }
+
+                                    let app_handle_clone = app_handle.clone();
+                                    let server_clone = server.clone();
+                                    let tx_clone = tx.clone();
+                                    let method_string = method.clone();
+                                    let id_string = id.clone();
+
+                                    tokio::spawn(async move {
+                                        let result = handle_command(&method_string, params, &app_handle_clone, &server_clone).await;
+                                        let resp = match result {
+                                            Ok(ipc_result) => {
+                                                if ipc_result.success {
+                                                    WsOutbound::Response {
+                                                        id: id_string,
+                                                        success: true,
+                                                        data: ipc_result.data,
+                                                        error: None,
+                                                        code: None,
+                                                    }
+                                                } else {
+                                                    WsOutbound::Response {
+                                                        id: id_string,
+                                                        success: false,
+                                                        data: None,
+                                                        error: ipc_result.error,
+                                                        code: ipc_result.code,
+                                                    }
+                                                }
                                             }
-                                        } else {
-                                            WsOutbound::Response {
+                                            Err(e) => WsOutbound::Response {
                                                 id: id_string,
                                                 success: false,
                                                 data: None,
-                                                error: ipc_result.error,
-                                                code: ipc_result.code,
-                                            }
-                                        }
-                                    }
-                                    Err(e) => WsOutbound::Response {
-                                        id: id_string,
-                                        success: false,
-                                        data: None,
-                                        error: Some(e),
-                                        code: Some("COMMAND_ERROR".to_string()),
-                                    },
-                                };
-                                let _ = tx_clone.send(resp);
-                            });
+                                                error: Some(e),
+                                                code: Some("COMMAND_ERROR".to_string()),
+                                            },
+                                        };
+                                        let _ = tx_clone.send(resp);
+                                    });
+                                }
+                            }
                         }
                     }
+                    Message::Close(_) => break,
+                    Message::Ping(data) => {
+                        let _ = tx.send(WsOutbound::Pong(data.to_vec()));
+                    }
+                    _ => {}
                 }
             }
-            Message::Close(_) => break,
-            Message::Ping(data) => {
-                let _ = tx.send(WsOutbound::Pong(data.to_vec()));
-            }
-            _ => {}
         }
     }
 

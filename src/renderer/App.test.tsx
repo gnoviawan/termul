@@ -26,6 +26,10 @@ vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
 }))
 
+vi.mock('./layouts/WorkspaceLayout', () => ({
+  default: () => <div data-testid="workspace-layout" />
+}))
+
 const mockCheckForUpdates = vi.fn(async () => {})
 const mockInitializeUpdater = vi.fn(async () => {})
 const mockStopPeriodicChecks = vi.fn(() => {})

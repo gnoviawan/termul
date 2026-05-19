@@ -2,6 +2,9 @@ export interface WsServerStatus {
   isRunning: boolean
   port: number
   clientCount: number
+  sessionId: string
+  activeProjectId: string | null
+  tokenTtlSecs: number
 }
 
 export interface WsRequest {
@@ -29,6 +32,8 @@ export interface WsEvent {
 export interface WsAuth {
   type: 'auth'
   token: string
+  projectId?: string | null
+  sessionId?: string | null
 }
 
 export type WsInboundMessage = WsRequest | WsAuth
@@ -37,6 +42,8 @@ export type WsOutboundMessage = WsResponse | WsEvent
 export interface WsAdapterConfig {
   url: string
   authToken: string
+  projectId?: string | null
+  sessionId?: string | null
   reconnectInterval?: number
   maxReconnectAttempts?: number
 }

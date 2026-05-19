@@ -17,17 +17,21 @@ use crate::ws_server::handler::{ws_handler, shutdown_signal};
 use crate::ws_server::utils::generate_self_signed_cert;
 
 pub(crate) async fn index_handler(State(state): State<super::AppState>) -> impl axum::response::IntoResponse {
+    let connection_context = state.server.get_connection_context().await;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let token_expired = now >= state.token_created_at + state.token_expiry_secs;
-    let token = if token_expired {
+    let token_expired = now >= connection_context.1 + connection_context.2;
+    let connection_context = if token_expired {
         log::warn!("[WsServer] Token expired, generating new one");
-        state.server.rotate_token().await
+        let _ = state.server.rotate_token().await;
+        state.server.get_connection_context().await
     } else {
-        state.auth_token.clone()
+        connection_context
     };
     let html = state.index_html
-        .replace("__TERMUL_TOKEN__", &token)
-        .replace("__TERMUL_TOKEN_EXPIRES__", &(state.token_created_at + state.token_expiry_secs).to_string());
+        .replace("__TERMUL_TOKEN__", &connection_context.0)
+        .replace("__TERMUL_TOKEN_EXPIRES__", &(connection_context.1 + connection_context.2).to_string())
+        .replace("__TERMUL_SESSION_ID__", &connection_context.3)
+        .replace("__TERMUL_ACTIVE_PROJECT_ID__", connection_context.4.as_deref().unwrap_or(""));
     Html(html)
 }
 
@@ -35,6 +39,7 @@ impl WsServer {
     pub fn new() -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(2048);
         let initial_token = Self::generate_token();
+        let initial_session_id = Self::generate_session_id();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         Self {
             config: tokio::sync::Mutex::new(None),
@@ -42,6 +47,9 @@ impl WsServer {
                 is_running: false,
                 port: 9876,
                 client_count: 0,
+                session_id: initial_session_id.clone(),
+                active_project_id: None,
+                token_ttl_secs: super::DEFAULT_TOKEN_TTL_SECS,
                 http_url: String::new(),
                 ws_url: String::new(),
                 use_https: false,
@@ -52,10 +60,12 @@ impl WsServer {
             self_weak: std::sync::Mutex::new(None),
             audit_log: tokio::sync::Mutex::new(Vec::new()),
             current_token: tokio::sync::Mutex::new(initial_token),
+            session_id: tokio::sync::Mutex::new(initial_session_id),
             token_created_at: std::sync::atomic::AtomicU64::new(now),
             token_ttl_secs: std::sync::atomic::AtomicU64::new(super::DEFAULT_TOKEN_TTL_SECS),
             auth_attempts: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             active_project: tokio::sync::Mutex::new(None),
+            active_project_id: tokio::sync::Mutex::new(None),
             projects: tokio::sync::Mutex::new(Vec::new()),
         }
     }
@@ -73,21 +83,37 @@ impl WsServer {
         (0..32).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
     }
 
+    pub fn generate_session_id() -> String {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        (0..24).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+    }
+
     pub async fn rotate_token(&self) -> String {
         let new_token = Self::generate_token();
+        let new_session_id = Self::generate_session_id();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         let mut token = self.current_token.lock().await;
         *token = new_token.clone();
+        *self.session_id.lock().await = new_session_id.clone();
         self.token_created_at.store(now, Ordering::SeqCst);
+        let active_project_id = self.active_project_id.lock().await.clone();
+        let token_ttl_secs = self.token_ttl_secs.load(Ordering::SeqCst);
+        let mut status = self.status.lock().await;
+        status.session_id = new_session_id;
+        status.active_project_id = active_project_id;
+        status.token_ttl_secs = token_ttl_secs;
         log::info!("[WsServer] Token rotated");
         new_token
     }
 
-    pub async fn get_token_info(&self) -> (String, u64, u64) {
+    pub async fn get_connection_context(&self) -> (String, u64, u64, String, Option<String>) {
         let token = self.current_token.lock().await.clone();
+        let session_id = self.session_id.lock().await.clone();
         let created = self.token_created_at.load(Ordering::SeqCst);
         let ttl = self.token_ttl_secs.load(Ordering::SeqCst);
-        (token, created, ttl)
+        let active_project_id = self.active_project_id.lock().await.clone();
+        (token, created, ttl, session_id, active_project_id)
     }
 
     pub fn log_connection(&self, addr: &SocketAddr, event: &str) {
@@ -121,12 +147,18 @@ impl WsServer {
 
     pub async fn set_active_project(&self, name: String, path: String, default_shell: Option<String>, color: Option<String>) {
         let mut active_proj = self.active_project.lock().await;
+        let project_binding = format!("{}::{}", name, path);
         *active_proj = Some(super::ActiveProjectInfo {
             name,
             path,
             default_shell,
             color,
         });
+        {
+            let mut active_project_id = self.active_project_id.lock().await;
+            *active_project_id = Some(project_binding);
+        }
+        let _ = self.rotate_token().await;
     }
 
     pub async fn set_projects(&self, projects: Vec<super::ProjectInfo>, active_project_id: Option<String>) {
@@ -142,8 +174,20 @@ impl WsServer {
                     default_shell: None,
                     color: Some(proj.color.clone()),
                 });
+                let mut active_project_id_lock = self.active_project_id.lock().await;
+                *active_project_id_lock = Some(proj.id.clone());
+            } else {
+                let mut active_project_id_lock = self.active_project_id.lock().await;
+                *active_project_id_lock = active_project_id.clone();
             }
+        } else {
+            let mut active_project_id_lock = self.active_project_id.lock().await;
+            *active_project_id_lock = None;
         }
+
+        drop(active_proj);
+        drop(projs);
+        let _ = self.rotate_token().await;
 
         let event_payload = serde_json::json!({
             "projects": projects,
@@ -205,6 +249,7 @@ impl WsServer {
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         *self.current_token.lock().await = auth_token.clone();
+        *self.session_id.lock().await = Self::generate_session_id();
         self.token_created_at.store(now, Ordering::SeqCst);
 
         {
@@ -231,6 +276,9 @@ impl WsServer {
         let scheme = if use_https { "https" } else { "http" };
         let ws_scheme = if use_https { "wss" } else { "ws" };
         let local_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+        let session_id = self.session_id.lock().await.clone();
+        let active_project_id = self.active_project_id.lock().await.clone();
+        let token_ttl_secs = self.token_ttl_secs.load(Ordering::SeqCst);
 
         let mut status = self.status.lock().await;
         status.is_running = true;
@@ -238,6 +286,9 @@ impl WsServer {
         status.http_url = format!("{}://localhost:{}", scheme, port);
         status.ws_url = format!("{}://localhost:{}", ws_scheme, port);
         status.use_https = use_https;
+        status.session_id = session_id;
+        status.active_project_id = active_project_id;
+        status.token_ttl_secs = token_ttl_secs;
 
         log::info!("[WsServer] Server started on {}://{}:{}", scheme, local_ip, port);
         log::info!("[WsServer] Local URL: {}://localhost:{}", scheme, port);
@@ -265,8 +316,15 @@ impl WsServer {
     }
 
     pub async fn get_status(&self) -> WsServerStatus {
+        let session_id = self.session_id.lock().await.clone();
+        let active_project_id = self.active_project_id.lock().await.clone();
+        let token_ttl_secs = self.token_ttl_secs.load(Ordering::SeqCst);
         let status = self.status.lock().await;
-        status.clone()
+        let mut cloned = status.clone();
+        cloned.session_id = session_id;
+        cloned.active_project_id = active_project_id;
+        cloned.token_ttl_secs = token_ttl_secs;
+        cloned
     }
 
     async fn run_server(
@@ -281,12 +339,8 @@ impl WsServer {
             .allow_methods(tower_http::cors::Any)
             .allow_headers(tower_http::cors::Any);
         let index_html = get_index_html();
-        let token_info = self.get_token_info().await;
 
         let app_state = super::AppState {
-            auth_token: token_info.0.clone(),
-            token_expiry_secs: token_info.2,
-            token_created_at: token_info.1,
             index_html: index_html.to_string(),
             app_handle: app_handle.clone(),
             server: self.clone(),
@@ -324,5 +378,27 @@ impl WsServer {
             .map_err(|e| format!("Server error: {}", e))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WsServer;
+
+    #[test]
+    fn generated_credentials_have_expected_lengths() {
+        assert_eq!(WsServer::generate_token().len(), 32);
+        assert_eq!(WsServer::generate_session_id().len(), 24);
+    }
+
+    #[tokio::test]
+    async fn rotating_token_also_rotates_session_context() {
+        let server = WsServer::new();
+        let before = server.get_connection_context().await.3;
+        let token = server.rotate_token().await;
+        let after = server.get_connection_context().await.3;
+
+        assert_eq!(token.len(), 32);
+        assert_ne!(before, after);
     }
 }

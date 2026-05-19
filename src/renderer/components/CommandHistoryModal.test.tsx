@@ -1,5 +1,122 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import React, { createContext, useContext, useState } from 'react'
+
+type SelectProps = {
+  value?: string
+  onValueChange?: (value: string) => void
+  children?: React.ReactNode
+}
+
+type SelectTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  children?: React.ReactNode
+}
+
+type SelectContentProps = {
+  children?: React.ReactNode
+}
+
+type SelectItemProps = {
+  value: string
+  children?: React.ReactNode
+}
+
+type VirtuosoProps<T> = {
+  data: T[]
+  itemContent: (index: number, item: T) => React.ReactNode
+}
+
+const SelectContext = createContext<{
+  value: string | undefined
+  setValue: (value: string) => void
+  open: boolean
+  setOpen: (open: boolean) => void
+} | null>(null)
+
+vi.mock('framer-motion', async () => {
+  const actual = await vi.importActual<typeof import('framer-motion')>('framer-motion')
+  return {
+    ...actual,
+    AnimatePresence: ({ children }: { children?: React.ReactNode }) => <>{children}</>
+  }
+})
+
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ value, onValueChange, children }: SelectProps) => {
+    const [internalValue, setInternalValue] = useState(value)
+    const [open, setOpen] = useState(false)
+    const currentValue = value ?? internalValue
+    const setValue = (nextValue: string) => {
+      setInternalValue(nextValue)
+      onValueChange?.(nextValue)
+      setOpen(false)
+    }
+
+    return (
+      <SelectContext.Provider value={{ value: currentValue, setValue, open, setOpen }}>
+        <div>{children}</div>
+      </SelectContext.Provider>
+    )
+  },
+  SelectTrigger: ({ children, ...props }: SelectTriggerProps) => {
+    const ctx = useContext(SelectContext)
+    return (
+      <button type="button" role="combobox" {...props} onClick={() => ctx?.setOpen(!ctx.open)}>
+        {children}
+        <span>{ctx?.value === 'all-projects' ? 'All Projects' : 'This Project'}</span>
+      </button>
+    )
+  },
+  SelectContent: ({ children }: SelectContentProps) => {
+    const ctx = useContext(SelectContext)
+    return ctx?.open ? <div role="listbox">{children}</div> : null
+  },
+  SelectItem: ({ value, children }: SelectItemProps) => {
+    const ctx = useContext(SelectContext)
+    return (
+      <button type="button" role="option" onClick={() => ctx?.setValue(value)}>
+        {children}
+      </button>
+    )
+  },
+  SelectValue: () => null
+}))
+
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: React.forwardRef<HTMLDivElement, VirtuosoProps<CommandHistoryEntry>>(
+    ({ data, itemContent }, _ref) => (
+      <div>{data.map((item, index) => itemContent(index, item))}</div>
+  ))
+}))
+
+vi.mock('@/components/ConfirmDialog', () => ({
+  ConfirmDialog: ({
+    isOpen,
+    title,
+    message,
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    onConfirm,
+    onCancel
+  }: {
+    isOpen: boolean
+    title: string
+    message?: string
+    confirmLabel?: string
+    cancelLabel?: string
+    onConfirm: () => void
+    onCancel: () => void
+  }) =>
+    isOpen ? (
+      <div>
+        <div>{title}</div>
+        {message ? <div>{message}</div> : null}
+        <button onClick={onCancel}>{cancelLabel}</button>
+        <button onClick={onConfirm}>{confirmLabel}</button>
+      </div>
+    ) : null
+}))
+
 import { CommandHistoryModal } from './CommandHistoryModal'
 import { CommandHistoryEntry } from '@/stores/command-history-store'
 
@@ -338,14 +455,24 @@ describe('CommandHistoryModal', () => {
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
       const clearButton = screen.getByText('Clear History')
-      fireEvent.click(clearButton)
+      await act(async () => {
+        fireEvent.click(clearButton)
+      })
 
       await waitFor(() => {
         expect(screen.getByText('Clear Command History')).toBeInTheDocument()
       })
 
       const confirmButton = screen.getByRole('button', { name: 'Clear' })
-      fireEvent.click(confirmButton)
+      await act(async () => {
+        fireEvent.click(confirmButton)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(screen.queryByText('Clear Command History')).not.toBeInTheDocument()
+      })
 
       expect(onClearHistory).toHaveBeenCalledTimes(1)
     })
@@ -355,14 +482,24 @@ describe('CommandHistoryModal', () => {
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
       const clearButton = screen.getByText('Clear History')
-      fireEvent.click(clearButton)
+      await act(async () => {
+        fireEvent.click(clearButton)
+      })
 
       await waitFor(() => {
         expect(screen.getByText('Clear Command History')).toBeInTheDocument()
       })
 
       const cancelButton = screen.getByRole('button', { name: 'Cancel' })
-      fireEvent.click(cancelButton)
+      await act(async () => {
+        fireEvent.click(cancelButton)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(screen.queryByText('Clear Command History')).not.toBeInTheDocument()
+      })
 
       expect(onClearHistory).not.toHaveBeenCalled()
     })
@@ -372,14 +509,18 @@ describe('CommandHistoryModal', () => {
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
       const clearButton = screen.getByText('Clear History')
-      fireEvent.click(clearButton)
+      await act(async () => {
+        fireEvent.click(clearButton)
+      })
 
       await waitFor(() => {
         expect(screen.getByText('Clear Command History')).toBeInTheDocument()
       })
 
       const confirmButton = screen.getByRole('button', { name: 'Clear' })
-      fireEvent.click(confirmButton)
+      await act(async () => {
+        fireEvent.click(confirmButton)
+      })
 
       await waitFor(() => {
         expect(screen.queryByText('Clear Command History')).not.toBeInTheDocument()

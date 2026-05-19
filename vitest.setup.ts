@@ -24,6 +24,8 @@ class ResizeObserverMock {
 
 window.ResizeObserver = ResizeObserverMock
 
+HTMLCanvasElement.prototype.getContext = vi.fn(() => null)
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))
@@ -56,7 +58,15 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => ({
-  createStore: vi.fn()
+  createStore: vi.fn(),
+  Store: {
+    load: vi.fn(async () => ({
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      save: vi.fn(async () => undefined)
+    }))
+  }
 }))
 
 vi.mock('@tauri-apps/plugin-os', () => ({

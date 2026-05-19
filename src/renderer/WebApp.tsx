@@ -29,6 +29,8 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:9876'
 const WS_TOKEN = import.meta.env.VITE_WS_TOKEN || ''
+const WS_PROJECT_ID = import.meta.env.VITE_WS_PROJECT_ID || ''
+const WS_SESSION_ID = import.meta.env.VITE_WS_SESSION_ID || ''
 
 interface WsContextValue {
   ws: WsAdapter | null
@@ -76,12 +78,14 @@ export function WebApp(): React.JSX.Element {
     setIsConnecting(true)
     setError(null)
 
-    const adapter = createWsAdapter({
-      url: WS_URL,
-      authToken: WS_TOKEN,
-      reconnectInterval: 3000,
-      maxReconnectAttempts: 20,
-    })
+      const adapter = createWsAdapter({
+        url: WS_URL,
+        authToken: WS_TOKEN,
+        projectId: WS_PROJECT_ID || undefined,
+        sessionId: WS_SESSION_ID || undefined,
+        reconnectInterval: 3000,
+        maxReconnectAttempts: 20,
+      })
 
     adapter.onDisconnect(() => {
       setIsConnected(false)

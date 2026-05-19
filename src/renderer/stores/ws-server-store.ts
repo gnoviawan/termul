@@ -35,7 +35,7 @@ interface WsServerRotateResult {
 }
 
 export const useWsServerStore = create<WsServerState>((set, get) => ({
-  status: { isRunning: false, port: 9876, clientCount: 0, httpUrl: '', wsUrl: '', useHttps: false },
+  status: { isRunning: false, port: 9876, clientCount: 0, sessionId: '', activeProjectId: null, tokenTtlSecs: 900, httpUrl: '', wsUrl: '', useHttps: false },
   isLoading: false,
   error: null,
   authToken: null,
@@ -44,10 +44,11 @@ export const useWsServerStore = create<WsServerState>((set, get) => ({
   startServer: async (port, authToken, useHttps = false) => {
     set({ isLoading: true, error: null })
     const result = await wsServerApi.start(port, authToken, useHttps)
-    set({ isLoading: false, authToken, tokenExpiry: Date.now() / 1000 + 3600 })
+    const ttlSecs = result.data?.tokenTtlSecs ?? 900
     if (result.success && result.data) {
-      set({ status: result.data })
+      set({ isLoading: false, authToken, tokenExpiry: Date.now() / 1000 + ttlSecs, status: result.data })
     } else {
+      set({ isLoading: false })
       set({ error: result.error || 'Failed to start server' })
     }
     return result
@@ -72,7 +73,8 @@ export const useWsServerStore = create<WsServerState>((set, get) => ({
 
   generateToken: async () => {
     const token = await wsServerApi.generateToken()
-    set({ authToken: token, tokenExpiry: Date.now() / 1000 + 3600 })
+    const ttlSecs = get().status.tokenTtlSecs || 900
+    set({ authToken: token, tokenExpiry: Date.now() / 1000 + ttlSecs })
     return token
   },
 
@@ -81,7 +83,8 @@ export const useWsServerStore = create<WsServerState>((set, get) => ({
     const result = await wsServerApi.rotateToken()
     set({ isLoading: false })
     if (result.success && result.data?.token) {
-      set({ authToken: result.data.token, tokenExpiry: Date.now() / 1000 + 3600 })
+      const ttlSecs = get().status.tokenTtlSecs || 900
+      set({ authToken: result.data.token, tokenExpiry: Date.now() / 1000 + ttlSecs })
     } else {
       set({ error: result.error || 'Failed to rotate token' })
     }

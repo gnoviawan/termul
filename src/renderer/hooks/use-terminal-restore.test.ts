@@ -34,7 +34,11 @@ vi.mock('./useTerminalAutoSave', () => ({
 vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mockTerminalSpawn,
-    kill: mockTerminalKill
+    kill: mockTerminalKill,
+    getCwd: vi.fn(async () => ({ success: true, data: null })),
+    getGitBranch: vi.fn(async () => ({ success: true, data: null })),
+    getGitStatus: vi.fn(async () => ({ success: true, data: null })),
+    getExitCode: vi.fn(async () => ({ success: true, data: null }))
   },
   sessionApi: {
     restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
@@ -80,7 +84,11 @@ const mockTerminalStoreState = {
   selectTerminal: vi.fn(),
   setTerminals: vi.fn(),
   addTerminal: vi.fn(),
-  setTerminalPtyId: vi.fn()
+  setTerminalPtyId: vi.fn(),
+  updateTerminalCwd: vi.fn(),
+  updateTerminalGitBranch: vi.fn(),
+  updateTerminalGitStatus: vi.fn(),
+  updateTerminalExitCode: vi.fn()
 }
 
 vi.mock('../stores/terminal-store', () => ({
