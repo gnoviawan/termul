@@ -410,9 +410,21 @@ function ConnectedTerminalComponent({
 	// Handle input from xterm to PTY
 	const handleTerminalData = useCallback(
 		async (data: string): Promise<void> => {
-			if (isSuspendedRef.current) return;
 			const ptyId = ptyIdRef.current;
 			if (!ptyId) return;
+
+			if (isSuspendedRef.current) {
+				try {
+					isOwnerRef.current = true;
+					const { invoke } = await import("@tauri-apps/api/core");
+					await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+					setIsSuspended(false);
+				} catch (e) {
+					isOwnerRef.current = false;
+					console.error("Auto-resume takeover failed:", e);
+					return;
+				}
+			}
 
 			// Auto-claim ownership on first keystroke — locks web side immediately
 			if (!isOwnerRef.current) {
