@@ -355,6 +355,13 @@ function ConnectedTerminalComponent({
 	const handleResume = useCallback(async (): Promise<void> => {
 		const ptyId = ptyIdRef.current || externalTerminalId;
 		if (!ptyId) return;
+		console.log("[ConnectedTerminal] handleResume start", {
+			instanceId,
+			ptyId,
+			externalTerminalId,
+			isSuspended: isSuspendedRef.current,
+			isOwner: isOwnerRef.current,
+		});
 
 		try {
 			isOwnerRef.current = true; // claim before invoke so keypress guard is set
@@ -364,6 +371,12 @@ function ConnectedTerminalComponent({
 			setIsSuspended(false);
 			
 			requestAnimationFrame(() => {
+				console.log("[ConnectedTerminal] handleResume focus+fit", {
+					instanceId,
+					ptyId,
+					cols: terminalRef.current?.cols,
+					rows: terminalRef.current?.rows,
+				});
 				performFit(true);
 				terminalRef.current?.focus();
 				
@@ -372,9 +385,14 @@ function ConnectedTerminalComponent({
 			});
 		} catch (err) {
 			isOwnerRef.current = false;
+			console.error("[ConnectedTerminal] handleResume failed", {
+				instanceId,
+				ptyId,
+				error: err instanceof Error ? err.message : String(err),
+			});
 			console.error("Resume takeover failed", err);
 		}
-	}, [externalTerminalId]);
+	}, [externalTerminalId, instanceId]);
 
 	useEffect(() => { if (externalTerminalId) ptyIdRef.current = externalTerminalId; }, [externalTerminalId]);
 
@@ -411,10 +429,22 @@ function ConnectedTerminalComponent({
 	const handleTerminalData = useCallback(
 		async (data: string): Promise<void> => {
 			const ptyId = ptyIdRef.current;
+			console.log("[ConnectedTerminal] handleTerminalData", {
+				instanceId,
+				ptyId,
+				isSuspended: isSuspendedRef.current,
+				isOwner: isOwnerRef.current,
+				dataPreview: JSON.stringify(data.slice(0, 20)),
+				dataLength: data.length,
+			});
 			if (!ptyId) return;
 
 			if (isSuspendedRef.current) {
 				try {
+					console.log("[ConnectedTerminal] auto-resume before write", {
+						instanceId,
+						ptyId,
+					});
 					isOwnerRef.current = true;
 					const { invoke } = await import("@tauri-apps/api/core");
 					await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
@@ -463,16 +493,27 @@ function ConnectedTerminalComponent({
 
 			try {
 				const result = await terminalApi.write(ptyId, data);
+				console.log("[ConnectedTerminal] terminalApi.write result", {
+					instanceId,
+					ptyId,
+					success: result.success,
+					error: result.success ? undefined : result.error,
+				});
 				if (!result.success && onErrorRef.current) {
 					onErrorRef.current(result.error);
 				}
 			} catch (err) {
+				console.error("[ConnectedTerminal] terminalApi.write threw", {
+					instanceId,
+					ptyId,
+					error: err instanceof Error ? err.message : String(err),
+				});
 				if (onErrorRef.current) {
 					onErrorRef.current(err instanceof Error ? err.message : "Write failed");
 				}
 			}
 		},
-		[],
+		[instanceId],
 	);
 
 	// Initialize terminal, set up IPC listeners, and spawn PTY
@@ -1447,12 +1488,18 @@ function ConnectedTerminalComponent({
 	}, []);
 
 	const handleContainerClick = useCallback((): void => {
+		console.log("[ConnectedTerminal] handleContainerClick", {
+			instanceId,
+			ptyId: ptyIdRef.current,
+			isSuspended: isSuspendedRef.current,
+			isOwner: isOwnerRef.current,
+		});
 		if (isSuspendedRef.current) {
 			void handleResume();
 		} else {
 			terminalRef.current?.focus();
 		}
-	}, [handleResume]);
+	}, [handleResume, instanceId]);
 
 	const handleSelectAll = useCallback((): void => {
 		terminalRef.current?.selectAll();
@@ -1673,6 +1720,15 @@ function ConnectedTerminalComponent({
 	useEffect(() => {
 		if (isVisible) onVisible.current?.();
 	}, [isVisible, autoFocus]);
+
+	useEffect(() => {
+		console.log("[ConnectedTerminal] suspended state changed", {
+			instanceId,
+			ptyId: ptyIdRef.current,
+			isSuspended,
+			isOwner: isOwnerRef.current,
+		});
+	}, [instanceId, isSuspended]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 
