@@ -1661,13 +1661,14 @@ function ConnectedTerminalComponent({
 	// Track isVisible via ref to avoid stale closure in rAF callback
 	const onVisible = useRef<(() => void) | null>(null);
 	onVisible.current = () => {
-		if (needsResizeOnReadyRef.current && terminalRef.current) {
+		if (!terminalRef.current) return;
+		if (needsResizeOnReadyRef.current) {
 			needsResizeOnReadyRef.current = false;
-			requestAnimationFrame(() => {
-				performFit(true);
-				if (autoFocus) terminalRef.current?.focus();
-			});
 		}
+		requestAnimationFrame(() => {
+			performFit(true);
+			if (autoFocus) terminalRef.current?.focus();
+		});
 	};
 	useEffect(() => {
 		if (isVisible) onVisible.current?.();
