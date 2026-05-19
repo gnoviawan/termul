@@ -650,6 +650,19 @@ async fn ws_get_audit_log(
     Ok(ws_server.get_audit_log().await)
 }
 
+#[tauri::command]
+async fn ui_lock_handover(
+    target: String,
+    app_handle: AppHandle,
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<(), String> {
+    log::info!("[ui_lock_handover] target={}", target);
+    let payload = serde_json::json!({ "target": target });
+    ws_server.emit_event("ui-lock-handover", payload.clone());
+    let _ = app_handle.emit("ui-lock-handover", payload);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 
@@ -732,6 +745,7 @@ pub fn run() {
                 "terminal-git-status-changed",
                 "terminal-exit-code-changed",
                 "terminal-takeover",
+                "ui-lock-handover",
             ] {
                 let ws = ws_server.clone();
                 let name = event_name.to_string();
@@ -811,6 +825,7 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_takeover,
+            ui_lock_handover,
             commands::terminal_set_visibility,
             // Browser tab commands
             commands::browser_tab_create,

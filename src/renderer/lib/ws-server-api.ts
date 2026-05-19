@@ -77,6 +77,10 @@ export const wsServerApi = {
     return invokeRaw<void>('ws_server_set_projects', { projects, activeProjectId })
   },
 
+  lockHandover(target: 'desktop' | 'web') {
+    return invokeRaw<void>('ui_lock_handover', { target })
+  },
+
   onStatusChanged(callback: (status: WsServerStatus) => void): () => void {
     return createListener<WsServerStatus>('ws-server-status-changed', callback)
   }

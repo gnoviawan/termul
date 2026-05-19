@@ -641,6 +641,10 @@ export function useProjectsWithActivity(): string[] {
     useShallow((state) => {
       const activeProjectIds = new Set<string>()
       for (const t of state.terminals) {
+        // Skip dead terminals — they belong to the error indicator, not the spinner
+        if (t.healthStatus === 'disconnected' || t.healthStatus === 'crashed') {
+          continue
+        }
         // Indikator menyala jika:
         // 1. Ada aktivitas output (hasActivity)
         // 2. Sedang proses awal loading/spawn (status running tapi PTY belum siap)

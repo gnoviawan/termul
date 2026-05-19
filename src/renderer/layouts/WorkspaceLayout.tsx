@@ -946,12 +946,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				if (terminalToClose.ptyId) {
 					const result = await terminalApi.kill(terminalToClose.ptyId);
 					if (!result.success) {
-						console.error("Failed to close terminal PTY:", result.error);
-						toast.error(
-							result.error ||
-								"Failed to close terminal process. Please try again.",
+						// PTY already gone (process exited naturally) — treat as non-fatal
+						// and proceed with UI cleanup so the tab can still be removed.
+						const isPtyGone =
+							!result.success &&
+							result.code === "KILL_FAILED" &&
+							result.error.includes("Terminal not found");
+						if (!isPtyGone) {
+							console.error("Failed to close terminal PTY:", result.error);
+							toast.error(
+								result.error ||
+									"Failed to close terminal process. Please try again.",
+							);
+							return false;
+						}
+						console.warn(
+							"PTY already exited, proceeding with tab removal:",
+							terminalToClose.ptyId,
 						);
-						return false;
 					}
 				}
 

@@ -23,6 +23,12 @@ struct LoginForm {
 
 async fn http_route_handler(State(state): State<super::AppState>, headers: HeaderMap) -> Response {
     let connection_context = state.server.get_connection_context().await;
+    log::info!(
+        "[WsServer][http_route] session_active client_count={} session_id={} active_project_id={:?}",
+        state.server.get_status().await.client_count,
+        connection_context.3,
+        connection_context.4
+    );
     if is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0) {
         index_handler(State(state)).await
     } else {
@@ -123,7 +129,7 @@ fn login_page_html_with_error(error: &str) -> &'static str {
 
 fn session_cookie_header(token: &str, ttl_secs: u64, secure: bool) -> Option<HeaderValue> {
     let value = format!(
-        "termul_web_lite_password={}; Path=/; Max-Age={}; SameSite=Lax; HttpOnly{}",
+        "termul_web_lite_password={}; Path=/; Max-Age={}; SameSite=Lax{}",
         token,
         ttl_secs,
         if secure { "; Secure" } else { "" }
@@ -164,6 +170,11 @@ pub(crate) async fn index_handler(State(state): State<super::AppState>) -> Respo
         .replace("__TERMUL_TOKEN_EXPIRES__", &(connection_context.1 + connection_context.2).to_string())
         .replace("__TERMUL_SESSION_ID__", &connection_context.3)
         .replace("__TERMUL_ACTIVE_PROJECT_ID__", connection_context.4.as_deref().unwrap_or(""));
+    log::info!(
+        "[WsServer][index_handler] inject session_id={} active_project_id={:?}",
+        connection_context.3,
+        connection_context.4
+    );
     let mut response = Html(html).into_response();
     if let Some(cookie) = session_cookie_header(&connection_context.0, connection_context.2, state.server.get_status().await.use_https) {
         response.headers_mut().insert(header::SET_COOKIE, cookie);
@@ -552,7 +563,6 @@ mod tests {
         assert!(value.contains("Path=/"));
         assert!(value.contains("Max-Age=900"));
         assert!(value.contains("SameSite=Lax"));
-        assert!(value.contains("HttpOnly"));
         assert!(!value.contains("Secure"));
     }
 
@@ -561,7 +571,6 @@ mod tests {
         let cookie = session_cookie_header("secret-token", 900, true).expect("cookie header");
         let value = cookie.to_str().expect("cookie str");
 
-        assert!(value.contains("HttpOnly"));
         assert!(value.contains("Secure"));
     }
 

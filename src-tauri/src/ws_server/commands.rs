@@ -101,6 +101,19 @@ pub(crate) async fn handle_command(
 
             Ok(IpcResult::success(serde_json::json!(null)))
         }
+        "ui_lock_handover" => {
+            let params = params.ok_or("Missing params")?;
+            let target: String = serde_json::from_value(params["target"].clone())
+                .map_err(|e| format!("Invalid target: {}", e))?;
+
+            let payload = serde_json::json!({
+                "target": target,
+            });
+
+            let _ = app_handle.emit("ui-lock-handover", payload);
+
+            Ok(IpcResult::success(serde_json::json!(null)))
+        }
         "terminal_kill" => {
             let params = params.ok_or("Missing params")?;
             let terminal_id: String = serde_json::from_value(params["terminalId"].clone())

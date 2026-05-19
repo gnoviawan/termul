@@ -766,6 +766,60 @@
         let activeProjectId = null;
         let isExplorerVisible = true;
         let explorerWidth = 280;
+        let isLocked = false;
+
+        function renderLockOverlay() {
+            let overlay = document.getElementById("handover-lock-overlay");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.id = "handover-lock-overlay";
+                overlay.style.cssText = [
+                    "position:fixed",
+                    "inset:0",
+                    "z-index:99999",
+                    "display:none",
+                    "align-items:center",
+                    "justify-content:center",
+                    "background:rgba(0,0,0,.82)",
+                    "backdrop-filter:blur(12px)"
+                ].join(";");
+                overlay.innerHTML = `
+                    <div style="width:min(420px,calc(100vw - 32px));background:rgba(9,10,18,.96);border:1px solid rgba(148,163,184,.18);border-radius:24px;padding:28px;text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.45);color:#e5e7eb;font-family:Inter,Arial,sans-serif;">
+                        <div style="width:64px;height:64px;margin:0 auto 14px;border-radius:18px;border:1px solid rgba(59,130,246,.22);background:rgba(59,130,246,.1);display:flex;align-items:center;justify-content:center;font-size:24px;">🔒</div>
+                        <h2 id="handover-lock-title" style="margin:0;font-size:20px;font-weight:700;">Web Lite Locked</h2>
+                        <p id="handover-lock-copy" style="margin:10px 0 0;color:#94a3b8;font-size:14px;line-height:1.5;">Click anywhere on Web Lite to lock desktop. Click Open to reload.</p>
+                        <button id="handover-lock-open" style="margin-top:20px;width:100%;border:0;border-radius:14px;background:linear-gradient(135deg,#0ea5e9,#2563eb);color:white;padding:14px 16px;font-size:15px;font-weight:700;cursor:pointer;">Open</button>
+                    </div>`;
+                document.body.appendChild(overlay);
+                overlay.addEventListener("click", (ev) => {
+                    if (ev.target && ev.target.id === "handover-lock-overlay") {
+                        hideLockOverlay();
+                    }
+                });
+                const btn = overlay.querySelector("#handover-lock-open");
+                if (btn) btn.addEventListener("click", () => {
+                    hideLockOverlay();
+                    window.location.reload();
+                });
+            }
+            const title = document.getElementById("handover-lock-title");
+            const copy = document.getElementById("handover-lock-copy");
+            if (title) title.textContent = "Web Lite Locked";
+            if (copy) copy.textContent = "Click anywhere on Web Lite to lock desktop. Click Open to reload.";
+            overlay.style.display = isLocked ? "flex" : "none";
+        }
+
+        function showLockOverlay() {
+            isLocked = true;
+            console.log("[WebLite] locked");
+            renderLockOverlay();
+        }
+
+        function hideLockOverlay() {
+            isLocked = false;
+            console.log("[WebLite] unlocked");
+            renderLockOverlay();
+        }
 
         function updateGridLayout() {
             const root = document.getElementById("root");
@@ -818,6 +872,13 @@
             if (list) list.forEach(cb => cb(payload));
         }
 
+        listen("ui-lock-handover", (payload) => {
+            console.log("[WebLite] ui-lock-handover", payload);
+            if (payload && payload.target === "web") {
+                showLockOverlay();
+            }
+        });
+
         function invoke(method, params = {}) {
             return new Promise((resolve, reject) => {
                 if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -837,6 +898,7 @@
         }
 
         function connect() {
+            console.log("[WebLite] connect start", { sessionId: SESSION_ID, activeProjectId: ACTIVE_PROJECT_ID });
             return new Promise((resolve, reject) => {
                 const loc = window.location;
                 const wsScheme = loc.protocol === "https:" ? "wss:" : "ws:";
@@ -850,6 +912,7 @@
                 }, 5000);
 
                 ws.onopen = () => {
+                    console.log("[WebLite] ws open, send auth");
                     ws.send(JSON.stringify({
                         type: "auth",
                         token: AUTH_TOKEN,
@@ -866,6 +929,7 @@
                                 clearTimeout(authTimeout);
                                 if (msg.success) {
                                     console.log("WebSocket authenticated successfully");
+                                    console.log("[WebLite] session active", { clientCount: 1, sessionId: SESSION_ID, activeProjectId: ACTIVE_PROJECT_ID });
                                     reconnectAttempts = 0;
                                     resolve();
                                 } else {
@@ -888,6 +952,15 @@
                         console.error("Error processing websocket message:", e);
                     }
                 };
+
+                document.addEventListener("pointerdown", () => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        console.log("[WebLite] pointerdown -> handover desktop");
+                        invoke("ui_lock_handover", { target: "desktop" })
+                            .then(() => console.log("[WebLite] handover desktop sent"))
+                            .catch((error) => console.error("[WebLite] handover desktop failed", error));
+                    }
+                }, true);
 
                 ws.onclose = (event) => {
                     console.warn("WebSocket connection closed:", event);
@@ -1571,6 +1644,7 @@
             });
             setTimeout(() => {
                 const cleanup = () => hideExplorerContextMenu();
+                document.addEventListener("click", () => console.log("[WebLite] click"), true);
                 document.addEventListener("click", cleanup, { once: true });
                 document.addEventListener("contextmenu", cleanup, { once: true });
             }, 0);

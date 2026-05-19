@@ -76,6 +76,7 @@ export function WebApp(): React.JSX.Element {
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isLocked, setIsLocked] = useState(false)
 
   const connect = useCallback(async () => {
     setIsConnecting(true)
@@ -96,6 +97,11 @@ export function WebApp(): React.JSX.Element {
 
     try {
       await adapter.connect()
+      console.log('[WebApp] session active', {
+        url: WS_URL,
+        projectId: WS_PROJECT_ID || null,
+        sessionId: WS_SESSION_ID || null,
+      })
       setWs(adapter)
       setIsConnected(true)
       setIsConnecting(false)
@@ -112,6 +118,35 @@ export function WebApp(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const handlePointerDown = (): void => {
+      if (!ws) return
+      console.log('[WebApp] pointerdown -> handover desktop')
+      void ws.invoke('ui_lock_handover', { target: 'desktop' })
+        .then(() => console.log('[WebApp] handover desktop sent'))
+        .catch((error) => console.error('[WebApp] handover desktop failed', error))
+    }
+
+    console.log('[WebApp] pointerdown listener attached', { hasWs: Boolean(ws) })
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => {
+      console.log('[WebApp] pointerdown listener removed')
+      document.removeEventListener('pointerdown', handlePointerDown, true)
+    }
+  }, [ws])
+
+  useEffect(() => {
+    if (!ws) return
+
+    return ws.listen('ui-lock-handover', (payload) => {
+      console.log('[WebApp] ui-lock-handover', payload)
+      if (payload.target === 'web') {
+        console.log('[WebApp] locked web')
+        setIsLocked(true)
+      }
+    })
+  }, [ws])
 
   if (isConnecting) {
     return (
@@ -177,6 +212,25 @@ export function WebApp(): React.JSX.Element {
       <div className="h-screen w-screen overflow-hidden bg-[#0f0f15] font-sans selection:bg-blue-500/20 selection:text-blue-200">
         <Toaster position="top-right" theme="dark" />
         {ws && <TerminalWorkspace ws={ws} />}
+        {isLocked && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md">
+            <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950/95 p-8 text-center shadow-2xl">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-500/10 text-2xl">🔒</div>
+              <h2 className="text-xl font-semibold text-white">Web Lite Locked</h2>
+              <p className="mt-2 text-sm text-zinc-400">Klik di web lite kirim lock ke desktop. Klik Open buat buka lagi.</p>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsLocked(false)
+                  void connect()
+                }}
+                className="mt-6 w-full rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500"
+              >
+                Open Web Lite
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </WsContext.Provider>
   )

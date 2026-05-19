@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -30,6 +30,8 @@ import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { wsServerApi } from '@/lib/ws-server-api'
+import { listen } from '@tauri-apps/api/event'
 
 const queryClient = new QueryClient()
 
@@ -79,6 +81,7 @@ const router = createHashRouter(
 
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
+  const [isLocked, setIsLocked] = useState(false)
 
   useEffect(() => {
     if (!isWindowStateReady) return
@@ -97,6 +100,28 @@ export default function TauriApp(): React.JSX.Element {
     showWindow()
   }, [isWindowStateReady])
 
+  useEffect(() => {
+    const handlePointerDown = (): void => {
+      console.log('[TauriApp] pointerdown -> handover web')
+      void wsServerApi.lockHandover('web')
+    }
+
+    const unlistenPromise = listen('ui-lock-handover', ({ payload }) => {
+      console.log('[TauriApp] ui-lock-handover', payload)
+      if ((payload as { target?: string } | undefined)?.target === 'desktop') {
+        console.log('[TauriApp] locked desktop')
+        setIsLocked(true)
+      }
+    })
+
+    console.log('[TauriApp] pointerdown listener attached')
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown, true)
+      void unlistenPromise.then((unlisten) => unlisten())
+    }
+  }, [])
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -105,6 +130,24 @@ export default function TauriApp(): React.JSX.Element {
           <Toaster />
           <Sonner />
           <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          {isLocked && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md">
+              <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950/95 p-8 text-center shadow-2xl">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-500/10 text-2xl">🔒</div>
+                <h2 className="text-xl font-semibold text-white">Desktop Locked</h2>
+                <p className="mt-2 text-sm text-zinc-400">Click anywhere on desktop to lock Web Lite. Click Open to reload.</p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    window.location.reload()
+                  }}
+                  className="mt-6 w-full rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500"
+                >
+                  Open Desktop
+                </button>
+              </div>
+            </div>
+          )}
         </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>

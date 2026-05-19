@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Globe,
   Terminal,
@@ -25,6 +25,7 @@ import { wsServerApi } from '@/lib/ws-server-api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { ConnectionAudit } from '@/lib/ws-server-api'
+import { listen } from '@tauri-apps/api/event'
 
 const WS_PORT = 9876
 const TUNNEL_ID = 'termul-web-tunnel'
@@ -54,6 +55,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
   const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [isTunnelStarting, setIsTunnelStarting] = useState(false)
+  const [runtimeStream, setRuntimeStream] = useState<Array<{ type: 'system' | 'data' | 'exit' | 'cwd' | 'git'; text: string }>>([])
+  const runtimeStreamRef = useRef<HTMLDivElement | null>(null)
+  const [pauseAutoscroll, setPauseAutoscroll] = useState(false)
 
   const activeTunnel = useMemo(
     () => tunnelSessions.find((s) => s.id === TUNNEL_ID) ?? null,
@@ -96,6 +100,72 @@ export function RemoteAccessPanel(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const unlistenPromise = listen<{ id: string; data: string }>('terminal-data', ({ payload }) => {
+      setRuntimeStream((prev) => {
+        const next = [...prev, { type: 'data' as const, text: `[${payload.id}] ${payload.data}` }]
+        return next.slice(-120)
+      })
+    })
+
+    const unlistenExitPromise = listen<{ id: string; exitCode?: number | null }>('terminal-exit', ({ payload }) => {
+      setRuntimeStream((prev) => {
+        const next = [...prev, { type: 'exit' as const, text: `[${payload.id}] exited ${payload.exitCode ?? 'unknown'}` }]
+        return next.slice(-120)
+      })
+    })
+
+    const unlistenCwdPromise = listen<{ id: string; cwd?: string | null }>('terminal-cwd-changed', ({ payload }) => {
+      setRuntimeStream((prev) => {
+        const next = [...prev, { type: 'cwd' as const, text: `[${payload.id}] cwd ${payload.cwd ?? 'unknown'}` }]
+        return next.slice(-120)
+      })
+    })
+
+    const unlistenBranchPromise = listen<{ id: string; branch?: string | null }>('terminal-git-branch-changed', ({ payload }) => {
+      setRuntimeStream((prev) => {
+        const next = [...prev, { type: 'git' as const, text: `[${payload.id}] git ${payload.branch ?? 'unknown'}` }]
+        return next.slice(-120)
+      })
+    })
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten())
+      void unlistenExitPromise.then((unlisten) => unlisten())
+      void unlistenCwdPromise.then((unlisten) => unlisten())
+      void unlistenBranchPromise.then((unlisten) => unlisten())
+    }
+  }, [])
+
+  useEffect(() => {
+    console.log('[RemoteAccessPanel] ws status', {
+      isRunning: wsStatus.isRunning,
+      clientCount: wsStatus.clientCount,
+      sessionId: wsStatus.sessionId,
+      activeProjectId: wsStatus.activeProjectId,
+    })
+    if (wsStatus.isRunning) {
+      console.log(`[RemoteAccessPanel] ${wsStatus.clientCount} Session Active`)
+    }
+  }, [wsStatus.isRunning, wsStatus.clientCount, wsStatus.sessionId, wsStatus.activeProjectId])
+
+  const statusLines = [
+    `WebSocket server running on port ${WS_PORT}.`,
+    authToken ? 'Security token initialized.' : null,
+    publicUrl ? 'Cloudflare Tunnel routing established.' : null,
+  ].filter((line): line is string => Boolean(line))
+
+  useEffect(() => {
+    if (pauseAutoscroll) return
+    runtimeStreamRef.current?.scrollTo({ top: runtimeStreamRef.current.scrollHeight, behavior: 'smooth' })
+  }, [runtimeStream, pauseAutoscroll])
+
+  const copyRuntimeStream = async (): Promise<void> => {
+    const text = runtimeStream.map((line) => line.text).join('\n')
+    await navigator.clipboard.writeText(text)
+    toast.success('Runtime stream copied')
+  }
 
   const tokenRemaining = useMemo(() => {
     if (!tokenExpiry) return null
@@ -546,21 +616,83 @@ export function RemoteAccessPanel(): React.JSX.Element {
           <div className="flex items-center gap-2 text-white/50 text-[10px] font-bold uppercase tracking-wider">
             <Terminal size={12} className="text-primary" /> Live Runtime Stream
           </div>
-          <div className="flex gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
-            <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
-            <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPauseAutoscroll((prev) => !prev)}
+              className={cn(
+                'px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider border rounded-lg',
+                pauseAutoscroll
+                  ? 'text-amber-300 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/15'
+                  : 'text-zinc-400 bg-white/5 border-white/10 hover:text-white hover:bg-white/10'
+              )}
+            >
+              {pauseAutoscroll ? 'Resume' : 'Pause'}
+            </button>
+            <button
+              onClick={() => void copyRuntimeStream()}
+              className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 bg-white/5 border border-white/10 rounded-lg hover:text-white hover:bg-white/10"
+            >
+              Copy
+            </button>
+            <button
+              onClick={() => setRuntimeStream([])}
+              className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 bg-white/5 border border-white/10 rounded-lg hover:text-white hover:bg-white/10"
+            >
+              Clear
+            </button>
+            <div className="flex gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
+              <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
+              <span className="w-2.5 h-2.5 rounded-full bg-white/10" />
+            </div>
           </div>
         </div>
-        <div className="h-56 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed bg-black text-green-500/90 selection:bg-white/10">
-          {wsStatus.isRunning ? (
-            <div className="space-y-1">
-              <div><span className="text-white/20">[{new Date().toLocaleTimeString()}]</span> <span className="text-primary">system:</span> WebSocket server spinning on port {WS_PORT}...</div>
-              {authToken && <div><span className="text-white/20">[{new Date().toLocaleTimeString()}]</span> <span className="text-primary">system:</span> Security token initialized.</div>}
-              {publicUrl && <div><span className="text-white/20">[{new Date().toLocaleTimeString()}]</span> <span className="text-primary">system:</span> Cloudflare Tunnel routing established.</div>}
-              <div className="text-white/30 animate-pulse">Waiting for incoming socket events...</div>
-            </div>
-          ) : (
+          <div ref={runtimeStreamRef} className="h-56 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed bg-black text-green-500/90 selection:bg-white/10">
+            {wsStatus.isRunning ? (
+              <div className="space-y-1">
+              {statusLines.map((line) => (
+                <div key={line} className="flex items-center gap-2 text-zinc-400">
+                  <span className="text-white/20">[{new Date().toLocaleTimeString()}]</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded border border-sky-500/20 bg-sky-500/10 text-sky-400 uppercase tracking-wider">system</span>
+                  {line}
+                </div>
+              ))}
+              {runtimeStream.length > 0 ? (
+                runtimeStream.map((line, index) => (
+                  <div
+                    key={`${index}-${line.text}`}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="text-white/20">[{new Date().toLocaleTimeString()}]</span>
+                    <span
+                      className={cn(
+                        'text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wider shrink-0',
+                        line.type === 'data' && 'bg-green-500/10 text-green-400 border-green-500/20',
+                        line.type === 'exit' && 'bg-red-500/10 text-red-400 border-red-500/20',
+                        line.type === 'cwd' && 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+                        line.type === 'git' && 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20',
+                      )}
+                    >
+                      {line.type}
+                    </span>
+                    <div
+                      className={cn(
+                        'whitespace-pre-wrap break-words flex-1',
+                        line.type === 'data' && 'text-green-400',
+                        line.type === 'exit' && 'text-red-400',
+                        line.type === 'cwd' && 'text-amber-300',
+                        line.type === 'git' && 'text-cyan-300',
+                      )}
+                    >
+                      {line.text}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-white/30 animate-pulse">Waiting for runtime output...</div>
+              )}
+              </div>
+            ) : (
             <div className="h-full flex items-center justify-center text-zinc-600 italic">
               Runtime stream is inactive. Start connection to hook into terminal processes.
             </div>
