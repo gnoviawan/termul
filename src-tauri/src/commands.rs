@@ -805,12 +805,13 @@ fn detect_rg_path() -> String {
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    command.creation_flags(CREATE_NO_WINDOW);
 }
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
 
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
