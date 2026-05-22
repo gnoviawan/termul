@@ -835,13 +835,13 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 		<div
 			id="file-explorer-panel"
 			ref={containerRef}
-			className="relative flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
+			className="relative flex flex-col bg-background text-foreground flex-shrink-0 h-full border-l border-border/50"
 			style={{ width: explorerWidth }}
 			tabIndex={0}
 		>
 			{/* Header */}
-			<div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
-				<span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+			<div className="flex items-center justify-between px-3 h-8 border-b border-border/50 flex-shrink-0">
+				<span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
 					Explorer
 				</span>
 				<button
@@ -849,32 +849,32 @@ export function FileExplorer({ side = "right" }: FileExplorerProps): React.JSX.E
 					className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
 					title="Collapse All"
 				>
-					<ChevronsDownUp size={14} />
+					<ChevronsDownUp size={12} />
 				</button>
 			</div>
 
-			<div className="px-3 py-1.5 border-b border-border">
+			<div className="px-2.5 py-1 border-b border-border/50">
 				<div className="relative">
 					<Search
-						size={13}
+						size={12}
 						className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
 					/>
 					<input
 						type="text"
 						value={normalizedSearchQuery}
 						onChange={(event) => setSearchQuery(event.target.value)}
-						placeholder="Search files and content…"
-						className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0"
+						placeholder="Search files..."
+						className="w-full rounded border-0 bg-secondary/50 py-1 pl-6 pr-6 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-primary/30"
 						aria-label="Search files and content"
 					/>
 					{hasSearchInput && (
 						<button
 							onClick={() => resetSearch()}
-							className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+							className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
 							title="Clear search"
 							aria-label="Clear search"
 						>
-							<X size={11} />
+							<X size={10} />
 						</button>
 					)}
 				</div>

@@ -23,7 +23,7 @@ vi.mock('@/lib/api', () => ({
 function createEditorFileState(filePath: string): {
   filePath: string
   content: string
-  originalContent: string
+  originalContentHash: number
   isDirty: boolean
   language: string
   lastModified: number
@@ -34,7 +34,7 @@ function createEditorFileState(filePath: string): {
   return {
     filePath,
     content: '',
-    originalContent: '',
+    originalContentHash: 0,
     isDirty: false,
     language: 'typescript',
     lastModified: Date.now(),

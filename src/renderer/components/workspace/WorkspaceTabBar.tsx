@@ -124,13 +124,18 @@ function TerminalTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					"relative h-full px-2.5 flex items-center border-r border-border/40 min-w-[90px] cursor-pointer group transition-all duration-150 ease-out",
 					isActive
-						? "bg-background border-b-primary"
+						? "bg-background text-foreground"
 						: "hover:bg-secondary/50 text-muted-foreground",
 					isDragging && "opacity-50 scale-[0.98]",
 				)}
 			>
+				{/* Active indicator */}
+				{isActive && (
+					<div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
+				)}
+
 				{/* Drop indicator line */}
 				{isDropTarget && dropPosition === "before" && (
 					<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
@@ -140,8 +145,8 @@ function TerminalTabInline({
 				)}
 
 				<TerminalIcon
-					size={12}
-					className={cn("mr-2", isActive ? "text-primary" : "")}
+					size={11}
+					className={cn("mr-1.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")}
 				/>
 				{isEditing ? (
 					<input
@@ -165,7 +170,7 @@ function TerminalTabInline({
 				) : (
 					<span
 						onDoubleClick={handleDoubleClick}
-						className={cn("text-[11px] font-medium", isActive && "text-foreground")}
+						className={cn("text-[11px] font-medium truncate", isActive && "text-foreground")}
 					>
 						{terminal.name}
 					</span>
@@ -178,12 +183,12 @@ function TerminalTabInline({
 						}
 					}}
 					disabled={isClosing}
-					className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100 disabled:cursor-wait"
+					className="ml-auto p-0.5 rounded hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100 disabled:cursor-wait"
 				>
 					{isClosing ? (
-						<Loader2 size={11} className="animate-spin" />
+						<Loader2 size={10} className="animate-spin" />
 					) : (
-						<XIcon size={11} />
+						<XIcon size={10} />
 					)}
 				</button>
 			</div>
@@ -365,14 +370,17 @@ function BrowserTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					"relative h-full px-2.5 flex items-center border-r border-border/40 min-w-[90px] cursor-pointer group transition-all duration-150 ease-out",
 					isActive
-						? "bg-background border-b-primary"
+						? "bg-background text-foreground"
 						: "hover:bg-secondary/50 text-muted-foreground",
 					isDragging && "opacity-50 scale-[0.98]",
 				)}
 			>
-				{/* Drop indicator line */}
+				{isActive && (
+					<div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
+				)}
+
 				{isDropTarget && dropPosition === "before" && (
 					<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
 				)}
@@ -381,8 +389,8 @@ function BrowserTabInline({
 				)}
 
 				<Globe
-					size={12}
-					className={cn("mr-2", isActive ? "text-primary" : "")}
+					size={11}
+					className={cn("mr-1.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")}
 				/>
 				<span className={cn("text-[11px] font-medium truncate", isActive && "text-foreground")}>
 					{label}
@@ -392,9 +400,9 @@ function BrowserTabInline({
 						e.stopPropagation();
 						onClose();
 					}}
-					className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+					className="ml-auto p-0.5 rounded hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
 				>
-					<XIcon size={11} />
+					<XIcon size={10} />
 				</button>
 			</div>
 
@@ -462,22 +470,20 @@ function GitTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors",
+					"group relative flex items-center h-full px-2.5 min-w-[100px] max-w-[180px] gap-1.5 cursor-pointer select-none border-r border-border/40 transition-colors",
 					isActive
-						? "bg-secondary text-foreground"
+						? "bg-background text-foreground"
 						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
 					isDragging && "opacity-50",
-					isDropTarget &&
-						dropPosition === "before" &&
-						"border-l-2 border-l-primary",
-					isDropTarget &&
-						dropPosition === "after" &&
-						"border-r-2 border-r-primary",
 				)}
 			>
-				<GitBranch size={12} className={isActive ? "text-primary" : ""} />
+				{isActive && (
+					<div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
+				)}
+
+				<GitBranch size={11} className={cn("shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")} />
 				<span className="truncate text-[11px] font-medium flex-1">
-					Git Changes
+					Git
 				</span>
 				{totalChanges > 0 && (
 					<span
@@ -496,14 +502,10 @@ function GitTabInline({
 						e.stopPropagation();
 						onClose();
 					}}
-					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
+					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-secondary transition-opacity"
 				>
 					<XIcon size={10} />
 				</button>
-
-				{isActive && (
-					<div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />
-				)}
 			</div>
 
 			{contextMenu && (
@@ -565,13 +567,17 @@ function TunnelTabInline({
 			onDrop={onDrop}
 			onClick={onSelect}
 			className={cn(
-				"relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent",
+				"relative h-full px-2.5 flex items-center border-r border-border/40 min-w-[90px] cursor-pointer group transition-all duration-150 ease-out",
 				isActive
-					? "bg-background border-b-primary"
+					? "bg-background text-foreground"
 					: "hover:bg-secondary/50 text-muted-foreground",
 				isDragging && "opacity-50 scale-[0.98]",
 			)}
 		>
+			{isActive && (
+				<div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
+			)}
+
 			{isDropTarget && dropPosition === "before" && (
 				<div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
 			)}
@@ -579,16 +585,16 @@ function TunnelTabInline({
 				<div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
 			)}
 
-			<div className="relative mr-2 flex items-center">
-				<Network size={12} className={cn(isActive ? "text-primary" : "")} />
+			<div className="relative mr-1.5 flex items-center">
+				<Network size={11} className={cn(isActive ? "text-primary" : "text-muted-foreground/60")} />
 				{status === "running" && (
-					<div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border-2 border-background" />
+					<div className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-green-500 rounded-full border border-background" />
 				)}
 				{status === "error" && (
-					<div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-background" />
+					<div className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-red-500 rounded-full border border-background" />
 				)}
 				{status === "starting" && (
-					<div className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-500 rounded-full border-2 border-background animate-pulse" />
+					<div className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-yellow-500 rounded-full border border-background animate-pulse" />
 				)}
 			</div>
 
@@ -601,9 +607,9 @@ function TunnelTabInline({
 					e.stopPropagation();
 					onClose();
 				}}
-				className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+				className="ml-auto p-0.5 rounded hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
 			>
-				<XIcon size={11} />
+				<XIcon size={10} />
 			</button>
 		</div>
 	);
@@ -893,7 +899,7 @@ export function WorkspaceTabBar({
 
 	return (
 		<div
-			className="h-9 bg-card border-b border-border flex items-center"
+			className="h-8 bg-card border-b border-border/50 flex items-center"
 			onDragOver={(e) => {
 				e.preventDefault();
 				e.dataTransfer.dropEffect = "move";
@@ -1047,22 +1053,22 @@ export function WorkspaceTabBar({
 				)}
 			</div>
 
-			<div className="ml-auto flex items-center gap-1 px-2 shrink-0 h-full border-l border-border/60">
-				{onAddTerminal && (
-					<div ref={terminalMenuRef} className="relative flex items-center h-full">
-						<button
-							onClick={() => setIsTerminalMenuOpen((open) => !open)}
-							className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-							title="Open terminal menu"
-						>
-							<TerminalIcon size={12} />
-						</button>
+		<div className="ml-auto flex items-center gap-0.5 px-1.5 shrink-0 h-full border-l border-border/40">
+			{onAddTerminal && (
+				<div ref={terminalMenuRef} className="relative flex items-center h-full">
+					<button
+						onClick={() => setIsTerminalMenuOpen((open) => !open)}
+						className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title="Open terminal menu"
+					>
+						<TerminalIcon size={11} />
+					</button>
 
-						{isTerminalMenuOpen && (
-							<div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
-								<div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30">
-									Terminal
-								</div>
+					{isTerminalMenuOpen && (
+						<div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
+							<div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30">
+								Terminal
+							</div>
 								{loading ? (
 									<div className="py-1 px-2.5 space-y-1.5">
 										<Skeleton className="h-6 w-full" />
@@ -1079,11 +1085,11 @@ export function WorkspaceTabBar({
 													shell.name === defaultShell && "text-primary",
 												)}
 											>
-												<TerminalIcon size={11} />
+												<TerminalIcon size={10} />
 												<span className="truncate">{shell.displayName}</span>
 												{shell.name === defaultShell && (
 													<span className="ml-auto text-[10px] text-muted-foreground">
-														(default)
+														default
 													</span>
 												)}
 											</button>
@@ -1099,35 +1105,35 @@ export function WorkspaceTabBar({
 					</div>
 				)}
 
-				{onAddBrowserTab && (
-					<button
-						onClick={onAddBrowserTab}
-						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-						title="New Browser Tab"
-					>
-						<Globe size={12} />
-					</button>
-				)}
+			{onAddBrowserTab && (
+				<button
+					onClick={onAddBrowserTab}
+					className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+					title="New Browser Tab"
+				>
+					<Globe size={11} />
+				</button>
+			)}
 
-				{onAddGitTab && (
-					<button
-						onClick={onAddGitTab}
-						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-						title="Git Changes"
-					>
-						<GitBranch size={12} />
-					</button>
-				)}
+			{onAddGitTab && (
+				<button
+					onClick={onAddGitTab}
+					className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+					title="Git Changes"
+				>
+					<GitBranch size={11} />
+				</button>
+			)}
 
-				{onAddTunnelTab && (
-					<button
-						onClick={onAddTunnelTab}
-						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-						title="Tunnel"
-					>
-						<Network size={12} />
-					</button>
-				)}
+			{onAddTunnelTab && (
+				<button
+					onClick={onAddTunnelTab}
+					className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+					title="Tunnel"
+				>
+					<Network size={11} />
+				</button>
+			)}
 			</div>
 		</div>
 	);

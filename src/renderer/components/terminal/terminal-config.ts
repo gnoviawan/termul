@@ -42,7 +42,7 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
 	cursorBlink: false,
 	cursorStyle: "block",
 	allowTransparency: false,
-	scrollback: 10000,
+	scrollback: 3000,
 	tabStopWidth: 4,
 	convertEol: false,
 	ignoreBracketedPasteMode: false,

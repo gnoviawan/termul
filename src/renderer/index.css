@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,74 +6,61 @@
 
 @layer base {
   :root {
-    /* Background layers - Codex dark theme */
-    --background: 0 0% 7%; /* #121212 - darker main background */
-    --foreground: 0 0% 90%;
+    --background: 240 6% 6%; /* #0f0f12 - deep dark */
+    --foreground: 240 5% 87%; /* #dddddf */
 
-    /* Surface colors for layered UI */
-    --card: 0 0% 11%; /* #1c1c1c - slightly elevated surface */
-    --card-foreground: 0 0% 90%;
+    --card: 240 5% 10%; /* #18181b */
+    --card-foreground: 240 5% 87%;
 
-    --popover: 0 0% 11%;
-    --popover-foreground: 0 0% 90%;
+    --popover: 240 5% 10%;
+    --popover-foreground: 240 5% 87%;
 
-    /* Primary - IDE Blue */
-    --primary: 217 91% 60%; /* #3B82F6 */
+    --primary: 220 70% 56%; /* #3478f6 - refined blue */
     --primary-foreground: 0 0% 100%;
 
-    /* Secondary - Muted surface */
-    --secondary: 0 0% 15%; /* #262626 */
-    --secondary-foreground: 0 0% 70%;
+    --secondary: 240 4% 14%; /* #232326 */
+    --secondary-foreground: 240 4% 65%;
 
-    /* Muted elements */
-    --muted: 0 0% 18%; /* #2e2e2e */
-    --muted-foreground: 0 0% 50%;
+    --muted: 240 4% 16%; /* #28282c */
+    --muted-foreground: 240 4% 46%;
 
-    /* Accent for highlights */
-    --accent: 217 91% 60%;
+    --accent: 220 70% 56%;
     --accent-foreground: 0 0% 100%;
 
-    /* Status colors */
-    --destructive: 0 84% 60%;
+    --destructive: 0 72% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Borders - subtle dark borders */
-    --border: 0 0% 20%; /* #333333 */
-    --input: 0 0% 20%;
-    --ring: 217 91% 60%;
+    --border: 240 4% 18%; /* #2a2a2e */
+    --input: 240 4% 18%;
+    --ring: 220 70% 56%;
 
-    --radius: 0.5rem; /* 8px - rounded corners */
+    --radius: 0.5rem;
 
-    /* Terminal-specific */
-    --terminal-bg: 0 0% 7%; /* #121212 */
-    --terminal-fg: 0 0% 85%;
+    --terminal-bg: 240 6% 6%;
+    --terminal-fg: 240 5% 82%;
 
-    /* Surface layers */
-    --surface-dark: 0 0% 11%; /* #1c1c1c */
-    --surface-darker: 0 0% 7%;
+    --surface-dark: 240 5% 10%;
+    --surface-darker: 240 6% 6%;
 
-    /* Status bar (VS Code style) */
-    --status-bar: 217 91% 40%; /* #007acc */
+    --status-bar: 220 70% 42%;
 
-    /* Project colors */
-    --project-blue: 217 91% 60%;
-    --project-purple: 271 81% 56%;
-    --project-green: 142 71% 45%;
-    --project-yellow: 45 93% 47%;
-    --project-red: 0 84% 60%;
-    --project-cyan: 187 85% 53%;
-    --project-pink: 330 81% 60%;
-    --project-orange: 25 95% 53%;
+    --project-blue: 220 70% 56%;
+    --project-purple: 265 67% 55%;
+    --project-green: 152 58% 44%;
+    --project-yellow: 42 88% 50%;
+    --project-red: 0 72% 55%;
+    --project-cyan: 188 72% 48%;
+    --project-pink: 328 65% 55%;
+    --project-orange: 24 90% 52%;
 
-    /* Sidebar - darker than main content */
-    --sidebar-background: 0 0% 9%; /* #171717 */
-    --sidebar-foreground: 0 0% 70%;
-    --sidebar-primary: 217 91% 60%;
+    --sidebar-background: 240 6% 8%; /* #131316 */
+    --sidebar-foreground: 240 4% 65%;
+    --sidebar-primary: 220 70% 56%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 15%; /* #262626 */
-    --sidebar-accent-foreground: 0 0% 90%;
-    --sidebar-border: 0 0% 20%;
-    --sidebar-ring: 217 91% 60%;
+    --sidebar-accent: 240 4% 14%;
+    --sidebar-accent-foreground: 240 5% 87%;
+    --sidebar-border: 240 4% 18%;
+    --sidebar-ring: 220 70% 56%;
   }
 }
 
@@ -83,13 +70,16 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply bg-background text-foreground antialiased;
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'ss01', 'ss02', 'cv01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Custom scrollbar - Codex style */
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 5px;
+    height: 5px;
   }
 
   ::-webkit-scrollbar-track {
@@ -97,52 +87,43 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: hsl(0 0% 25%);
-    border-radius: 2px;
+    background: hsl(240 4% 22%);
+    border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(0 0% 35%);
+    background: hsl(240 4% 30%);
   }
 
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
 
-  /* Anti-flicker for xterm.js terminal rendering */
   .xterm {
-    /* Force GPU compositing to prevent flicker during re-renders */
     transform: translateZ(0);
     will-change: contents;
   }
 
   .xterm .xterm-screen {
-    /* Prevent screen flash during buffer updates */
     backface-visibility: hidden;
   }
 
   .xterm .xterm-rows {
-    /* Stabilize row rendering to prevent layout shifts */
     contain: layout style;
   }
 
   .xterm .xterm-cursor-layer {
-    /* Prevent cursor layer from causing full repaint */
     isolation: isolate;
   }
 
   .xterm .xterm-viewport {
-    /* Smooth viewport updates */
     overscroll-behavior: contain;
   }
 
-  /* Prevent invisible xterm containers from causing layout flash */
   .xterm-helper-textarea {
-    /* Keep helper textarea stable */
     caret-color: transparent;
   }
 
-  /* Disable xterm cursor animation to prevent continuous repaints */
   .xterm .xterm-cursor-layer .xterm-cursor {
     transition: none !important;
     animation: none !important;
@@ -150,28 +131,23 @@
 }
 
 @layer utilities {
-  /* Terminal text styling */
   .terminal-text {
     @apply font-mono text-sm leading-relaxed;
   }
 
-  /* Blinking cursor */
   .terminal-cursor {
     @apply inline-block w-2.5 h-5 bg-muted-foreground animate-pulse;
   }
 
-  /* Glass effect for modals - Codex style */
   .glass-panel {
-    background: hsla(0, 0%, 11%, 0.95);
-    backdrop-filter: blur(12px);
+    background: hsla(240, 5%, 10%, 0.92);
+    backdrop-filter: blur(16px);
   }
 
-  /* Project color dot glow */
   .project-dot-glow {
-    box-shadow: 0 0 8px currentColor;
+    box-shadow: 0 0 6px currentColor;
   }
 
-  /* Snapshot thumbnail lines */
   .snapshot-line {
     height: 2px;
     border-radius: 1px;

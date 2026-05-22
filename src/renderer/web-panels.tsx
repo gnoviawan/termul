@@ -23,9 +23,9 @@ export function BrowserPanel(props: {
   } = props
 
   return (
-    <div className="flex h-full items-start justify-center p-6 text-zinc-200">
-      <div className="w-full max-w-6xl space-y-4 rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
-        <div className="text-lg font-semibold">Browser</div>
+    <div className="flex h-full items-start justify-center p-6 text-foreground">
+      <div className="w-full max-w-6xl space-y-4 rounded-lg border border-border bg-card p-6">
+        <div className="text-base font-semibold">Browser</div>
         <div className="flex gap-2">
           <input value={browserUrl} onChange={(e) => {
             const nextUrl = e.target.value
@@ -33,27 +33,27 @@ export function BrowserPanel(props: {
             if (activeBrowserTabId) {
               setBrowserTabs((prev) => prev.map((tab) => (tab.id === activeBrowserTabId ? { ...tab, url: nextUrl, title: nextUrl } : tab)))
             }
-          }} className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none" placeholder="https://example.com" />
-          <button onClick={() => { setBrowserOpenError(null); try { window.open(browserUrl, '_blank', 'noopener,noreferrer') } catch (err) { setBrowserOpenError(err instanceof Error ? err.message : 'failed') } }} className="rounded-xl bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-500">Open</button>
+          }} className="flex-1 rounded border border-border bg-secondary px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary" placeholder="https://example.com" />
+          <button onClick={() => { setBrowserOpenError(null); try { window.open(browserUrl, '_blank', 'noopener,noreferrer') } catch (err) { setBrowserOpenError(err instanceof Error ? err.message : 'failed') } }} className="rounded bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Open</button>
         </div>
-        {browserOpenError && <div className="text-xs text-red-400">{browserOpenError}</div>}
-        <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-2">
-            <div className="mb-2 px-2 text-xs uppercase tracking-wider text-zinc-500">Tabs</div>
-            <div className="space-y-1">
+        {browserOpenError && <div className="text-xs text-destructive">{browserOpenError}</div>}
+        <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="rounded border border-border bg-secondary/50 p-2">
+            <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Tabs</div>
+            <div className="space-y-0.5">
               {browserTabs.map((tab) => (
-                <div key={tab.id} className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${activeBrowserTabId === tab.id ? 'bg-blue-600 text-white' : 'bg-zinc-950 hover:bg-zinc-800'}`}>
+                <div key={tab.id} className={`flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs ${activeBrowserTabId === tab.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'}`}>
                   <button onClick={() => { setActiveBrowserTabId(tab.id); setBrowserUrl(tab.url) }} className="min-w-0 flex-1 text-left">
-                    <span className="block truncate">{tab.title}</span>
-                    <span className="text-xs opacity-70">{tab.url}</span>
+                    <span className="block truncate font-medium">{tab.title}</span>
+                    <span className="text-[10px] text-muted-foreground/60">{tab.url}</span>
                   </button>
-                  <button onClick={() => { const next = browserTabs.filter((item) => item.id !== tab.id); setBrowserTabs(next); if (activeBrowserTabId === tab.id) setActiveBrowserTabId(next[0]?.id ?? null) }} className="rounded-lg px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800">x</button>
+                  <button onClick={() => { const next = browserTabs.filter((item) => item.id !== tab.id); setBrowserTabs(next); if (activeBrowserTabId === tab.id) setActiveBrowserTabId(next[0]?.id ?? null) }} className="rounded px-1.5 py-0.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground">x</button>
                 </div>
               ))}
-              {browserTabs.length === 0 && <div className="px-3 py-2 text-sm text-zinc-500">No tab</div>}
+              {browserTabs.length === 0 && <div className="px-2.5 py-1.5 text-xs text-muted-foreground">No tabs</div>}
             </div>
           </div>
-          <div className="min-h-[70vh] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60">
+          <div className="min-h-[70vh] overflow-hidden rounded border border-border bg-background">
             {browserTabs.find((tab) => tab.id === activeBrowserTabId) ? (
               <iframe
                 title="Termul Browser"
@@ -73,7 +73,7 @@ export function BrowserPanel(props: {
                 className="h-[70vh] w-full border-0 bg-white"
               />
             ) : (
-              <div className="flex h-[70vh] items-center justify-center text-sm text-zinc-500">Open tab first</div>
+              <div className="flex h-[70vh] items-center justify-center text-sm text-muted-foreground">Open a tab first</div>
             )}
           </div>
         </div>
@@ -101,7 +101,7 @@ export function GitPanel({ ws }: { ws: WsAdapter }): React.JSX.Element {
     return () => { mounted = false; window.clearInterval(interval) }
   }, [ws])
 
-  return <div className="h-full overflow-auto p-6 text-zinc-200"><div className="mx-auto max-w-4xl space-y-3">{items.map((item) => <div key={item.id} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4"><div className="flex items-center justify-between"><div className="font-semibold">{item.id}</div><div className="flex items-center gap-2"><div className="text-sm text-zinc-400">{item.branch || 'no branch'}</div><button onClick={() => void ws.invoke('terminal_list')} className="rounded-lg border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-900">Refresh</button></div></div><div className="mt-2 text-xs text-zinc-500">{item.cwd || 'cwd unknown'}</div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><div className="rounded-lg bg-zinc-900 px-2 py-1">Changed {item.gitStatus?.changedFiles ?? 0}</div><div className="rounded-lg bg-zinc-900 px-2 py-1">Staged {item.gitStatus?.stagedFiles ?? 0}</div><div className="rounded-lg bg-zinc-900 px-2 py-1">Untracked {item.gitStatus?.untrackedFiles ?? 0}</div></div><div className="mt-3 text-xs text-zinc-500">Ahead {item.gitStatus?.aheadBehind?.ahead ?? 0} / Behind {item.gitStatus?.aheadBehind?.behind ?? 0}</div></div>)}{items.length === 0 && <div className="text-zinc-500">No terminal data</div>}</div></div>
+  return <div className="h-full overflow-auto p-6 text-foreground"><div className="mx-auto max-w-4xl space-y-2">{items.map((item) => <div key={item.id} className="rounded border border-border bg-card p-4"><div className="flex items-center justify-between"><div className="text-sm font-semibold">{item.id}</div><div className="flex items-center gap-2"><div className="text-xs text-muted-foreground">{item.branch || 'no branch'}</div><button onClick={() => void ws.invoke('terminal_list')} className="rounded border border-border px-2 py-1 text-[11px] hover:bg-secondary">Refresh</button></div></div><div className="mt-1.5 text-[11px] text-muted-foreground">{item.cwd || 'cwd unknown'}</div><div className="mt-2.5 grid grid-cols-3 gap-1.5 text-[11px]"><div className="rounded bg-secondary px-2 py-1">Changed {item.gitStatus?.changedFiles ?? 0}</div><div className="rounded bg-secondary px-2 py-1">Staged {item.gitStatus?.stagedFiles ?? 0}</div><div className="rounded bg-secondary px-2 py-1">Untracked {item.gitStatus?.untrackedFiles ?? 0}</div></div><div className="mt-2 text-[11px] text-muted-foreground">Ahead {item.gitStatus?.aheadBehind?.ahead ?? 0} / Behind {item.gitStatus?.aheadBehind?.behind ?? 0}</div></div>)}{items.length === 0 && <div className="text-muted-foreground text-sm">No terminal data</div>}</div></div>
 }
 
 export function TunnelPanel({ ws, remoteStatus }: { ws: WsAdapter; remoteStatus: { httpUrl: string; wsUrl: string; clientCount: number } | null }): React.JSX.Element {
@@ -109,5 +109,29 @@ export function TunnelPanel({ ws, remoteStatus }: { ws: WsAdapter; remoteStatus:
   const [busy, setBusy] = useState(false)
   const [authToken, setAuthToken] = useState('')
   const url = remoteStatus?.httpUrl || remoteStatus?.wsUrl || ''
-  return <div className="flex h-full items-start justify-center p-6 text-zinc-200"><div className="w-full max-w-2xl space-y-4 rounded-3xl border border-zinc-800 bg-zinc-950 p-6"><div className="flex items-center justify-between"><div className="text-lg font-semibold">Tunnel</div><div className={`rounded-full px-3 py-1 text-xs ${remoteStatus ? 'bg-emerald-500/15 text-emerald-300' : 'bg-zinc-800 text-zinc-400'}`}>{remoteStatus ? `${remoteStatus.clientCount} client` : 'offline'}</div></div><div className="text-sm text-zinc-400">Status server + tunnel URL.</div><div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-sm">{url}</div><div className="flex gap-2"><button onClick={async () => { await navigator.clipboard.writeText(url); setCopied(true); window.setTimeout(() => setCopied(false), 1200) }} className="rounded-xl bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-500">{copied ? 'Copied' : 'Copy URL'}</button><button onClick={() => void ws.invoke('ws_server_get_status')} className="rounded-xl border border-zinc-700 px-4 py-2 hover:bg-zinc-900">Refresh</button></div><div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4"><div className="mb-2 text-sm font-medium">Server</div><div className="mb-3 text-xs text-zinc-500">Start/stop may work if ws server commands exposed to web socket.</div><input value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder="token" className="mb-3 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none" /><div className="flex gap-2"><button onClick={async () => { setBusy(true); try { await ws.invoke('ws_server_start', { port: 9876, authToken, useHttps: false }); await ws.invoke('ws_server_get_status') } finally { setBusy(false) } }} disabled={busy} className="rounded-xl bg-emerald-600 px-4 py-2 font-medium text-white disabled:opacity-60">{busy ? 'Working' : 'Start'}</button><button onClick={async () => { setBusy(true); try { await ws.invoke('ws_server_stop'); await ws.invoke('ws_server_get_status') } finally { setBusy(false) } }} disabled={busy} className="rounded-xl bg-red-600 px-4 py-2 font-medium text-white disabled:opacity-60">{busy ? 'Working' : 'Stop'}</button></div></div></div></div>
+  return (
+    <div className="flex h-full items-start justify-center p-6 text-foreground">
+      <div className="w-full max-w-2xl space-y-4 rounded border border-border bg-card p-6">
+        <div className="flex items-center justify-between">
+          <div className="text-base font-semibold">Tunnel</div>
+          <div className={`rounded px-2 py-0.5 text-[11px] font-medium ${remoteStatus ? 'bg-green-500/15 text-green-400' : 'bg-secondary text-muted-foreground'}`}>{remoteStatus ? `${remoteStatus.clientCount} client` : 'offline'}</div>
+        </div>
+        <div className="text-xs text-muted-foreground">Status server + tunnel URL.</div>
+        <div className="rounded border border-border bg-secondary p-3 text-sm font-mono">{url}</div>
+        <div className="flex gap-2">
+          <button onClick={async () => { await navigator.clipboard.writeText(url); setCopied(true); window.setTimeout(() => setCopied(false), 1200) }} className="rounded bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">{copied ? 'Copied' : 'Copy URL'}</button>
+          <button onClick={() => void ws.invoke('ws_server_get_status')} className="rounded border border-border px-4 py-1.5 text-sm hover:bg-secondary">Refresh</button>
+        </div>
+        <div className="rounded border border-border bg-secondary/50 p-4">
+          <div className="mb-2 text-sm font-medium">Server</div>
+          <div className="mb-2 text-[11px] text-muted-foreground">Start/stop may work if ws server commands exposed.</div>
+          <input value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder="token" className="mb-3 w-full rounded border border-border bg-background px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary" />
+          <div className="flex gap-2">
+            <button onClick={async () => { setBusy(true); try { await ws.invoke('ws_server_start', { port: 9876, authToken, useHttps: false }); await ws.invoke('ws_server_get_status') } finally { setBusy(false) } }} disabled={busy} className="rounded bg-green-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-60">{busy ? 'Working' : 'Start'}</button>
+            <button onClick={async () => { setBusy(true); try { await ws.invoke('ws_server_stop'); await ws.invoke('ws_server_get_status') } finally { setBusy(false) } }} disabled={busy} className="rounded bg-destructive px-4 py-1.5 text-sm font-medium text-destructive-foreground disabled:opacity-60">{busy ? 'Working' : 'Stop'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }

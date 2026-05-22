@@ -137,7 +137,7 @@ const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
 // ADR-002.3: Flusher thread constants
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
 pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
-pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
+pub const MAX_PENDING: usize = 1 * 1024 * 1024; // 1MB overflow cap
 pub const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
 
 /// Public information about a spawned terminal

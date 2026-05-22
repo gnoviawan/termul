@@ -129,8 +129,15 @@ impl BrowserTabManager {
                         lastReady = ready;
                     }};
 
-                    // Poll every 400ms
-                    setInterval(check, 400);
+                    // Poll every 800ms, skip when document is hidden
+                    var pollTimer = setInterval(function() {{
+                        if (!document.hidden) check();
+                    }}, 800);
+
+                    // Also check when tab becomes visible again
+                    document.addEventListener('visibilitychange', function() {{
+                        if (!document.hidden) check();
+                    }});
 
                     // Hook history.pushState for SPA navigation
                     var origPush = history.pushState;

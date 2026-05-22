@@ -1,10 +1,11 @@
-import { useCallback } from 'react'
-import { CodeEditor } from './CodeEditor'
-import { MarkdownEditor } from './MarkdownEditor'
+import { useCallback, Suspense, lazy } from 'react'
 import { EditorToolbar } from './EditorToolbar'
 import { useEditorStore } from '@/stores/editor-store'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useTocSettings } from '@/hooks/use-toc-settings'
+
+const CodeEditor = lazy(() => import('./CodeEditor').then(m => ({ default: m.CodeEditor })))
+const MarkdownEditor = lazy(() => import('./MarkdownEditor').then(m => ({ default: m.MarkdownEditor })))
 
 interface EditorPanelProps {
   filePath: string
@@ -72,26 +73,28 @@ export function EditorPanel({
         />
       )}
       <div className="flex-1 relative overflow-hidden">
-        {isMarkdownFile && fileState.viewMode === 'markdown' ? (
-          <MarkdownEditor
-            filePath={filePath}
-            content={fileState.content}
-            isVisible={isVisible}
-            onChange={handleChange}
-          />
-        ) : (
-          <CodeEditor
-            filePath={filePath}
-            content={fileState.content}
-            language={fileState.language}
-            isVisible={isVisible}
-            initialCursorPosition={fileState.cursorPosition}
-            initialScrollTop={fileState.scrollTop}
-            onChange={handleChange}
-            onCursorChange={handleCursorChange}
-            onScrollChange={handleScrollChange}
-          />
-        )}
+        <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-muted-foreground">Loading editor...</div>}>
+          {isMarkdownFile && fileState.viewMode === 'markdown' ? (
+            <MarkdownEditor
+              filePath={filePath}
+              content={fileState.content}
+              isVisible={isVisible}
+              onChange={handleChange}
+            />
+          ) : (
+            <CodeEditor
+              filePath={filePath}
+              content={fileState.content}
+              language={fileState.language}
+              isVisible={isVisible}
+              initialCursorPosition={fileState.cursorPosition}
+              initialScrollTop={fileState.scrollTop}
+              onChange={handleChange}
+              onCursorChange={handleCursorChange}
+              onScrollChange={handleScrollChange}
+            />
+          )}
+        </Suspense>
       </div>
     </div>
   )

@@ -9,7 +9,7 @@ export interface PersistedTerminal {
 }
 
 // Default scrollback limit to prevent excessive storage
-export const DEFAULT_SCROLLBACK_LIMIT = 10000
+export const DEFAULT_SCROLLBACK_LIMIT = 3000
 
 // Stored at terminals/{projectId}.json
 export interface PersistedTerminalLayout {

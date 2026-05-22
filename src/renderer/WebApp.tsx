@@ -34,7 +34,12 @@ import {
 } from 'lucide-react'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:9876'
+function resolveWsUrl(rawUrl: string): string {
+  if (rawUrl.endsWith('/ws')) return rawUrl
+  return `${rawUrl.replace(/\/+$/, '')}/ws`
+}
+
+const WS_URL = resolveWsUrl(import.meta.env.VITE_WS_URL || 'ws://localhost:9876')
 const WS_PROJECT_ID = import.meta.env.VITE_WS_PROJECT_ID || ''
 const WS_SESSION_ID = import.meta.env.VITE_WS_SESSION_ID || ''
 
@@ -332,24 +337,24 @@ export function WebApp(): React.JSX.Element {
 
   if (isConnecting) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#0f0f15] text-zinc-300">
-        <div className="text-center space-y-6 max-w-sm p-8 bg-zinc-900/50 rounded-3xl border border-zinc-800/80 shadow-2xl backdrop-blur-md animate-in fade-in duration-300">
-          <div className="relative w-16 h-16 mx-auto">
-            <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full" />
-            <div className="absolute inset-0 border-4 border-t-blue-500 rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-background text-foreground">
+        <div className="text-center space-y-6 max-w-sm p-8 bg-card rounded-lg border border-border shadow-2xl animate-in fade-in duration-300">
+          <div className="relative w-14 h-14 mx-auto">
+            <div className="absolute inset-0 border-2 border-primary/20 rounded-full" />
+            <div className="absolute inset-0 border-2 border-t-primary rounded-full animate-spin" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Laptop className="w-6 h-6 text-blue-400 animate-pulse" />
+              <Laptop className="w-5 h-5 text-primary animate-pulse" />
             </div>
           </div>
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold tracking-tight text-white">Termul Remote</h3>
-            <p className="text-sm text-zinc-400 leading-normal">
-              Connecting to secure runtime server endpoint...
+          <div className="space-y-1.5">
+            <h3 className="text-base font-semibold tracking-tight text-foreground">Termul Remote</h3>
+            <p className="text-xs text-muted-foreground">
+              Connecting to secure runtime server...
             </p>
           </div>
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/25 rounded-2xl">
-              <p className="text-red-400 text-xs font-mono">{error}</p>
+            <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-md">
+              <p className="text-destructive text-xs font-mono">{error}</p>
             </div>
           )}
         </div>
@@ -359,34 +364,34 @@ export function WebApp(): React.JSX.Element {
 
   if (!isConnected) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#0f0f15] text-zinc-300">
-        <div className="text-center space-y-6 max-w-md p-8 bg-zinc-900/50 rounded-3xl border border-zinc-800/80 shadow-2xl backdrop-blur-md">
-          <div className="w-16 h-16 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center justify-center mx-auto text-3xl animate-bounce">
-            🔌
+      <div className="flex items-center justify-center h-screen bg-background text-foreground">
+        <div className="text-center space-y-6 max-w-md p-8 bg-card rounded-lg border border-border shadow-2xl">
+          <div className="w-14 h-14 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg flex items-center justify-center mx-auto">
+            <Wifi className="w-6 h-6" />
           </div>
-          <div className="space-y-2">
-            <h1 className="text-xl font-bold text-white tracking-tight">Connection Severed</h1>
-            <p className="text-sm text-zinc-400 leading-relaxed">
-              Cannot establish WebSocket tunnel link to Termul host at:
-              <code className="block mt-2 bg-zinc-950 p-2.5 rounded-xl border border-zinc-800 font-mono text-xs text-zinc-300 truncate">
+          <div className="space-y-1.5">
+            <h1 className="text-lg font-semibold text-foreground tracking-tight">Connection Lost</h1>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Cannot connect to Termul host at:
+              <code className="block mt-2 bg-secondary p-2 rounded border border-border font-mono text-[11px] text-foreground truncate">
                 {WS_URL}
               </code>
             </p>
           </div>
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/25 rounded-2xl">
-              <p className="text-red-400 text-xs font-mono">{error}</p>
+            <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-md">
+              <p className="text-destructive text-xs font-mono">{error}</p>
             </div>
           )}
           <button
             onClick={() => void connect()}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white font-semibold rounded-2xl shadow-lg shadow-blue-600/15 transition-all"
+            className="w-full py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-medium rounded-md shadow-sm transition-colors"
           >
-            Reconnect Session
+            Reconnect
           </button>
           <button
             onClick={handleLogout}
-            className="w-full py-3 bg-transparent border border-zinc-700 hover:border-zinc-500 active:scale-[0.98] text-zinc-400 hover:text-zinc-200 font-semibold rounded-2xl transition-all"
+            className="w-full py-2.5 bg-transparent border border-border hover:bg-secondary text-muted-foreground hover:text-foreground font-medium rounded-md transition-colors"
           >
             Logout
           </button>
@@ -397,67 +402,68 @@ export function WebApp(): React.JSX.Element {
 
   return (
     <WsContext.Provider value={{ ws, isConnected, isConnecting, error }}>
-      <div className="h-screen w-screen overflow-hidden bg-[#0a0a0f] font-sans selection:bg-blue-500/20 selection:text-blue-200">
+      <div className="h-screen w-screen overflow-hidden bg-background font-sans selection:bg-primary/20 selection:text-primary-foreground">
         <Toaster position="top-right" theme="dark" />
         {ws && (
           <div className="flex h-full">
-            <aside className="flex w-16 flex-col items-center gap-2 border-r border-zinc-800 bg-zinc-950/95 px-2 py-3 text-zinc-400">
-              <button onClick={() => setActiveMode('terminal')} title="Terminal" aria-label="Terminal" className={`rounded-2xl p-3 ${activeMode === 'terminal' ? 'bg-blue-600 text-white' : 'bg-zinc-900 hover:bg-zinc-800'}`}>
+            <aside className="flex w-12 flex-col items-center gap-1.5 border-r border-border bg-sidebar px-1.5 py-2 text-muted-foreground">
+              <button onClick={() => setActiveMode('terminal')} title="Terminal" aria-label="Terminal" className={`rounded-md p-2 transition-colors ${activeMode === 'terminal' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary hover:text-foreground'}`}>
                 <TerminalIcon className="h-4 w-4" />
               </button>
-              <button onClick={() => setActiveMode('browser')} title="Browser" aria-label="Browser" className={`rounded-2xl p-3 ${activeMode === 'browser' ? 'bg-blue-600 text-white' : 'bg-zinc-900 hover:bg-zinc-800'}`}>
+              <button onClick={() => setActiveMode('browser')} title="Browser" aria-label="Browser" className={`rounded-md p-2 transition-colors ${activeMode === 'browser' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary hover:text-foreground'}`}>
                 <Globe className="h-4 w-4" />
               </button>
-              <button onClick={() => setActiveMode('git')} title="Git" aria-label="Git" className={`rounded-2xl p-3 ${activeMode === 'git' ? 'bg-blue-600 text-white' : 'bg-zinc-900 hover:bg-zinc-800'}`}>
+              <button onClick={() => setActiveMode('git')} title="Git" aria-label="Git" className={`rounded-md p-2 transition-colors ${activeMode === 'git' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary hover:text-foreground'}`}>
                 <GitBranch className="h-4 w-4" />
               </button>
-              <button onClick={() => setActiveMode('tunnel')} title="Tunnel" aria-label="Tunnel" className={`rounded-2xl p-3 ${activeMode === 'tunnel' ? 'bg-blue-600 text-white' : 'bg-zinc-900 hover:bg-zinc-800'}`}>
+              <button onClick={() => setActiveMode('tunnel')} title="Tunnel" aria-label="Tunnel" className={`rounded-md p-2 transition-colors ${activeMode === 'tunnel' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary hover:text-foreground'}`}>
                 <Route className="h-4 w-4" />
               </button>
-              <div className="mt-auto flex flex-col items-center gap-2 pb-2 text-[10px] text-zinc-500">
-                <div className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">{isConnected ? 'LIVE' : 'OFF'}</div>
-                <div className="h-px w-8 bg-zinc-800" />
+              <div className="mt-auto flex flex-col items-center gap-1.5 pb-1 text-[10px] text-muted-foreground">
+                <div className={`rounded-full px-1.5 py-0.5 ${isConnected ? 'bg-green-500/15 text-green-400' : 'bg-destructive/15 text-destructive'}`}>
+                  {isConnected ? 'LIVE' : 'OFF'}
+                </div>
+                <div className="h-px w-6 bg-border" />
                 <div className="text-center leading-tight">{remoteStatus?.clientCount ?? 0}c</div>
               </div>
             </aside>
 
             <div className="flex min-w-0 flex-1 flex-col">
-              <header className="flex items-center gap-3 border-b border-zinc-800 bg-zinc-950/90 px-4 py-3 text-sm text-zinc-300">
+              <header className="flex items-center gap-3 border-b border-border bg-sidebar px-4 py-2 text-sm">
                 <div className="flex min-w-0 items-center gap-2">
-                  <div className="h-2.5 w-2.5 rounded-full bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.7)]" />
+                  <div className="h-2 w-2 rounded-full bg-primary" />
                   <div className="min-w-0">
-                    <div className="truncate font-semibold text-white">Termul Web</div>
-                    <div className="truncate text-xs text-zinc-500">{shellSummary?.projectName || 'Remote shell'}</div>
+                    <div className="truncate font-semibold text-foreground text-sm">Termul Web</div>
+                    <div className="truncate text-[11px] text-muted-foreground">{shellSummary?.projectName || 'Remote shell'}</div>
                   </div>
                 </div>
-                <div className="ml-auto flex items-center gap-3 text-xs text-zinc-400">
-                  <div className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1">{shellSummary?.projectPath || 'workspace'}</div>
-                  <div className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1">{shellSummary?.terminalCount ?? 0} terminals</div>
-                  <div className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1">{shellSummary?.branchCount ?? 0} branches</div>
-                  <div className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1">{remoteStatus?.wsUrl || WS_URL}</div>
+                <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="rounded border border-border bg-secondary px-2 py-0.5">{shellSummary?.projectPath || 'workspace'}</span>
+                  <span className="rounded border border-border bg-secondary px-2 py-0.5">{shellSummary?.terminalCount ?? 0} terms</span>
+                  <span className="rounded border border-border bg-secondary px-2 py-0.5">{shellSummary?.branchCount ?? 0} branches</span>
                 </div>
               </header>
 
               <main className="min-h-0 flex-1">
                 {activeMode === 'terminal' && (
                   <div className="flex h-full min-h-0">
-                    <div className="w-72 shrink-0 border-r border-zinc-800 bg-zinc-950/70 p-3">
-                      <div className="mb-3 text-xs uppercase tracking-wider text-zinc-500">Projects</div>
-                      <div className="space-y-1">
+                    <div className="w-56 shrink-0 border-r border-border bg-sidebar p-2">
+                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Projects</div>
+                      <div className="space-y-0.5">
                         {projectList.map((project) => (
                           <button
                             key={project.id}
                             onClick={() => setSelectedProjectId(project.id)}
-                            className={`w-full rounded-2xl px-3 py-2 text-left ${selectedProjectId === project.id ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'}`}
+                            className={`w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selectedProjectId === project.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'}`}
                           >
-                            <div className="truncate text-sm font-medium">{project.name}</div>
-                            <div className="truncate text-xs opacity-70">{project.path || 'workspace'}</div>
+                            <div className="truncate text-xs font-medium">{project.name}</div>
+                            <div className="truncate text-[10px] text-muted-foreground/60">{project.path || 'workspace'}</div>
                           </button>
                         ))}
-                        {projectList.length === 0 && <div className="rounded-2xl bg-zinc-900 px-3 py-2 text-sm text-zinc-500">No projects</div>}
+                        {projectList.length === 0 && <div className="rounded-md px-2.5 py-1.5 text-xs text-muted-foreground">No projects</div>}
                       </div>
-                      <div className="mt-4 text-xs uppercase tracking-wider text-zinc-500">Files</div>
-                      <div className="mt-2 max-h-[50vh] overflow-auto rounded-2xl bg-zinc-900/80 p-2 text-sm text-zinc-300">
+                      <div className="mt-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Files</div>
+                      <div className="mt-1.5 max-h-[50vh] overflow-auto rounded-md bg-background/50 p-1 text-xs">
                         {projectFiles.map((entry) => (
                           <button
                             key={entry.path}
@@ -466,13 +472,13 @@ export function WebApp(): React.JSX.Element {
                                 void ws.invoke<Array<{ name: string; path: string; type: 'directory' | 'file' }>>('read_directory', { dirPath: entry.path }).then((entries) => setProjectFiles((entries ?? []).slice(0, 60))).catch(() => {})
                               }
                             }}
-                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-zinc-800"
+                            className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-foreground hover:bg-secondary/50 transition-colors"
                           >
-                            <span className={`h-2 w-2 rounded-full ${entry.type === 'directory' ? 'bg-blue-400' : 'bg-zinc-500'}`} />
+                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${entry.type === 'directory' ? 'bg-primary' : 'bg-muted-foreground/40'}`} />
                             <span className="truncate">{entry.name}</span>
                           </button>
                         ))}
-                        {projectFiles.length === 0 && <div className="px-3 py-2 text-zinc-500">No files</div>}
+                        {projectFiles.length === 0 && <div className="px-2 py-1 text-muted-foreground">No files</div>}
                       </div>
                     </div>
                     <div className="min-w-0 flex-1">
@@ -496,28 +502,37 @@ export function WebApp(): React.JSX.Element {
                 {activeMode === 'tunnel' && <TunnelPanel ws={ws} remoteStatus={remoteStatus} />}
               </main>
 
-              <footer className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-950/90 px-4 py-2 text-[11px] text-zinc-500">
+              <footer className="flex items-center gap-3 border-t border-border bg-sidebar px-3 py-1.5 text-[10px] text-muted-foreground">
                 <span>{isConnected ? 'connected' : 'offline'}</span>
-                <span>mode {activeMode}</span>
+                <span className="text-muted-foreground/40">|</span>
+                <span>{activeMode}</span>
+                <span className="text-muted-foreground/40">|</span>
                 <span>{remoteStatus?.clientCount ?? 0} client</span>
-                <span className="truncate">{error || 'stable'}</span>
+                {error && (
+                  <>
+                    <span className="text-muted-foreground/40">|</span>
+                    <span className="truncate text-destructive">{error}</span>
+                  </>
+                )}
               </footer>
             </div>
           </div>
         )}
         {isLocked && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md">
-            <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950/95 p-8 text-center shadow-2xl">
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-500/10 text-2xl">🔒</div>
-              <h2 className="text-xl font-semibold text-white">Web Lite Locked</h2>
-              <p className="mt-2 text-sm text-zinc-400">Klik di web lite kirim lock ke desktop. Klik Open buat buka lagi.</p>
+            <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 text-center shadow-2xl">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-primary/20 bg-primary/10">
+                <Wifi className="w-5 h-5 text-primary" />
+              </div>
+              <h2 className="text-lg font-semibold text-foreground">Web Lite Locked</h2>
+              <p className="mt-1.5 text-xs text-muted-foreground">Desktop took over. Click below to reclaim web access.</p>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   setIsLocked(false)
                   void connect()
                 }}
-                className="mt-6 w-full rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500"
+                className="mt-6 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
               >
                 Open Web Lite
               </button>
@@ -526,7 +541,7 @@ export function WebApp(): React.JSX.Element {
                   e.stopPropagation()
                   handleLogout()
                 }}
-                className="mt-3 w-full rounded-2xl border border-zinc-700 hover:border-zinc-500 px-4 py-3 font-semibold text-zinc-400 hover:text-zinc-200 transition-colors"
+                className="mt-2 w-full rounded-md border border-border hover:bg-secondary px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
                 Logout
               </button>

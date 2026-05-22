@@ -1,21 +1,28 @@
 use parking_lot::RwLock;
+#[cfg(unix)]
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+#[cfg(unix)]
+use tauri::Emitter;
+use tauri::AppHandle;
 
+#[cfg(unix)]
 const POLL_INTERVAL_MS: u64 = 500;
 
 /// State for tracking a single terminal's CWD
 #[derive(Clone, Debug)]
 struct CwdState {
+    #[cfg(unix)]
     terminal_id: String,
+    #[cfg(unix)]
     pid: u32,
     last_known_cwd: String,
 }
 
 /// Event emitted when a terminal's CWD changes
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CwdChangedEvent {
@@ -26,7 +33,8 @@ pub struct CwdChangedEvent {
 /// Tracks the current working directory (CWD) of terminal processes.
 ///
 /// This tracker polls the `/proc/{pid}/cwd` symlink on Unix systems to detect
-/// directory changes. On Windows, CWD tracking is not supported and returns None.
+/// directory changes. On Windows, CWD tracking is not supported — the tracker
+/// stores initial CWD but does not poll.
 ///
 /// Polling is visibility-aware: when the terminal is hidden, polling is paused
 /// to conserve CPU resources.
@@ -35,6 +43,7 @@ pub struct CwdTracker {
     tracked_terminals: Arc<RwLock<HashMap<String, CwdState>>>,
 
     /// Tauri app handle for emitting events
+    #[cfg(unix)]
     app_handle: AppHandle,
 
     /// Handle to the polling task (wrapped in Arc<RwLock> for interior mutability)
@@ -47,6 +56,7 @@ pub struct CwdTracker {
     is_visible: Arc<AtomicBool>,
 
     /// Poll counter for testing/debugging (increments each time we poll)
+    #[cfg(unix)]
     poll_count: Arc<AtomicBool>,
 }
 
@@ -55,13 +65,15 @@ impl CwdTracker {
     ///
     /// # Arguments
     /// * `app_handle` - Tauri app handle for emitting events
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(_app_handle: AppHandle) -> Self {
         Self {
             tracked_terminals: Arc::new(RwLock::new(HashMap::new())),
-            app_handle,
+            #[cfg(unix)]
+            app_handle: _app_handle,
             poll_handle: Arc::new(RwLock::new(None)),
             is_polling_started: Arc::new(AtomicBool::new(false)),
             is_visible: Arc::new(AtomicBool::new(true)),
+            #[cfg(unix)]
             poll_count: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -78,27 +90,17 @@ impl CwdTracker {
     /// # Returns
     /// * `Some(String)` - Absolute path to current working directory
     /// * `None` - Process not found or platform not supported
+    #[cfg(unix)]
     fn detect_cwd(_pid: u32) -> Option<String> {
-        #[cfg(unix)]
-        {
-            use std::fs;
-            use std::path::Path;
+        use std::fs;
+        use std::path::Path;
 
-            let cwd_path = Path::new("/proc").join(_pid.to_string()).join("cwd");
+        let cwd_path = Path::new("/proc").join(_pid.to_string()).join("cwd");
 
-            // Read the symlink which points to the actual directory
-            fs::read_link(&cwd_path)
-                .ok()
-                .and_then(|path| path.into_os_string().into_string().ok())
-        }
-
-        #[cfg(not(unix))]
-        {
-            // Windows does not have /proc filesystem
-            // CWD tracking on Windows would require different mechanisms
-            // (e.g., NtQueryInformationProcess), which is not implemented here
-            None
-        }
+        // Read the symlink which points to the actual directory
+        fs::read_link(&cwd_path)
+            .ok()
+            .and_then(|path| path.into_os_string().into_string().ok())
     }
 
     /// Starts tracking a terminal's CWD.
@@ -109,9 +111,11 @@ impl CwdTracker {
     /// * `terminal_id` - Unique identifier for the terminal
     /// * `pid` - Process ID of the terminal shell
     /// * `initial_cwd` - Initial working directory
-    pub fn start_tracking(&self, terminal_id: &str, pid: u32, initial_cwd: &str) {
+    pub fn start_tracking(&self, terminal_id: &str, _pid: u32, initial_cwd: &str) {
         let state = CwdState {
+            #[cfg(unix)]
             terminal_id: terminal_id.to_string(),
+            #[cfg(unix)]
             pid,
             last_known_cwd: initial_cwd.to_string(),
         };
@@ -121,7 +125,8 @@ impl CwdTracker {
             terminals.insert(terminal_id.to_string(), state);
         }
 
-        // Start polling if not already running
+        // Start polling if not already running (only on Unix where detect_cwd works)
+        #[cfg(unix)]
         self.ensure_polling_started();
     }
 
@@ -181,6 +186,7 @@ impl CwdTracker {
     ///
     /// This is called internally when adding terminals to tracking.
     /// Uses atomic flag to prevent starting multiple polling loops.
+    #[cfg(unix)]
     fn ensure_polling_started(&self) {
         // Use compare_exchange to atomically start polling only once
         if self
@@ -200,6 +206,10 @@ impl CwdTracker {
     ///
     /// This spawns a tokio task that periodically checks CWD for all tracked terminals.
     /// Uses interior mutability through Arc<RwLock> for poll_handle.
+    ///
+    /// On non-Unix platforms (where detect_cwd always returns None), polling is
+    /// skipped entirely to avoid wasting CPU on a no-op.
+    #[cfg(unix)]
     fn start_polling(&self) {
         let tracked = self.tracked_terminals.clone();
         let is_visible = self.is_visible.clone();
@@ -208,56 +218,56 @@ impl CwdTracker {
         let poll_count = self.poll_count.clone();
 
         let handle = tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_millis(POLL_INTERVAL_MS));
+                let mut interval =
+                    tokio::time::interval(tokio::time::Duration::from_millis(POLL_INTERVAL_MS));
 
-            loop {
-                interval.tick().await;
+                loop {
+                    interval.tick().await;
 
-                // Skip polling when not visible
-                if !is_visible.load(Ordering::Relaxed) {
-                    continue;
-                }
+                    // Skip polling when not visible
+                    if !is_visible.load(Ordering::Relaxed) {
+                        continue;
+                    }
 
-                // Increment poll counter for testing/debugging
-                poll_count.fetch_xor(true, Ordering::Relaxed);
+                    // Increment poll counter for testing/debugging
+                    poll_count.fetch_xor(true, Ordering::Relaxed);
 
-                // Collect terminal IDs and PIDs to avoid holding the write lock during detection
-                let snapshots: Vec<(String, u32)> = {
-                    let terminals = tracked.read();
-                    terminals
-                        .values()
-                        .map(|state| (state.terminal_id.clone(), state.pid))
-                        .collect()
-                };
+                    // Collect terminal IDs and PIDs to avoid holding the write lock during detection
+                    let snapshots: Vec<(String, u32)> = {
+                        let terminals = tracked.read();
+                        terminals
+                            .values()
+                            .map(|state| (state.terminal_id.clone(), state.pid))
+                            .collect()
+                    };
 
-                // Check each terminal's CWD
-                for (terminal_id, pid) in snapshots {
-                    if let Some(new_cwd) = Self::detect_cwd(pid) {
-                        let mut terminals = tracked.write();
+                    // Check each terminal's CWD
+                    for (terminal_id, pid) in snapshots {
+                        if let Some(new_cwd) = Self::detect_cwd(pid) {
+                            let mut terminals = tracked.write();
 
-                        if let Some(state) = terminals.get_mut(&terminal_id) {
-                            // Only emit event if CWD actually changed
-                            if state.last_known_cwd != new_cwd {
-                                state.last_known_cwd = new_cwd.clone();
+                            if let Some(state) = terminals.get_mut(&terminal_id) {
+                                // Only emit event if CWD actually changed
+                                if state.last_known_cwd != new_cwd {
+                                    state.last_known_cwd = new_cwd.clone();
 
-                                // Emit the event
-                                let event = CwdChangedEvent {
-                                    terminal_id: terminal_id.clone(),
-                                    cwd: new_cwd,
-                                };
+                                    // Emit the event
+                                    let event = CwdChangedEvent {
+                                        terminal_id: terminal_id.clone(),
+                                        cwd: new_cwd,
+                                    };
 
-                                let _ = app_handle.emit("terminal-cwd-changed", event);
+                                    let _ = app_handle.emit("terminal-cwd-changed", event);
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
 
-        // Store the handle using RwLock write lock
-        let mut poll_handle_guard = poll_handle.write();
-        *poll_handle_guard = Some(handle);
+            // Store the handle using RwLock write lock
+            let mut poll_handle_guard = poll_handle.write();
+            *poll_handle_guard = Some(handle);
     }
 
     /// Stops the polling loop.
@@ -292,6 +302,7 @@ impl CwdTracker {
     /// This increments each time the polling loop runs.
     /// Useful for verifying that polling is actually occurring.
     #[cfg(test)]
+    #[cfg(unix)]
     pub fn take_poll_count(&self) -> bool {
         self.poll_count.fetch_and(false, Ordering::Relaxed)
     }
@@ -302,37 +313,28 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn test_detect_cwd_unix() {
-        #[cfg(unix)]
-        {
-            // Test with current process
-            let pid = std::process::id();
-            let cwd = CwdTracker::detect_cwd(pid);
-            assert!(cwd.is_some());
+        // Test with current process
+        let pid = std::process::id();
+        let cwd = CwdTracker::detect_cwd(pid);
+        assert!(cwd.is_some());
 
-            // Test with invalid PID
-            let invalid_cwd = CwdTracker::detect_cwd(999_999);
-            assert!(invalid_cwd.is_none());
-        }
-
-        #[cfg(not(unix))]
-        {
-            // On Windows, should always return None
-            let cwd = CwdTracker::detect_cwd(std::process::id());
-            assert!(cwd.is_none());
-        }
+        // Test with invalid PID
+        let invalid_cwd = CwdTracker::detect_cwd(999_999);
+        assert!(invalid_cwd.is_none());
     }
 
     #[test]
     fn test_cwd_state_creation() {
         let state = CwdState {
+            #[cfg(unix)]
             terminal_id: "test-term".to_string(),
+            #[cfg(unix)]
             pid: 1234,
             last_known_cwd: "/home/user".to_string(),
         };
 
-        assert_eq!(state.terminal_id, "test-term");
-        assert_eq!(state.pid, 1234);
         assert_eq!(state.last_known_cwd, "/home/user");
     }
 

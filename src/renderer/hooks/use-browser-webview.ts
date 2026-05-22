@@ -162,18 +162,27 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       })
   }, [url, browserTabId, clearLoadingTimeout, armLoadingTimeout])
 
-  // Resize observer
+  // Resize observer with debounce to avoid flooding IPC during window drag-resize
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
-      updateBounds()
+      if (resizeTimer) clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null
+        updateBounds()
+      }, 100)
     })
     ro.observe(el)
 
     return () => {
       ro.disconnect()
+      if (resizeTimer) {
+        clearTimeout(resizeTimer)
+        resizeTimer = null
+      }
     }
   }, [updateBounds])
 

@@ -118,7 +118,7 @@ export function TerminalTabBar({
   })
 
   return (
-    <div className="h-9 bg-card border-b border-border flex items-center">
+    <div className="h-8 bg-card border-b border-border/50 flex items-center">
       <div className="relative flex items-center h-full min-w-0 shrink">
         <div
           ref={tabsContainerRef}
@@ -316,13 +316,16 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
         onClick={onSelect}
         onContextMenu={handleContextMenu}
         className={cn(
-          'h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-colors',
+          'h-full px-2.5 flex items-center border-r border-border/40 min-w-[90px] cursor-pointer group transition-colors',
           isActive
-            ? 'bg-background border-t-2 border-t-primary'
+            ? 'bg-background text-foreground'
             : 'hover:bg-secondary/50 text-muted-foreground'
         )}
       >
-        <TerminalIcon size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
+        {isActive && (
+          <div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
+        )}
+        <TerminalIcon size={11} className={cn('mr-1.5 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground/60')} />
         {isEditing ? (
           <input
             ref={inputRef}
@@ -337,7 +340,7 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
         ) : (
           <span
             onDoubleClick={handleDoubleClick}
-            className={cn('text-[11px] font-medium', isActive && 'text-foreground')}
+            className={cn('text-[11px] font-medium truncate', isActive && 'text-foreground')}
           >
             {terminal.name}
           </span>
@@ -347,9 +350,9 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             e.stopPropagation()
             onClose()
           }}
-          className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+          className="ml-auto p-0.5 rounded hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <X size={11} />
+          <X size={10} />
         </button>
       </div>
 

@@ -284,7 +284,7 @@ function ConnectedTerminalComponent({
 		const term = terminalRef.current;
 		const buf = writeBufferRef.current;
 		if (term && buf.length > 0) {
-			console.log("[ConnectedTerminal] flushWriteBuffer", {
+			if (import.meta.env.DEV) console.log("[ConnectedTerminal] flushWriteBuffer", {
 				instanceId,
 				ptyId: ptyIdRef.current,
 				length: buf.length,
@@ -305,7 +305,7 @@ function ConnectedTerminalComponent({
 
 	// Buffer incoming PTY data to prevent flicker from rapid small writes
 	const bufferWrite = useCallback((data: string): void => {
-		console.log("[ConnectedTerminal] bufferWrite enqueue", {
+		if (import.meta.env.DEV) console.log("[ConnectedTerminal] bufferWrite enqueue", {
 			instanceId,
 			ptyId: ptyIdRef.current,
 			length: data.length,
@@ -367,7 +367,7 @@ function ConnectedTerminalComponent({
 	const handleResume = useCallback(async (): Promise<void> => {
 		const ptyId = ptyIdRef.current || externalTerminalId;
 		if (!ptyId) return;
-		console.log("[ConnectedTerminal] handleResume start", {
+		if (import.meta.env.DEV) console.log("[ConnectedTerminal] handleResume start", {
 			instanceId,
 			ptyId,
 			externalTerminalId,
@@ -383,7 +383,7 @@ function ConnectedTerminalComponent({
 			setIsSuspended(false);
 			
 			requestAnimationFrame(() => {
-				console.log("[ConnectedTerminal] handleResume focus+fit", {
+				if (import.meta.env.DEV) console.log("[ConnectedTerminal] handleResume focus+fit", {
 					instanceId,
 					ptyId,
 					cols: terminalRef.current?.cols,
@@ -441,7 +441,7 @@ function ConnectedTerminalComponent({
 	const handleTerminalData = useCallback(
 		async (data: string): Promise<void> => {
 			const ptyId = ptyIdRef.current;
-			console.log("[ConnectedTerminal] handleTerminalData", {
+			if (import.meta.env.DEV) console.log("[ConnectedTerminal] handleTerminalData", {
 				instanceId,
 				ptyId,
 				isSuspended: isSuspendedRef.current,
@@ -453,10 +453,10 @@ function ConnectedTerminalComponent({
 
 			if (isSuspendedRef.current) {
 				try {
-					console.log("[ConnectedTerminal] auto-resume before write", {
-						instanceId,
-						ptyId,
-					});
+				if (import.meta.env.DEV) console.log("[ConnectedTerminal] auto-resume before write", {
+					instanceId,
+					ptyId,
+				});
 					isOwnerRef.current = true;
 					const { invoke } = await import("@tauri-apps/api/core");
 					await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
@@ -505,7 +505,7 @@ function ConnectedTerminalComponent({
 
 			try {
 				const result = await terminalApi.write(ptyId, data);
-				console.log("[ConnectedTerminal] terminalApi.write result", {
+				if (import.meta.env.DEV) console.log("[ConnectedTerminal] terminalApi.write result", {
 					instanceId,
 					ptyId,
 					success: result.success,
@@ -1500,7 +1500,7 @@ function ConnectedTerminalComponent({
 	}, []);
 
 	const handleContainerClick = useCallback((): void => {
-		console.log("[ConnectedTerminal] handleContainerClick", {
+		if (import.meta.env.DEV) console.log("[ConnectedTerminal] handleContainerClick", {
 			instanceId,
 			ptyId: ptyIdRef.current,
 			isSuspended: isSuspendedRef.current,
@@ -1592,14 +1592,21 @@ function ConnectedTerminalComponent({
 		} else {
 			needsResizeOnReadyRef.current = true;
 		}
+		let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 		const resizeObserver = new ResizeObserver(() => {
-			if (isVisible && pendingResizeRef.current === null) {
-				pendingResizeRef.current = () => {
-					pendingResizeRef.current = null;
-					performFit();
-				};
-				requestAnimationFrame(pendingResizeRef.current as () => void);
-			} else if (!isVisible) {
+			if (isVisible) {
+				if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+				resizeDebounceTimer = setTimeout(() => {
+					resizeDebounceTimer = null;
+					if (pendingResizeRef.current === null) {
+						pendingResizeRef.current = () => {
+							pendingResizeRef.current = null;
+							performFit();
+						};
+						requestAnimationFrame(pendingResizeRef.current as () => void);
+					}
+				}, 100);
+			} else {
 				needsResizeOnReadyRef.current = true;
 			}
 		});
@@ -1609,7 +1616,7 @@ function ConnectedTerminalComponent({
 		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
 				const decoded = new TextDecoder().decode(data);
-				console.log("[ConnectedTerminal] terminalApi.onData", {
+				if (import.meta.env.DEV) console.log("[ConnectedTerminal] terminalApi.onData", {
 					instanceId,
 					id,
 					length: decoded.length,
@@ -1707,6 +1714,7 @@ function ConnectedTerminalComponent({
 			if (ptyIdRef.current) unregisterTerminal(ptyIdRef.current);
 			else if (externalTerminalId) unregisterTerminal(externalTerminalId);
 			resizeObserver.disconnect(); dataDisposable.dispose(); resizeDisposable.dispose();
+			if (resizeDebounceTimer) { clearTimeout(resizeDebounceTimer); resizeDebounceTimer = null; }
 			if (cleanupDataListenerRef.current) cleanupDataListenerRef.current();
 			if (cleanupExitListenerRef.current) cleanupExitListenerRef.current();
 			if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -1741,7 +1749,7 @@ function ConnectedTerminalComponent({
 	}, [isVisible, autoFocus]);
 
 	useEffect(() => {
-		console.log("[ConnectedTerminal] suspended state changed", {
+		if (import.meta.env.DEV) console.log("[ConnectedTerminal] suspended state changed", {
 			instanceId,
 			ptyId: ptyIdRef.current,
 			isSuspended,

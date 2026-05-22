@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal, Globe } from 'lucide-react'
+import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal, Globe, Keyboard } from 'lucide-react'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarVisible } from '@/stores/sidebar-store'
@@ -9,8 +9,9 @@ import { windowApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { cn } from '@/lib/utils'
 
-const focusableButtonClass = 'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
+const focusableButtonClass = 'h-full px-2.5 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset transition-colors'
 
 interface TitleBarProps {
   isShortcutsOpen?: boolean
@@ -53,25 +54,16 @@ export function TitleBar({
   }, [])
 
   return (
-    <header
-      className="h-8 flex items-center bg-background select-none shrink-0"
-    >
-      {/* macOS: spacer for native traffic lights (close/minimize/zoom) */}
+    <header className="h-9 flex items-center bg-sidebar select-none shrink-0 border-b border-border/50">
       {isMac && (
         <div className="flex items-center h-full" style={{ width: '70px', paddingLeft: '14px' }} data-tauri-drag-region>
-          <div className="flex items-center gap-2">
-            {/* Native traffic lights are rendered by macOS automatically */}
-          </div>
+          <div className="flex items-center gap-2" />
         </div>
       )}
 
-      <div
-        className="flex items-center h-full px-3"
-        data-tauri-drag-region
-      >
-        <span
-          className="text-xs font-semibold text-muted-foreground tracking-wider uppercase pointer-events-none"
-        >
+      <div className="flex items-center h-full px-3 gap-2" data-tauri-drag-region>
+        <div className="w-2 h-2 rounded-full bg-primary" />
+        <span className="text-[11px] font-semibold text-foreground/80 tracking-wide uppercase pointer-events-none">
           termul
         </span>
       </div>
@@ -83,110 +75,90 @@ export function TitleBar({
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          onClick={(e) => {
-            void handleToggleSidebar(e)
-          }}
-          className={focusableButtonClass}
+          onClick={(e) => { void handleToggleSidebar(e) }}
+          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           title="Toggle sidebar"
           aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
           aria-pressed={isSidebarVisible}
         >
-          <PanelLeft
-            size={16}
-            className={isSidebarVisible ? 'text-foreground' : 'text-muted-foreground'}
-          />
+          <PanelLeft size={14} className={isSidebarVisible ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
         <button
-          onClick={(e) => {
-            void handleToggleFileExplorer(e)
-          }}
-          className={focusableButtonClass}
+          onClick={(e) => { void handleToggleFileExplorer(e) }}
+          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           title="Toggle file explorer"
           aria-label={isExplorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           aria-pressed={isExplorerVisible}
         >
-          <PanelRight
-            size={16}
-            className={isExplorerVisible ? 'text-foreground' : 'text-muted-foreground'}
-          />
+          <PanelRight size={14} className={isExplorerVisible ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
         <TitleBarShortcutsPopover
-          buttonClassName={focusableButtonClass}
+          buttonClassName={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           open={isShortcutsOpen}
           onOpenChange={onShortcutsOpenChange}
         />
 
         <button
           onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
-          className={focusableButtonClass}
+          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           title="Settings"
           aria-label="Open settings"
           aria-current={location.pathname === '/settings' ? 'page' : undefined}
         >
-          <Settings
-            size={16}
-            className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'}
-          />
+          <Settings size={14} className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
         <button
           onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}
-          className={focusableButtonClass}
+          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           title="Preferences"
           aria-label="Open preferences"
           aria-current={location.pathname === '/preferences' ? 'page' : undefined}
         >
-          <SlidersHorizontal
-            size={16}
-            className={location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'}
-          />
+          <SlidersHorizontal size={14} className={location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
         <button
           onClick={(e) => { e.stopPropagation(); navigate('/remote'); }}
-          className={focusableButtonClass}
+          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
           title="Remote Coding"
           aria-label="Open remote coding"
           aria-current={location.pathname === '/remote' ? 'page' : undefined}
         >
-          <Globe
-            size={16}
-            className={location.pathname === '/remote' ? 'text-foreground' : 'text-muted-foreground'}
-          />
+          <Globe size={14} className={location.pathname === '/remote' ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
-        <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
+        <div className="w-px h-3.5 bg-border/60 mx-1.5" aria-hidden="true" />
 
-        {/* Window controls — hidden on macOS (native traffic lights) or when running on web */}
         {!isMac && isTauriContext() && (
           <>
             <button
               onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}
-              className={`${focusableButtonClass} cursor-pointer`}
+              className={cn(focusableButtonClass, 'cursor-pointer')}
               title="Minimize"
               aria-label="Minimize window"
             >
-              <Minus size={16} />
+              <Minus size={14} />
             </button>
 
             <button
               onClick={(e) => { e.stopPropagation(); void windowApi.toggleMaximize(); }}
-              className={`${focusableButtonClass} cursor-pointer`}
+              className={cn(focusableButtonClass, 'cursor-pointer')}
               title={isMaximized ? 'Restore' : 'Maximize'}
               aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
             >
-              {isMaximized ? <Copy size={14} /> : <Square size={14} />}
+              {isMaximized ? <Copy size={12} /> : <Square size={12} />}
             </button>
 
             <button
               onClick={(e) => { e.stopPropagation(); void windowApi.close(); }}
-              className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
+              className="h-full px-2.5 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer transition-colors"
               title="Close"
               aria-label="Close window"
             >
-              <X size={16} />
+              <X size={14} />
             </button>
           </>
         )}

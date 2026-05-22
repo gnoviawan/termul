@@ -47,7 +47,7 @@ function getDefaultViewMode(filePath: string): 'code' | 'markdown' {
 export interface EditorFileState {
   filePath: string
   content: string
-  originalContent: string
+  originalContentHash: number
   isDirty: boolean
   language: string
   lastModified: number
@@ -55,6 +55,14 @@ export interface EditorFileState {
   cursorPosition: { line: number; col: number }
   scrollTop: number
   operationStatus: 'idle' | 'saving' | 'reloading'
+}
+
+function hashContent(str: string): number {
+  let hash = 5381
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0
+  }
+  return hash
 }
 
 export interface EditorState {
@@ -139,7 +147,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const fileState: EditorFileState = {
       filePath: path,
       content: result.data.content,
-      originalContent: result.data.content,
+      originalContentHash: hashContent(result.data.content),
       isDirty: false,
       language: detectLanguage(path),
       lastModified: result.data.modifiedAt,
@@ -199,7 +207,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     newFiles.set(path, {
       ...file,
       content,
-      isDirty: content !== file.originalContent
+      isDirty: hashContent(content) !== file.originalContentHash
     })
     set({ openFiles: newFiles })
   },
@@ -234,7 +242,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const bufferUnchanged = current.content === snapshotContent
       updatedFiles.set(path, {
         ...current,
-        originalContent: current.content,
+        originalContentHash: hashContent(current.content),
         isDirty: !bufferUnchanged,
         lastModified: Date.now(),
         operationStatus: 'idle'
@@ -329,7 +337,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         updatedFiles.set(path, {
           ...current,
           content: result.data.content,
-          originalContent: result.data.content,
+          originalContentHash: hashContent(result.data.content),
           isDirty: false,
           lastModified: result.data.modifiedAt,
           operationStatus: 'idle'

@@ -19,14 +19,32 @@ import { Terminal } from "@xterm/xterm";
 /** Map of PTY ID → cached Terminal instance. */
 const cache = new Map<string, Terminal>();
 
+/** Maximum number of cached terminal instances. Oldest entries are evicted first. */
+const MAX_CACHE_SIZE = 10;
+
 /**
  * Store a terminal in the cache and detach its DOM element.
  * Call this in the cleanup (unmount) path instead of terminal.dispose().
+ *
+ * Enforces a max cache size via LRU eviction — the oldest cached terminal
+ * is disposed and removed when the limit is reached.
  */
 export function cacheTerminal(ptyId: string, terminal: Terminal): void {
 	if (cache.has(ptyId)) {
 		// Already cached — shouldn't happen, but avoid double-cache
 		return;
+	}
+
+	// Evict oldest entry if cache is full
+	if (cache.size >= MAX_CACHE_SIZE) {
+		const oldestKey = cache.keys().next().value;
+		if (oldestKey !== undefined) {
+			const oldest = cache.get(oldestKey);
+			if (oldest) {
+				oldest.dispose();
+			}
+			cache.delete(oldestKey);
+		}
 	}
 
 	// Detach the xterm element from the DOM so it doesn't linger in the

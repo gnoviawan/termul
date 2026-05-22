@@ -626,7 +626,7 @@ impl GitTracker {
                         return None;
                     }
 
-                    std::thread::sleep(Duration::from_millis(25));
+                    std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(_) => return None,
             }
@@ -901,23 +901,28 @@ impl GitTracker {
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let terminals: Vec<(String, String)> = states
-                        .read()
-                        .iter()
-                        .map(|(id, state)| (id.clone(), state.last_known_cwd.clone()))
-                        .collect();
+                    // Group terminals by CWD to avoid redundant git process spawns
+                    let cwd_groups: HashMap<String, Vec<String>> = {
+                        let states_read = states.read();
+                        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+                        for (id, state) in states_read.iter() {
+                            map.entry(state.last_known_cwd.clone())
+                                .or_default()
+                                .push(id.clone());
+                        }
+                        map
+                    };
 
-                    for (terminal_id, cwd) in terminals {
+                    for (cwd, terminal_ids) in cwd_groups {
                         let (new_status, new_branch) = Self::poll_git_snapshot(cwd).await;
-                        let terminal_ids = vec![terminal_id.clone()];
                         let (branch_emits, status_emits) =
                             Self::apply_git_results(&states, &terminal_ids, new_branch, new_status);
 
-                        for (_, branch) in branch_emits {
+                        for (terminal_id, branch) in branch_emits {
                             Self::emit_branch_changed_static(&app_handle, &terminal_id, &branch);
                         }
 
-                        for (_, status) in status_emits {
+                        for (terminal_id, status) in status_emits {
                             Self::emit_status_changed_static(&app_handle, &terminal_id, &status);
                         }
                     }

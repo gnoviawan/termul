@@ -1,4 +1,4 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
+import { GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -23,68 +23,58 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
 
-  // Context bar visibility settings
   const showGitBranch = useShowGitBranch()
   const showGitStatus = useShowGitStatus()
   const showWorkingDirectory = useShowWorkingDirectory()
   const showExitCode = useShowExitCode()
 
-  // Updater state
   const updateDownloaded = useUpdateDownloaded()
   const updateVersion = useUpdateVersion()
 
-  // Display terminal CWD if available, otherwise fall back to project path
   const displayPath = activeTerminal?.cwd || project?.path
   const formattedPath = displayPath ? formatPath(displayPath, homeDir) : undefined
 
-  // Display terminal git branch if available, otherwise fall back to project gitBranch
   const gitBranch = activeTerminal?.gitBranch ?? project?.gitBranch
-
-  // Git status from active terminal
   const gitStatus = activeTerminal?.gitStatus
-
-  // Last command exit code from active terminal
   const lastExitCode = activeTerminal?.lastExitCode
 
   return (
     <div
       className={cn(
-        'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0 relative z-50',
+        'h-7 text-white/90 flex items-center px-3 text-[11px] select-none flex-shrink-0 relative z-50',
         bgColor
       )}
     >
-      {/* Left side */}
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center gap-3">
         {project && (
           <>
-            <StatusItem icon={<Server size={14} />}>
+            <span className="font-medium opacity-90">
               {project.name.toLowerCase().replace(/\s+/g, '-')}
-            </StatusItem>
+            </span>
 
             {showGitBranch && gitBranch && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div>
-                    <StatusItem icon={<GitBranch size={14} />}>
-                      {gitBranch}
-                      {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
-                        <span className="ml-2 flex items-center space-x-1.5 border-l border-white/20 pl-2">
-                          {gitStatus.ahead > 0 && (
-                            <span className="flex items-center gap-0.5">
-                              <ArrowUp size={12} />
-                              {gitStatus.ahead}
-                            </span>
-                          )}
-                          {gitStatus.behind > 0 && (
-                            <span className="flex items-center gap-0.5">
-                              <ArrowDown size={12} />
-                              {gitStatus.behind}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </StatusItem>
-                  </div>
+                  <span className="flex items-center gap-1 opacity-80 hover:opacity-100 cursor-pointer transition-opacity">
+                    <GitBranch size={12} />
+                    {gitBranch}
+                    {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+                      <span className="flex items-center gap-1 ml-1 border-l border-white/15 pl-1.5">
+                        {gitStatus.ahead > 0 && (
+                          <span className="flex items-center gap-0.5">
+                            <ArrowUp size={10} />
+                            {gitStatus.ahead}
+                          </span>
+                        )}
+                        {gitStatus.behind > 0 && (
+                          <span className="flex items-center gap-0.5">
+                            <ArrowDown size={10} />
+                            {gitStatus.behind}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent side="top">
                   {gitBranch} {gitStatus?.ahead ? `(${gitStatus.ahead} ahead)` : ''} {gitStatus?.behind ? `(${gitStatus.behind} behind)` : ''}
@@ -103,11 +93,10 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
             {showWorkingDirectory && formattedPath && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div>
-                    <StatusItem icon={<Folder size={14} />} className="opacity-80">
-                      {formattedPath}
-                    </StatusItem>
-                  </div>
+                  <span className="flex items-center gap-1 opacity-60 hover:opacity-100 cursor-pointer transition-opacity">
+                    <Folder size={12} />
+                    {formattedPath}
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-md break-all">
                   {displayPath}
@@ -120,22 +109,19 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       <div className="flex-1" />
 
-      {/* Right side */}
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center gap-3">
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div>
-                <StatusItem>
-                  <span
-                    className={cn(
-                      'w-2 h-2 rounded-full mr-2',
-                      lastExitCode === 0 ? 'bg-green-400' : 'bg-red-400'
-                    )}
-                  />
-                  Exit: {lastExitCode}
-                </StatusItem>
-              </div>
+              <span className="flex items-center gap-1.5 opacity-80 hover:opacity-100 cursor-pointer transition-opacity">
+                <span
+                  className={cn(
+                    'w-1.5 h-1.5 rounded-full',
+                    lastExitCode === 0 ? 'bg-green-400' : 'bg-red-400'
+                  )}
+                />
+                {lastExitCode}
+              </span>
             </TooltipTrigger>
             <TooltipContent side="top">
               {lastExitCode === 0
@@ -148,9 +134,9 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         {updateDownloaded && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex items-center">
-                <StatusItem icon={<Download size={14} />} className="text-green-400" />
-              </div>
+              <span className="flex items-center text-green-300 opacity-80 hover:opacity-100 cursor-pointer transition-opacity">
+                <Download size={12} />
+              </span>
             </TooltipTrigger>
             <TooltipContent side="top">
               Update ready to install (version {updateVersion})
@@ -158,29 +144,11 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           </Tooltip>
         )}
 
-        <StatusItem icon={<Bell size={14} />} />
+        <span className="flex items-center opacity-60 hover:opacity-100 cursor-pointer transition-opacity">
+          <Bell size={12} />
+        </span>
         <ContextBarSettingsPopover />
       </div>
-    </div>
-  )
-}
-
-interface StatusItemProps {
-  icon?: React.ReactNode
-  children?: React.ReactNode
-  className?: string
-}
-
-function StatusItem({ icon, children, className }: StatusItemProps): React.JSX.Element {
-  return (
-    <div
-      className={cn(
-        'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors',
-        className
-      )}
-    >
-      {icon && <span className="mr-1.5">{icon}</span>}
-      {children}
     </div>
   )
 }
@@ -198,8 +166,8 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="modified">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-yellow-400">
-            <Pencil size={12} className="mr-0.5" />
+          <span className="flex items-center gap-0.5 text-yellow-300">
+            <Pencil size={10} />
             {modified}
           </span>
         </TooltipTrigger>
@@ -214,8 +182,8 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="staged">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-green-400">
-            <Plus size={12} className="mr-0.5" />
+          <span className="flex items-center gap-0.5 text-green-300">
+            <Plus size={10} />
             {staged}
           </span>
         </TooltipTrigger>
@@ -230,8 +198,8 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-gray-400">
-            <FileQuestion size={12} className="mr-0.5" />
+          <span className="flex items-center gap-0.5 text-white/50">
+            <FileQuestion size={10} />
             {untracked}
           </span>
         </TooltipTrigger>
@@ -245,8 +213,8 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
   if (items.length === 0) return null
 
   return (
-    <div className="flex items-center space-x-2 px-2 py-0.5 rounded hover:bg-white/10 transition-colors">
+    <span className="flex items-center gap-1.5 opacity-80">
       {items}
-    </div>
+    </span>
   )
 }

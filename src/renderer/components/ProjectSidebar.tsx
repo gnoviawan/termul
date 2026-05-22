@@ -417,28 +417,25 @@ const handleSaveSettings = useCallback(() => {
 	);
 
 	return (
-		<aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
+		<aside className="w-56 bg-sidebar flex flex-col flex-shrink-0 h-full border-r border-border/50">
 			{/* Header with inline + button */}
-			<div className="h-9 flex items-center justify-between px-3 border-b border-sidebar-border rounded-t-xl">
-				<span className="text-xs tracking-wider text-sidebar-foreground uppercase">
+			<div className="h-8 flex items-center justify-between px-3 border-b border-border/50">
+				<span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
 					Projects
 				</span>
 				<button
 					onClick={onNewProject}
-					className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+					className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
 					title="New Project"
 					aria-label="Create new project from header"
 					data-testid="header-new-project"
 				>
-					<Plus
-						size={14}
-						className="text-muted-foreground group-hover:text-foreground"
-					/>
+					<Plus size={12} className="text-muted-foreground group-hover:text-foreground transition-colors" />
 				</button>
 			</div>
 
 			{/* Project List */}
-			<div className="flex-1 overflow-y-auto py-1">
+			<div className="flex-1 overflow-y-auto py-0.5">
 				{activeProjects.length === 0 && archivedProjects.length === 0 ? (
 					<div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
 						<p className="text-sm text-muted-foreground">No projects yet</p>
@@ -533,10 +530,8 @@ const handleSaveSettings = useCallback(() => {
 			</div>
 
 			{/* Bottom toolbar - Version */}
-			<div className="p-2 rounded-b-xl">
-				<div className="w-full h-6 inline-flex items-center justify-center">
-					<span className="text-xs text-muted-foreground">Termul v0.3.8</span>
-				</div>
+			<div className="px-3 py-1.5 border-t border-border/50">
+				<span className="text-[10px] text-muted-foreground/60">v0.3.8</span>
 			</div>
 
 			{/* Context Menu */}
@@ -766,30 +761,23 @@ function ProjectItem({
 			onClick={isEditing ? undefined : onClick}
 			onContextMenu={onContextMenu}
 			className={cn(
-				"w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2",
+				"w-full flex items-center px-2 py-1 transition-colors group text-left",
 				isActive
-					? `${colors.border} bg-sidebar-accent`
-					: `${colors.borderMuted} hover:bg-sidebar-accent/50`,
+					? "bg-sidebar-accent"
+					: "hover:bg-sidebar-accent/50",
 			)}
 			aria-current={isActive ? "page" : undefined}
 			aria-label={`Project: ${project.name}${isActive ? " (active)" : ""}`}
 			data-testid={`project-item-${project.id}`}
 		>
-			{/* Circular avatar with first letter */}
 			<div
 				className={cn(
-					"w-4 h-4 rounded-full flex items-center justify-center ml-2 mr-2 flex-shrink-0",
+					"w-3 h-3 rounded-full flex-shrink-0",
 					colors.bg,
+					isActive && "ring-1 ring-offset-1 ring-offset-sidebar ring-primary",
 				)}
 				aria-hidden="true"
-			>
-				<span
-					className="text-[10px] leading-none text-white"
-					data-testid="project-avatar-letter"
-				>
-					{firstLetter}
-				</span>
-			</div>
+			/>
 			{isEditing ? (
 				<input
 					ref={inputRef}
@@ -798,15 +786,15 @@ function ProjectItem({
 					onChange={(e) => onEditNameChange(e.target.value)}
 					onKeyDown={handleKeyDown}
 					onBlur={onSaveRename}
-					className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+					className="flex-1 bg-sidebar-accent border border-border rounded px-1.5 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary ml-2"
 					onClick={(e) => e.stopPropagation()}
 				/>
 			) : (
 				<span
 					className={cn(
-						"text-sm transition-colors flex-1 mr-2",
+						"text-xs transition-colors flex-1 ml-2 truncate",
 						isActive
-							? "text-foreground"
+							? "text-foreground font-medium"
 							: "text-muted-foreground group-hover:text-foreground",
 					)}
 				>
@@ -814,14 +802,14 @@ function ProjectItem({
 				</span>
 			)}
 			{hasError && (
-				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
-					<AlertTriangle size={12} />
+				<span className="flex items-center ml-auto text-yellow-500 animate-pulse" title="Terminal crashed">
+					<AlertTriangle size={10} />
 				</span>
 			)}
 			{!isEditing && shortcut && (
 				<span
 					className={cn(
-						"text-xs font-mono text-muted-foreground transition-opacity mr-3",
+						"text-[10px] font-mono text-muted-foreground/60 transition-opacity ml-auto",
 						isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
 					)}
 				>
@@ -829,11 +817,8 @@ function ProjectItem({
 				</span>
 			)}
 			{!isEditing && hasActivity && (
-				<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>
-					<Loader2
-						size={12}
-						className={"animate-spin text-primary opacity-100"}
-					/>
+				<span className="flex items-center ml-auto" title="Terminal activity" style={{ isolation: "isolate" }}>
+					<Loader2 size={10} className="animate-spin text-primary" />
 				</span>
 			)}
 		</button>
@@ -863,41 +848,32 @@ function ArchivedProjectItem({
 			onClick={onClick}
 			onContextMenu={onContextMenu}
 			className={cn(
-				"w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100",
-				colors.borderMuted,
+				"w-full flex items-center px-2 py-1 transition-colors group text-left opacity-50 hover:opacity-80",
 			)}
 			aria-label={`Archived project: ${project.name}`}
 			data-testid={`archived-project-item-${project.id}`}
 		>
-			{/* Circular avatar with first letter */}
 			<div
 				className={cn(
-					"w-4 h-4 rounded-full flex items-center justify-center ml-2 mr-2 flex-shrink-0",
+					"w-3 h-3 rounded-full flex-shrink-0",
 					colors.bg,
 				)}
 				aria-hidden="true"
-			>
-				<span
-					className="text-[10px] leading-none text-white"
-					data-testid="project-avatar-letter"
-				>
-					{firstLetter}
-				</span>
-			</div>
-			<span className="text-sm text-muted-foreground group-hover:text-foreground flex-1">
+			/>
+			<span className="text-xs text-muted-foreground group-hover:text-foreground flex-1 ml-2 truncate">
 				{project.name}
 			</span>
 			{hasActivity && (
-				<span className="flex items-center mr-2" title="Terminal activity" style={{ isolation: "isolate" }}>
+				<span className="flex items-center ml-auto" title="Terminal activity" style={{ isolation: "isolate" }}>
 					<Loader2 size={10} className="animate-spin text-primary opacity-60" />
 				</span>
 			)}
 			{hasError && (
-				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+				<span className="flex items-center ml-auto text-yellow-500 animate-pulse" title="Terminal crashed">
 					<AlertTriangle size={10} />
 				</span>
 			)}
-			<Archive size={12} className="text-muted-foreground mr-3" />
+			<Archive size={10} className="text-muted-foreground/40 ml-1" />
 		</button>
 	);
 }

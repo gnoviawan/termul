@@ -59,10 +59,10 @@ export function useAddCommand(): (
         timestamp: Date.now()
       })
 
-      // Persist after adding
+      // Persist after adding (debounced to avoid disk write per command)
       const { entries } = useCommandHistoryStore.getState()
       const projectEntries = entries.filter((e) => e.projectId === projectId)
-      await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+      await persistenceApi.writeDebounced(COMMAND_HISTORY_KEY(projectId), projectEntries)
     },
     [addCommand]
   )
