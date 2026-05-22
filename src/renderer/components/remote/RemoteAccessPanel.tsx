@@ -251,6 +251,12 @@ export function RemoteAccessPanel(): React.JSX.Element {
     }
   }
 
+  const handleCopyLocalUrl = async () => {
+    const url = wsStatus.httpUrl || `http://localhost:${WS_PORT}`
+    await navigator.clipboard.writeText(url)
+    toast.success('Local address copied')
+  }
+
   const handleCopyWsUrl = async () => {
     const url = publicUrl || wsStatus.httpUrl || `http://localhost:${WS_PORT}`
     await navigator.clipboard.writeText(url)
@@ -425,7 +431,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
                   <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest px-1">Local Address</label>
                   <div
                     className="flex items-center gap-2 bg-muted/50 hover:bg-muted border border-border p-3 rounded-2xl cursor-pointer group transition-colors"
-                    onClick={handleCopyWsUrl}
+                    onClick={handleCopyLocalUrl}
                     title="Click to copy"
                   >
                     <code className="text-xs text-muted-foreground font-mono truncate flex-1">
@@ -433,7 +439,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
                     </code>
                     <button
                       className="flex items-center gap-1 px-2.5 py-1 bg-background group-hover:bg-primary group-hover:text-primary-foreground rounded-xl border text-[11px] font-medium transition-colors shrink-0"
-                      onClick={(e) => { e.stopPropagation(); handleCopyWsUrl() }}
+                      onClick={(e) => { e.stopPropagation(); handleCopyLocalUrl() }}
                     >
                       <Copy size={11} /> Copy
                     </button>

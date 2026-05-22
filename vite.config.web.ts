@@ -16,8 +16,9 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     outDir: 'dist-web',
+    emptyOutDir: true,
     rollupOptions: {
-      input: path.resolve(__dirname, './src/renderer/web-main.tsx'),
+      input: path.resolve(__dirname, './web-index.html'),
     },
   },
   define: {

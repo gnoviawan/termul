@@ -9,6 +9,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use std::path::{Path, PathBuf};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -46,6 +47,56 @@ async fn http_route_handler(State(state): State<super::AppState>, headers: Heade
         index_handler(State(state)).await
     } else {
         Html(login_page_html()).into_response()
+    }
+}
+
+async fn static_asset_handler(
+    State(state): State<super::AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_path): axum::extract::Path<String>,
+) -> Response {
+    let connection_context = state.server.get_connection_context().await;
+    let cookie_valid = is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0);
+    if !cookie_valid {
+        return Html(login_page_html()).into_response();
+    }
+
+    let dist_dir = if Path::new("../dist-web").is_dir() {
+        PathBuf::from("../dist-web")
+    } else {
+        PathBuf::from("dist-web")
+    };
+    let safe_path = request_path.trim_start_matches('/');
+    let candidate = dist_dir.join(safe_path);
+    let file_path = if candidate.is_file() {
+        candidate
+    } else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mime = mime_for_path(&file_path);
+            let mut response = Response::new(bytes.into());
+            response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+            response
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn mime_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+        "js" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "json" => "application/json; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        _ => "application/octet-stream",
     }
 }
 
@@ -523,7 +574,7 @@ impl WsServer {
         let index_html = get_index_html();
 
         let app_state = super::AppState {
-            index_html: index_html.to_string(),
+            index_html,
             app_handle: app_handle.clone(),
             server: self.clone(),
         };
@@ -532,6 +583,7 @@ impl WsServer {
         let http_app = Router::new()
             .route("/", get(http_route_handler))
             .route("/login", post(login_handler))
+            .route("/*path", get(static_asset_handler))
             .fallback(get(http_route_handler));
 
         let app = ws_app
