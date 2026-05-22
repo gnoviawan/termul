@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
@@ -800,6 +802,16 @@ fn detect_rg_path() -> String {
     detected
 }
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn configure_background_command(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
@@ -880,12 +892,10 @@ pub async fn search_content_stream(
     let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let mut child = match Command::new(&rg_path)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    configure_background_command(&mut rg_command);
+    let mut child = match rg_command.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = app_handle.emit(
@@ -1162,7 +1172,10 @@ pub async fn search_content(
     let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let output = Command::new(&rg_path).args(args).output();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args);
+    configure_background_command(&mut rg_command);
+    let output = rg_command.output();
     let output = match output {
         Ok(o) => o,
         Err(e) => {
