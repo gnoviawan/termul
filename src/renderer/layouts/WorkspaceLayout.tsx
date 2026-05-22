@@ -90,6 +90,7 @@ import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
+import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -115,6 +116,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const location = useLocation();
 	const navigate = useNavigate();
 	const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+	const hiddenBrowserTabForModalRef = useRef<string | null>(null);
 	const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 	const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false);
 	const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] =
@@ -809,6 +811,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		isExplorerVisible,
 		isSidebarVisible,
 	]);
+
+	useEffect(() => {
+		if (isNewProjectModalOpen) {
+			if (activeTab?.type === "browser") {
+				hiddenBrowserTabForModalRef.current = activeTab.browserTabId;
+				browserTabHide(activeTab.browserTabId).catch(console.error);
+			}
+			return;
+		}
+
+		const hiddenBrowserTabId = hiddenBrowserTabForModalRef.current;
+		if (hiddenBrowserTabId) {
+			browserTabShow(hiddenBrowserTabId).catch(console.error);
+			hiddenBrowserTabForModalRef.current = null;
+		}
+	}, [isNewProjectModalOpen, activeTab]);
 
 	// Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
 	useEffect(() => {
