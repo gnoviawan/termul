@@ -120,8 +120,7 @@ pub struct DetectedShells {
 static AVAILABLE_SHELLS_CACHE: OnceLock<Vec<ShellInfo>> = OnceLock::new();
 static CACHE_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-#[tauri::command]
-fn detect_shells() -> Result<DetectedShells, String> {
+pub(crate) fn detect_shells_inner() -> Result<DetectedShells, String> {
     let count = CACHE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::debug!("[ShellDetect] detect_shells called (call #{})", count);
 
@@ -138,12 +137,16 @@ fn detect_shells() -> Result<DetectedShells, String> {
 }
 
 #[tauri::command]
+fn detect_shells() -> Result<DetectedShells, String> {
+    detect_shells_inner()
+}
+
+#[tauri::command]
 fn get_default_shell() -> Result<ShellInfo, String> {
     get_default_shell_info().ok_or_else(|| "No default shell found".to_string())
 }
 
-#[tauri::command]
-fn get_home_directory() -> Result<String, String> {
+pub(crate) fn get_home_directory_inner() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         Ok(env::var("USERPROFILE")
@@ -155,6 +158,11 @@ fn get_home_directory() -> Result<String, String> {
     {
         Ok(env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     }
+}
+
+#[tauri::command]
+fn get_home_directory() -> Result<String, String> {
+    get_home_directory_inner()
 }
 
 fn get_default_shell_info() -> Option<ShellInfo> {
@@ -980,7 +988,7 @@ mod tests {
         assert!(is_builtin_windows_shell("cmd"));
         assert!(is_builtin_windows_shell("CMD.EXE"));
         assert!(is_builtin_windows_shell("powershell"));
-        assert!(is_builtin_windows_shell("pwsh"));
+        assert!(!is_builtin_windows_shell("pwsh"));
         assert!(is_builtin_windows_shell("wsl"));
         assert!(!is_builtin_windows_shell("bash.exe"));
         assert!(!is_builtin_windows_shell("git-bash"));

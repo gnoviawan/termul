@@ -46,7 +46,7 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
 
   it('should have expected default values', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.fontSize).toBe(14)
-    expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(10000)
+    expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(3000)
     expect(DEFAULT_TERMINAL_OPTIONS.cursorBlink).toBe(false)
   })
 })

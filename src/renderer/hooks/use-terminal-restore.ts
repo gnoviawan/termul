@@ -4,8 +4,7 @@ import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
-import { terminalApi, sessionApi } from '@/lib/api'
-import { shellApi } from '@/lib/shell-api'
+import { terminalApi, sessionApi, shellApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import {
   loadPersistedTerminals,

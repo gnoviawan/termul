@@ -2,6 +2,8 @@ import '@testing-library/jest-dom'
 import React from 'react'
 import { vi } from 'vitest'
 
+;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({
@@ -31,8 +33,26 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn()
+  listen: vi.fn(async () => () => {})
 }))
+
+vi.mock('@tauri-apps/api/window', () => {
+  const mockWindow = {
+    minimize: vi.fn(async () => {}),
+    maximize: vi.fn(async () => {}),
+    unmaximize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    destroy: vi.fn(async () => {}),
+    isMaximized: vi.fn(async () => false),
+    onResized: vi.fn(async () => () => {}),
+    onCloseRequested: vi.fn(async () => () => {})
+  }
+  return {
+    getCurrentWindow: vi.fn(() => mockWindow),
+    LogicalPosition: class {},
+    LogicalSize: class {}
+  }
+})
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readDir: vi.fn(),

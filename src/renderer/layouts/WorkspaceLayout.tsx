@@ -92,6 +92,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { wsServerApi } from "@/lib/ws-server-api";
 import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@/lib/api-bridge";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -306,6 +307,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	}, [projects, activeProjectId]);
 
 	useEffect(() => {
+		if (!isTauri()) return;
+		
 		let unlisten: (() => void) | undefined;
 		async function setup() {
 			try {
@@ -1153,14 +1156,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		(t) => t.id === closeConfirmTerminal?.terminalId,
 	);
 
-	// Show loading state while projects are being loaded
-	if (!isLoaded) {
+	// Show loading state while projects are being loaded (Tauri only – web loads via WS)
+	if (!isLoaded && isTauri()) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
-				<TitleBar
-					isShortcutsOpen={isShortcutMenuOpen}
-					onShortcutsOpenChange={setIsShortcutMenuOpen}
-				/>
+				{isTauri() && (
+					<TitleBar
+						isShortcutsOpen={isShortcutMenuOpen}
+						onShortcutsOpenChange={setIsShortcutMenuOpen}
+					/>
+				)}
 				<div className="flex-1 flex items-center justify-center">
 					<div className="text-muted-foreground text-sm">Loading...</div>
 				</div>
@@ -1170,10 +1175,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
-			<TitleBar
-				isShortcutsOpen={isShortcutMenuOpen}
-				onShortcutsOpenChange={setIsShortcutMenuOpen}
-			/>
+			{isTauri() && (
+				<TitleBar
+					isShortcutsOpen={isShortcutMenuOpen}
+					onShortcutsOpenChange={setIsShortcutMenuOpen}
+				/>
+			)}
 
 			<div className="flex-1 flex overflow-hidden min-h-0 h-full">
 				{/* Sidebar */}
@@ -1261,7 +1268,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						</main>
 
 						{/* File Explorer - separate floating panel */}
-						{isExplorerVisible && activeProject?.path && (
+						{isTauri() && isExplorerVisible && activeProject?.path && (
 							<div className="flex-shrink-0 ml-2">
 								<FileExplorer />
 							</div>

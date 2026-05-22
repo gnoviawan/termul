@@ -377,8 +377,7 @@ function ConnectedTerminalComponent({
 
 		try {
 			isOwnerRef.current = true; // claim before invoke so keypress guard is set
-			const { invoke } = await import("@tauri-apps/api/core");
-			await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+			await terminalApi.takeover(ptyId);
 			
 			setIsSuspended(false);
 			
@@ -458,8 +457,7 @@ function ConnectedTerminalComponent({
 					ptyId,
 				});
 					isOwnerRef.current = true;
-					const { invoke } = await import("@tauri-apps/api/core");
-					await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+					await terminalApi.takeover(ptyId);
 					setIsSuspended(false);
 				} catch (e) {
 					isOwnerRef.current = false;
@@ -473,8 +471,7 @@ function ConnectedTerminalComponent({
 				isOwnerRef.current = true;
 				void (async () => {
 					try {
-						const { invoke } = await import("@tauri-apps/api/core");
-						await invoke("terminal_takeover", { terminalId: ptyId, clientType: "tauri" });
+						await terminalApi.takeover(ptyId);
 					} catch (e) {
 						console.error("Auto-takeover failed:", e);
 					}

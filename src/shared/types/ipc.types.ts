@@ -154,6 +154,8 @@ export interface TerminalApi {
 		enabled: boolean,
 		timeout: number | null,
 	) => Promise<IpcResult<void>>;
+	/** Claim ownership of a terminal, notifying the other side to suspend. */
+	takeover: (terminalId: string) => Promise<IpcResult<void>>;
 }
 
 // Error codes

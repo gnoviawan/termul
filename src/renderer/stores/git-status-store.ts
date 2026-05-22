@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { gitApi } from "@/lib/git-api";
+import { gitApi } from "@/lib/api";
 import { GitStatusDetail } from "@shared/types/ipc.types";
 
 export interface GitStatusState {

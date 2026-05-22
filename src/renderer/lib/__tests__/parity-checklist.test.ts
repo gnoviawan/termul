@@ -77,44 +77,104 @@ function apiBridgeUsesTauriAdapter(exportName: string, tauriAdapterFile: string)
   const apiPath = join(LIB_DIR, 'api.ts')
   if (!existsSync(apiPath)) return false
 
-  const content = readFileSync(apiPath, 'utf-8')
+  const visited = new Set<string>()
 
-  // Check that the export exists
-  const exportPattern = new RegExp(`export.*\\b${exportName}\\b`, 'm')
-  if (!exportPattern.test(content)) return false
+  function checkExportWired(filePath: string, expName: string, adapterFile: string): boolean {
+    const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase()
+    if (visited.has(normalizedPath)) return false
+    visited.add(normalizedPath)
 
-  // Pattern 1: Direct export from adapter file (e.g., export { terminalApi } from './terminal-api')
-  const directExportMatch = content.match(
-    new RegExp(`export\\s+\\{[^}]*\\b${exportName}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`)
-  )
+    if (!existsSync(filePath)) return false
+    const content = readFileSync(filePath, 'utf-8')
 
-  if (directExportMatch) {
-    const importPath = directExportMatch[1]
-    // Check if the imported file uses Tauri adapter
-    const adapterPath = join(LIB_DIR, `${importPath}.ts`)
-    if (existsSync(adapterPath)) {
-      const adapterContent = readFileSync(adapterPath, 'utf-8')
-      // Check for imports from tauri- files or createTauriXxxApi pattern
-      return (
-        adapterContent.includes(`from './${tauriAdapterFile}'`) ||
-        adapterContent.includes(`from "./${tauriAdapterFile}"`) ||
-        adapterContent.includes('createTauri') ||
-        adapterContent.includes('tauri' + exportName.charAt(0).toUpperCase() + exportName.slice(1)) // e.g., tauriSessionApi
-      )
+    // Clean extension for direct imports
+    const adapterBase = adapterFile.replace('.ts', '')
+    if (
+      content.includes(`./${adapterBase}`) ||
+      content.includes(`from './${adapterBase}'`) ||
+      content.includes(`from "./${adapterBase}"`)
+    ) {
+      return true
     }
+
+    // Look for proxy: export const terminalApi = createProxy(tauriTerminalApi, wsTerminalApi)
+    const proxyRegex = new RegExp(`export\\s+const\\s+${expName}\\s*=\\s*(?:createProxy|new Proxy)\\s*\\(\\s*(\\w+)`, 'm')
+    const proxyMatch = content.match(proxyRegex)
+    if (proxyMatch) {
+      const tauriApiVar = proxyMatch[1]
+      // Check if it is imported
+      const varImportRegex = new RegExp(`import\\s+\\{[^}]*\\b${tauriApiVar}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`, 'm')
+      const varImportMatch = content.match(varImportRegex)
+      if (varImportMatch) {
+        const importPath = varImportMatch[1]
+        const importedFilePath = join(join(filePath, '..'), `${importPath}.ts`)
+        if (checkExportWired(importedFilePath, tauriApiVar, adapterFile)) {
+          return true
+        }
+      }
+    }
+
+    // Look for re-exports: export { _systemApi as systemApi } from './api-bridge'
+    const reexportRegex = /export\s+\{([^}]+)\}\s*(?:from\s+['"]([^'"]+)['"])?/g
+    let reexportMatch
+    while ((reexportMatch = reexportRegex.exec(content)) !== null) {
+      const clause = reexportMatch[1]
+      const fromPath = reexportMatch[2]
+      const specifiers = clause.split(',')
+      for (const spec of specifiers) {
+        const parts = spec.trim().split(/\s+as\s+/)
+        const originalName = parts[0].trim()
+        const exportedName = parts[1] ? parts[1].trim() : originalName
+        if (exportedName === expName) {
+          if (fromPath) {
+            const importedFilePath = join(join(filePath, '..'), `${fromPath}.ts`)
+            if (checkExportWired(importedFilePath, originalName, adapterFile)) {
+              return true
+            }
+          } else {
+            // Check local import for originalName
+            const localImportRegex = new RegExp(`import\\s+\\{[^}]*\\b${originalName}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`, 'm')
+            const localImportMatch = content.match(localImportRegex)
+            if (localImportMatch) {
+              const importPath = localImportMatch[1]
+              const importedFilePath = join(join(filePath, '..'), `${importPath}.ts`)
+              if (checkExportWired(importedFilePath, originalName, adapterFile)) {
+                return true
+              }
+            }
+            // Check alias local import: e.g. systemApi as _systemApi
+            const aliasImportRegex = new RegExp(`import\\s+\\{[^}]*\\b(\\w+)\\s+as\\s+\\b${originalName}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`, 'm')
+            const aliasImportMatch = content.match(aliasImportRegex)
+            if (aliasImportMatch) {
+              const importedName = aliasImportMatch[1]
+              const importPath = aliasImportMatch[2]
+              const importedFilePath = join(join(filePath, '..'), `${importPath}.ts`)
+              if (checkExportWired(importedFilePath, importedName, adapterFile)) {
+                return true
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Look for normal imports re-exported:
+    // e.g. import { keyboardApi } from './keyboard-api'
+    // export { keyboardApi }
+    const normalImportRegex = new RegExp(`import\\s+\\{[^}]*\\b${expName}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`, 'm')
+    const normalImportMatch = content.match(normalImportRegex)
+    if (normalImportMatch) {
+      const importPath = normalImportMatch[1]
+      const importedFilePath = join(join(filePath, '..'), `${importPath}.ts`)
+      if (checkExportWired(importedFilePath, expName, adapterFile)) {
+        return true
+      }
+    }
+
+    return false
   }
 
-  // Pattern 2: Explicit Tauri export without Electron fallback.
-  // The key indicators are:
-  // a) Import from the Tauri adapter file (without .ts extension in imports)
-  // b) Export of the API name (already checked above)
-
-  // Remove .ts extension for import check
-  const adapterFileWithoutExt = tauriAdapterFile.replace('.ts', '')
-  const hasTauriImport = content.includes(`from './${adapterFileWithoutExt}'`) ||
-    content.includes(`from "./${adapterFileWithoutExt}"`)
-
-  return hasTauriImport
+  return checkExportWired(apiPath, exportName, tauriAdapterFile)
 }
 
 /**

@@ -86,7 +86,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
   const handleBrowse = useCallback(async () => {
     const result = await dialogApi.selectDirectory()
-    if (result.success) {
+    if (result.success && result.data) {
       setPath(result.data)
     }
   }, [])

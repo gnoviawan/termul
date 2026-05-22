@@ -15,11 +15,15 @@ export const tauriDialogApi = {
     }
   },
 
-  async selectFile(options?: { filters?: Array<{ name: string; extensions: string[] }> }): Promise<IpcResult<string | null>> {
+  async selectFile(options?: {
+    filters?: Array<{ name: string; extensions: string[] }>;
+    title?: string;
+  }): Promise<IpcResult<string | null>> {
     try {
       const selected = await open({
         multiple: false,
         filters: options?.filters,
+        title: options?.title,
       });
       return { success: true, data: selected as string | null };
     } catch (err) {
@@ -27,10 +31,14 @@ export const tauriDialogApi = {
     }
   },
 
-  async saveFile(options?: { filters?: Array<{ name: string; extensions: string[] }> }): Promise<IpcResult<string | null>> {
+  async saveFile(options?: {
+    filters?: Array<{ name: string; extensions: string[] }>;
+    title?: string;
+  }): Promise<IpcResult<string | null>> {
     try {
       const saved = await save({
         filters: options?.filters,
+        title: options?.title,
       });
       return { success: true, data: saved as string | null };
     } catch (err) {

@@ -20,12 +20,15 @@ import {
 import { useWsServerStore } from '@/stores/ws-server-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useTunnelStore } from '@/stores/tunnel-store'
-import { tunnelApi } from '@/lib/tunnel-api'
+import { tunnelApi } from '@/lib/api'
 import { wsServerApi } from '@/lib/ws-server-api'
+import { openerApi } from '@/lib/tauri-opener-api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { ConnectionAudit } from '@/lib/ws-server-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { listen } from '@tauri-apps/api/event'
+
 
 const WS_PORT = 9876
 const TUNNEL_ID = 'termul-web-tunnel'
@@ -108,6 +111,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (!isTauriContext()) return
     const unlistenPromise = listen<{ id: string; data: string }>('terminal-data', ({ payload }) => {
       setRuntimeStream((prev) => {
         const next = [...prev, { type: 'data' as const, text: `[${payload.id}] ${sanitizeRuntimeText(payload.data)}` }]
@@ -164,7 +168,9 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   useEffect(() => {
     if (pauseAutoscroll) return
-    runtimeStreamRef.current?.scrollTo({ top: runtimeStreamRef.current.scrollHeight, behavior: 'smooth' })
+    if (typeof runtimeStreamRef.current?.scrollTo === 'function') {
+      runtimeStreamRef.current.scrollTo({ top: runtimeStreamRef.current.scrollHeight, behavior: 'smooth' })
+    }
   }, [runtimeStream, pauseAutoscroll])
 
   const copyRuntimeStream = async (): Promise<void> => {
@@ -265,7 +271,11 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
   const handleOpenBrowser = async () => {
     const url = publicUrl || wsStatus.httpUrl || `http://localhost:${WS_PORT}`
-    window.open(url, '_blank')
+    const result = await openerApi.openUrlWithSystemBrowser(url)
+    if (!result.success) {
+      await navigator.clipboard.writeText(url)
+      toast.error('Failed to open browser, URL copied to clipboard')
+    }
   }
 
   const handleRotateToken = async () => {

@@ -8,24 +8,70 @@
  *   import { terminalApi, clipboardApi, systemApi } from '@/lib/api'
  */
 
-export { terminalApi, addRendererRef, removeRendererRef } from './terminal-api'
-export { clipboardApi } from './clipboard-api'
-export { systemApi } from './system-api'
-export { persistenceApi } from './persistence-api'
-export { windowApi } from './window-api'
-export { keyboardApi } from './keyboard-api'
-export { visibilityApi } from './visibility-api'
-export { filesystemApi } from './filesystem-api'
-export { dialogApi } from './dialog-api'
-export { shellApi } from './shell-api'
-export { gitApi } from './git-api'
-export { openerApi } from './tauri-opener-api'
-export { tunnelApi } from './tunnel-api'
-export * as tauriUpdaterApi from './tauri-updater-api'
-export * as tauriVersionSkipService from './tauri-version-skip'
-export { hasActiveTerminalSessions } from './tauri-safe-update'
+import { tauriTerminalApi, addRendererRef, removeRendererRef } from './terminal-api'
+import {
+  clipboardApi as _clipboardApi,
+  systemApi as _systemApi,
+  persistenceApi as _persistenceApi,
+  windowApi as _windowApi,
+  filesystemApi as _filesystemApi,
+  dialogApi as _dialogApi
+} from './api-bridge'
+import { keyboardApi } from './keyboard-api'
+import { visibilityApi } from './visibility-api'
+import { shellApi as tauriShellApi } from './shell-api'
+import { tauriGitApi } from './git-api'
+import { openerApi } from './tauri-opener-api'
+import { tauriTunnelApi } from './tunnel-api'
+import * as tauriUpdaterApi from './tauri-updater-api'
+import * as tauriVersionSkipService from './tauri-version-skip'
+import { hasActiveTerminalSessions } from './tauri-safe-update'
 import { tauriSessionApi } from './tauri-session-api'
 import { createTauriDataMigrationApi } from './tauri-data-migration-api'
+import { isTauri } from './api-bridge'
+import { wsGitApi, wsTunnelApi, wsTerminalApi, wsShellApi } from './ws-api-adapters'
+
+function createProxy<T extends object>(tauriApi: T, wsApi: T): T {
+  return new Proxy(tauriApi, {
+    get(target, prop, receiver) {
+      if (!isTauri()) {
+        const wsValue = Reflect.get(wsApi, prop, wsApi)
+        if (typeof wsValue === 'function') {
+          return wsValue.bind(wsApi)
+        }
+        return wsValue
+      }
+      const tauriValue = Reflect.get(target, prop, receiver)
+      if (typeof tauriValue === 'function') {
+        return tauriValue.bind(target)
+      }
+      return tauriValue
+    }
+  })
+}
+
+export const terminalApi = createProxy(tauriTerminalApi, wsTerminalApi)
+export const gitApi = createProxy(tauriGitApi, wsGitApi)
+export const tunnelApi = createProxy(tauriTunnelApi, wsTunnelApi)
+export const shellApi = createProxy(tauriShellApi, wsShellApi)
+
+export { addRendererRef, removeRendererRef }
+export {
+  _clipboardApi as clipboardApi,
+  _systemApi as systemApi,
+  _persistenceApi as persistenceApi,
+  _windowApi as windowApi,
+  keyboardApi,
+  visibilityApi,
+  _filesystemApi as filesystemApi,
+  _dialogApi as dialogApi,
+  openerApi,
+  tauriUpdaterApi,
+  tauriVersionSkipService,
+  hasActiveTerminalSessions
+}
+
+
 
 export const sessionApi = tauriSessionApi
 export const dataMigrationApi = createTauriDataMigrationApi()

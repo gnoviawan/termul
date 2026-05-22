@@ -22,7 +22,7 @@
 				"minHeight": 600,
 				"decorations": false,
 				"maximized": true,
-				"visible": false,
+				"visible": true,
 				"transparent": false,
 				"dragDropEnabled": false
 			}

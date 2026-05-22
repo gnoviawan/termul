@@ -56,7 +56,8 @@ const IPC_COMMANDS = {
   GET_EXIT_CODE: 'terminal_get_exit_code',
   UPDATE_ORPHAN_DETECTION: 'terminal_update_orphan_detection',
   ADD_RENDERER_REF: 'terminal_add_renderer_ref',
-  REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref'
+  REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref',
+  TAKEOVER: 'terminal_takeover'
 } as const
 
 /**
@@ -494,6 +495,14 @@ export function createTauriTerminalApi(): TerminalApi {
         timeoutMinutes: timeout ? Math.floor(timeout / 60000) : null
       }
       return invokeIpc<void>(IPC_COMMANDS.UPDATE_ORPHAN_DETECTION, { settings })
+    },
+
+    /**
+     * Claim ownership of a terminal (Tauri-side takeover).
+     * Emits `terminal-takeover` event with clientType=\"tauri\" so the web side suspends.
+     */
+    async takeover(terminalId: string): Promise<IpcResult<void>> {
+      return invokeIpc<void>(IPC_COMMANDS.TAKEOVER, { terminalId, clientType: 'tauri' })
     }
   }
 }

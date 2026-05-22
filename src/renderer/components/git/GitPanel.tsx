@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { gitApi } from "@/lib/git-api";
+import { gitApi } from "@/lib/api";
 import { toast } from "sonner";
 import { GitFileStatus, GitStatusDetail } from "@shared/types/ipc.types";
 

@@ -1,6 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { AnnotationSubMode } from '@/stores/browser-session-store'
+import { isTauriContext } from './tauri-runtime'
+
+const NOT_SUPPORTED: { success: false; error: string; code: string } = {
+  success: false,
+  error: 'Browser webview not supported in web context',
+  code: 'NOT_SUPPORTED'
+}
+
 
 export interface BrowserBounds {
   x: number
@@ -93,6 +101,7 @@ export async function browserTabCreate(
   url: string,
   bounds: BrowserBounds
 ): Promise<IpcResult<BrowserTabInfo>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_create', { tabId, url, bounds })
 }
 
@@ -100,6 +109,7 @@ export async function browserTabNavigate(
   tabId: string,
   url: string
 ): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_navigate', { tabId, url })
 }
 
@@ -107,34 +117,42 @@ export async function browserTabResize(
   tabId: string,
   bounds: BrowserBounds
 ): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_resize', { tabId, bounds })
 }
 
 export async function browserTabShow(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_show', { tabId })
 }
 
 export async function browserTabHide(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_hide', { tabId })
 }
 
 export async function browserTabDestroy(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_destroy', { tabId })
 }
 
 export async function browserTabGoBack(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_go_back', { tabId })
 }
 
 export async function browserTabGoForward(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_go_forward', { tabId })
 }
 
 export async function browserTabReload(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_reload', { tabId })
 }
 
 export async function browserTabOpenDevtools(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_open_devtools', { tabId })
 }
 
@@ -143,6 +161,10 @@ function createBrowserEventSubscription<T>(
   eventName: string,
   callback: (payload: T) => void
 ): BrowserEventSubscription {
+  if (!isTauriContext()) {
+    return { unlisten: () => {} }
+  }
+
   let resolvedUnlisten: UnlistenFn | null = null
   let unlistenCalledEarly = false
 
@@ -174,10 +196,12 @@ export async function browserTabInjectAnnotation(
   tabId: string,
   mode: AnnotationSubMode
 ): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_inject_annotation', { tabId, mode })
 }
 
 export async function browserTabRemoveAnnotationOverlay(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_remove_annotation_overlay', { tabId })
 }
 
@@ -216,6 +240,7 @@ export async function browserTabInjectAnnotationMarkers(
   annotations: MarkerAnnotation[],
   selectedId: string | null
 ): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_inject_annotation_markers', { tabId, annotationsJson: JSON.stringify(annotations), selectedId })
 }
 
@@ -223,6 +248,7 @@ export async function browserTabUpdateAnnotationMarkerSelection(
   tabId: string,
   selectedId: string | null
 ): Promise<IpcResult<void>> {
+  if (!isTauriContext()) return NOT_SUPPORTED
   return invoke('browser_tab_update_annotation_marker_selection', { tabId, selectedId })
 }
 

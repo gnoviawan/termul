@@ -36,13 +36,11 @@ describe('WebApp', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders mode buttons after connect', () => {
+  it('renders workspace empty state after connect', () => {
     render(<WebApp />)
     return waitFor(() => {
-      expect(screen.getByLabelText('Terminal')).toBeTruthy()
-      expect(screen.getByLabelText('Browser')).toBeTruthy()
-      expect(screen.getByLabelText('Git')).toBeTruthy()
-      expect(screen.getByLabelText('Tunnel')).toBeTruthy()
+      expect(screen.getByText('No Projects Yet')).toBeInTheDocument()
+      expect(screen.getByText('No projects yet')).toBeInTheDocument()
     })
   })
 })

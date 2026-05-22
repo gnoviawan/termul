@@ -63,7 +63,7 @@ describe("terminalFactory", () => {
 			// Default options from terminal-config
 			expect(terminal.options.cursorBlink).toBe(false);
 			expect(terminal.options.cursorStyle).toBe("block");
-			expect(terminal.options.scrollback).toBe(10000);
+			expect(terminal.options.scrollback).toBe(3000);
 		});
 
 		it("should allow overriding default options", () => {

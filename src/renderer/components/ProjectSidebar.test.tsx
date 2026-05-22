@@ -271,7 +271,7 @@ describe('ProjectSidebar', () => {
   it('should show version label at the bottom', async () => {
     await renderWithRouter({})
 
-    expect(screen.getByText(/Termul v/)).toBeInTheDocument()
+    expect(screen.getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument()
   })
 
   it('should show empty state when no projects', async () => {

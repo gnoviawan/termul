@@ -19,7 +19,7 @@ import type { TerminalApi } from '@shared/types/ipc.types'
  * In the future, this could conditionally export an Electron implementation
  * based on build environment.
  */
-export const terminalApi: TerminalApi = createTauriTerminalApi()
+export const tauriTerminalApi: TerminalApi = createTauriTerminalApi()
 
 // Re-export internal renderer ref methods for ConnectedTerminal component
 export { addRendererRef, removeRendererRef } from './tauri-terminal-api'

@@ -41,7 +41,7 @@ function createListener<T>(eventName: string, callback: (payload: T) => void): (
   return () => cleanupTauriListener(unlisten)
 }
 
-export const tunnelApi: TunnelApi = {
+export const tauriTunnelApi: TunnelApi = {
   start(config: TunnelConfig): Promise<IpcResult<TunnelSession>> {
     return invokeIpc<TunnelSession>(CMD.START, { config })
   },

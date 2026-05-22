@@ -45,8 +45,8 @@ describe('tauri-terminal-api', () => {
 
     eventHandler?.({ payload: { id: 'pty-1', data: 'hello' } })
 
-    expect(callbackA).toHaveBeenCalledWith('pty-1', 'hello')
-    expect(callbackB).toHaveBeenCalledWith('pty-1', 'hello')
+    expect(callbackA).toHaveBeenCalledWith('pty-1', new TextEncoder().encode('hello'))
+    expect(callbackB).toHaveBeenCalledWith('pty-1', new TextEncoder().encode('hello'))
 
     unsubscribeA()
     expect(unlisten).not.toHaveBeenCalled()

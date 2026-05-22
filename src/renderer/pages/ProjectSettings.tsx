@@ -121,7 +121,7 @@ export default function ProjectSettings() {
       return
     }
 
-    if (!fileResult.success) {
+    if (!fileResult.success || !fileResult.data) {
       // User cancelled - not an error
       return
     }
@@ -242,7 +242,7 @@ export default function ProjectSettings() {
                       <button
                         onClick={async () => {
                           const result = await dialogApi.selectDirectory()
-                          if (result.success) {
+                          if (result.success && result.data) {
                             setRootPath(result.data)
                             setHasChanges(true)
                           }

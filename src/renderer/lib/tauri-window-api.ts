@@ -190,5 +190,11 @@ export const tauriWindowApi = {
       const size = await getCurrentWindow().outerSize()
       return { width: size.width, height: size.height }
     }, 'SIZE_ERROR')
+  },
+
+  respondToClose(response: 'close' | 'cancel'): void {
+    if (response === 'close') {
+      void getCurrentWindow().destroy()
+    }
   }
 }

@@ -21,6 +21,7 @@ const {
   useTunnelStoreMock,
   clipboardWriteText,
   mockWindowOpen,
+  mockOpenUrlWithSystemBrowser,
   handlers
 } = vi.hoisted(() => {
   const mockToast = {
@@ -90,6 +91,7 @@ const {
 
   const clipboardWriteText = vi.fn().mockResolvedValue(undefined)
   const mockWindowOpen = vi.fn()
+  const mockOpenUrlWithSystemBrowser = vi.fn().mockResolvedValue({ success: true })
   const handlers = {
     tunnelStatus: undefined as ((event: { tunnelId: string; status: string; publicUrl?: string | null; lastError?: string | null }) => void) | undefined,
     wsStatus: undefined as ((status: typeof wsState.status) => void) | undefined
@@ -114,6 +116,7 @@ const {
     useTunnelStoreMock,
     clipboardWriteText,
     mockWindowOpen,
+    mockOpenUrlWithSystemBrowser,
     handlers
   }
 })
@@ -122,8 +125,8 @@ vi.mock('sonner', () => ({ toast: mockToast }))
 vi.mock('@/stores/ws-server-store', () => ({ useWsServerStore: useWsServerStoreMock }))
 vi.mock('@/stores/project-store', () => ({ useActiveProject: mockActiveProject, useProjectStore: useProjectStoreMock }))
 vi.mock('@/stores/tunnel-store', () => ({ useTunnelStore: useTunnelStoreMock }))
-vi.mock('@/lib/tunnel-api', () => ({
-  tunnelApi: {
+vi.mock('@/lib/tunnel-api', () => {
+  const mockApi = {
     onStatusChanged: vi.fn((callback: (event: { tunnelId: string; status: string; publicUrl?: string | null; lastError?: string | null }) => void) => {
       handlers.tunnelStatus = callback
       return () => {}
@@ -132,7 +135,11 @@ vi.mock('@/lib/tunnel-api', () => ({
     start: mockStartTunnel,
     stop: mockStopTunnel
   }
-}))
+  return {
+    tunnelApi: mockApi,
+    tauriTunnelApi: mockApi
+  }
+})
 vi.mock('@/lib/ws-server-api', () => ({
   wsServerApi: {
     onStatusChanged: vi.fn((callback: (status: typeof wsState.status) => void) => {
@@ -144,6 +151,14 @@ vi.mock('@/lib/ws-server-api', () => ({
     stop: mockStopServer,
     generateToken: mockGenerateToken,
     rotateToken: mockRotateToken
+  }
+}))
+
+vi.mock('@/lib/tauri-opener-api', () => ({
+  openerApi: {
+    openUrlWithSystemBrowser: mockOpenUrlWithSystemBrowser,
+    openWithExternalApp: vi.fn(),
+    revealInFileManager: vi.fn()
   }
 }))
 
@@ -182,6 +197,7 @@ beforeEach(() => {
   })
   clipboardWriteText.mockClear()
   mockWindowOpen.mockClear()
+  mockOpenUrlWithSystemBrowser.mockClear().mockResolvedValue({ success: true })
   vi.spyOn(window, 'open').mockImplementation(mockWindowOpen)
 })
 
@@ -252,7 +268,7 @@ describe('RemoteAccessPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Disconnect/i }))
 
     await waitFor(() => {
-      expect(window.open).toHaveBeenCalledWith('https://example.trycloudflare.com', '_blank')
+      expect(mockOpenUrlWithSystemBrowser).toHaveBeenCalledWith('https://example.trycloudflare.com')
       expect(clipboardWriteText).toHaveBeenCalledWith('https://example.trycloudflare.com')
       expect(mockStopTunnel).toHaveBeenCalledWith('termul-web-tunnel')
       expect(mockStopServer).toHaveBeenCalledTimes(1)

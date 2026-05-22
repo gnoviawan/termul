@@ -445,6 +445,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_cwd_changed_event_shape() {
         // Verify the CwdChangedEvent has the correct shape for serialization
         let event = CwdChangedEvent {

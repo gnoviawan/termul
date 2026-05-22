@@ -875,28 +875,6 @@ impl PtyManager {
             }
         };
 
-        if on_data.is_none() {
-            // No binary channel — read and discard flusher
-            loop {
-                std::thread::sleep(FLUSH_INTERVAL);
-                if done_flag.load(Ordering::Acquire) {
-                    break;
-                }
-                // Drain pending buffer silently
-                if let Ok(mut guard) = pending_buf.lock() {
-                    guard.clear();
-                }
-            }
-            // Final drain
-            if let Ok(mut guard) = pending_buf.lock() {
-                guard.clear();
-            }
-            log::info!("[PTY {}] Flusher thread ended (no channel)", id);
-            return;
-        }
-
-        let channel = on_data.unwrap();
-
         loop {
             std::thread::sleep(FLUSH_INTERVAL);
 
@@ -917,8 +895,10 @@ impl PtyManager {
                 };
                 if let Some(data) = chunk {
                     emit_terminal_data(&data);
-                    if let Err(e) = channel.send(Response::new(data)) {
-                        log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                    if let Some(ref channel) = on_data {
+                        if let Err(e) = channel.send(Response::new(data)) {
+                            log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                        }
                     }
                 }
                 break;
@@ -939,8 +919,10 @@ impl PtyManager {
 
             if let Some(data) = chunk {
                 emit_terminal_data(&data);
-                if let Err(e) = channel.send(Response::new(data)) {
-                    log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                if let Some(ref channel) = on_data {
+                    if let Err(e) = channel.send(Response::new(data)) {
+                        log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                    }
                 }
             }
         }

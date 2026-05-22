@@ -24,9 +24,9 @@ vi.mock('./tauri-runtime', () => ({
   cleanupTauriListener: mockCleanupTauriListener
 }))
 
-import { tunnelApi } from './tunnel-api'
+import { tauriTunnelApi } from './tunnel-api'
 
-describe('tunnelApi', () => {
+describe('tauriTunnelApi', () => {
   beforeEach(() => {
     mockInvoke.mockReset()
     mockListen.mockReset()
@@ -37,10 +37,10 @@ describe('tunnelApi', () => {
   })
 
   it('maps commands to the expected tunnel IPC calls', async () => {
-    await tunnelApi.start({ id: 't1', name: 'Termul', localPort: 3000 })
-    await tunnelApi.stop('t1')
-    await tunnelApi.getStatus('t1')
-    await tunnelApi.list()
+    await tauriTunnelApi.start({ id: 't1', name: 'Termul', localPort: 3000 })
+    await tauriTunnelApi.stop('t1')
+    await tauriTunnelApi.getStatus('t1')
+    await tauriTunnelApi.list()
 
     expect(mockInvoke).toHaveBeenCalledWith('tunnel_start', { config: { id: 't1', name: 'Termul', localPort: 3000 } })
     expect(mockInvoke).toHaveBeenCalledWith('tunnel_stop', { tunnelId: 't1' })
@@ -61,8 +61,8 @@ describe('tunnelApi', () => {
     const onStatusChanged = vi.fn()
     const onLog = vi.fn()
 
-    const removeStatus = tunnelApi.onStatusChanged(onStatusChanged)
-    const removeLog = tunnelApi.onLog(onLog)
+    const removeStatus = tauriTunnelApi.onStatusChanged(onStatusChanged)
+    const removeLog = tauriTunnelApi.onLog(onLog)
 
     statusHandler?.({ payload: { tunnelId: 't1', status: 'running', publicUrl: 'https://example.com' } })
     logHandler?.({ payload: { tunnelId: 't1', line: 'connected' } })
@@ -81,7 +81,7 @@ describe('tunnelApi', () => {
   it('wraps invoke failures into INVOKE_ERROR results', async () => {
     mockInvoke.mockRejectedValueOnce(new Error('boom'))
 
-    const result = await tunnelApi.list()
+    const result = await tauriTunnelApi.list()
 
     expect(result.success).toBe(false)
     if (!result.success) {

@@ -41,8 +41,13 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
   const onData = (callback: (terminalId: string, data: Uint8Array) => void): (() => void) => {
     return ws.listen('terminal-data', (payload) => {
       const terminalId = (payload.id || payload.terminalId) as string
-      const data = payload.data as Uint8Array
-      if (terminalId && data) callback(terminalId, data)
+      const rawData = payload.data
+      if (terminalId && rawData !== undefined) {
+        const data = typeof rawData === 'string'
+          ? new TextEncoder().encode(rawData)
+          : rawData as Uint8Array
+        callback(terminalId, data)
+      }
     })
   }
 
@@ -127,6 +132,15 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
     return { success: true, data: undefined }
   }
 
+  const takeover = async (terminalId: string): Promise<IpcResult<void>> => {
+    try {
+      await ws.invoke('terminal_takeover', { terminalId, clientType: 'web' })
+      return { success: true, data: undefined }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error), code: 'TAKEOVER_FAILED' }
+    }
+  }
+
   return {
     spawn,
     write,
@@ -143,5 +157,6 @@ export function createWsTerminalApi(ws: WsAdapter): TerminalApi {
     onExitCodeChanged,
     getExitCode,
     updateOrphanDetection,
+    takeover,
   }
 }

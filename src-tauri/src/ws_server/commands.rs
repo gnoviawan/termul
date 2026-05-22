@@ -449,6 +449,18 @@ pub(crate) async fn handle_command(
                 Ok(IpcResult::error(format!("Project not found: {}", project_id), "PROJECT_NOT_FOUND"))
             }
         }
+        "detect_shells" => {
+            match crate::detect_shells_inner() {
+                Ok(shells) => Ok(IpcResult::success(serde_json::to_value(&shells).map_err(|e| e.to_string())?)),
+                Err(e) => Ok(IpcResult::error(e, "DETECT_SHELLS_FAILED")),
+            }
+        }
+        "get_home_directory" => {
+            match crate::get_home_directory_inner() {
+                Ok(path) => Ok(IpcResult::success(serde_json::to_value(&path).map_err(|e| e.to_string())?)),
+                Err(e) => Ok(IpcResult::error(e, "GET_HOME_DIRECTORY_FAILED")),
+            }
+        }
         other => {
             Ok(IpcResult::error(format!("Unknown method: {}", other), "METHOD_NOT_FOUND"))
         }

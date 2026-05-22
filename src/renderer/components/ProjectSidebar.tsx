@@ -31,6 +31,7 @@ import { ColorPickerPopover } from "./ColorPickerPopover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
+import { isTauri } from "@/lib/api-bridge";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -423,15 +424,17 @@ const handleSaveSettings = useCallback(() => {
 				<span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
 					Projects
 				</span>
-				<button
-					onClick={onNewProject}
-					className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-					title="New Project"
-					aria-label="Create new project from header"
-					data-testid="header-new-project"
-				>
-					<Plus size={12} className="text-muted-foreground group-hover:text-foreground transition-colors" />
-				</button>
+				{isTauri() && (
+					<button
+						onClick={onNewProject}
+						className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+						title="New Project"
+						aria-label="Create new project from header"
+						data-testid="header-new-project"
+					>
+						<Plus size={12} className="text-muted-foreground group-hover:text-foreground transition-colors" />
+					</button>
+				)}
 			</div>
 
 			{/* Project List */}
@@ -772,12 +775,18 @@ function ProjectItem({
 		>
 			<div
 				className={cn(
-					"w-3 h-3 rounded-full flex-shrink-0",
+					"w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0",
 					colors.bg,
 					isActive && "ring-1 ring-offset-1 ring-offset-sidebar ring-primary",
 				)}
-				aria-hidden="true"
-			/>
+			>
+				<span
+					className="text-[10px] leading-none text-white font-semibold"
+					data-testid="project-avatar-letter"
+				>
+					{firstLetter}
+				</span>
+			</div>
 			{isEditing ? (
 				<input
 					ref={inputRef}

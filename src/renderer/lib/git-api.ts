@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { GitStatusDetail } from "@shared/types/ipc.types";
 
-export const gitApi = {
+export const tauriGitApi = {
   getStatus: (cwd: string) => 
     invoke<GitStatusDetail[]>("git_get_status", { cwd }),
     

@@ -192,7 +192,7 @@ describe('FileExplorer', () => {
     render(<FileExplorer />)
 
     expect(screen.getByLabelText('Search files and content')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Search files and content…')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Search files...')).toBeInTheDocument()
     expect(screen.getByText('Keep typing to start searching')).toBeInTheDocument()
     expect(screen.getByText('Type at least 2 characters to search file names and content.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()

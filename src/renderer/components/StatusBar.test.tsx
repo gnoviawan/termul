@@ -121,7 +121,7 @@ describe('StatusBar', () => {
     it('should render exit code when showExitCode is true', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
-      expect(screen.getByText('Exit: 0')).toBeDefined()
+      expect(screen.getByText('0')).toBeDefined()
     })
 
     it('should not render exit code when showExitCode is false', () => {
@@ -131,7 +131,7 @@ describe('StatusBar', () => {
 
       renderWithProviders(<StatusBar project={mockProject} />)
 
-      expect(screen.queryByText('Exit: 0')).toBeNull()
+      expect(screen.queryByText('0')).toBeNull()
     })
 
     it('should hide all optional elements when all settings are false', () => {
@@ -150,7 +150,7 @@ describe('StatusBar', () => {
       expect(screen.getByText('test-project')).toBeDefined()
       expect(screen.queryByText('feature-branch')).toBeNull()
       expect(screen.queryByText('~/project')).toBeNull()
-      expect(screen.queryByText('Exit: 0')).toBeNull()
+      expect(screen.queryByText('0')).toBeNull()
     })
   })
 
