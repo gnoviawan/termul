@@ -16,7 +16,13 @@ const SESSION_MAX_DURATION_SECS: u64 = 28_800;
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
+    if state.server.is_rate_limited(&addr).await {
+        log::warn!("[WsServer] Rate limit exceeded for WS connect {}", addr);
+        return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
     let connection_context = state.server.get_connection_context().await;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let token_expired = now >= connection_context.1 + connection_context.2;
@@ -34,7 +40,6 @@ pub(crate) async fn ws_handler(
     let expected_session_id = connection_context.3;
     let app = state.app_handle;
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     server.log_connection(&addr, "connecting");
 
     ws.on_upgrade(move |socket| handle_ws(socket, server, token, expected_project_id, expected_session_id, app, addr))
@@ -134,14 +139,28 @@ async fn handle_ws(
                                 WsInbound::Auth { token, project_id, session_id } => {
                                     let project_ok = match &project_id {
                                         Some(id) => expected_project_id.as_ref() == Some(id),
-                                        None => true,
+                                        None => expected_project_id.is_none(),
                                     };
                                     let session_ok = match &session_id {
                                         Some(id) => id == &expected_session_id,
-                                        None => true,
+                                        None => false,
                                     };
                                     let context_ok = project_ok && session_ok;
-                                    let success = token == auth_token && context_ok;
+                                    
+                                    // Constant-time token comparison
+                                    let token_ok = {
+                                        if token.len() != auth_token.len() {
+                                            false
+                                        } else {
+                                            let mut result = 0;
+                                            for (x, y) in token.bytes().zip(auth_token.bytes()) {
+                                                result |= x ^ y;
+                                            }
+                                            result == 0
+                                        }
+                                    };
+                                    
+                                    let success = token_ok && context_ok;
                                     let resp = if success {
                                         let mut clients = server.clients.lock().await;
                                         if let Some(client) = clients.get_mut(&client_id) {

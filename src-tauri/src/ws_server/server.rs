@@ -5,7 +5,7 @@ use crate::ws_server::utils::{is_port_in_use, get_local_ip};
 use axum::{
     Router,
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    extract::{Form, State},
+    extract::{Form, State, ConnectInfo},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -22,7 +22,22 @@ struct LoginForm {
     password: String,
 }
 
-async fn http_route_handler(State(state): State<super::AppState>, headers: HeaderMap) -> Response {
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+async fn http_route_handler(
+    State(state): State<super::AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap
+) -> Response {
     let connection_context = state.server.get_connection_context().await;
     let cookie_valid = is_session_cookie_valid(headers.get(header::COOKIE), &connection_context.0);
     log::info!(
@@ -66,8 +81,19 @@ async fn static_asset_handler(
     } else {
         PathBuf::from("dist-web")
     };
+    
+    // Normalize and sanitize path to prevent directory traversal
     let safe_path = request_path.trim_start_matches('/');
     let candidate = dist_dir.join(safe_path);
+    
+    let canonical_dist = dist_dir.canonicalize().unwrap_or_else(|_| dist_dir.clone());
+    let canonical_candidate = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+    
+    if !canonical_candidate.starts_with(&canonical_dist) {
+        log::warn!("[WsServer] Blocked path traversal attempt: {}", request_path);
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
     let file_path = if candidate.is_file() {
         candidate
     } else {
@@ -102,10 +128,16 @@ fn mime_for_path(path: &Path) -> &'static str {
 
 async fn login_handler(
     State(state): State<super::AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    if state.server.is_rate_limited(&addr).await {
+        log::warn!("[WsServer] Rate limit exceeded for {}", addr);
+        return Html(login_page_html_with_error("Too many login attempts. Please try again later.")).into_response();
+    }
+
     let connection_context = state.server.get_connection_context().await;
-    if form.password != connection_context.0 {
+    if !constant_time_eq(&form.password, &connection_context.0) {
         log::warn!(
             "[WsServer][login] Invalid password attempt — submitted_len={} expected_len={} token_prefix={}",
             form.password.len(),
@@ -221,7 +253,7 @@ fn is_session_cookie_valid(header_value: Option<&HeaderValue>, expected_token: &
     header_value
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').find_map(|part| part.trim().strip_prefix("termul_web_lite_password=")))
-        .map(|token| token == expected_token)
+        .map(|token| constant_time_eq(token, expected_token))
         .unwrap_or(false)
 }
 
@@ -432,7 +464,6 @@ impl WsServer {
         });
     }
 
-    #[expect(dead_code)]
     pub async fn is_rate_limited(&self, addr: &SocketAddr) -> bool {
         let key = addr.ip().to_string();
         let now = Instant::now();
@@ -610,7 +641,9 @@ impl WsServer {
 
         log::info!("[WsServer] HTTP/WS server listening on http://{}", addr);
 
-        axum::serve(listener, app)
+        let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
+
+        axum::serve(listener, make_service)
             .with_graceful_shutdown(shutdown_signal(self.clone()))
             .await
             .map_err(|e| format!("Server error: {}", e))?;

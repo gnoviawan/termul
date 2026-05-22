@@ -5,6 +5,27 @@ use crate::pty::{PtyManager, SpawnOptions};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
+use std::path::{Path, PathBuf};
+
+fn check_path_boundary(target_path: &str, active_project_path: Option<&String>) -> Result<(), String> {
+    let active_path = active_project_path.ok_or_else(|| "No active project available to scope file access".to_string())?;
+    let canonical_active = Path::new(active_path).canonicalize()
+        .map_err(|e| format!("Invalid active project path: {}", e))?;
+
+    let mut path_to_check = PathBuf::from(target_path);
+    while !path_to_check.exists() && path_to_check.parent().is_some() {
+        path_to_check = path_to_check.parent().unwrap().to_path_buf();
+    }
+
+    let canonical_target = path_to_check.canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_active) {
+        return Err("Access denied: Path is outside the active project boundary".to_string());
+    }
+
+    Ok(())
+}
 
 pub(crate) async fn handle_command(
     method: &str,
@@ -245,6 +266,12 @@ pub(crate) async fn handle_command(
             let dir_path: String = serde_json::from_value(params["dirPath"].clone())
                 .map_err(|e| format!("Invalid dirPath: {}", e))?;
 
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&dir_path, active_project_path.as_ref())?;
+
             let ignored = [
                 "node_modules", ".git", ".next", ".cache", ".turbo", "dist", "build", ".output",
                 ".nuxt", ".svelte-kit", "__pycache__", ".pytest_cache", "venv", ".env", "coverage", ".nyc_output"
@@ -311,6 +338,12 @@ pub(crate) async fn handle_command(
             let file_path: String = serde_json::from_value(params["filePath"].clone())
                 .map_err(|e| format!("Invalid filePath: {}", e))?;
 
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&file_path, active_project_path.as_ref())?;
+
             let content = std::fs::read_to_string(&file_path)
                 .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
             let metadata = std::fs::metadata(&file_path)
@@ -333,6 +366,12 @@ pub(crate) async fn handle_command(
             let content: String = serde_json::from_value(params["content"].clone())
                 .map_err(|e| format!("Invalid content: {}", e))?;
 
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&file_path, active_project_path.as_ref())?;
+
             std::fs::write(&file_path, &content)
                 .map_err(|e| format!("Failed to write file {}: {}", file_path, e))?;
             Ok(IpcResult::success(serde_json::json!(true)))
@@ -341,6 +380,12 @@ pub(crate) async fn handle_command(
             let params = params.ok_or("Missing params")?;
             let dir_path: String = serde_json::from_value(params["dirPath"].clone())
                 .map_err(|e| format!("Invalid dirPath: {}", e))?;
+
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&dir_path, active_project_path.as_ref())?;
 
             std::fs::create_dir_all(&dir_path)
                 .map_err(|e| format!("Failed to create directory {}: {}", dir_path, e))?;
@@ -351,6 +396,12 @@ pub(crate) async fn handle_command(
             let target_path: String = serde_json::from_value(params["path"].clone())
                 .map_err(|e| format!("Invalid path: {}", e))?;
             let is_dir: bool = params.get("isDir").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&target_path, active_project_path.as_ref())?;
 
             if is_dir {
                 std::fs::remove_dir_all(&target_path)
@@ -367,6 +418,13 @@ pub(crate) async fn handle_command(
                 .map_err(|e| format!("Invalid oldPath: {}", e))?;
             let new_path: String = serde_json::from_value(params["newPath"].clone())
                 .map_err(|e| format!("Invalid newPath: {}", e))?;
+
+            let active_project_path = {
+                let proj = server.active_project.lock().await;
+                proj.as_ref().map(|p| p.path.clone())
+            };
+            check_path_boundary(&old_path, active_project_path.as_ref())?;
+            check_path_boundary(&new_path, active_project_path.as_ref())?;
 
             std::fs::rename(&old_path, &new_path)
                 .map_err(|e| format!("Failed to rename {} -> {}: {}", old_path, new_path, e))?;
