@@ -2,6 +2,7 @@ use super::{AppState, WsServer, WsClient, WsOutbound, WsInbound};
 use crate::ws_server::commands::handle_command;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
+use axum::http::{HeaderMap, header};
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
+use tauri::Url;
 
 const SESSION_IDLE_TIMEOUT_SECS: u64 = 900;
 const SESSION_MAX_DURATION_SECS: u64 = 28_800;
@@ -16,11 +18,19 @@ const SESSION_MAX_DURATION_SECS: u64 = 28_800;
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     if state.server.is_rate_limited(&addr).await {
         log::warn!("[WsServer] Rate limit exceeded for WS connect {}", addr);
         return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
+    if !is_allowed_ws_origin(&headers) {
+        let origin = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()).unwrap_or("<missing>");
+        let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("<missing>");
+        log::warn!("[WsServer] Rejected WS origin origin={} host={} addr={}", origin, host, addr);
+        return axum::http::StatusCode::FORBIDDEN.into_response();
     }
 
     let connection_context = state.server.get_connection_context().await;
@@ -43,6 +53,46 @@ pub(crate) async fn ws_handler(
     server.log_connection(&addr, "connecting");
 
     ws.on_upgrade(move |socket| handle_ws(socket, server, token, expected_project_id, expected_session_id, app, addr))
+}
+
+fn is_allowed_ws_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return true;
+    };
+
+    let Some(origin_url) = Url::parse(origin).ok() else {
+        return false;
+    };
+
+    let Some(origin_host) = origin_url.host_str() else {
+        return false;
+    };
+
+    let forwarded_host = headers
+        .get("x-forwarded-host")
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| headers.get(header::HOST).and_then(|value| value.to_str().ok()));
+
+    let Some(request_host) = forwarded_host.and_then(parse_host_header_host) else {
+        return false;
+    };
+
+    origin_host.eq_ignore_ascii_case(request_host)
+}
+
+fn parse_host_header_host(value: &str) -> Option<&str> {
+    let host = value.trim();
+    if host.is_empty() {
+        return None;
+    }
+
+    if host.starts_with('[') {
+        return host
+            .find(']')
+            .map(|end| &host[1..end]);
+    }
+
+    Some(host.split(':').next().unwrap_or(host))
 }
 
 pub(crate) async fn shutdown_signal(server: Arc<WsServer>) {
@@ -296,5 +346,35 @@ async fn handle_ws(
             server.log_connection(&addr, "disconnected");
         }
         let _ = app_handle.emit("ws-server-status-changed", status.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_ws_origin;
+    use axum::http::{HeaderMap, HeaderValue, header};
+
+    #[test]
+    fn allows_missing_origin_for_non_browser_clients() {
+        let headers = HeaderMap::new();
+        assert!(is_allowed_ws_origin(&headers));
+    }
+
+    #[test]
+    fn allows_same_host_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("https://demo.trycloudflare.com"));
+        headers.insert(header::HOST, HeaderValue::from_static("demo.trycloudflare.com"));
+
+        assert!(is_allowed_ws_origin(&headers));
+    }
+
+    #[test]
+    fn rejects_cross_host_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("https://attacker.example"));
+        headers.insert(header::HOST, HeaderValue::from_static("demo.trycloudflare.com"));
+
+        assert!(!is_allowed_ws_origin(&headers));
     }
 }

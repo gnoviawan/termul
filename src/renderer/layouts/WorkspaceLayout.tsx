@@ -143,6 +143,27 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 	const [isMobileExplorerOpen, setIsMobileExplorerOpen] = useState(false);
 
+	// Sync --app-height CSS variable to visual viewport so the layout shrinks
+	// when the Android soft keyboard appears (visual viewport != layout viewport).
+	useEffect(() => {
+		if (!isMobile) return;
+		const vv = window.visualViewport;
+		const update = (): void => {
+			const h = vv ? vv.height : window.innerHeight;
+			document.documentElement.style.setProperty("--app-height", `${h}px`);
+		};
+		update();
+		vv?.addEventListener("resize", update);
+		vv?.addEventListener("scroll", update);
+		window.addEventListener("resize", update);
+		return () => {
+			vv?.removeEventListener("resize", update);
+			vv?.removeEventListener("scroll", update);
+			window.removeEventListener("resize", update);
+			document.documentElement.style.removeProperty("--app-height");
+		};
+	}, [isMobile]);
+
 	const isLoaded = useProjectsLoaded();
 	const confirmTerminalClose = useConfirmTerminalClose();
 	const projects = useProjects();
@@ -1201,7 +1222,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	}
 
 	return (
-		<div className="h-screen flex flex-col overflow-hidden bg-background">
+		<div
+			className="flex flex-col overflow-hidden bg-background"
+			style={{ height: isMobile ? "var(--app-height, 100svh)" : "100vh" }}
+		>
 			{(isDesktopApp || !isMobile) && (
 				<TitleBar
 					isShortcutsOpen={isShortcutMenuOpen}
@@ -1234,59 +1258,59 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				</header>
 			)}
 
-			<div className="flex-1 flex overflow-hidden min-h-0 h-full">
-				{/* Sidebar - desktop: inline, mobile: Sheet overlay */}
-				{isMobile ? (
-					<>
-						<Sheet open={isMobileSidebarOpen} onOpenChange={setIsMobileSidebarOpen}>
-							<SheetContent side="left" className="w-64 p-0 bg-sidebar border-r border-border/50">
-								<SheetTitle className="sr-only">Projects</SheetTitle>
-								<ProjectSidebar
-									projects={projects}
-									activeProjectId={activeProjectId}
-									onSelectProject={(id) => {
-										selectProject(id);
-										setIsMobileSidebarOpen(false);
-									}}
-									onNewProject={() => {
-										setIsMobileSidebarOpen(false);
-										setIsNewProjectModalOpen(true);
-									}}
-									onUpdateProject={updateProject}
-									onDeleteProject={deleteProject}
-									onArchiveProject={archiveProject}
-									onRestoreProject={restoreProject}
-									onReorderProjects={reorderProjects}
-								/>
-							</SheetContent>
-						</Sheet>
-						<Sheet open={isMobileExplorerOpen} onOpenChange={setIsMobileExplorerOpen}>
-							<SheetContent side="right" className="w-[85vw] max-w-none p-0 bg-background border-l border-border/50">
-								<SheetTitle className="sr-only">File Explorer</SheetTitle>
-								<div className="h-full pr-10">
-									<FileExplorer side="left" />
-								</div>
-							</SheetContent>
-						</Sheet>
-					</>
-				) : (
-					isSidebarVisible && (
-						<ProjectSidebar
-							projects={projects}
-							activeProjectId={activeProjectId}
-							onSelectProject={selectProject}
-							onNewProject={() => setIsNewProjectModalOpen(true)}
-							onUpdateProject={updateProject}
-							onDeleteProject={deleteProject}
-							onArchiveProject={archiveProject}
-							onRestoreProject={restoreProject}
-							onReorderProjects={reorderProjects}
-						/>
-					)
-				)}
+			<PaneDndProvider>
+				<div className="flex-1 flex overflow-hidden min-h-0 h-full">
+					{/* Sidebar - desktop: inline, mobile: Sheet overlay */}
+					{isMobile ? (
+						<>
+							<Sheet open={isMobileSidebarOpen} onOpenChange={setIsMobileSidebarOpen}>
+								<SheetContent side="left" className="w-64 p-0 bg-sidebar border-r border-border/50">
+									<SheetTitle className="sr-only">Projects</SheetTitle>
+									<ProjectSidebar
+										projects={projects}
+										activeProjectId={activeProjectId}
+										onSelectProject={(id) => {
+											selectProject(id);
+											setIsMobileSidebarOpen(false);
+										}}
+										onNewProject={() => {
+											setIsMobileSidebarOpen(false);
+											setIsNewProjectModalOpen(true);
+										}}
+										onUpdateProject={updateProject}
+										onDeleteProject={deleteProject}
+										onArchiveProject={archiveProject}
+										onRestoreProject={restoreProject}
+										onReorderProjects={reorderProjects}
+									/>
+								</SheetContent>
+							</Sheet>
+							<Sheet open={isMobileExplorerOpen} onOpenChange={setIsMobileExplorerOpen}>
+								<SheetContent side="right" className="w-[85vw] max-w-none p-0 bg-background border-l border-border/50">
+									<SheetTitle className="sr-only">File Explorer</SheetTitle>
+									<div className="h-full pr-10">
+										<FileExplorer side="left" />
+									</div>
+								</SheetContent>
+							</Sheet>
+						</>
+					) : (
+						isSidebarVisible && (
+							<ProjectSidebar
+								projects={projects}
+								activeProjectId={activeProjectId}
+								onSelectProject={selectProject}
+								onNewProject={() => setIsNewProjectModalOpen(true)}
+								onUpdateProject={updateProject}
+								onDeleteProject={deleteProject}
+								onArchiveProject={archiveProject}
+								onRestoreProject={restoreProject}
+								onReorderProjects={reorderProjects}
+							/>
+						)
+					)}
 
-				{/* Main Content and File Explorer Container */}
-				<PaneDndProvider>
+					{/* Main Content and File Explorer Container */}
 					<div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
 						{/* Main Content Area */}
 						<main className="flex-1 flex flex-col min-w-0 bg-card overflow-hidden">
@@ -1361,8 +1385,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							</div>
 						)}
 					</div>
-				</PaneDndProvider>
-			</div>
+				</div>
+			</PaneDndProvider>
 
 			{/* Modals */}
 			<NewProjectModal

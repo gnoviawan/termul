@@ -50,7 +50,9 @@ import {
 	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
 import { useTerminalClipboard } from "@/hooks/use-terminal-clipboard";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { terminalApi, systemApi } from "@/lib/api";
 import {
 	buildTerminalPathLinks,
@@ -127,6 +129,19 @@ const CLIPBOARD_RATE_LIMIT_MS = 100;
 const WRITE_BUFFER_FLUSH_MS = 16; // ~60fps - batch rapid writes into single render frame
 const RESIZE_DEBOUNCE_OBSERVER_MS = 100; // debounce ResizeObserver to prevent rapid re-renders
 
+const MOBILE_TERMINAL_KEYS = [
+	{ label: "Ctrl+C", sequence: "\u0003" },
+	{ label: "Ctrl+D", sequence: "\u0004" },
+	{ label: "Ctrl+L", sequence: "\u000c" },
+	{ label: "Ctrl+R", sequence: "\u0012" },
+	{ label: "Tab", sequence: "\t" },
+	{ label: "Esc", sequence: "\u001b" },
+	{ label: "Up", sequence: "\u001b[A" },
+	{ label: "Down", sequence: "\u001b[B" },
+	{ label: "Left", sequence: "\u001b[D" },
+	{ label: "Right", sequence: "\u001b[C" },
+] as const;
+
 const shouldUseWebglRenderer = (
 	rendererPreference: "auto" | "webgl" | "dom",
 ): boolean => rendererPreference !== "dom";
@@ -201,6 +216,7 @@ function ConnectedTerminalComponent({
 	const fontSize = useTerminalFontSize();
 	const bufferSize = useTerminalBufferSize();
 	const rendererPreference = useTerminalRenderer();
+	const isMobile = useIsMobile();
 	const activeProject = useActiveProject();
 	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
 
@@ -1514,6 +1530,13 @@ function ConnectedTerminalComponent({
 		terminalRef.current?.selectAll();
 	}, []);
 
+	const sendVirtualKey = useCallback((sequence: string): void => {
+		const ptyId = ptyIdRef.current;
+		if (!ptyId) return;
+		void terminalApi.write(ptyId, sequence);
+		terminalRef.current?.focus();
+	}, []);
+
 	useImperativeHandle(searchRef, () => {
 		const searchDecorations = {
 			matchBackground: "#444444",
@@ -1539,7 +1562,8 @@ function ConnectedTerminalComponent({
 		if (didInitRef.current) return;
 		didInitRef.current = true;
 		initializedTerminalIdRef.current = targetId;
-		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize, scrollback: bufferSize };
+		const effectiveFontSize = isMobile ? Math.min(fontSize, 11) : fontSize;
+		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize: effectiveFontSize, scrollback: bufferSize };
 		const terminal = new Terminal(terminalOptions);
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
@@ -1723,7 +1747,7 @@ function ConnectedTerminalComponent({
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned, bufferWrite, isVisible]);
+	}, [targetId, ptyId, autoSpawn, rendererPreference, memoizedSpawnOptions, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, initialScrollback, handleTerminalData, handleResize, copySelection, pasteFromClipboard, setTerminalHealthStatus, disposeWebglAddon, onError, onSpawned, bufferWrite, isVisible, isMobile]);
 
 	const isVisibleRef = useRef(isVisible);
 	isVisibleRef.current = isVisible;
@@ -1759,10 +1783,11 @@ function ConnectedTerminalComponent({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
-				<div className="relative w-full h-full group overflow-hidden">
-					<div ref={containerRef} className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`} onClick={handleContainerClick} onMouseDown={(e) => { e.stopPropagation(); terminalRef.current?.focus(); }} />
-					{isSuspended && (
-						<div className="absolute inset-0 bg-[#0c0c0ced]/90 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+				<div className="relative flex w-full h-full flex-col overflow-hidden group">
+					<div className="relative min-h-0 flex-1">
+						<div ref={containerRef} className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`} onClick={handleContainerClick} onMouseDown={(e) => { e.stopPropagation(); terminalRef.current?.focus(); }} />
+						{isSuspended && (
+							<div className="absolute inset-0 bg-[#0c0c0ced]/90 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
 							<div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-blue-500">
 								<div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">
 									<div className="w-20 h-20 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-3 shadow-inner">
@@ -1781,10 +1806,10 @@ function ConnectedTerminalComponent({
 									</div>
 								</div>
 							</div>
-						</div>
-					)}
-					{isCrashed && (
-						<div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+							</div>
+						)}
+						{isCrashed && (
+							<div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
 							<div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-destructive">
 								<div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">
 									<div className="w-20 h-20 rounded-2xl bg-destructive/10 flex items-center justify-center mb-3 shadow-inner group-hover:scale-110 transition-transform duration-500">
@@ -1804,6 +1829,33 @@ function ConnectedTerminalComponent({
 										<div className="text-[10px] text-muted-foreground/60 font-mono">REF::{targetId?.slice(0, 8)}</div>
 									</div>
 								</div>
+							</div>
+							</div>
+						)}
+					</div>
+					{isMobile && (
+						<div className="shrink-0 border-t border-border/60 bg-card/95 px-2 py-2 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+							<div className="flex gap-2 overflow-x-auto pb-1">
+								{MOBILE_TERMINAL_KEYS.map((key) => (
+									<Button
+										key={key.label}
+										type="button"
+										variant="secondary"
+										size="sm"
+										disabled={!ptyIdRef.current}
+										className="h-8 shrink-0 rounded-md px-2.5 font-mono text-[11px]"
+										onMouseDown={(event) => {
+											event.preventDefault();
+											event.stopPropagation();
+										}}
+										onClick={(event) => {
+											event.stopPropagation();
+											sendVirtualKey(key.sequence);
+										}}
+									>
+										{key.label}
+									</Button>
+								))}
 							</div>
 						</div>
 					)}

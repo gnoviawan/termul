@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent, screen } from '@testing-library/react'
 import { toast } from 'sonner'
 
 // Mock Tauri APIs BEFORE importing the component
@@ -168,6 +168,14 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProject: vi.fn(() => ({ path: '/project-root' })),
   useProjects: vi.fn(() => []),
   useActiveProjectId: vi.fn(() => 'project-a')
+}))
+
+const { mockUseIsMobile } = vi.hoisted(() => ({
+  mockUseIsMobile: vi.fn(() => false)
+}))
+
+vi.mock('@/hooks/use-mobile', () => ({
+  useIsMobile: mockUseIsMobile
 }))
 
 // Mock window.api with proper typing for mocks
@@ -406,6 +414,7 @@ describe('ConnectedTerminal', () => {
     // Reset terminal selection mocks
     mockTerminalInstance.hasSelection.mockReturnValue(false)
     mockTerminalInstance.getSelection.mockReturnValue('')
+    mockUseIsMobile.mockReturnValue(false)
   })
 
   afterEach(() => {
@@ -455,6 +464,30 @@ describe('ConnectedTerminal', () => {
     expect(vi.mocked(terminalApi).onData.mock.calls.length).toBe(existingOnDataCalls)
     expect(vi.mocked(terminalApi).onExit.mock.calls.length).toBe(existingOnExitCalls)
     expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalledWith('terminal-123', true)
+  })
+
+  it('shows mobile terminal controls only on mobile', () => {
+    render(<ConnectedTerminal />)
+
+    expect(screen.queryByRole('button', { name: 'Ctrl+C' })).not.toBeInTheDocument()
+  })
+
+  it('sends virtual mobile control keys to the PTY', async () => {
+    mockUseIsMobile.mockReturnValue(true)
+
+    render(<ConnectedTerminal terminalId="mobile-pty-123" autoSpawn={false} />)
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Ctrl+C' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl+C' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tab' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Up' }))
+
+    expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('mobile-pty-123', '\u0003')
+    expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('mobile-pty-123', '\t')
+    expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('mobile-pty-123', '\u001b[A')
   })
 
   it('should call onSpawned callback with terminal ID', async () => {

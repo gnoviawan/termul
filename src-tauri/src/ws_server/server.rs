@@ -240,15 +240,6 @@ fn session_cookie_header(token: &str, ttl_secs: u64, secure: bool) -> Option<Hea
     HeaderValue::from_str(&value).ok()
 }
 
-fn allowed_origins(port: u16) -> [HeaderValue; 4] {
-    [
-        HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
-        HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
-        HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
-        HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
-    ]
-}
-
 fn is_session_cookie_valid(header_value: Option<&HeaderValue>, expected_token: &str) -> bool {
     header_value
         .and_then(|value| value.to_str().ok())
@@ -648,10 +639,6 @@ impl WsServer {
         _auth_token: String,
         use_https: bool,
     ) -> Result<(), String> {
-        let cors = tower_http::cors::CorsLayer::new()
-            .allow_origin(allowed_origins(port))
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any);
         let index_html = get_index_html();
 
         let app_state = super::AppState {
@@ -669,7 +656,6 @@ impl WsServer {
 
         let app = ws_app
             .merge(http_app)
-            .layer(cors)
             .with_state(app_state);
 
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -742,22 +728,6 @@ mod tests {
         let value = cookie.to_str().expect("cookie str");
 
         assert!(value.contains("Secure"));
-    }
-
-    #[test]
-    fn allowed_origins_are_localhost_only() {
-        let origins = super::allowed_origins(9876);
-        let rendered = origins
-            .iter()
-            .map(|value| value.to_str().expect("origin str"))
-            .collect::<Vec<_>>();
-
-        assert_eq!(rendered, vec![
-            "http://localhost:9876",
-            "http://127.0.0.1:9876",
-            "https://localhost:9876",
-            "https://127.0.0.1:9876",
-        ]);
     }
 
     #[test]

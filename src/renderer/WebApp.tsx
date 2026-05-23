@@ -9,12 +9,22 @@ import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 import { router } from './app-router'
 
-function resolveWsUrl(rawUrl: string): string {
-  if (rawUrl.endsWith('/ws')) return rawUrl
-  return `${rawUrl.replace(/\/+$/, '')}/ws`
+function resolveWsUrl(rawUrl?: string): string {
+  const normalizedRawUrl = rawUrl?.trim()
+  if (!normalizedRawUrl) {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}/ws`
+  }
+
+  const wsBaseUrl = normalizedRawUrl
+    .replace(/^http:/i, 'ws:')
+    .replace(/^https:/i, 'wss:')
+
+  if (wsBaseUrl.endsWith('/ws')) return wsBaseUrl
+  return `${wsBaseUrl.replace(/\/+$/, '')}/ws`
 }
 
-const WS_URL = resolveWsUrl(import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:9876')
+const WS_URL = resolveWsUrl(import.meta.env.VITE_WS_URL)
 
 function getWsToken(): string {
   if (import.meta.env.VITE_WS_TOKEN) return import.meta.env.VITE_WS_TOKEN as string
