@@ -659,6 +659,21 @@ async fn ws_get_audit_log(
 }
 
 #[tauri::command]
+async fn ws_list_clients(
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<Vec<ws_server::WsClientInfo>, String> {
+    Ok(ws_server.get_client_sessions().await)
+}
+
+#[tauri::command]
+async fn ws_revoke_client(
+    client_id: String,
+    ws_server: State<'_, Arc<ws_server::WsServer>>,
+) -> Result<bool, String> {
+    ws_server.revoke_client(&client_id).await
+}
+
+#[tauri::command]
 async fn ui_lock_handover(
     target: String,
     app_handle: AppHandle,
@@ -880,6 +895,8 @@ pub fn run() {
             ws_server_get_token,
             ws_rotate_token,
             ws_get_audit_log,
+            ws_list_clients,
+            ws_revoke_client,
             ws_server_set_active_project,
             ws_server_set_projects,
         ])

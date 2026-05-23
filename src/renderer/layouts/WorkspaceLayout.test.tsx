@@ -134,7 +134,8 @@ vi.mock('@/hooks/use-command-history', () => ({
   useAllCommandHistory: vi.fn(() => [])
 }))
 
-const { mockUpdatePanelVisibility, mockWaitForPendingAppSettingsPersistence } = vi.hoisted(() => ({
+const { mockUseIsMobile, mockUpdatePanelVisibility, mockWaitForPendingAppSettingsPersistence } = vi.hoisted(() => ({
+  mockUseIsMobile: vi.fn(() => false),
   mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
   mockWaitForPendingAppSettingsPersistence: vi.fn(() => Promise.resolve())
 }))
@@ -147,6 +148,10 @@ vi.mock('@/hooks/use-app-settings', () => ({
 
 vi.mock('@/hooks/use-file-watcher', () => ({
   useFileWatcher: vi.fn()
+}))
+
+vi.mock('@/hooks/use-mobile', () => ({
+  useIsMobile: () => mockUseIsMobile()
 }))
 
 vi.mock('@/hooks/use-pane-dnd', () => ({
@@ -330,6 +335,7 @@ beforeEach(() => {
   mockUseAllTerminals.mockReturnValue([])
   mockUseActiveTerminal.mockReturnValue(null)
   mockUseActiveTerminalId.mockReturnValue('')
+  mockUseIsMobile.mockReturnValue(false)
   mockUpdatePanelVisibility.mockReset()
   mockWaitForPendingAppSettingsPersistence.mockReset()
   useFileExplorerStore.setState({ isVisible: true })
@@ -471,6 +477,40 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
     })
+
+    it('renders file explorer in web mode when visible and an active project exists', () => {
+      renderWithRouter()
+
+      expect(screen.getByTestId('title-bar')).toBeInTheDocument()
+      expect(screen.getByTestId('file-explorer')).toBeInTheDocument()
+    })
+
+    it('renders file explorer even when active project path is unavailable', () => {
+      mockUseProjects.mockReturnValue([
+        {
+          id: '1',
+          name: 'Test Project',
+          color: 'blue',
+          path: undefined,
+          gitBranch: 'main',
+          isActive: true
+        }
+      ])
+      mockUseActiveProject.mockReturnValue({
+        id: '1',
+        name: 'Test Project',
+        color: 'blue',
+        path: undefined,
+        gitBranch: 'main',
+        isActive: true
+      })
+      mockUseActiveProjectId.mockReturnValue('1')
+
+      renderWithRouter()
+
+      expect(screen.getByTestId('file-explorer')).toBeInTheDocument()
+    })
+
   })
 
   describe('Empty State Styling', () => {

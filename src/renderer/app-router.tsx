@@ -1,4 +1,5 @@
 import { createHashRouter } from 'react-router-dom'
+import { isTauri } from '@/lib/api-bridge'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import ProjectSettings from './pages/ProjectSettings'
@@ -6,6 +7,8 @@ import AppPreferences from './pages/AppPreferences'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { RemoteAccessPanel } from '@/components/remote/RemoteAccessPanel'
+
+const isDesktopApp = isTauri()
 
 export const router = createHashRouter(
   [
@@ -15,9 +18,9 @@ export const router = createHashRouter(
       children: [
         { index: true, element: <WorkspaceDashboard /> },
         { path: 'snapshots', element: <WorkspaceSnapshots /> },
-        { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> },
-        { path: 'remote', element: <RemoteAccessPanel /> }
+        ...(isDesktopApp ? [{ path: 'settings', element: <ProjectSettings /> }] : []),
+        ...(isDesktopApp ? [{ path: 'preferences', element: <AppPreferences /> }] : []),
+        ...(isDesktopApp ? [{ path: 'remote', element: <RemoteAccessPanel /> }] : [])
       ]
     },
     { path: '*', element: <NotFound /> }

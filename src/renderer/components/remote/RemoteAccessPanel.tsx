@@ -6,7 +6,6 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
-  Clock,
   FileText,
   Link,
   Shield,
@@ -15,7 +14,9 @@ import {
   Activity,
   Layers,
   Eye,
-  EyeOff
+  EyeOff,
+  Monitor,
+  Ban
 } from 'lucide-react'
 import { useWsServerStore } from '@/stores/ws-server-store'
 import { useActiveProject } from '@/stores/project-store'
@@ -25,7 +26,7 @@ import { wsServerApi } from '@/lib/ws-server-api'
 import { openerApi } from '@/lib/tauri-opener-api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import type { ConnectionAudit } from '@/lib/ws-server-api'
+import type { ConnectionAudit, RemoteDeviceSession } from '@/lib/ws-server-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { listen } from '@tauri-apps/api/event'
 
@@ -47,7 +48,6 @@ export function RemoteAccessPanel(): React.JSX.Element {
     tokenExpiry,
     startServer: startWsServer,
     stopServer: stopWsServer,
-    generateToken,
     rotateToken,
     refreshStatus: refreshWsStatus
   } = useWsServerStore()
@@ -55,6 +55,7 @@ export function RemoteAccessPanel(): React.JSX.Element {
   const tunnelSessions = useTunnelStore((state) => state.sessions)
   const startTunnel = useTunnelStore((state) => state.startTunnel)
   const stopTunnel = useTunnelStore((state) => state.stopTunnel)
+  const refreshTunnelSessions = useTunnelStore((state) => state.refreshSessions)
   const tunnelError = useTunnelStore((state) => state.error)
 
   const [useHttps, setUseHttps] = useState(false)
@@ -62,8 +63,11 @@ export function RemoteAccessPanel(): React.JSX.Element {
   const [webLitePassword, setWebLitePassword] = useState(authToken ?? '')
   const [showWebLitePassword, setShowWebLitePassword] = useState(false)
   const [auditLog, setAuditLog] = useState<ConnectionAudit[]>([])
+  const [remoteClients, setRemoteClients] = useState<RemoteDeviceSession[]>([])
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [isTunnelStarting, setIsTunnelStarting] = useState(false)
+  const [isClientsLoading, setIsClientsLoading] = useState(false)
+  const [revokingClientId, setRevokingClientId] = useState<string | null>(null)
   const [runtimeStream, setRuntimeStream] = useState<Array<{ type: 'system' | 'data' | 'exit' | 'cwd' | 'git'; text: string }>>([])
   const runtimeStreamRef = useRef<HTMLDivElement | null>(null)
   const [pauseAutoscroll, setPauseAutoscroll] = useState(false)
@@ -80,10 +84,29 @@ export function RemoteAccessPanel(): React.JSX.Element {
     return null
   }, [activeTunnel])
 
+  const authenticatedClients = useMemo(
+    () => remoteClients.filter((client) => client.authenticated),
+    [remoteClients]
+  )
+
+  const refreshRemoteClients = async (): Promise<void> => {
+    setIsClientsLoading(true)
+    const result = await wsServerApi.listClients()
+    if (result.success && result.data) {
+      setRemoteClients(result.data)
+    } else if (!result.success) {
+      toast.error(result.error || 'Failed to load connected devices')
+    }
+    setIsClientsLoading(false)
+  }
+
   useEffect(() => {
     void refreshWsStatus()
+    void refreshTunnelSessions()
+    void refreshRemoteClients()
     const unsubWs = wsServerApi.onStatusChanged((status) => {
       useWsServerStore.setState({ status })
+      void refreshRemoteClients()
     })
     const unsub = tunnelApi.onStatusChanged((event) => {
       if (event.tunnelId === TUNNEL_ID) {
@@ -109,6 +132,20 @@ export function RemoteAccessPanel(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!wsStatus.isRunning) {
+      setRemoteClients([])
+      return
+    }
+    setAcknowledgeRemoteAccess(true)
+  }, [wsStatus.isRunning])
+
+  useEffect(() => {
+    if (authToken) {
+      setWebLitePassword(authToken)
+    }
+  }, [authToken])
 
   useEffect(() => {
     if (!isTauriContext()) return
@@ -300,6 +337,28 @@ export function RemoteAccessPanel(): React.JSX.Element {
     } else {
       toast.error(result.error || 'Failed to load audit log')
     }
+  }
+
+  const handleRevokeClient = async (clientId: string): Promise<void> => {
+    setRevokingClientId(clientId)
+    const result = await wsServerApi.revokeClient(clientId)
+    if (result.success && result.data) {
+      toast.success('Device access revoked')
+      await refreshRemoteClients()
+      void refreshWsStatus()
+    } else if (result.success) {
+      toast.error('Device no longer connected')
+      await refreshRemoteClients()
+    } else {
+      toast.error(result.error || 'Failed to revoke device')
+    }
+    setRevokingClientId(null)
+  }
+
+  const formatActivityTime = (value: string): string => {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return 'Unknown'
+    return date.toLocaleString()
   }
 
   return (
@@ -538,6 +597,57 @@ export function RemoteAccessPanel(): React.JSX.Element {
 
             {wsStatus.isRunning ? (
               <div className="space-y-3 animate-in fade-in duration-300">
+                <div className="rounded-xl border bg-background/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Connected Devices</div>
+                    <button
+                      className="text-[10px] font-semibold text-muted-foreground hover:text-foreground"
+                      onClick={() => void refreshRemoteClients()}
+                      type="button"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  {isClientsLoading ? (
+                    <div className="text-xs text-muted-foreground">Loading connected devices...</div>
+                  ) : authenticatedClients.length > 0 ? (
+                    <div className="space-y-2">
+                      {authenticatedClients.map((client) => (
+                        <div key={client.clientId} className="rounded-xl border bg-card/60 p-3 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 text-xs font-semibold">
+                                <Monitor size={12} className="text-primary" />
+                                <span className="truncate">{client.remoteAddr}</span>
+                              </div>
+                              <div className="mt-1 text-[10px] text-muted-foreground">
+                                IP: {client.ipAddress}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground">
+                                Connected: {formatActivityTime(client.connectedAt)}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground">
+                                Last active: {formatActivityTime(client.lastActivityAt)}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleRevokeClient(client.clientId)}
+                              disabled={revokingClientId === client.clientId}
+                              className="inline-flex items-center gap-1 rounded-lg border border-destructive/20 bg-destructive/10 px-2.5 py-1.5 text-[10px] font-semibold text-destructive hover:bg-destructive/15 disabled:opacity-50"
+                            >
+                              <Ban size={11} />
+                              {revokingClientId === client.clientId ? 'Revoking...' : 'Revoke'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">No connected device yet.</div>
+                  )}
+                </div>
+
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-0.5">Authorization Token</label>
                   <div className="flex items-center gap-2 bg-muted/50 p-2.5 rounded-xl border">

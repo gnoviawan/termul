@@ -9,6 +9,7 @@ import {
   onBrowserTabNavigated,
   onBrowserTabLoaded,
 } from '@/lib/browser-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserBounds {
@@ -54,7 +55,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
   const updateBounds = useCallback(() => {
     const el = containerRef.current
-    if (!el || !createdRef.current) return
+    if (!isTauriContext() || !el || !createdRef.current) return
     const bounds = getElementBounds(el)
     browserTabResize(browserTabId, bounds)
       .then((result) => {
@@ -69,6 +70,13 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
   // Create / destroy webview lifecycle
   useEffect(() => {
+    if (!isTauriContext()) {
+      createdRef.current = false
+      clearLoadingTimeout()
+      useBrowserSessionStore.getState().setLoading(browserTabId, false)
+      return
+    }
+
     mountedRef.current = true
     mountTokenRef.current += 1
     const mountToken = mountTokenRef.current

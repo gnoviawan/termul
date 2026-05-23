@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tauri::AppHandle;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, watch};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,10 +101,27 @@ pub struct ConnectionAudit {
     pub client_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsClientInfo {
+    pub client_id: String,
+    pub ip_address: String,
+    pub remote_addr: String,
+    pub authenticated: bool,
+    pub connected_at: String,
+    pub last_activity_at: String,
+}
+
 pub(crate) struct WsClient {
+    pub client_id: String,
     pub authenticated: bool,
     pub tx: tokio::sync::mpsc::UnboundedSender<WsOutbound>,
+    pub disconnect_tx: watch::Sender<bool>,
+    pub ip_address: String,
+    pub remote_addr: String,
     pub connected_at: Instant,
+    pub connected_at_system: SystemTime,
+    pub last_activity_at_system: SystemTime,
 }
 
 pub struct WsServer {

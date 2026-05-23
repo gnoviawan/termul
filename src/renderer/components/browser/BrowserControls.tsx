@@ -2,21 +2,41 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { browserTabGoBack, browserTabGoForward, browserTabOpenDevtools, browserTabReload } from "@/lib/browser-api";
-import { ArrowLeft, ArrowRight, Bug, RotateCcw, Globe, Loader2, Pencil } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bug, RotateCcw, Globe, Loader2, Pencil, ExternalLink } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface BrowserControlsProps {
   browserTabId: string;
+  onBack?: () => void;
+  onForward?: () => void;
+  onReload?: () => void;
+  onOpenExternal?: () => void;
+  supportsDevtools?: boolean;
+  supportsAnnotation?: boolean;
+  respectNavCapabilities?: boolean;
 }
 
 export function BrowserControls({
   browserTabId,
+  onBack,
+  onForward,
+  onReload,
+  onOpenExternal,
+  supportsDevtools = true,
+  supportsAnnotation = true,
+  respectNavCapabilities = false,
 }: BrowserControlsProps): React.JSX.Element {
   const tabUrl = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.url ?? ''
   );
   const tabLoading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
+  );
+  const canGoBack = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.canGoBack ?? false
+  );
+  const canGoForward = useBrowserSessionStore(
+    (state) => state.tabs.get(browserTabId)?.canGoForward ?? false
   );
   const tabAnnotationMode = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
@@ -56,25 +76,56 @@ export function BrowserControls({
 
   if (!tabUrl) return <></>;
 
+  const backDisabled = respectNavCapabilities && !canGoBack;
+  const forwardDisabled = respectNavCapabilities && !canGoForward;
+
   return (
     <div className="flex flex-col shrink-0">
       <div className="h-9 flex items-center gap-1.5 px-2 bg-card border-b border-border">
         <button
-          onClick={() => browserTabGoBack(browserTabId).catch(console.error)}
-          className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => {
+            if (backDisabled) return;
+            if (onBack) {
+              onBack();
+              return;
+            }
+            browserTabGoBack(browserTabId).catch(console.error);
+          }}
+          disabled={backDisabled}
+          className={cn(
+            "p-1.5 rounded text-muted-foreground transition-colors",
+            backDisabled ? "opacity-40 cursor-not-allowed" : "hover:bg-secondary hover:text-foreground"
+          )}
           title="Back"
         >
           <ArrowLeft size={14} />
         </button>
         <button
-          onClick={() => browserTabGoForward(browserTabId).catch(console.error)}
-          className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => {
+            if (forwardDisabled) return;
+            if (onForward) {
+              onForward();
+              return;
+            }
+            browserTabGoForward(browserTabId).catch(console.error);
+          }}
+          disabled={forwardDisabled}
+          className={cn(
+            "p-1.5 rounded text-muted-foreground transition-colors",
+            forwardDisabled ? "opacity-40 cursor-not-allowed" : "hover:bg-secondary hover:text-foreground"
+          )}
           title="Forward"
         >
           <ArrowRight size={14} />
         </button>
         <button
-          onClick={() => browserTabReload(browserTabId).catch(console.error)}
+          onClick={() => {
+            if (onReload) {
+              onReload();
+              return;
+            }
+            browserTabReload(browserTabId).catch(console.error);
+          }}
           className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
           title="Reload"
         >
@@ -96,39 +147,58 @@ export function BrowserControls({
             placeholder="Enter URL..."
           />
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
-              className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Open debug console"
-              title="Debug Console"
-            >
-              <Bug size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Debug Console</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleToggleAnnotationMode}
-              aria-pressed={tabAnnotationMode}
-              className={cn(
-                "p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95",
-                tabAnnotationMode
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20"
-                  : "hover:bg-secondary text-muted-foreground hover:text-foreground"
-              )}
-              aria-label={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
-            >
-              <Pencil size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
-          </TooltipContent>
-        </Tooltip>
+        {onOpenExternal && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={onOpenExternal}
+                className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Open in new tab"
+                title="Open in new tab"
+              >
+                <ExternalLink size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open in new tab</TooltipContent>
+          </Tooltip>
+        )}
+        {supportsDevtools && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
+                className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Open debug console"
+                title="Debug Console"
+              >
+                <Bug size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Debug Console</TooltipContent>
+          </Tooltip>
+        )}
+        {supportsAnnotation && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleToggleAnnotationMode}
+                aria-pressed={tabAnnotationMode}
+                className={cn(
+                  "p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95",
+                  tabAnnotationMode
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20"
+                    : "hover:bg-secondary text-muted-foreground hover:text-foreground"
+                )}
+                aria-label={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+              >
+                <Pencil size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

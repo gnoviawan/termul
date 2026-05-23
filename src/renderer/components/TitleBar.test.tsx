@@ -6,6 +6,8 @@ import { useSidebarStore } from '@/stores/sidebar-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
 
+const mockIsTauriContext = vi.fn(() => true)
+
 const { mockUpdatePanelVisibility, mockToastError, mockWindowApi } = vi.hoisted(() => ({
   mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
   mockToastError: vi.fn(),
@@ -21,6 +23,10 @@ vi.mock('@/lib/api', () => ({
   windowApi: mockWindowApi
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => mockIsTauriContext()
+}))
+
 vi.mock('sonner', () => ({
   toast: {
     error: mockToastError
@@ -30,6 +36,7 @@ vi.mock('sonner', () => ({
 describe('TitleBar', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(true)
     vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(
       mockUpdatePanelVisibility
     )
@@ -87,5 +94,16 @@ describe('TitleBar', () => {
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith('persist failed')
     })
+  })
+
+  it('hides desktop-only actions in web mode', () => {
+    mockIsTauriContext.mockReturnValue(false)
+
+    renderTitleBar()
+
+    expect(screen.queryByLabelText('Open settings')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Open preferences')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Open remote coding')).not.toBeInTheDocument()
+    expect(screen.queryByText('Shortcut Menu')).not.toBeInTheDocument()
   })
 })

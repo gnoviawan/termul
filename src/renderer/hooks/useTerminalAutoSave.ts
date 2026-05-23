@@ -245,8 +245,8 @@ export async function loadPersistedTerminals(
     return result.data
   }
 
-  // FILE_NOT_FOUND is expected for new projects
-  if (result.code === 'FILE_NOT_FOUND') {
+  // Missing persisted layout is expected for new projects and Web Lite sessions
+  if (result.code === 'FILE_NOT_FOUND' || result.code === 'KEY_NOT_FOUND') {
     return null
   }
 

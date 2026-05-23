@@ -36,6 +36,8 @@ describe('wsServerApi', () => {
     await wsServerApi.generateToken()
     await wsServerApi.rotateToken()
     await wsServerApi.getAuditLog()
+    await wsServerApi.listClients()
+    await wsServerApi.revokeClient('client-1')
     await wsServerApi.setActiveProject('My Project', '/path/to/project', '/bin/bash', 'blue')
     await wsServerApi.setProjects([{ id: '1', name: 'Proj' }], '1')
 
@@ -44,6 +46,8 @@ describe('wsServerApi', () => {
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_get_token')
     expect(mockInvoke).toHaveBeenCalledWith('ws_rotate_token')
     expect(mockInvoke).toHaveBeenCalledWith('ws_get_audit_log')
+    expect(mockInvoke).toHaveBeenCalledWith('ws_list_clients')
+    expect(mockInvoke).toHaveBeenCalledWith('ws_revoke_client', { clientId: 'client-1' })
     expect(mockInvoke).toHaveBeenCalledWith('ws_server_set_active_project', {
       projectName: 'My Project',
       projectPath: '/path/to/project',

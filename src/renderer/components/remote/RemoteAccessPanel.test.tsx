@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { RemoteAccessPanel } from './RemoteAccessPanel'
 
 const {
@@ -11,8 +11,11 @@ const {
   mockRotateToken,
   mockStartTunnel,
   mockStopTunnel,
+  mockRefreshTunnelSessions,
   mockUpsertSession,
   mockSetError,
+  mockListClients,
+  mockRevokeClient,
   mockActiveProject,
   wsState,
   tunnelState,
@@ -37,8 +40,11 @@ const {
 
   const mockStartTunnel = vi.fn()
   const mockStopTunnel = vi.fn()
+  const mockRefreshTunnelSessions = vi.fn()
   const mockUpsertSession = vi.fn()
   const mockSetError = vi.fn()
+  const mockListClients = vi.fn()
+  const mockRevokeClient = vi.fn()
 
   const wsState = {
     status: { isRunning: false, port: 9876, clientCount: 0, sessionId: '', activeProjectId: null as string | null, tokenTtlSecs: 900, httpUrl: '', wsUrl: '', useHttps: false },
@@ -58,6 +64,7 @@ const {
     error: null as string | null,
     startTunnel: mockStartTunnel,
     stopTunnel: mockStopTunnel,
+    refreshSessions: mockRefreshTunnelSessions,
     upsertSession: mockUpsertSession,
     setError: mockSetError
   }
@@ -106,8 +113,11 @@ const {
     mockRotateToken,
     mockStartTunnel,
     mockStopTunnel,
+    mockRefreshTunnelSessions,
     mockUpsertSession,
     mockSetError,
+    mockListClients,
+    mockRevokeClient,
     mockActiveProject,
     wsState,
     tunnelState,
@@ -147,6 +157,8 @@ vi.mock('@/lib/ws-server-api', () => ({
       return () => {}
     }),
     getAuditLog: vi.fn(),
+    listClients: mockListClients,
+    revokeClient: mockRevokeClient,
     start: mockStartServer,
     stop: mockStopServer,
     generateToken: mockGenerateToken,
@@ -183,6 +195,9 @@ beforeEach(() => {
   mockStopTunnel.mockReset()
   mockUpsertSession.mockReset()
   mockSetError.mockReset()
+  mockRefreshTunnelSessions.mockReset()
+  mockListClients.mockReset()
+  mockRevokeClient.mockReset()
 
   mockGenerateToken.mockResolvedValue('generated-token')
   mockStartServer.mockResolvedValue({ success: true, data: { isRunning: true, port: 9876, clientCount: 0, httpUrl: 'http://localhost:9876', wsUrl: 'ws://localhost:9876', useHttps: false } })
@@ -190,6 +205,8 @@ beforeEach(() => {
   mockRotateToken.mockResolvedValue({ success: true, data: { token: 'rotated-token' } })
   mockStartTunnel.mockResolvedValue({ id: 'termul-web-tunnel', configId: 'termul-web-tunnel', status: 'running', publicUrl: 'https://example.trycloudflare.com', pid: 123, lastError: null })
   mockStopTunnel.mockResolvedValue(true)
+  mockListClients.mockResolvedValue({ success: true, data: [] })
+  mockRevokeClient.mockResolvedValue({ success: true, data: true })
 
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: clipboardWriteText },
@@ -223,6 +240,25 @@ describe('RemoteAccessPanel', () => {
         autoStart: false
       })
       expect(mockToast.success).toHaveBeenCalledWith('Termul Web ready at https://example.trycloudflare.com')
+    })
+  })
+
+  it('refreshes existing tunnel and device state on mount', async () => {
+    wsState.status = { isRunning: true, port: 9876, clientCount: 1, sessionId: 'session-1', activeProjectId: 'proj-1', tokenTtlSecs: 900, httpUrl: 'http://localhost:9876', wsUrl: 'ws://localhost:9876', useHttps: false }
+    wsState.authToken = 'secret-token'
+    mockListClients.mockResolvedValueOnce({
+      success: true,
+      data: [{ clientId: 'client-1', ipAddress: '10.0.0.8', remoteAddr: '10.0.0.8:44321', authenticated: true, connectedAt: '2026-05-23T10:00:00.000Z', lastActivityAt: '2026-05-23T10:05:00.000Z' }]
+    })
+
+    render(<RemoteAccessPanel />)
+
+    await waitFor(() => {
+      expect(mockRefreshStatus).toHaveBeenCalledTimes(1)
+      expect(mockRefreshTunnelSessions).toHaveBeenCalledTimes(1)
+      expect(mockListClients).toHaveBeenCalled()
+      expect(screen.getByText('10.0.0.8:44321')).toBeInTheDocument()
+      expect(screen.getByText('IP: 10.0.0.8')).toBeInTheDocument()
     })
   })
 
@@ -275,11 +311,38 @@ describe('RemoteAccessPanel', () => {
     })
   })
 
+  it('renders connected devices and revokes a single device', async () => {
+    wsState.status = { isRunning: true, port: 9876, clientCount: 2, sessionId: 'session-1', activeProjectId: 'proj-1', tokenTtlSecs: 900, httpUrl: 'http://localhost:9876', wsUrl: 'ws://localhost:9876', useHttps: false }
+    wsState.authToken = 'secret-token'
+    tunnelState.sessions = [{ id: 'termul-web-tunnel', status: 'running', publicUrl: 'https://example.trycloudflare.com', lastError: null }]
+    mockListClients
+      .mockResolvedValueOnce({
+        success: true,
+        data: [{ clientId: 'client-1', ipAddress: '10.0.0.8', remoteAddr: '10.0.0.8:44321', authenticated: true, connectedAt: '2026-05-23T10:00:00.000Z', lastActivityAt: '2026-05-23T10:05:00.000Z' }]
+      })
+      .mockResolvedValueOnce({ success: true, data: [] })
+
+    render(<RemoteAccessPanel />)
+
+    await waitFor(() => {
+      expect(screen.getByText('10.0.0.8:44321')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Revoke/i })[1])
+
+    await waitFor(() => {
+      expect(mockRevokeClient).toHaveBeenCalledWith('client-1')
+      expect(mockToast.success).toHaveBeenCalledWith('Device access revoked')
+    })
+  })
+
   it('syncs websocket and tunnel events into the stores', () => {
     render(<RemoteAccessPanel />)
 
-    handlers.tunnelStatus?.({ tunnelId: 'termul-web-tunnel', status: 'running', publicUrl: 'https://example.trycloudflare.com' })
-    handlers.wsStatus?.({ isRunning: true, port: 9876, clientCount: 1, sessionId: 'session-1', activeProjectId: 'proj-1', tokenTtlSecs: 900, httpUrl: 'http://localhost:9876', wsUrl: 'ws://localhost:9876', useHttps: false })
+    act(() => {
+      handlers.tunnelStatus?.({ tunnelId: 'termul-web-tunnel', status: 'running', publicUrl: 'https://example.trycloudflare.com' })
+      handlers.wsStatus?.({ isRunning: true, port: 9876, clientCount: 1, sessionId: 'session-1', activeProjectId: 'proj-1', tokenTtlSecs: 900, httpUrl: 'http://localhost:9876', wsUrl: 'ws://localhost:9876', useHttps: false })
+    })
 
     expect(mockUpsertSession).toHaveBeenCalledWith({
       id: 'termul-web-tunnel',

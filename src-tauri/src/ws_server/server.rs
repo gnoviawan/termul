@@ -35,7 +35,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 async fn http_route_handler(
     State(state): State<super::AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap
 ) -> Response {
     let connection_context = state.server.get_connection_context().await;
@@ -406,19 +406,69 @@ impl WsServer {
         self.audit_log.lock().await.clone()
     }
 
+    pub async fn get_client_sessions(&self) -> Vec<super::WsClientInfo> {
+        let clients = self.clients.lock().await;
+        let mut sessions = clients
+            .values()
+            .map(|client| super::WsClientInfo {
+                client_id: client.client_id.clone(),
+                ip_address: client.ip_address.clone(),
+                remote_addr: client.remote_addr.clone(),
+                authenticated: client.authenticated,
+                connected_at: chrono::DateTime::<chrono::Utc>::from(client.connected_at_system).to_rfc3339(),
+                last_activity_at: chrono::DateTime::<chrono::Utc>::from(client.last_activity_at_system).to_rfc3339(),
+            })
+            .collect::<Vec<_>>();
+
+        sessions.sort_by(|left, right| right.last_activity_at.cmp(&left.last_activity_at));
+        sessions
+    }
+
+    pub async fn revoke_client(&self, client_id: &str) -> Result<bool, String> {
+        let clients = self.clients.lock().await;
+        let Some(client) = clients.get(client_id) else {
+            return Ok(false);
+        };
+
+        let _ = client.tx.send(WsOutbound::Event {
+            event: "device-revoked".to_string(),
+            payload: Some(serde_json::json!({
+                "clientId": client_id,
+            })),
+        });
+        let _ = client.disconnect_tx.send(true);
+        Ok(true)
+    }
+
     pub async fn set_active_project(&self, name: String, path: String, default_shell: Option<String>, color: Option<String>) {
         let mut active_proj = self.active_project.lock().await;
-        let project_binding = format!("{}::{}", name, path);
         *active_proj = Some(super::ActiveProjectInfo {
             name: name.clone(),
             path: path.clone(),
             default_shell,
             color,
         });
+
+        let projects = self.projects.lock().await;
+        let resolved_active_project_id = projects
+            .iter()
+            .find(|project| project.name == name && project.path.as_deref() == Some(path.as_str()))
+            .map(|project| project.id.clone());
+
         {
             let mut active_project_id = self.active_project_id.lock().await;
-            *active_project_id = Some(project_binding);
+            *active_project_id = resolved_active_project_id.clone();
         }
+
+        let event_payload = serde_json::json!({
+            "projects": &*projects,
+            "activeProjectId": resolved_active_project_id,
+        });
+        let _ = self.event_tx.send(WsOutbound::Event {
+            event: "projects-changed".to_string(),
+            payload: Some(event_payload),
+        });
+
         log::info!("[WsServer] set_active_project name={} (token unchanged)", name);
         // NOTE: do NOT rotate token here — rotating on every project switch
         // invalidates the browser cookie and forces the user to re-login.

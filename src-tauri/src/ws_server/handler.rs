@@ -7,7 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
 
 const SESSION_IDLE_TIMEOUT_SECS: u64 = 900;
@@ -66,13 +66,21 @@ async fn handle_ws(
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WsOutbound>();
+    let (disconnect_tx, mut disconnect_rx) = tokio::sync::watch::channel(false);
+    let connected_at_system = SystemTime::now();
 
     {
         let mut clients = server.clients.lock().await;
         clients.insert(client_id.clone(), WsClient {
+            client_id: client_id.clone(),
             authenticated: false,
             tx: tx.clone(),
+            disconnect_tx,
+            ip_address: addr.ip().to_string(),
+            remote_addr: addr.to_string(),
             connected_at: Instant::now(),
+            connected_at_system,
+            last_activity_at_system: connected_at_system,
         });
         let mut status = server.status.lock().await;
         status.client_count = clients.len();
@@ -128,9 +136,21 @@ async fn handle_ws(
                 log::warn!("[WsServer] Closing expired websocket session: {}", addr);
                 break;
             }
+            changed = disconnect_rx.changed() => {
+                if changed.is_ok() && *disconnect_rx.borrow() {
+                    log::info!("[WsServer] Closing revoked websocket client: {}", addr);
+                    break;
+                }
+            }
             msg = ws_read.next() => {
                 let Some(Ok(msg)) = msg else { break; };
                 last_activity = Instant::now();
+                {
+                    let mut clients = server.clients.lock().await;
+                    if let Some(client) = clients.get_mut(&client_id) {
+                        client.last_activity_at_system = SystemTime::now();
+                    }
+                }
 
                 match msg {
                     Message::Text(text) => {
@@ -165,8 +185,11 @@ async fn handle_ws(
                                         let mut clients = server.clients.lock().await;
                                         if let Some(client) = clients.get_mut(&client_id) {
                                             client.authenticated = true;
+                                            client.last_activity_at_system = SystemTime::now();
                                         }
                                         server.log_connection(&addr, "authenticated");
+                                        let status = server.status.lock().await.clone();
+                                        let _ = app_handle.emit("ws-server-status-changed", status);
                                         WsOutbound::Response {
                                             id: "auth".to_string(),
                                             success: true,

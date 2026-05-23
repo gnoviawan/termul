@@ -43,4 +43,15 @@ describe('WebApp', () => {
       expect(screen.getByText('No projects yet')).toBeInTheDocument()
     })
   })
+
+  it('renders offline state when websocket connection fails', async () => {
+    mockConnect.mockRejectedValueOnce(new Error('connect failed'))
+
+    render(<WebApp />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Web Lite offline')).toBeInTheDocument()
+      expect(screen.getByText('connect failed')).toBeInTheDocument()
+    })
+  })
 })

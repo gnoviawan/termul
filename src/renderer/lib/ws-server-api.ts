@@ -22,6 +22,15 @@ export interface ConnectionAudit {
   clientId: string | null
 }
 
+export interface RemoteDeviceSession {
+  clientId: string
+  ipAddress: string
+  remoteAddr: string
+  authenticated: boolean
+  connectedAt: string
+  lastActivityAt: string
+}
+
 async function invokeRaw<T>(command: string, args?: Record<string, unknown>): Promise<{ success: boolean; data?: T; error?: string }> {
   try {
     const data = args !== undefined ? await invoke<T>(command, args) : await invoke<T>(command)
@@ -67,6 +76,14 @@ export const wsServerApi = {
 
   getAuditLog() {
     return invokeRaw<ConnectionAudit[]>('ws_get_audit_log')
+  },
+
+  listClients() {
+    return invokeRaw<RemoteDeviceSession[]>('ws_list_clients')
+  },
+
+  revokeClient(clientId: string) {
+    return invokeRaw<boolean>('ws_revoke_client', { clientId })
   },
 
   setActiveProject(projectName: string, projectPath: string, defaultShell?: string, color?: string) {

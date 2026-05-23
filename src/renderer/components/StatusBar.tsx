@@ -45,17 +45,17 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         bgColor
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {project && (
           <>
-            <span className="font-medium opacity-90">
+            <span className="font-medium opacity-90 truncate max-w-[120px] sm:max-w-none">
               {project.name.toLowerCase().replace(/\s+/g, '-')}
             </span>
 
             {showGitBranch && gitBranch && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="flex items-center gap-1 opacity-80 hover:opacity-100 cursor-pointer transition-opacity">
+                  <span className="hidden sm:flex items-center gap-1 opacity-80 hover:opacity-100 cursor-pointer transition-opacity">
                     <GitBranch size={12} />
                     {gitBranch}
                     {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
@@ -83,17 +83,19 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
             )}
 
             {showGitStatus && gitStatus && gitStatus.hasChanges && (
-              <GitStatusIndicator
-                modified={gitStatus.modified}
-                staged={gitStatus.staged}
-                untracked={gitStatus.untracked}
-              />
+              <span className="hidden sm:inline">
+                <GitStatusIndicator
+                  modified={gitStatus.modified}
+                  staged={gitStatus.staged}
+                  untracked={gitStatus.untracked}
+                />
+              </span>
             )}
 
             {showWorkingDirectory && formattedPath && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="flex items-center gap-1 opacity-60 hover:opacity-100 cursor-pointer transition-opacity">
+                  <span className="hidden md:flex items-center gap-1 opacity-60 hover:opacity-100 cursor-pointer transition-opacity">
                     <Folder size={12} />
                     {formattedPath}
                   </span>
@@ -109,7 +111,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       <div className="flex-1" />
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>

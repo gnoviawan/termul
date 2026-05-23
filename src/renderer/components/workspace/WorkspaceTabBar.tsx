@@ -124,7 +124,7 @@ function TerminalTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"relative h-full px-2.5 flex items-center border-r border-border/40 min-w-[90px] cursor-pointer group transition-all duration-150 ease-out",
+					"relative h-full px-2 sm:px-2.5 flex items-center border-r border-border/40 min-w-[70px] sm:min-w-[90px] cursor-pointer group transition-all duration-150 ease-out",
 					isActive
 						? "bg-background text-foreground"
 						: "hover:bg-secondary/50 text-muted-foreground",
@@ -146,7 +146,7 @@ function TerminalTabInline({
 
 				<TerminalIcon
 					size={11}
-					className={cn("mr-1.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")}
+					className={cn("mr-1 sm:mr-1.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")}
 				/>
 				{isEditing ? (
 					<input

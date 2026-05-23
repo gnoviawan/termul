@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { FolderKanban, Terminal } from "lucide-react";
+import { FolderKanban, Terminal, Menu, PanelRight } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
 import { RemoteAccessPanel } from "@/components/remote/RemoteAccessPanel";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
@@ -19,6 +19,8 @@ import {
 	ResizablePanel,
 	ResizableHandle,
 } from "@/components/ui/resizable";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
 	useProjects,
 	useActiveProject,
@@ -136,6 +138,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false);
 	const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false);
 	const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0);
+
+	const isMobile = useIsMobile();
+	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+	const [isMobileExplorerOpen, setIsMobileExplorerOpen] = useState(false);
 
 	const isLoaded = useProjectsLoaded();
 	const confirmTerminalClose = useConfirmTerminalClose();
@@ -512,6 +518,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const maxTerminals = useMaxTerminalsPerProject();
 	const updateAppSetting = useUpdateAppSetting();
 	const updatePanelVisibility = useUpdatePanelVisibility();
+	const handleOpenMobileExplorer = useCallback(() => {
+		const openExplorer = async (): Promise<void> => {
+			if (!isExplorerVisible) {
+				try {
+					await updatePanelVisibility("fileExplorerVisible", true);
+				} catch (error) {
+					toast.error(
+						error instanceof Error
+							? error.message
+							: "Failed to update file explorer visibility",
+					);
+					return;
+				}
+			}
+
+			setIsMobileExplorerOpen(true);
+		};
+
+		void openExplorer();
+	}, [isExplorerVisible, updatePanelVisibility]);
 
 	// Helper to get active key for a shortcut
 	const getActiveKey = useCallback(
@@ -1155,12 +1181,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const terminalToClose = terminals.find(
 		(t) => t.id === closeConfirmTerminal?.terminalId,
 	);
+	const isDesktopApp = isTauri();
 
 	// Show loading state while projects are being loaded (Tauri only – web loads via WS)
-	if (!isLoaded && isTauri()) {
+	if (!isLoaded && isDesktopApp) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
-				{isTauri() && (
+				{isDesktopApp && (
 					<TitleBar
 						isShortcutsOpen={isShortcutMenuOpen}
 						onShortcutsOpenChange={setIsShortcutMenuOpen}
@@ -1175,27 +1202,87 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
-			{isTauri() && (
+			{(isDesktopApp || !isMobile) && (
 				<TitleBar
 					isShortcutsOpen={isShortcutMenuOpen}
 					onShortcutsOpenChange={setIsShortcutMenuOpen}
 				/>
 			)}
 
+			{/* Mobile header with hamburger */}
+			{isMobile && !isTauri() && (
+				<header className="h-10 flex items-center px-3 bg-sidebar border-b border-border/50 flex-shrink-0">
+					<button
+						onClick={() => setIsMobileSidebarOpen(true)}
+						className="p-1.5 rounded hover:bg-sidebar-accent transition-colors"
+						aria-label="Open sidebar"
+					>
+						<Menu size={18} className="text-foreground" />
+					</button>
+					<span className="ml-2 text-xs font-semibold text-foreground/80 tracking-wide uppercase">
+						termul
+					</span>
+					<div className="ml-auto">
+						<button
+							onClick={handleOpenMobileExplorer}
+							className="p-1.5 rounded hover:bg-sidebar-accent transition-colors"
+							aria-label="Open file explorer"
+						>
+							<PanelRight size={18} className="text-foreground" />
+						</button>
+					</div>
+				</header>
+			)}
+
 			<div className="flex-1 flex overflow-hidden min-h-0 h-full">
-				{/* Sidebar */}
-				{isSidebarVisible && (
-					<ProjectSidebar
-						projects={projects}
-						activeProjectId={activeProjectId}
-						onSelectProject={selectProject}
-						onNewProject={() => setIsNewProjectModalOpen(true)}
-						onUpdateProject={updateProject}
-						onDeleteProject={deleteProject}
-						onArchiveProject={archiveProject}
-						onRestoreProject={restoreProject}
-						onReorderProjects={reorderProjects}
-					/>
+				{/* Sidebar - desktop: inline, mobile: Sheet overlay */}
+				{isMobile ? (
+					<>
+						<Sheet open={isMobileSidebarOpen} onOpenChange={setIsMobileSidebarOpen}>
+							<SheetContent side="left" className="w-64 p-0 bg-sidebar border-r border-border/50">
+								<SheetTitle className="sr-only">Projects</SheetTitle>
+								<ProjectSidebar
+									projects={projects}
+									activeProjectId={activeProjectId}
+									onSelectProject={(id) => {
+										selectProject(id);
+										setIsMobileSidebarOpen(false);
+									}}
+									onNewProject={() => {
+										setIsMobileSidebarOpen(false);
+										setIsNewProjectModalOpen(true);
+									}}
+									onUpdateProject={updateProject}
+									onDeleteProject={deleteProject}
+									onArchiveProject={archiveProject}
+									onRestoreProject={restoreProject}
+									onReorderProjects={reorderProjects}
+								/>
+							</SheetContent>
+						</Sheet>
+						<Sheet open={isMobileExplorerOpen} onOpenChange={setIsMobileExplorerOpen}>
+							<SheetContent side="right" className="w-[85vw] max-w-none p-0 bg-background border-l border-border/50">
+								<SheetTitle className="sr-only">File Explorer</SheetTitle>
+								<div className="h-full pr-10">
+									<FileExplorer side="left" />
+								</div>
+							</SheetContent>
+						</Sheet>
+					</>
+				) : (
+					isSidebarVisible && (
+						<ProjectSidebar
+							projects={projects}
+							activeProjectId={activeProjectId}
+							onSelectProject={selectProject}
+							onNewProject={() => setIsNewProjectModalOpen(true)}
+							onUpdateProject={updateProject}
+							onDeleteProject={deleteProject}
+							onArchiveProject={archiveProject}
+							onRestoreProject={restoreProject}
+							onReorderProjects={reorderProjects}
+						/>
+					)
 				)}
 
 				{/* Main Content and File Explorer Container */}
@@ -1267,8 +1354,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							)}
 						</main>
 
-						{/* File Explorer - separate floating panel */}
-						{isTauri() && isExplorerVisible && activeProject?.path && (
+					{/* File Explorer - separate floating panel (hidden on mobile) */}
+					{!isMobile && isExplorerVisible && activeProjectId && (
 							<div className="flex-shrink-0 ml-2">
 								<FileExplorer />
 							</div>
@@ -1292,21 +1379,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onAddTerminal={() => handleAddTerminal(undefined)}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
-				onStartTunnel={() => {
-					const preset = activeProject?.tunnelPresets?.[0]
-					if (!preset) return
-					void useTunnelStore.getState().startTunnel({
-						...preset,
-						id: `tunnel-${Date.now()}`
-					})
-				}}
-				onOpenProjectSettings={handleOpenProjectSettings}
-				onOpenAppPreferences={handleOpenAppPreferences}
-				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-				onOpenShortcutMenu={handleOpenShortcutMenu}
-				getShortcutLabel={getShortcutLabel}
-				getProjectShortcutLabel={getProjectShortcutLabel}
-			/>
+								onStartTunnel={() => {
+									const preset = activeProject?.tunnelPresets?.[0]
+									if (!preset) return
+									void useTunnelStore.getState().startTunnel({
+										...preset,
+										id: `tunnel-${Date.now()}`
+									})
+								}}
+								onOpenProjectSettings={isDesktopApp ? handleOpenProjectSettings : undefined}
+								onOpenAppPreferences={isDesktopApp ? handleOpenAppPreferences : undefined}
+								onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+								onOpenShortcutMenu={isDesktopApp ? handleOpenShortcutMenu : undefined}
+								getShortcutLabel={getShortcutLabel}
+								getProjectShortcutLabel={getProjectShortcutLabel}
+							/>
 
 			<CreateSnapshotModal
 				isOpen={isCreateSnapshotModalOpen}

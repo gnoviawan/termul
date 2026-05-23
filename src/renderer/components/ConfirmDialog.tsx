@@ -76,7 +76,7 @@ export function ConfirmDialog({
 						animate={{ opacity: 1, scale: 1, y: 0 }}
 						exit={{ opacity: 0, scale: 0.95, y: 10 }}
 						transition={{ duration: 0.15 }}
-						className="bg-card rounded-lg shadow-2xl w-[400px] border border-border overflow-hidden"
+						className="bg-card rounded-lg shadow-2xl w-[95vw] max-w-[400px] border border-border overflow-hidden"
 						onClick={(e) => e.stopPropagation()}
 						onKeyDown={handleKeyDown}
 						tabIndex={-1}

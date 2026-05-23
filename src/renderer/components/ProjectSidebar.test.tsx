@@ -10,6 +10,8 @@ const { mockGetAvailableShells, mockUseProjectsWithActivity, mockUseProjectsWith
   mockUseProjectsWithErrors: vi.fn()
 }))
 
+const mockIsTauri = vi.fn(() => true)
+
 vi.mock('@/lib/api', () => ({
   shellApi: {
     getAvailableShells: mockGetAvailableShells
@@ -30,8 +32,13 @@ vi.mock('@/lib/utils', async () => {
   return { ...actual }
 })
 
+vi.mock('@/lib/api-bridge', () => ({
+  isTauri: () => mockIsTauri()
+}))
+
 // Setup mock data
 beforeEach(() => {
+  mockIsTauri.mockReturnValue(true)
   mockGetAvailableShells.mockReset()
   mockGetAvailableShells.mockResolvedValue({
     success: true,
@@ -85,9 +92,20 @@ describe('ProjectSidebar Context Menu', () => {
     fireEvent.contextMenu(projectItem)
 
     expect(screen.getByText('Rename')).toBeInTheDocument()
+    expect(screen.getByText('Project Settings')).toBeInTheDocument()
     expect(screen.getByText('Change Color')).toBeInTheDocument()
     expect(screen.getByText('Archive')).toBeInTheDocument()
     expect(screen.getByText('Delete')).toBeInTheDocument()
+  })
+
+  it('should hide project settings from context menu in web mode', async () => {
+    mockIsTauri.mockReturnValue(false)
+    await renderWithRouter()
+
+    fireEvent.contextMenu(screen.getByText('Project One'))
+
+    expect(screen.getByText('Rename')).toBeInTheDocument()
+    expect(screen.queryByText('Project Settings')).not.toBeInTheDocument()
   })
 
   it('should close context menu on escape', async () => {

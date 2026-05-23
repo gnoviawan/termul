@@ -89,6 +89,7 @@ export function ProjectSidebar({
 	onReorderProjects,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
+	const isDesktopApp = isTauri();
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
@@ -325,17 +326,20 @@ const handleSaveSettings = useCallback(() => {
 					onClick: () => handleStartRename(projectId),
 				},
 				{
-					label: "Project Settings",
-					icon: <Settings size={14} />,
-					onClick: () => handleOpenSettings(projectId),
-				},
-				{
 					label: "Change Color",
 					icon: <Palette size={14} />,
 					onClick: () =>
 						handleOpenColorPicker(projectId, contextMenu.x, contextMenu.y),
 				},
 			];
+
+			if (isDesktopApp) {
+				items.splice(1, 0, {
+					label: "Project Settings",
+					icon: <Settings size={14} />,
+					onClick: () => handleOpenSettings(projectId),
+				});
+			}
 
 			if (shellSubmenu.length > 0) {
 				items.push({
@@ -366,6 +370,7 @@ const handleSaveSettings = useCallback(() => {
 		},
 		[
 			projects,
+			isDesktopApp,
 			availableShells,
 			contextMenu.x,
 			contextMenu.y,
@@ -424,7 +429,7 @@ const handleSaveSettings = useCallback(() => {
 				<span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
 					Projects
 				</span>
-				{isTauri() && (
+				{isDesktopApp && (
 					<button
 						onClick={onNewProject}
 						className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -572,7 +577,7 @@ const handleSaveSettings = useCallback(() => {
 						animate={{ opacity: 1, scale: 1, y: 0 }}
 						exit={{ opacity: 0, scale: 0.95, y: 10 }}
 						transition={{ duration: 0.15 }}
-						className="bg-card rounded-lg shadow-2xl w-[500px] border border-border overflow-hidden"
+						className="bg-card rounded-lg shadow-2xl w-[95vw] max-w-[500px] border border-border overflow-hidden"
 						onClick={(e) => e.stopPropagation()}
 					>
 						{/* Header */}

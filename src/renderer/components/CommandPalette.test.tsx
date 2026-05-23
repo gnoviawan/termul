@@ -189,6 +189,18 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Switch to Project: Alpha')).toBeInTheDocument()
   })
 
+  it('can hide desktop-only commands in web mode', () => {
+    renderPalette({
+      onOpenProjectSettings: undefined,
+      onOpenAppPreferences: undefined,
+      onOpenShortcutMenu: undefined
+    })
+
+    expect(screen.queryByText('Project Settings')).not.toBeInTheDocument()
+    expect(screen.queryByText('App Preferences')).not.toBeInTheDocument()
+    expect(screen.queryByText('Open Shortcut Menu')).not.toBeInTheDocument()
+  })
+
   it('keeps recent commands visible when the search is empty', () => {
     recentCommandIds = ['open-command-history', 'project-alpha']
 

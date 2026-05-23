@@ -14,9 +14,7 @@ function resolveWsUrl(rawUrl: string): string {
   return `${rawUrl.replace(/\/+$/, '')}/ws`
 }
 
-const WS_URL = resolveWsUrl(import.meta.env.VITE_WS_URL || 'ws://localhost:9876')
-const WS_PROJECT_ID = import.meta.env.VITE_WS_PROJECT_ID || ''
-const WS_SESSION_ID = import.meta.env.VITE_WS_SESSION_ID || ''
+const WS_URL = resolveWsUrl(import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:9876')
 
 function getWsToken(): string {
   if (import.meta.env.VITE_WS_TOKEN) return import.meta.env.VITE_WS_TOKEN as string
@@ -24,6 +22,18 @@ function getWsToken(): string {
   if (win.AUTH_TOKEN) return win.AUTH_TOKEN
   const match = document.cookie.match(/(?:^|; )termul_web_lite_password=([^;]+)/)
   return match ? decodeURIComponent(match[1]) : ''
+}
+
+function getWsSessionId(): string {
+  if (import.meta.env.VITE_WS_SESSION_ID) return import.meta.env.VITE_WS_SESSION_ID as string
+  const win = window as typeof window & { TERMUL_SESSION_ID?: string }
+  return win.TERMUL_SESSION_ID || ''
+}
+
+function getWsProjectId(): string {
+  if (import.meta.env.VITE_WS_PROJECT_ID) return import.meta.env.VITE_WS_PROJECT_ID as string
+  const win = window as typeof window & { TERMUL_ACTIVE_PROJECT_ID?: string }
+  return win.TERMUL_ACTIVE_PROJECT_ID || ''
 }
 
 interface WsContextValue {
@@ -76,12 +86,14 @@ export function WebApp(): React.JSX.Element {
     setError(null)
 
     const token = getWsToken()
+    const projectId = getWsProjectId()
+    const sessionId = getWsSessionId()
 
     const adapter = createWsAdapter({
       url: WS_URL,
       authToken: token,
-      projectId: WS_PROJECT_ID || undefined,
-      sessionId: WS_SESSION_ID || undefined,
+      projectId: projectId || undefined,
+      sessionId: sessionId || undefined,
       reconnectInterval: 3000,
       maxReconnectAttempts: 20,
     })
@@ -124,6 +136,15 @@ export function WebApp(): React.JSX.Element {
         useProjectStore.getState().setProjects((projects ?? []) as unknown as Project[], activeProjectId)
       })
       .catch(console.error)
+  }, [ws])
+
+  useEffect(() => {
+    if (!ws) return
+    return ws.listen('projects-changed', (payload) => {
+      const projects = Array.isArray(payload.projects) ? payload.projects : []
+      const activeProjectId = typeof payload.activeProjectId === 'string' ? payload.activeProjectId : undefined
+      useProjectStore.getState().setProjects(projects as Project[], activeProjectId)
+    })
   }, [ws])
 
   useEffect(() => {
@@ -182,11 +203,30 @@ export function WebApp(): React.JSX.Element {
     )
   }
 
+  if (!ws) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background text-foreground p-6">
+        <div className="max-w-sm text-center space-y-4">
+          <h3 className="text-base font-semibold">Web Lite offline</h3>
+          <p className="text-sm text-muted-foreground">
+            {error || 'No websocket connection.'}
+          </p>
+          <button
+            onClick={() => void connect()}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <WsContext.Provider value={{ ws, isConnected, isConnecting, error }}>
       <div className="h-screen w-screen overflow-hidden bg-background font-sans selection:bg-primary/20 selection:text-primary-foreground">
         <Toaster position="top-right" theme="dark" />
-        {ws && !isLocked && <RouterProvider router={router} />}
+        {!isLocked && <RouterProvider router={router} />}
         {isLocked && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md">
             <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 text-center shadow-2xl">

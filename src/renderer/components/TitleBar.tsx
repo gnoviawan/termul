@@ -23,6 +23,7 @@ export function TitleBar({
   onShortcutsOpenChange
 }: TitleBarProps = {}): React.JSX.Element {
   const [isMaximized, setIsMaximized] = useState(false)
+  const isDesktopApp = isTauriContext()
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
@@ -94,45 +95,49 @@ export function TitleBar({
           <PanelRight size={14} className={isExplorerVisible ? 'text-foreground' : 'text-muted-foreground'} />
         </button>
 
-        <TitleBarShortcutsPopover
-          buttonClassName={cn(focusableButtonClass, 'rounded-md mx-0.5')}
-          open={isShortcutsOpen}
-          onOpenChange={onShortcutsOpenChange}
-        />
+        {isDesktopApp && (
+          <>
+            <TitleBarShortcutsPopover
+              buttonClassName={cn(focusableButtonClass, 'rounded-md mx-0.5')}
+              open={isShortcutsOpen}
+              onOpenChange={onShortcutsOpenChange}
+            />
 
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
-          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
-          title="Settings"
-          aria-label="Open settings"
-          aria-current={location.pathname === '/settings' ? 'page' : undefined}
-        >
-          <Settings size={14} className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'} />
-        </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
+              className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
+              title="Settings"
+              aria-label="Open settings"
+              aria-current={location.pathname === '/settings' ? 'page' : undefined}
+            >
+              <Settings size={14} className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'} />
+            </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}
-          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
-          title="Preferences"
-          aria-label="Open preferences"
-          aria-current={location.pathname === '/preferences' ? 'page' : undefined}
-        >
-          <SlidersHorizontal size={14} className={location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'} />
-        </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}
+              className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
+              title="Preferences"
+              aria-label="Open preferences"
+              aria-current={location.pathname === '/preferences' ? 'page' : undefined}
+            >
+              <SlidersHorizontal size={14} className={location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'} />
+            </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate('/remote'); }}
-          className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
-          title="Remote Coding"
-          aria-label="Open remote coding"
-          aria-current={location.pathname === '/remote' ? 'page' : undefined}
-        >
-          <Globe size={14} className={location.pathname === '/remote' ? 'text-foreground' : 'text-muted-foreground'} />
-        </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate('/remote'); }}
+              className={cn(focusableButtonClass, 'rounded-md mx-0.5')}
+              title="Remote Coding"
+              aria-label="Open remote coding"
+              aria-current={location.pathname === '/remote' ? 'page' : undefined}
+            >
+              <Globe size={14} className={location.pathname === '/remote' ? 'text-foreground' : 'text-muted-foreground'} />
+            </button>
 
-        <div className="w-px h-3.5 bg-border/60 mx-1.5" aria-hidden="true" />
+            <div className="w-px h-3.5 bg-border/60 mx-1.5" aria-hidden="true" />
+          </>
+        )}
 
-        {!isMac && isTauriContext() && (
+        {!isMac && isDesktopApp && (
           <>
             <button
               onClick={(e) => { e.stopPropagation(); void windowApi.minimize(); }}

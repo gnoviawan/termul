@@ -119,7 +119,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.15 }}
-            className="bg-card rounded-lg shadow-2xl w-[480px] border border-border overflow-hidden"
+            className="bg-card rounded-lg shadow-2xl w-[95vw] max-w-[480px] border border-border overflow-hidden"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={handleKeyDown}
           >
