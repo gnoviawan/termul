@@ -1793,8 +1793,8 @@ function ConnectedTerminalComponent({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
-				<div className="relative flex w-full h-full flex-col overflow-hidden group">
-					<div className="relative min-h-0 flex-1">
+				<div className="relative flex w-full h-full flex-col group">
+					<div className="relative min-h-0 flex-1 overflow-hidden">
 						<div ref={containerRef} className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`} onClick={handleContainerClick} onMouseDown={(e) => { e.stopPropagation(); terminalRef.current?.focus(); }} />
 						{isSuspended && (
 							<div className="absolute inset-0 bg-[#0c0c0ced]/90 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
@@ -1844,8 +1844,8 @@ function ConnectedTerminalComponent({
 						)}
 					</div>
 					{isMobile && (
-						<div className="shrink-0 border-t border-border/60 bg-card/95 px-2 py-2 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-							<div className="flex gap-2 overflow-x-auto pb-1">
+						<div className="shrink-0 border-t border-border/60 bg-card/95 px-2 py-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+							<div className="flex gap-2 overflow-x-auto">
 								{MOBILE_TERMINAL_KEYS.map((key) => (
 									<Button
 										key={key.label}
