@@ -1226,7 +1226,7 @@ describe('ConnectedTerminal', () => {
       expect(result).toBe(false)
     })
 
-    it('should pass Ctrl+R through to PTY as a readline passthrough (reverse-i-search)', async () => {
+    it('should treat Ctrl+R as app-owned when it matches an app shortcut', async () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
@@ -1235,8 +1235,8 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Ctrl+R is a readline binding (reverse-i-search) and must reach the PTY
-      // on all platforms even though it may also match the commandHistory app shortcut.
+      // Ctrl+R matches commandHistory app shortcut — should be app-owned so the
+      // workspace handler can open the command history panel from terminal focus.
       const event = new KeyboardEvent('keydown', {
         key: 'r',
         ctrlKey: true,
@@ -1245,10 +1245,10 @@ describe('ConnectedTerminal', () => {
 
       const result = handler(event)
 
-      expect(result).toBe(true)
+      expect(result).toBe(false)
     })
 
-    it('should pass Ctrl+K through to PTY as a readline passthrough (kill to EOL)', async () => {
+    it('should treat Ctrl+K as app-owned when it matches an app shortcut', async () => {
       render(<ConnectedTerminal />)
 
       await vi.waitFor(() => {
@@ -1257,10 +1257,32 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Ctrl+K is a readline binding (kill to end of line) and must reach the PTY
-      // on all platforms even though it may also match the commandPalette app shortcut.
+      // Ctrl+K matches commandPalette app shortcut — should be app-owned so the
+      // workspace handler can open the command palette from terminal focus.
       const event = new KeyboardEvent('keydown', {
         key: 'k',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(false)
+    })
+
+    it('should pass pure readline passthrough Ctrl+E when it matches no app shortcut', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Ctrl+E is a readline binding (end of line) and does NOT match any app
+      // shortcut — must reach the PTY.
+      const event = new KeyboardEvent('keydown', {
+        key: 'e',
         ctrlKey: true,
         bubbles: true
       })

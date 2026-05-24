@@ -102,15 +102,22 @@ function isAppOwnedTerminalShortcut(
 	event: KeyboardEvent,
 	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
 ): boolean {
-	if (!isMac && isReadlinePassthrough(event)) {
-		return false;
-	}
-
+	// 1. App shortcuts take priority over readline passthrough.
+	// This ensures commandPalette, commandHistory, etc. work from terminal
+	// focus even though their Ctrl+key also matches a readline binding.
 	for (const shortcut of Object.values(shortcuts)) {
 		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
 		if (matchesShortcut(event, activeKey)) {
 			return true;
 		}
+	}
+
+	// 2. No app shortcut matched — check readline passthrough.
+	// Ctrl+letter readline bindings must reach the PTY on every platform.
+	// On macOS the isMac guard in matchesShortcut already prevents Ctrl+key
+	// from matching app shortcuts, so the readline behavior is preserved.
+	if (isReadlinePassthrough(event)) {
+		return false;
 	}
 
 	return false;
