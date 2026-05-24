@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal } from 'lucide-react'
+import { Minus, Square, Copy, X, PanelLeft, PanelRight, SlidersHorizontal } from 'lucide-react'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarVisible } from '@/stores/sidebar-store'
@@ -116,19 +116,6 @@ export function TitleBar({
           open={isShortcutsOpen}
           onOpenChange={onShortcutsOpenChange}
         />
-
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
-          className={focusableButtonClass}
-          title="Settings"
-          aria-label="Open settings"
-          aria-current={location.pathname === '/settings' ? 'page' : undefined}
-        >
-          <Settings
-            size={16}
-            className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
 
         <button
           onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}

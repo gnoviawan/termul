@@ -10,6 +10,7 @@ import {
 	RotateCcw,
 	ChevronDown,
 	ChevronRight,
+	Settings,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor } from "@/types/project";
@@ -21,6 +22,7 @@ import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { shellApi } from "@/lib/api";
+import { useProjectActions } from "@/stores/project-store";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -73,6 +75,7 @@ export function ProjectSidebar({
 	onReorderProjects,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
+	const { selectProject } = useProjectActions();
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
@@ -240,6 +243,14 @@ export function ProjectSidebar({
 
 			const items: ContextMenuItem[] = [
 				{
+					label: "Settings",
+					icon: <Settings size={14} />,
+					onClick: () => {
+						selectProject(projectId);
+						navigate("/settings");
+					},
+				},
+				{
 					label: "Rename",
 					icon: <Edit2 size={14} />,
 					onClick: () => handleStartRename(projectId),
@@ -254,7 +265,7 @@ export function ProjectSidebar({
 
 			if (shellSubmenu.length > 0) {
 				items.push({
-					label: "Set Default Shell",
+					label: "Default Shell",
 					icon: <Terminal size={14} />,
 					submenu: shellSubmenu,
 					onSubmenuSelect: (shellPath: string) => {
@@ -289,6 +300,8 @@ export function ProjectSidebar({
 			onUpdateProject,
 			onArchiveProject,
 			handleConfirmDelete,
+			selectProject,
+			navigate,
 		],
 	);
 
@@ -387,7 +400,6 @@ export function ProjectSidebar({
 										isActive={project.id === activeProjectId}
 										isEditing={editingId === project.id}
 										editName={editName}
-										shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
 										onClick={() => {
 											onSelectProject(project.id);
 											navigate("/");
@@ -396,6 +408,10 @@ export function ProjectSidebar({
 										onEditNameChange={setEditName}
 										onSaveRename={() => handleSaveRename(project.id)}
 										onCancelRename={handleCancelRename}
+										onSettingsClick={() => {
+											selectProject(project.id);
+											navigate("/settings");
+										}}
 									/>
 								</Reorder.Item>
 							))}
@@ -483,12 +499,12 @@ interface ProjectItemProps {
 	isActive: boolean;
 	isEditing: boolean;
 	editName: string;
-	shortcut?: string;
 	onClick: () => void;
 	onContextMenu: (e: React.MouseEvent) => void;
 	onEditNameChange: (name: string) => void;
 	onSaveRename: () => void;
 	onCancelRename: () => void;
+	onSettingsClick: () => void;
 }
 
 function ProjectItem({
@@ -496,12 +512,12 @@ function ProjectItem({
 	isActive,
 	isEditing,
 	editName,
-	shortcut,
 	onClick,
 	onContextMenu,
 	onEditNameChange,
 	onSaveRename,
 	onCancelRename,
+	onSettingsClick,
 }: ProjectItemProps): React.JSX.Element {
 	const colors = getColorClasses(project.color);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -578,15 +594,18 @@ function ProjectItem({
 					{project.name}
 				</span>
 			)}
-			{!isEditing && shortcut && (
-				<span
-					className={cn(
-						"text-xs font-mono text-muted-foreground transition-opacity mr-3",
-						isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-					)}
+			{!isEditing && (
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onSettingsClick();
+					}}
+					className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+					title="Project settings"
+					aria-label={`Settings for ${project.name}`}
 				>
-					{shortcut}
-				</span>
+					<Settings size={12} className="text-muted-foreground" />
+				</button>
 			)}
 		</button>
 	);

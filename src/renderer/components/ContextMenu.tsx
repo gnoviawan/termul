@@ -34,7 +34,7 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
   // Adjust position if menu would overflow viewport
   const adjustedPosition = useCallback((): { left: number; top: number } => {
     const menuWidth = 180
-    const menuHeight = items.length * 36 + 8
+    const menuHeight = items.length * 28 + 4
     const viewportWidth = window.innerWidth
     const viewportHeight = window.innerHeight
 
@@ -83,7 +83,7 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 bg-card border border-border rounded-md shadow-lg py-1 min-w-[180px]"
+      className="fixed z-50 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
     >
       {items.map((item, index) => {
@@ -108,22 +108,22 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
                 }}
                 disabled={item.disabled}
                 className={cn(
-                  'w-full flex items-center px-3 py-2 text-sm transition-colors',
+                  'w-full flex items-center px-2 py-1 text-xs transition-colors',
                   item.disabled && 'opacity-50 cursor-not-allowed',
                   item.variant === 'danger'
                     ? 'text-red-400 hover:bg-red-500/10'
                     : 'text-foreground hover:bg-secondary'
                 )}
               >
-                {item.icon && <span className="mr-2">{item.icon}</span>}
+                {item.icon && <span className="mr-1.5">{item.icon}</span>}
                 {item.label}
-                {item.submenu && <ChevronRight size={14} className="ml-auto" />}
+                {item.submenu && <ChevronRight size={12} className="ml-auto" />}
               </button>
 
               {/* Submenu */}
               {item.submenu && hoveredIndex === index && (
                 <div
-                  className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-1 min-w-[160px]"
+                  className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[140px]"
                 >
                   {item.submenu.map((subItem) => (
                     <button
@@ -134,14 +134,14 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
                         }
                         onClose()
                       }}
-                      className="w-full flex items-center px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors"
+                      className="w-full flex items-center px-2 py-1 text-xs text-foreground hover:bg-secondary transition-colors"
                     >
                       {subItem.isSelected ? (
-                        <Check size={14} className="mr-2 text-primary" />
+                        <Check size={12} className="mr-1.5 text-primary" />
                       ) : (
-                        <span className="w-[14px] mr-2" />
+                        <span className="w-[12px] mr-1.5" />
                       )}
-                      {subItem.icon && <span className="mr-2">{subItem.icon}</span>}
+                      {subItem.icon && <span className="mr-1.5">{subItem.icon}</span>}
                       {subItem.label}
                     </button>
                   ))}
