@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
 
 /// IPC Result pattern
@@ -70,13 +73,19 @@ pub struct RendererRefRequest {
 
 // ==================== Terminal Commands ====================
 
-/// Spawn a new terminal
+/// Spawn a new terminal with binary data channel
+///
+/// The `on_data` channel uses Tauri 2's Channel API for
+/// zero-overhead binary IPC. PTY output is sent as raw `Vec<u8>` via
+/// `Response::new(bytes)`, arriving in JS as `ArrayBuffer` with no JSON
+/// serialization overhead.
 #[tauri::command]
 pub async fn terminal_spawn(
     options: SpawnOptions,
+    on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<TerminalInfo>, String> {
-    match pty_manager.spawn(options).await {
+    match pty_manager.spawn(options, Some(on_data)).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
     }
@@ -814,6 +823,17 @@ fn detect_rg_path() -> String {
     detected
 }
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
+
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
@@ -894,12 +914,10 @@ pub async fn search_content_stream(
     let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let mut child = match Command::new(&rg_path)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    configure_background_command(&mut rg_command);
+    let mut child = match rg_command.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = app_handle.emit(
@@ -1177,7 +1195,10 @@ pub async fn search_content(
     let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let output = Command::new(&rg_path).args(args).output();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args);
+    configure_background_command(&mut rg_command);
+    let output = rg_command.output();
     let output = match output {
         Ok(o) => o,
         Err(e) => {
