@@ -45,10 +45,19 @@ export interface PersistedSnapshotList {
   updatedAt: string // ISO timestamp
 }
 
+// Persisted workspace pane layout (stored at workspace/{projectId})
+// PaneNode is serializable JSON — no functions, only plain data.
+export interface PersistedWorkspaceLayout {
+  root: unknown // PaneNode — typed as unknown here to keep shared/ runtime-neutral
+  activePaneId: string
+  updatedAt: string // ISO timestamp
+}
+
 // Keys used for persistence storage
 export const PersistenceKeys = {
   terminals: (projectId: string): string => `terminals/${projectId}`,
   snapshots: (projectId: string): string => `snapshots/${projectId}`,
+  workspace: (projectId: string): string => `workspace/${projectId}`,
   projects: 'projects',
   settings: 'settings',
   windowState: 'window-state'

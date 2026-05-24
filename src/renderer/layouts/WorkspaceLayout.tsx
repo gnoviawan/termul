@@ -64,6 +64,11 @@ import {
 } from "@/hooks/use-command-history";
 import { saveTerminalLayout } from "@/hooks/useTerminalAutoSave";
 import {
+	useWorkspaceLayoutLoader,
+	useWorkspaceLayoutAutoSave,
+	saveWorkspaceLayout,
+} from "@/hooks/use-workspace-persistence";
+import {
 	filesystemApi,
 	windowApi,
 	keyboardApi,
@@ -200,11 +205,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// File watcher hook
 	useFileWatcher();
 
+	// Workspace layout persistence — load on project switch, auto-save on change
+	useWorkspaceLayoutLoader(activeProjectId || undefined);
+	useWorkspaceLayoutAutoSave(activeProjectId || undefined);
+
 	useEffect(() => {
 		const persistBeforeUnload = () => {
 			if (!activeProjectId) return;
 			void saveTerminalLayout(activeProjectId).catch((error) => {
 				console.warn("Failed to persist terminal layout before reload:", error);
+			});
+			void saveWorkspaceLayout(activeProjectId).catch((error) => {
+				console.warn("Failed to persist workspace layout before reload:", error);
 			});
 		};
 
