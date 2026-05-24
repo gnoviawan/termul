@@ -16,6 +16,7 @@ import {
   beginProjectContinuityCorrelation,
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+import { waitForWorkspaceLayoutReady } from './use-workspace-persistence'
 
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
@@ -977,6 +978,14 @@ async function restoreFromLayout(
     terminalStore.setTerminals([...existingTerminals, ...newTerminals])
 
     if (idMap.size > 0) {
+      // Wait for workspace layout to be loaded from disk before remapping tab IDs.
+      // useWorkspaceLayoutLoader runs concurrently with this restore — if it finishes
+      // after remapTerminalTabs, it would overwrite the pane tree with stale old IDs.
+      await waitForWorkspaceLayoutReady(projectId)
+      if (isCancelled()) {
+        await cleanupSpawnedPtys(newTerminals, restoreId, 'after workspace layout ready')
+        return { status: 'cancelled', path: 'persisted-replay' }
+      }
       useWorkspaceStore.getState().remapTerminalTabs(Object.fromEntries(idMap))
     }
 
