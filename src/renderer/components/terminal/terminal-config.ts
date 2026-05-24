@@ -73,3 +73,24 @@ export function getTerminalOptions(platform: string): ITerminalOptions {
 
 	return baseOptions;
 }
+
+/**
+ * Get mobile-optimized terminal options.
+ * Disables expensive features that cause input lag on mobile devices:
+ * - screenReaderMode: false — avoids per-character DOM accessibility tree updates
+ * - Reduced scrollback — less memory pressure on constrained devices
+ * - Smaller font size cap — prevents layout thrash from virtual keyboard resize
+ */
+export function getMobileTerminalOptions(platform: string): ITerminalOptions {
+	const base = getTerminalOptions(platform);
+	return {
+		...base,
+		// screenReaderMode maintains a live DOM accessibility tree that is updated
+		// on every character write. On mobile this causes severe input lag.
+		screenReaderMode: false,
+		// Reduce scrollback to lower memory pressure on mobile devices.
+		scrollback: 1000,
+		// Disable cursor blink animation — saves GPU/CPU cycles on mobile.
+		cursorBlink: false,
+	};
+}

@@ -19,7 +19,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions } from "./terminal-config";
+import { getTerminalOptions, getMobileTerminalOptions } from "./terminal-config";
 import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
@@ -128,6 +128,8 @@ const RESIZE_DEBOUNCE_MS = 100;
 const CLIPBOARD_RATE_LIMIT_MS = 100;
 const WRITE_BUFFER_FLUSH_MS = 16; // ~60fps - batch rapid writes into single render frame
 const RESIZE_DEBOUNCE_OBSERVER_MS = 100; // debounce ResizeObserver to prevent rapid re-renders
+// On mobile, virtual keyboard show/hide triggers many rapid resize events — use a longer debounce
+const RESIZE_DEBOUNCE_OBSERVER_MOBILE_MS = 300;
 
 const MOBILE_TERMINAL_KEYS = [
 	{ label: "Ctrl+C", sequence: "\u0003" },
@@ -274,6 +276,8 @@ function ConnectedTerminalComponent({
 	const writeBufferFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const writeBufferRafRef = useRef<number | null>(0);
 	const pendingResizeRef = useRef<(() => void) | null>(null);
+	// Reuse a single TextDecoder instance to avoid per-event object allocation
+	const textDecoderRef = useRef<TextDecoder>(new TextDecoder());
 
 	// 4. STATE
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
@@ -482,16 +486,14 @@ function ConnectedTerminalComponent({
 				}
 			}
 
-			// Auto-claim ownership on first keystroke — locks web side immediately
+			// Auto-claim ownership on first keystroke — fire-and-forget so it never
+			// blocks the write path. On mobile this is critical: awaiting takeover
+			// before every write causes visible input lag.
 			if (!isOwnerRef.current) {
 				isOwnerRef.current = true;
-				void (async () => {
-					try {
-						await terminalApi.takeover(ptyId);
-					} catch (e) {
-						console.error("Auto-takeover failed:", e);
-					}
-				})();
+				void terminalApi.takeover(ptyId).catch((e) => {
+					console.error("Auto-takeover failed:", e);
+				});
 			}
 
 			// Track command input for history
@@ -1563,7 +1565,12 @@ function ConnectedTerminalComponent({
 		didInitRef.current = true;
 		initializedTerminalIdRef.current = targetId;
 		const effectiveFontSize = isMobile ? Math.min(fontSize, 11) : fontSize;
-		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize: effectiveFontSize, scrollback: bufferSize };
+		const terminalOptions = {
+			...(isMobile ? getMobileTerminalOptions(navigator.platform) : getTerminalOptions(navigator.platform)),
+			fontFamily,
+			fontSize: effectiveFontSize,
+			scrollback: isMobile ? Math.min(bufferSize, 1000) : bufferSize,
+		};
 		const terminal = new Terminal(terminalOptions);
 		terminalRef.current = terminal;
 		setTerminalInstance(terminal);
@@ -1613,6 +1620,9 @@ function ConnectedTerminalComponent({
 		} else {
 			needsResizeOnReadyRef.current = true;
 		}
+		const resizeObserverDebounceMs = isMobile
+			? RESIZE_DEBOUNCE_OBSERVER_MOBILE_MS
+			: RESIZE_DEBOUNCE_OBSERVER_MS;
 		let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 		const resizeObserver = new ResizeObserver(() => {
 			if (isVisible) {
@@ -1626,7 +1636,7 @@ function ConnectedTerminalComponent({
 						};
 						requestAnimationFrame(pendingResizeRef.current as () => void);
 					}
-				}, 100);
+				}, resizeObserverDebounceMs);
 			} else {
 				needsResizeOnReadyRef.current = true;
 			}
@@ -1636,7 +1646,7 @@ function ConnectedTerminalComponent({
 		const resizeDisposable = terminal.onResize(({ cols, rows }) => handleResize(cols, rows));
 		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
 			if (id === ptyIdRef.current && terminalRef.current) {
-				const decoded = new TextDecoder().decode(data);
+				const decoded = textDecoderRef.current.decode(data);
 				if (import.meta.env.DEV) console.log("[ConnectedTerminal] terminalApi.onData", {
 					instanceId,
 					id,
