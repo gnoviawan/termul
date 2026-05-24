@@ -30,6 +30,7 @@ import { ColorPickerPopover } from "./ColorPickerPopover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
+import { useProjectActions } from "@/stores/project-store";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -87,6 +88,7 @@ export function ProjectSidebar({
 	onReorderProjects,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
+	const { selectProject } = useProjectActions();
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
@@ -321,6 +323,14 @@ export function ProjectSidebar({
 
 			const items: ContextMenuItem[] = [
 				{
+					label: "Settings",
+					icon: <Settings size={14} />,
+					onClick: () => {
+						selectProject(projectId);
+						navigate("/settings");
+					},
+				},
+				{
 					label: "Rename",
 					icon: <Edit2 size={14} />,
 					onClick: () => handleStartRename(projectId),
@@ -340,7 +350,7 @@ export function ProjectSidebar({
 
 			if (shellSubmenu.length > 0) {
 				items.push({
-					label: "Set Default Shell",
+					label: "Default Shell",
 					icon: <Terminal size={14} />,
 					submenu: shellSubmenu,
 					onSubmenuSelect: (shellPath: string) => {
@@ -376,6 +386,8 @@ export function ProjectSidebar({
 			onUpdateProject,
 			onArchiveProject,
 			handleConfirmDelete,
+			selectProject,
+			navigate,
 		],
 	);
 
@@ -487,6 +499,10 @@ export function ProjectSidebar({
 											onEditNameChange={setEditName}
 											onSaveRename={() => handleSaveRename(project.id)}
 											onCancelRename={handleCancelRename}
+											onSettingsClick={() => {
+												selectProject(project.id);
+												navigate("/settings");
+											}}
 										/>
 									</Reorder.Item>
 								);
@@ -722,6 +738,7 @@ interface ProjectItemProps {
 	onEditNameChange: (name: string) => void;
 	onSaveRename: () => void;
 	onCancelRename: () => void;
+	onSettingsClick: () => void;
 }
 
 function ProjectItem({
@@ -737,6 +754,7 @@ function ProjectItem({
 	onEditNameChange,
 	onSaveRename,
 	onCancelRename,
+	onSettingsClick,
 }: ProjectItemProps): React.JSX.Element {
 	const colors = getColorClasses(project.color);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -827,6 +845,19 @@ function ProjectItem({
 				>
 					{shortcut}
 				</span>
+			)}
+			{!isEditing && (
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onSettingsClick();
+					}}
+					className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+					title="Project settings"
+					aria-label={`Settings for ${project.name}`}
+				>
+					<Settings size={12} className="text-muted-foreground" />
+				</button>
 			)}
 			{!isEditing && hasActivity && (
 				<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>

@@ -415,7 +415,7 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     fireEvent.contextMenu(projectItem)
 
     await waitFor(() => {
-      expect(screen.getByText('Set Default Shell')).toBeInTheDocument()
+      expect(screen.getByText('Default Shell')).toBeInTheDocument()
     })
   })
 
@@ -431,8 +431,8 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
 
-    // Hover over Set Default Shell to show submenu
-    const shellMenuItem = await screen.findByText('Set Default Shell')
+    // Hover over Default Shell to show submenu
+    const shellMenuItem = await screen.findByText('Default Shell')
     fireEvent.mouseEnter(shellMenuItem.closest('div')!)
 
     // Click on Zsh in submenu
