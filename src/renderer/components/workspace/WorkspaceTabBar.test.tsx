@@ -214,7 +214,7 @@ describe('WorkspaceTabBar', () => {
     expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
   })
 
-  it('renders without legacy fullscreen controls for empty panes', async () => {
+  it('renders fullscreen focus button when leafCount > 1', async () => {
     render(
       <WorkspaceTabBar
         paneId="pane-a"
@@ -225,11 +225,11 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    expect(screen.queryByTitle('Focus pane')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Focus pane')).toBeInTheDocument()
     expect(screen.queryByTitle('Restore pane layout')).not.toBeInTheDocument()
   })
 
-  it('does not render removed fullscreen controls', async () => {
+  it('renders restore button when pane is fullscreen', async () => {
     mockWorkspaceStoreState.fullscreenPaneId = 'pane-a'
 
     render(
@@ -242,7 +242,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    expect(screen.queryByTitle('Restore pane layout')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Restore pane layout')).toBeInTheDocument()
     expect(screen.queryByTitle('Focus pane')).not.toBeInTheDocument()
   })
 

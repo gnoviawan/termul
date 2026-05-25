@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -43,6 +43,8 @@ import {
 	useWorkspaceStore,
 	useActiveTab,
 	usePaneRoot,
+	useFullscreenPaneId,
+	findPaneById,
 	editorTabId,
 	getActiveTerminalIdFromTree,
 	getActiveFilePathFromTree,
@@ -159,6 +161,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const isSidebarVisible = useSidebarVisible();
 	const activeTab = useActiveTab();
 	const paneRoot = usePaneRoot();
+	const fullscreenPaneId = useFullscreenPaneId();
+	const fullscreenPane = useMemo(() => {
+		if (!fullscreenPaneId) return null;
+		const pane = findPaneById(paneRoot, fullscreenPaneId);
+		return pane?.type === "leaf" ? pane : null;
+	}, [fullscreenPaneId, paneRoot]);
 	const prevProjectIdRef = useRef<string>("");
 	const watchedRootPathRef = useRef<string | null>(null);
 	const projectSwitchRequestIdRef = useRef(0);
@@ -1174,9 +1182,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 							) : (
 								<>
 									{isWorkspaceRoute ? (
-										<div className="flex-1 min-h-0 h-full overflow-hidden">
+										<motion.div
+										key={fullscreenPaneId ? "fullscreen" : "normal"}
+										initial={{ opacity: 0.85, scale: 0.97 }}
+										animate={{ opacity: 1, scale: 1 }}
+										transition={{ duration: 0.2, ease: "easeOut" }}
+										className="flex-1 min-h-0 h-full overflow-hidden"
+									>
 											<PaneRenderer
-												node={paneRoot}
+												node={fullscreenPane ?? paneRoot}
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
 												onAddGitTab={handleAddGitTab}
@@ -1188,7 +1202,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 													activeProject?.defaultShell || appDefaultShell
 												}
 											/>
-										</div>
+										</motion.div>
 									) : (
 										<div className="flex-1 overflow-hidden bg-background relative rounded-xl">
 											<div className="w-full h-full">
