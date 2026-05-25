@@ -256,19 +256,23 @@
    * ease-in (user already committed to dismissing).
    * Modals keep transform-origin: center (Emil's exception —
    * not anchored to a trigger).
+   *
+   * IMPORTANT: Radix Popover / Tooltip / Dropdown / Select content
+   * also expose role="dialog" but live inside
+   * [data-radix-popper-content-wrapper]. We exclude those here
+   * via :where(...) so the popper rule above keeps owning their
+   * timing (180/130ms) and only true Dialog / AlertDialog get
+   * the 200/140ms treatment.
    * ------------------------------------------------------------ */
-  [role="dialog"][data-state],
-  [role="alertdialog"][data-state] {
+  :where([role="dialog"], [role="alertdialog"])[data-state]:not([data-radix-popper-content-wrapper] *) {
     animation-timing-function: var(--ease-out) !important;
   }
 
-  [role="dialog"][data-state="open"],
-  [role="alertdialog"][data-state="open"] {
+  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not([data-radix-popper-content-wrapper] *) {
     animation-duration: 200ms !important;
   }
 
-  [role="dialog"][data-state="closed"],
-  [role="alertdialog"][data-state="closed"] {
+  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not([data-radix-popper-content-wrapper] *) {
     animation-duration: 140ms !important;
   }
 }
