@@ -628,21 +628,14 @@ function ConnectedTerminalComponent({
 				containerRef.current.appendChild(terminal.element);
 			}
 
-			// On rapid project switches, the cached terminal's WebGL canvas
-			// may have lost its context while detached from the DOM. Force a
-			// dispose so the WebGL addon load below grabs a fresh GL context
-			// against the freshly-reattached canvas. Without this, refresh()
-			// alone can leave the renderer in a state where it stops painting
-			// and dispatching input — the symptom users see as a frozen
-			// terminal after switching projects too quickly.
-			if (webglAddonRef.current) {
-				try {
-					webglAddonRef.current.dispose();
-				} catch {
-					// Already disposed in some race — ignore.
-				}
-				webglAddonRef.current = null;
-			}
+			// Note: the actual fix for "frozen terminal after rapid project
+			// switches" lives in terminal-cache.ts (cacheTerminal disposes any
+			// stale prior occupant before storing a new one). The fresh
+			// component instance always arrives here with webglAddonRef.current
+			// === null (the previous instance disposed its addon during cleanup),
+			// so a guarded dispose here would be a no-op. We just reset the
+			// context-lost flag so the WebGL addon load further down treats this
+			// as a clean mount.
 			webglContextLostRef.current = false;
 
 			// Force a full refresh so the renderer repaints after DOM reattachment.
