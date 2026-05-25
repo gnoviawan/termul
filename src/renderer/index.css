@@ -46,6 +46,12 @@
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
+    /* Custom easing curves — stronger than browser defaults so animations
+       feel intentional. Reference: easing.dev (Emil Kowalski). */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
     /* Terminal-specific */
     --terminal-bg: 0 0% 7%; /* #121212 */
     --terminal-fg: 0 0% 85%;
@@ -111,6 +117,35 @@
     font-feature-settings: 'calt', 'liga', 'zero';
   }
 
+  /* Press feedback for ALL pressable elements. Buttons must feel like the
+     UI heard the click. Subtle scale (0.97) + custom ease-out keeps it
+     snappy. Disabled buttons skip the press to avoid "dead element"
+     feedback. We scope by [data-press-feedback] for opt-out flexibility,
+     but default it on for buttons / role=button / summary. */
+  @media (hover: hover) and (pointer: fine) {
+    button:not(:disabled):not([data-press-feedback='off']),
+    [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']),
+    summary:not([data-press-feedback='off']) {
+      transition: transform 120ms var(--ease-out);
+    }
+
+    button:not(:disabled):not([data-press-feedback='off']):active,
+    [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']):active,
+    summary:not([data-press-feedback='off']):active {
+      transform: scale(0.97);
+    }
+  }
+
+  /* Honour user motion preference: drop the press transform but keep
+     functional state changes (colour, focus ring) intact. */
+  @media (prefers-reduced-motion: reduce) {
+    button:active,
+    [role='button']:active,
+    summary:active {
+      transform: none;
+    }
+  }
+
   /* Native <select> dropdown items: WebKitGTK ignores parent styling on the
      popup menu, so set our theme tokens directly on <option>. */
   select option {
@@ -123,10 +158,14 @@
     color: hsl(var(--accent-foreground));
   }
 
-  /* Custom scrollbar - Codex style */
+  /* Custom scrollbar.
+     8px so it's reachable on Linux/Wayland (4px is too thin to grab).
+     Inset thumb via background-clip + transparent border = thinner visual
+     while keeping the wider hit area. ease-out on hover transition keeps
+     the colour swap snappy. */
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 10px;
+    height: 10px;
   }
 
   ::-webkit-scrollbar-track {
@@ -134,12 +173,19 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: hsl(0 0% 25%);
-    border-radius: 2px;
+    background-color: hsl(0 0% 28%);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    transition: background-color 160ms var(--ease-out);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(0 0% 35%);
+    background-color: hsl(0 0% 42%);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 
   .scrollbar-hide::-webkit-scrollbar {
