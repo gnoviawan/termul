@@ -10,6 +10,25 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps['theme']}
       className="toaster group"
+      // Stack collapses to a peeking pile; expands when hovered. Subtle
+      // delight that also reveals queued toasts without forcing them
+      // open all the time.
+      expand={false}
+      // Cap visible stack so a flood of toasts (e.g. failing batch op)
+      // doesn't take over the screen. Older toasts still queue silently.
+      visibleToasts={4}
+      // Always render a close button. Auto-dismiss alone leaves users
+      // unsure whether they can dismiss early.
+      closeButton
+      // Semantic colour tints (success/info/warning/error) instead of
+      // outline-only. Feels more native; readable at a glance.
+      richColors
+      // Comfortable distance from screen edge.
+      offset={20}
+      // Default 4s is fine for success; errors deserve a touch longer
+      // because they usually need reading. Per-call duration on toast()
+      // still wins over this.
+      duration={4000}
       toastOptions={{
         classNames: {
           toast:
