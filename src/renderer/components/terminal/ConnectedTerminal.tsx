@@ -1397,8 +1397,19 @@ function ConnectedTerminalComponent({
 		terminal.open(containerRef.current);
 		terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 			if (event.type !== "keydown") return true;
-			if (isAppOwnedTerminalShortcut(event, shortcutsRef.current)) return isMac && event.ctrlKey && !event.metaKey;
-			if (isPlatformModifier(event)) {
+
+			const shortcuts = shortcutsRef.current;
+
+			if (isAppOwnedTerminalShortcut(event, shortcuts)) {
+				if (isMac && event.ctrlKey && !event.metaKey) {
+					return true;
+				}
+				return false;
+			}
+
+			const clipboardModifier = isPlatformModifier(event);
+
+			if (clipboardModifier) {
 				const now = Date.now();
 				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) return false;
 				switch (event.key.toLowerCase()) {
