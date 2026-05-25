@@ -191,6 +191,57 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* xterm v6 scrollbar: proper spacing, no text overlap */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar {
+    width: 8px !important;
+    background: transparent !important;
+  }
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border-radius: 4px !important;
+  }
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra:hover {
+    background: rgba(255, 255, 255, 0.25) !important;
+  }
+  /* Reserve space on the right so scrollbar doesn't overlay text */
+  .xterm .xterm-viewport {
+    scrollbar-width: thin !important;
+    padding-right: 10px;
+  }
+
+  /* ------------------------------------------------------------
+   * Radix popovers, tooltips, dropdowns, selects, menubars,
+   * context menus, hover cards: origin-aware scale + custom
+   * ease-out for entering. The default Radix CSS uses
+   * transform-origin: center which feels disconnected from the
+   * trigger. Radix exposes the correct origin via
+   * --radix-*-content-transform-origin per primitive.
+   *
+   * tailwindcss-animate defaults to 150ms ease-in-out. We
+   * override to a snappier 180ms with our --ease-out token so
+   * the entrance feels intentional. Modals (dialog) keep
+   * transform-origin: center on purpose — they are not
+   * anchored to a trigger.
+   * ------------------------------------------------------------ */
+  [data-radix-popper-content-wrapper] > * {
+    transform-origin: var(--radix-popover-content-transform-origin,
+      var(--radix-tooltip-content-transform-origin,
+      var(--radix-dropdown-menu-content-transform-origin,
+      var(--radix-context-menu-content-transform-origin,
+      var(--radix-select-content-transform-origin,
+      var(--radix-menubar-content-transform-origin,
+      var(--radix-hover-card-content-transform-origin,
+      var(--radix-navigation-menu-viewport-transform-origin)))))))) !important;
+    animation-duration: 180ms !important;
+    animation-timing-function: var(--ease-out) !important;
+  }
+
+  /* Closing animation should be a touch faster than opening so
+     dismiss feels instant (asymmetric enter/exit timing). */
+  [data-radix-popper-content-wrapper] > [data-state="closed"] {
+    animation-duration: 130ms !important;
+  }
 }
 
 @layer utilities {
