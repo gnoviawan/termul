@@ -149,6 +149,11 @@ jobs:
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
 
+          - platform: macos-x64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'

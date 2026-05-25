@@ -72,12 +72,13 @@ The main release pipeline is `.github/workflows/release.yml`.
    - Windows x64
    - Linux x64
    - macOS arm64
+   - macOS x64 / Intel
 
 4. **Validate versions**
    - `package.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/tauri.conf.json`
-   must all match the tag version
+     must all match the tag version
 
 5. **Publish via Tauri action**
    - builds bundles
@@ -134,6 +135,7 @@ git push origin v0.3.7
 ## Platform-Specific Notes
 
 ### Linux
+
 The release workflow installs Linux build dependencies such as:
 
 - `libwebkit2gtk-4.1-dev`
@@ -142,14 +144,17 @@ The release workflow installs Linux build dependencies such as:
 - `patchelf`
 
 ### Windows
+
 Windows builds target:
 
 - `x86_64-pc-windows-msvc`
 
 ### macOS
+
 Release workflow currently targets:
 
 - `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
 
 Repository scripts also support Intel macOS builds locally.
 
