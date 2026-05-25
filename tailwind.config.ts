@@ -83,8 +83,33 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace']
+        // Variable Inter (bundled). Fall through to native UI fonts so we still
+        // look right if the bundled font fails to load. Ubuntu/Cantarell are
+        // the actual GNOME UI fonts on Linux.
+        sans: [
+          '"Inter Variable"',
+          'Inter',
+          '"SF Pro Text"',
+          '"Segoe UI"',
+          'Ubuntu',
+          'Cantarell',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'sans-serif'
+        ],
+        mono: [
+          '"JetBrains Mono Variable"',
+          '"JetBrains Mono"',
+          '"Cascadia Code"',
+          '"SF Mono"',
+          'Menlo',
+          'Consolas',
+          '"Ubuntu Mono"',
+          '"DejaVu Sans Mono"',
+          '"Liberation Mono"',
+          'monospace'
+        ]
       },
       borderRadius: {
         lg: 'var(--radius)',
