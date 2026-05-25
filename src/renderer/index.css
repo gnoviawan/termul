@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Local variable fonts (no network dependency, consistent across OS) */
+@import url('@fontsource-variable/inter/index.css');
+@import url('@fontsource-variable/jetbrains-mono/index.css');
 
 @tailwind base;
 @tailwind components;
@@ -82,8 +84,43 @@
     @apply border-border;
   }
 
+  html {
+    /* Crisp font rendering on Linux/Wayland (sub-pixel AA off by default) */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    /* Hint native form controls (select dropdowns, scrollbars, date pickers,
+       autofill highlight) to render with the dark theme. Without this,
+       WebKitGTK on Linux paints <select> popups with the system light theme,
+       which clashes hard with our dark UI. */
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    /* Inter typographic features: kerning, contextual alts, tabular figures */
+    font-feature-settings: 'cv11', 'ss01', 'ss03', 'cv02', 'tnum';
+    font-variant-ligatures: contextual;
+  }
+
+  code,
+  pre,
+  kbd,
+  .font-mono {
+    /* JetBrains Mono ligatures for code-ish UI (excluded inside terminals via xterm settings) */
+    font-feature-settings: 'calt', 'liga', 'zero';
+  }
+
+  /* Native <select> dropdown items: WebKitGTK ignores parent styling on the
+     popup menu, so set our theme tokens directly on <option>. */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+  select option:checked,
+  select option:hover {
+    background-color: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
   }
 
   /* Custom scrollbar - Codex style */
