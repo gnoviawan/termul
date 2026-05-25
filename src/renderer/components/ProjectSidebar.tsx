@@ -847,17 +847,26 @@ function ProjectItem({
 				</span>
 			)}
 			{!isEditing && (
-				<button
+				<span
+					role="button"
+					tabIndex={0}
 					onClick={(e) => {
 						e.stopPropagation();
 						onSettingsClick();
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							e.stopPropagation();
+							onSettingsClick();
+						}
 					}}
 					className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
 					title="Project settings"
 					aria-label={`Settings for ${project.name}`}
 				>
 					<Settings size={12} className="text-muted-foreground" />
-				</button>
+				</span>
 			)}
 			{!isEditing && hasActivity && (
 				<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>
