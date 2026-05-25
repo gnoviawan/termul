@@ -93,6 +93,7 @@ import { useSSHConnection } from "@/hooks/use-ssh-connection";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
+import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import type { SFTPEntry } from "@shared/types/ssh.types";
 import { SSHFileExplorer } from "@/components/ssh/SSHFileExplorer";
@@ -1224,6 +1225,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
+				<ResizeEdges />
 				<TitleBar
 					isShortcutsOpen={isShortcutMenuOpen}
 					onShortcutsOpenChange={setIsShortcutMenuOpen}
@@ -1237,6 +1239,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
+			<ResizeEdges />
 			<TitleBar
 				isShortcutsOpen={isShortcutMenuOpen}
 				onShortcutsOpenChange={setIsShortcutMenuOpen}
