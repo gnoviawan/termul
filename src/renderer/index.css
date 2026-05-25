@@ -242,6 +242,35 @@
   [data-radix-popper-content-wrapper] > [data-state="closed"] {
     animation-duration: 130ms !important;
   }
+
+  /* ------------------------------------------------------------
+   * Modal / Dialog motion: timing only.
+   *
+   * Slide distance is set on the component className (8px instead
+   * of 48%), but timing & easing are tweaked here so we don't
+   * have to repeat them across dialog.tsx + alert-dialog.tsx +
+   * any future modal primitive.
+   *
+   * Asymmetric timing: 200ms in / 140ms out so dismiss feels
+   * instant. ease-out on both because closing modals don't need
+   * ease-in (user already committed to dismissing).
+   * Modals keep transform-origin: center (Emil's exception —
+   * not anchored to a trigger).
+   * ------------------------------------------------------------ */
+  [role="dialog"][data-state],
+  [role="alertdialog"][data-state] {
+    animation-timing-function: var(--ease-out) !important;
+  }
+
+  [role="dialog"][data-state="open"],
+  [role="alertdialog"][data-state="open"] {
+    animation-duration: 200ms !important;
+  }
+
+  [role="dialog"][data-state="closed"],
+  [role="alertdialog"][data-state="closed"] {
+    animation-duration: 140ms !important;
+  }
 }
 
 @layer utilities {
