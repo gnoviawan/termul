@@ -126,13 +126,17 @@
     button:not(:disabled):not([data-press-feedback='off']),
     [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']),
     summary:not([data-press-feedback='off']) {
-      /* Note: this transition shorthand replaces any prior transition on
-         this element. Buttons that depend on tailwind utilities like
-         transition-colors will keep working because tailwind sets a
-         different transition-property (color/bg) and the cascade composes
-         correctly via the same selector specificity. If you ever see hover
-         color snaps, switch this to a longhand transition-property/duration/
-         timing-function form scoped to transform only. */
+      /* Note: 'transition' here is shorthand and resets transition-property
+         on the element. Components that rely on tailwind's transition-colors
+         (e.g. hover:bg-primary) may lose their colour transition on buttons
+         that match this selector. We accept that trade-off because press
+         feedback is the dominant interaction and per-component
+         transition-colors usually still wins by specificity / cascade order
+         (this rule is in @layer base, tailwind utilities are @layer
+         utilities and apply later). If a hover snap shows up, scope the
+         override per component or drop the shorthand here in favour of
+         transition-property: transform; transition-duration: 120ms;
+         transition-timing-function: var(--ease-out); */
       transition: transform 120ms var(--ease-out);
     }
 
