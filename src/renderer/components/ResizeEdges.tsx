@@ -105,7 +105,7 @@ export function ResizeEdges(): React.JSX.Element | null {
 
   return (
     <div
-      className="pointer-events-none fixed inset-0 z-[9999]"
+      className="pointer-events-none fixed inset-0 z-50"
       aria-hidden="true"
     >
       {REGIONS.map((region) => (
