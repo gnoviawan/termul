@@ -166,7 +166,7 @@ The app stores local state using Tauri plugin store adapters:
 - `termul-sessions.json` — session persistence
 - logical keys like `projects`, `terminals/{projectId}`, `snapshots/{projectId}`, `window-state`
 
-Project env vars are persisted, and the code notes a future improvement for moving secret values to secure OS storage.
+Project env vars are persisted in local store data, but secret-marked values are redacted before persistence and must be re-entered after app restart until secure OS storage is added.
 
 ## File Watching and Editor Behavior
 

@@ -293,7 +293,7 @@ export default function ProjectSettings() {
                 <div className="w-1/3 pt-1">
                   <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Secrets and config injected into your shell session.
+                    Secrets and config injected into your shell session. Secret values are cleared on app restart until secure storage is added.
                   </p>
                   <button
                     onClick={addEnvVar}

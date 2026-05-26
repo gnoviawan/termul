@@ -5,6 +5,22 @@ import { PersistenceKeys } from '../../shared/types/persistence.types'
 import type { PersistedProjectData, PersistedProject } from '../../shared/types/persistence.types'
 import type { Project, ProjectColor } from '@/types/project'
 
+function toPersistedEnvVars(project: Project): PersistedProject['envVars'] {
+  return project.envVars?.map((envVar) => ({
+    key: envVar.key,
+    value: envVar.isSecret ? '' : envVar.value,
+    isSecret: envVar.isSecret
+  }))
+}
+
+function fromPersistedEnvVars(persisted: PersistedProject): Project['envVars'] {
+  return persisted.envVars?.map((envVar) => ({
+    key: envVar.key,
+    value: envVar.isSecret ? '' : envVar.value,
+    isSecret: envVar.isSecret
+  }))
+}
+
 function toPersistedProject(project: Project): PersistedProject {
   return {
     id: project.id,
@@ -15,13 +31,8 @@ function toPersistedProject(project: Project): PersistedProject {
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
     // TODO: Secret values (isSecret===true) should be stored in secure OS storage (keyring/secureStore)
-    // instead of plaintext. For now, we persist all values but this is a security concern.
-    // A future PR should implement secure storage for secrets.
-    envVars: project.envVars?.map((envVar) => ({
-      key: envVar.key,
-      value: envVar.value,
-      isSecret: envVar.isSecret
-    }))
+    // instead of plaintext. Until secure storage exists, secret keys are preserved but values are redacted.
+    envVars: toPersistedEnvVars(project)
   }
 }
 
@@ -34,11 +45,7 @@ function fromPersistedProject(persisted: PersistedProject): Project {
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
     defaultShell: persisted.defaultShell,
-    envVars: persisted.envVars?.map((envVar) => ({
-      key: envVar.key,
-      value: envVar.value,
-      isSecret: envVar.isSecret
-    }))
+    envVars: fromPersistedEnvVars(persisted)
   }
 }
 
