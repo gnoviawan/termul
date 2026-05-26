@@ -203,16 +203,20 @@
     display: none;
   }
 
-  /* xterm v6 scrollbar: proper spacing, no text overlap */
+  /* xterm v6 scrollbar: proper spacing, no text overlap.
+     Note: in xterm v6, the scrollbar thumb is rendered with class
+     `.xterm-slider`. `.xterm-scra` is the arrow-button class
+     (xterm-arrow-up / xterm-arrow-down) and is unrelated to the
+     thumb — earlier rules targeting `.xterm-scra` were no-ops. */
   .xterm .xterm-scrollable-element > .xterm-scrollbar {
     width: 8px !important;
     background: transparent !important;
   }
-  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra {
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
     background: rgba(255, 255, 255, 0.15) !important;
     border-radius: 4px !important;
   }
-  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-scra:hover {
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
     background: rgba(255, 255, 255, 0.25) !important;
   }
   /* Reserve space on the right so scrollbar doesn't overlay text */
