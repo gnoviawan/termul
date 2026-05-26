@@ -1,5 +1,6 @@
 import { useTheme } from 'next-themes'
 import { Toaster as Sonner, toast } from 'sonner'
+import 'sonner/dist/styles.css'
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 

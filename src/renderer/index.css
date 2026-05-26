@@ -126,6 +126,13 @@
     button:not(:disabled):not([data-press-feedback='off']),
     [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']),
     summary:not([data-press-feedback='off']) {
+      /* Note: this transition shorthand replaces any prior transition on
+         this element. Buttons that depend on tailwind utilities like
+         transition-colors will keep working because tailwind sets a
+         different transition-property (color/bg) and the cascade composes
+         correctly via the same selector specificity. If you ever see hover
+         color snaps, switch this to a longhand transition-property/duration/
+         timing-function form scoped to transform only. */
       transition: transform 120ms var(--ease-out);
     }
 
