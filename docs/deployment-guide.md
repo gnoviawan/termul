@@ -36,17 +36,17 @@ Important configured values include:
 ## Local Production Build
 
 ```bash
-npm run build
+bun run build
 ```
 
 Additional targeted builds:
 
 ```bash
-npm run build:tauri:debug
-npm run build:tauri:win
-npm run build:tauri:mac-arm
-npm run build:tauri:mac-x64
-npm run build:tauri:linux
+bun run build:tauri:debug
+bun run build:tauri:win
+bun run build:tauri:mac-arm
+bun run build:tauri:mac-x64
+bun run build:tauri:linux
 ```
 
 ## Release Workflow
@@ -177,7 +177,7 @@ The repository also contains `.github/workflows/publish-aur.yml`, which updates 
 
 ## Recommended Release Checklist
 
-1. Run local validation (`npm run lint`, `npm run typecheck`, `npm test`)
+1. Run local validation (`bun run lint`, `bun run typecheck`, `bun run test`)
 2. Run Rust validation in `src-tauri/`
 3. Confirm version parity in all three version files
 4. Confirm signing secrets are available in GitHub

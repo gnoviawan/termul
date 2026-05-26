@@ -23,24 +23,24 @@ The repository is a **single desktop application** rather than a multi-part mono
 
 ## Technology Stack Summary
 
-| Category | Technology | Version | Justification |
-| --- | --- | --- | --- |
-| Desktop Runtime | Tauri | 2.x | Native desktop shell, window management, plugin integration, updater support |
-| Native Backend | Rust | edition 2021 / rust-version 1.77 | PTY lifecycle, browser webviews, migration manager, shell detection, OS integration |
-| Frontend UI | React | 18.3.1 | Main renderer UI |
-| Language | TypeScript | 5.8.3 | Typed frontend codebase |
-| Build Tool | Vite | 5.4.19 | Web asset build and dev server |
-| Routing | React Router | 6.30.1 | Hash-based application routing |
-| Async/Data | TanStack React Query | 5.83.0 | Query client infrastructure |
-| State Management | Zustand | 5.0.9 | App, workspace, terminal, editor, browser, and updater state |
-| Styling | Tailwind CSS | 3.4.17 | Utility-first styling |
-| UI Kit | Radix UI + shadcn/ui | mixed | Reusable UI primitives and wrappers |
-| Terminal Rendering | xterm.js | 5.5.0 | Terminal emulation in renderer |
-| PTY Bridge | tauri-pty + portable-pty | mixed | Native PTY process management |
-| Forms/Validation | react-hook-form + zod | 7.61.1 / 3.25.76 | Input handling and schema validation |
-| Rich Text / Docs | BlockNote + Mermaid + CodeMirror | mixed | Markdown, rich editing, diagrams, code editing |
-| Testing | Vitest + Testing Library + jsdom | 4.0.16 / 16.3.1 / 27.4.0 | Renderer unit and integration tests |
-| Quality | ESLint | 9.32.0 | Linting and CI validation |
+| Category           | Technology                       | Version                          | Justification                                                                       |
+| ------------------ | -------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------- |
+| Desktop Runtime    | Tauri                            | 2.x                              | Native desktop shell, window management, plugin integration, updater support        |
+| Native Backend     | Rust                             | edition 2021 / rust-version 1.77 | PTY lifecycle, browser webviews, migration manager, shell detection, OS integration |
+| Frontend UI        | React                            | 18.3.1                           | Main renderer UI                                                                    |
+| Language           | TypeScript                       | 5.8.3                            | Typed frontend codebase                                                             |
+| Build Tool         | Vite                             | 5.4.19                           | Web asset build and dev server                                                      |
+| Routing            | React Router                     | 6.30.1                           | Hash-based application routing                                                      |
+| Async/Data         | TanStack React Query             | 5.83.0                           | Query client infrastructure                                                         |
+| State Management   | Zustand                          | 5.0.9                            | App, workspace, terminal, editor, browser, and updater state                        |
+| Styling            | Tailwind CSS                     | 3.4.17                           | Utility-first styling                                                               |
+| UI Kit             | Radix UI + shadcn/ui             | mixed                            | Reusable UI primitives and wrappers                                                 |
+| Terminal Rendering | xterm.js                         | 5.5.0                            | Terminal emulation in renderer                                                      |
+| PTY Bridge         | tauri-pty + portable-pty         | mixed                            | Native PTY process management                                                       |
+| Forms/Validation   | react-hook-form + zod            | 7.61.1 / 3.25.76                 | Input handling and schema validation                                                |
+| Rich Text / Docs   | BlockNote + Mermaid + CodeMirror | mixed                            | Markdown, rich editing, diagrams, code editing                                      |
+| Testing            | Vitest + Testing Library + jsdom | 4.0.16 / 16.3.1 / 27.4.0         | Renderer unit and integration tests                                                 |
+| Quality            | ESLint                           | 9.32.0                           | Linting and CI validation                                                           |
 
 ## Key Features
 
@@ -68,21 +68,20 @@ The repository is a **single desktop application** rather than a multi-part mono
 
 ### Prerequisites
 
-- Node.js 18+
-- npm (repository also contains bun/pnpm lockfiles, but npm is the documented path)
+- Bun 1.3+
 - Rust toolchain (`rustup`, `cargo`, `rustc`)
 - Platform-specific Tauri dependencies from the README
 
 ### Getting Started
 
-Install dependencies with `npm install`, then run `npm run dev` to launch the Tauri app in development mode. The frontend is built with a Tauri-specific Vite config and served to the hidden startup window before the app shows itself.
+Install dependencies with `bun install`, then run `bun run dev` to launch the Tauri app in development mode. The frontend is built with a Tauri-specific Vite config and served to the hidden startup window before the app shows itself.
 
 ### Key Commands
 
-- **Install:** `npm install`
-- **Dev:** `npm run dev`
-- **Build:** `npm run build`
-- **Test:** `npm test`
+- **Install:** `bun install`
+- **Dev:** `bun run dev`
+- **Build:** `bun run build`
+- **Test:** `bun run test`
 
 ## Repository Structure
 

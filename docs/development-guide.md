@@ -10,28 +10,30 @@ Termul Manager is developed as a Tauri-first desktop application. Day-to-day dev
 
 ### Core Tooling
 
-- Node.js 18+
-- npm
+- Bun 1.3+
 - Rust toolchain (`rustup`, `cargo`, `rustc`)
 - Git
 
 ### Platform Requirements
 
 #### Windows
+
 - Visual Studio 2022 / MSVC build tools
 - WebView2 runtime
 
 #### macOS
+
 - Xcode Command Line Tools
 - Rust toolchain
 
 #### Linux
+
 Install the WebKitGTK and Tauri build dependencies documented in `README.md`.
 
 ## Install
 
 ```bash
-npm install
+bun install
 ```
 
 ## Local Development
@@ -39,7 +41,7 @@ npm install
 ### Start the App
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 This launches the Tauri app and uses the Tauri-specific Vite configuration to serve `tauri-index.html` to the hidden startup window before the app is shown.
@@ -53,23 +55,23 @@ The repository also retains a browser/dev bootstrap path (`index.html` -> `src/r
 ### Standard Production Build
 
 ```bash
-npm run build
+bun run build
 ```
 
 ### Frontend-Only Tauri Asset Build
 
 ```bash
-npm run build:frontend:tauri
+bun run build:frontend:tauri
 ```
 
 ### Debug / Targeted Tauri Builds
 
 ```bash
-npm run build:tauri:debug
-npm run build:tauri:win
-npm run build:tauri:mac-arm
-npm run build:tauri:mac-x64
-npm run build:tauri:linux
+bun run build:tauri:debug
+bun run build:tauri:win
+bun run build:tauri:mac-arm
+bun run build:tauri:mac-x64
+bun run build:tauri:linux
 ```
 
 ## Quality Checks
@@ -77,31 +79,32 @@ npm run build:tauri:linux
 ### Lint
 
 ```bash
-npm run lint
+bun run lint
 ```
 
 ### Typecheck
 
 ```bash
-npm run typecheck
+bun run typecheck
 ```
 
 ### Tests
 
 ```bash
-npm test
-npm run test:watch
+bun run test
+bun run test:watch
 ```
 
 ### Direct Tauri CLI Access
 
 ```bash
-npm run tauri <command>
+bun run tauri <command>
 ```
 
 ## Source Layout
 
 ### Frontend
+
 - `src/renderer/components/` — UI components
 - `src/renderer/hooks/` — orchestration and lifecycle hooks
 - `src/renderer/stores/` — Zustand state domains
@@ -110,9 +113,11 @@ npm run tauri <command>
 - `src/renderer/layouts/` — app-level layout shells
 
 ### Shared Contracts
+
 - `src/shared/types/` — shared TS types for IPC, persistence, filesystem, updater data
 
 ### Native Runtime
+
 - `src-tauri/src/` — Rust runtime modules
 - `src-tauri/resources/` — injected browser resources such as `annotation-overlay.js`
 - `src-tauri/icons/` — app icons and platform packaging assets
@@ -179,9 +184,9 @@ The file explorer and editor support live file watching through the filesystem A
 `.github/workflows/pr-validation.yml` runs:
 
 - PR title conventional-commit validation
-- `npm run lint`
-- `npm run typecheck`
-- `npm run test`
+- `bun run lint`
+- `bun run typecheck`
+- `bun run test`
 - `cargo check --all-targets`
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
@@ -219,9 +224,9 @@ From `CONTRIBUTING.md`:
 ## Recommended Local Verification Before PR
 
 ```bash
-npm run lint
-npm run typecheck
-npm test
+bun run lint
+bun run typecheck
+bun run test
 cd src-tauri && cargo check --all-targets && cargo test
 ```
 
