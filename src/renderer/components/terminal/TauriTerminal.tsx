@@ -269,7 +269,7 @@ export function TauriTerminal(): React.JSX.Element {
 	return (
 		<div className="flex-1 relative bg-[#1e1e1e]">
 			{status === "loading" && (
-				<div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-sm z-10">
+				<div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm z-10">
 					Loading terminal...
 				</div>
 			)}

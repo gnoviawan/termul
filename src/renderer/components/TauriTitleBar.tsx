@@ -55,6 +55,7 @@ export function TauriTitleBar(): React.JSX.Element {
           className={focusableButtonClass}
           title="Minimize"
           aria-label="Minimize window"
+          data-press-feedback="off"
         >
           <Minus size={16} />
         </button>
@@ -64,6 +65,7 @@ export function TauriTitleBar(): React.JSX.Element {
           className={focusableButtonClass}
           title={isMaximized ? 'Restore' : 'Maximize'}
           aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+          data-press-feedback="off"
         >
           {isMaximized ? <Copy size={14} /> : <Square size={14} />}
         </button>
@@ -73,6 +75,7 @@ export function TauriTitleBar(): React.JSX.Element {
           className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
           title="Close"
           aria-label="Close window"
+          data-press-feedback="off"
         >
           <X size={16} />
         </button>

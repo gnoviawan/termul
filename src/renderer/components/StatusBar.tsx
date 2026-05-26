@@ -212,7 +212,7 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-gray-400">
+          <span className="flex items-center text-muted-foreground">
             <FileQuestion size={12} className="mr-0.5" />
             {untracked}
           </span>

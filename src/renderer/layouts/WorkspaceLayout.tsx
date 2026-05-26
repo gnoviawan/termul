@@ -89,6 +89,7 @@ import { useEditorPersistence } from "@/hooks/use-editor-persistence";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
+import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
@@ -1103,6 +1104,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
+				<ResizeEdges />
 				<TitleBar
 					isShortcutsOpen={isShortcutMenuOpen}
 					onShortcutsOpenChange={setIsShortcutMenuOpen}
@@ -1116,6 +1118,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
+			<ResizeEdges />
 			<TitleBar
 				isShortcutsOpen={isShortcutMenuOpen}
 				onShortcutsOpenChange={setIsShortcutMenuOpen}
