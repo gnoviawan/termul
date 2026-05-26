@@ -44,7 +44,7 @@ Feature requests are welcome! Please:
    ```
 3. Install dependencies:
    ```bash
-   npm install
+   bun install
    ```
 4. Create a feature branch:
    ```bash
@@ -57,19 +57,19 @@ Feature requests are welcome! Please:
 2. Make your changes
 3. Run tests:
    ```bash
-   npm test
+   bun test
    ```
 4. Run type checking:
    ```bash
-   npm run typecheck
+   bun run typecheck
    ```
 5. Run linting:
    ```bash
-   npm run lint
+   bun run lint
    ```
 6. Test the app manually:
    ```bash
-   npm run dev
+   bun run dev
    ```
 
 #### Commit Guidelines
@@ -143,25 +143,25 @@ docs/electron-old/  # Archived Electron docs and migration history
 ### Prerequisites
 
 - Node.js 18+
-- npm or bun
+- [Bun](https://bun.sh) 1.0+
 - Git
 
 ### Running Locally
 
-> **Prerequisite:** Before running `npm run dev`, install the Rust toolchain (`rustup`, `rustc`, and `cargo`) plus any platform-specific Tauri dependencies listed in the README [Prerequisites](README.md#prerequisites) section.
+> **Prerequisite:** Before running `bun run dev`, install the Rust toolchain (`rustup`, `rustc`, and `cargo`) plus any platform-specific Tauri dependencies listed in the README [Prerequisites](README.md#prerequisites) section.
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Start the Tauri app in development mode
-npm run dev
+bun run dev
 
 # Run tests
-npm test
+bun test
 
 # Build for production
-npm run build
+bun run build
 ```
 
 ### Platform Builds
@@ -169,10 +169,10 @@ npm run build
 > **Prerequisite:** Platform-specific Tauri builds require the Rust toolchain, the required compilation targets, and the OS dependencies documented in the README [Prerequisites](README.md#prerequisites) section.
 
 ```bash
-npm run build:tauri:win        # Windows (x64)
-npm run build:tauri:mac-arm    # macOS (Apple Silicon)
-npm run build:tauri:mac-x64    # macOS (Intel)
-npm run build:tauri:linux      # Linux (x64)
+bun run build:tauri:win        # Windows (x64)
+bun run build:tauri:mac-arm    # macOS (Apple Silicon)
+bun run build:tauri:mac-x64    # macOS (Intel)
+bun run build:tauri:linux      # Linux (x64)
 ```
 
 ## Release Management (Maintainers Only)

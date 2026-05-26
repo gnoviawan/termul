@@ -98,7 +98,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ### Development Workflow Rules
 
-- Follow the repo’s existing validation flow before considering a change complete: `npm run lint`, `npm run typecheck`, and `npm test`.
+- Follow the repo’s existing validation flow before considering a change complete: `bun run lint`, `bun run typecheck`, and `bun test`.
 - Keep changes aligned with the current Tauri-first architecture and cleanup/parity-hardening direction of the repo.
 - Use conventional commit message style when preparing commit-ready changes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
 - Prefer incremental changes that fit existing structure over large unsolicited architectural rewrites.
@@ -136,7 +136,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 7. Reuse existing Zustand, routing, Radix/shadcn, and Tailwind patterns.
 8. Add or update colocated `*.test.ts` / `*.test.tsx` tests compatible with `Vitest + jsdom`.
 9. Prefer extending existing patterns over introducing new frameworks or parallel abstractions.
-10. Run `npm run lint`, `npm run typecheck`, and `npm test` before considering the change complete.
+10. Run `bun run lint`, `bun run typecheck`, and `bun test` before considering the change complete.
 
 **For AI Agents:**
 

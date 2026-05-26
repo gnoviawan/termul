@@ -53,26 +53,26 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 ### Prerequisites
 
 - Node.js 18+
-- npm
+- [Bun](https://bun.sh) 1.0+
 - Rust toolchain
 - Platform-specific Tauri dependencies from the README
 
 ### Setup
 
 ```bash
-npm install
+bun install
 ```
 
 ### Run Locally
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 ### Run Tests
 
 ```bash
-npm test
+bun test
 ```
 
 ## For AI-Assisted Development

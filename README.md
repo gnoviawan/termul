@@ -101,7 +101,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | ---------- | ------- | ----- |
 | [Node.js](https://nodejs.org) | 18+ | Recommended: use [nvm](https://github.com/nvm-sh/nvm) |
 | [Rust](https://www.rust-lang.org/tools/install) | Latest stable | Required for Tauri builds |
-| npm / bun | Any | Package manager |
+| [Bun](https://bun.sh) | 1.0+ | Package manager & runtime |
 
 #### Platform-Specific Requirements
 
@@ -163,26 +163,26 @@ git clone https://github.com/gnoviawan/termul.git
 cd termul
 
 # Install dependencies
-npm install
+bun install
 
 # Launch in development mode
-npm run dev
+bun run dev
 ```
 
 ### Building for Production
 
 ```bash
 # Build for your current platform
-npm run build
+bun run build
 
 # Platform-specific builds
-npm run build:tauri:win        # Windows (x64)
-npm run build:tauri:mac-arm    # macOS (Apple Silicon)
-npm run build:tauri:mac-x64    # macOS (Intel)
-npm run build:tauri:linux      # Linux (x64)
+bun run build:tauri:win        # Windows (x64)
+bun run build:tauri:mac-arm    # macOS (Apple Silicon)
+bun run build:tauri:mac-x64    # macOS (Intel)
+bun run build:tauri:linux      # Linux (x64)
 
 # Debug build (faster compilation, larger binary)
-npm run build:tauri:debug
+bun run build:tauri:debug
 ```
 
 Build output: `src-tauri/target/release/bundle/`
@@ -275,12 +275,12 @@ src/renderer/lib/
 ## 🛠️ Development
 
 ```bash
-npm run dev              # Development mode with hot reload
-npm test                 # Run tests
-npm run test:watch       # Tests in watch mode
-npm run typecheck        # Type checking
-npm run lint             # Linting
-npm run tauri <command>  # Direct Tauri CLI access
+bun run dev              # Development mode with hot reload
+bun test                 # Run tests
+bun run test:watch       # Tests in watch mode
+bun run typecheck        # Type checking
+bun run lint             # Linting
+bun run tauri <command>  # Direct Tauri CLI access
 ```
 
 ## ⭐ Star History

@@ -69,20 +69,20 @@ The repository is a **single desktop application** rather than a multi-part mono
 ### Prerequisites
 
 - Node.js 18+
-- npm (repository also contains bun/pnpm lockfiles, but npm is the documented path)
+- [Bun](https://bun.sh) 1.0+ (package manager)
 - Rust toolchain (`rustup`, `cargo`, `rustc`)
 - Platform-specific Tauri dependencies from the README
 
 ### Getting Started
 
-Install dependencies with `npm install`, then run `npm run dev` to launch the Tauri app in development mode. The frontend is built with a Tauri-specific Vite config and served to the hidden startup window before the app shows itself.
+Install dependencies with `bun install`, then run `bun run dev` to launch the Tauri app in development mode. The frontend is built with a Tauri-specific Vite config and served to the hidden startup window before the app shows itself.
 
 ### Key Commands
 
-- **Install:** `npm install`
-- **Dev:** `npm run dev`
-- **Build:** `npm run build`
-- **Test:** `npm test`
+- **Install:** `bun install`
+- **Dev:** `bun run dev`
+- **Build:** `bun run build`
+- **Test:** `bun test`
 
 ## Repository Structure
 

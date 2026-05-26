@@ -9,7 +9,7 @@ This guide summarizes the project’s documented contribution workflow and repos
 ## Prerequisites
 
 - Node.js 18+
-- npm or bun (npm is the documented default workflow)
+- [Bun](https://bun.sh) 1.0+
 - Git
 - Rust toolchain and platform-specific Tauri dependencies for running/building the desktop app
 
@@ -17,7 +17,7 @@ This guide summarizes the project’s documented contribution workflow and repos
 
 1. Fork the repository
 2. Clone your fork
-3. Install dependencies with `npm install`
+3. Install dependencies with `bun install`
 4. Create a feature branch
 5. Make changes
 6. Run validation commands
@@ -26,11 +26,11 @@ This guide summarizes the project’s documented contribution workflow and repos
 ## Recommended Commands
 
 ```bash
-npm install
-npm test
-npm run typecheck
-npm run lint
-npm run dev
+bun install
+bun test
+bun run typecheck
+bun run lint
+bun run dev
 ```
 
 ## Branching
