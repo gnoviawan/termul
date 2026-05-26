@@ -275,16 +275,40 @@
    * timing (180/130ms) and only true Dialog / AlertDialog get
    * the 200/140ms treatment.
    * ------------------------------------------------------------ */
-  :where([role="dialog"], [role="alertdialog"])[data-state]:not([data-radix-popper-content-wrapper] *) {
+  :where([role="dialog"], [role="alertdialog"])[data-state]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
     animation-timing-function: var(--ease-out) !important;
   }
 
-  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not([data-radix-popper-content-wrapper] *) {
+  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
     animation-duration: 200ms !important;
   }
 
-  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not([data-radix-popper-content-wrapper] *) {
+  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
     animation-duration: 140ms !important;
+  }
+
+  /* ------------------------------------------------------------
+   * Sheet (side drawer) motion. Sheet is built on Radix Dialog so
+   * it matches role="dialog", but it should NOT feel like a modal
+   * — drawers slide along an axis from outside the viewport, so
+   * they want a longer travel time and a drawer-shaped curve
+   * (--ease-drawer is iOS-like: starts fast, settles slowly).
+   *
+   * data-sheet is set on SheetContent in sheet.tsx and used to
+   * exclude Sheet from the modal rule above, then opt into this
+   * rule. Asymmetric 300/200ms in/out matches what Sheet already
+   * declares via className (animate-in/animate-out duration), but
+   * is restated here with !important so the modal rule's
+   * !important duration would not silently win on rule order.
+   * ------------------------------------------------------------ */
+  [data-sheet][data-state="open"] {
+    animation-timing-function: var(--ease-drawer) !important;
+    animation-duration: 300ms !important;
+  }
+
+  [data-sheet][data-state="closed"] {
+    animation-timing-function: var(--ease-drawer) !important;
+    animation-duration: 200ms !important;
   }
 }
 
