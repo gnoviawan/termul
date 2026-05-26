@@ -1,6 +1,6 @@
 /* Local variable fonts (no network dependency, consistent across OS) */
-@import url('@fontsource-variable/inter/index.css');
-@import url('@fontsource-variable/jetbrains-mono/index.css');
+@import '@fontsource-variable/inter/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';
 
 @tailwind base;
 @tailwind components;
@@ -94,7 +94,7 @@
     /* Crisp font rendering on Linux/Wayland (sub-pixel AA off by default) */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
+    text-rendering: optimizelegibility;
     /* Hint native form controls (select dropdowns, scrollbars, date pickers,
        autofill highlight) to render with the dark theme. Without this,
        WebKitGTK on Linux paints <select> popups with the system light theme,
