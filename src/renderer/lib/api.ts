@@ -24,6 +24,8 @@ export * as tauriVersionSkipService from './tauri-version-skip'
 export { hasActiveTerminalSessions } from './tauri-safe-update'
 import { tauriSessionApi } from './tauri-session-api'
 import { createTauriDataMigrationApi } from './tauri-data-migration-api'
+import { tauriSecureStorageApi } from './tauri-secure-storage-api'
 
 export const sessionApi = tauriSessionApi
 export const dataMigrationApi = createTauriDataMigrationApi()
+export const secureStorageApi = tauriSecureStorageApi

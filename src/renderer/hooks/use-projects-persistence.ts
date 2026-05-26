@@ -1,27 +1,130 @@
 import { useEffect, useCallback, useRef } from 'react'
 import { useProjectStore } from '@/stores/project-store'
-import { persistenceApi } from '@/lib/api'
+import { persistenceApi, secureStorageApi } from '@/lib/api'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import type { PersistedProjectData, PersistedProject } from '../../shared/types/persistence.types'
-import type { Project, ProjectColor } from '@/types/project'
+import type { Project, ProjectColor, EnvVariable } from '@/types/project'
 
-function toPersistedEnvVars(project: Project): PersistedProject['envVars'] {
-  return project.envVars?.map((envVar) => ({
-    key: envVar.key,
-    value: envVar.isSecret ? '' : envVar.value,
-    isSecret: envVar.isSecret
-  }))
+const REDACTED_VALUE = '[REDACTED]'
+
+/**
+ * Generate secure storage key for a project environment variable
+ */
+function getSecureStorageKey(projectId: string, envKey: string): string {
+  return `project:${projectId}:env:${envKey}`
 }
 
-function fromPersistedEnvVars(persisted: PersistedProject): Project['envVars'] {
-  return persisted.envVars?.map((envVar) => ({
-    key: envVar.key,
-    value: envVar.isSecret ? '' : envVar.value,
-    isSecret: envVar.isSecret
-  }))
+/**
+ * Store secret environment variables in secure storage
+ * Returns the env vars with secrets redacted for persistence
+ */
+async function storeSecretsAndRedact(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      // Store in secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const storeResult = await secureStorageApi.setSecret(storageKey, envVar.value)
+
+      if (!storeResult.success) {
+        console.error(
+          `Failed to store secret ${envVar.key} for project ${projectId}:`,
+          storeResult.error
+        )
+      }
+
+      // Add redacted version to result
+      result.push({
+        key: envVar.key,
+        value: REDACTED_VALUE,
+        isSecret: true
+      })
+    } else {
+      // Non-secret, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
 }
 
-function toPersistedProject(project: Project): PersistedProject {
+/**
+ * Load secret environment variables from secure storage
+ * Replaces redacted values with actual secrets
+ */
+async function loadSecrets(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret && envVar.value === REDACTED_VALUE) {
+      // Load from secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const getResult = await secureStorageApi.getSecret(storageKey)
+
+      if (getResult.success) {
+        result.push({
+          key: envVar.key,
+          value: getResult.data,
+          isSecret: true
+        })
+      } else {
+        // Secret not found or error - keep redacted
+        console.warn(
+          `Failed to load secret ${envVar.key} for project ${projectId}:`,
+          getResult.error
+        )
+        result.push(envVar)
+      }
+    } else {
+      // Non-secret or already has value, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Delete secret environment variables from secure storage
+ */
+async function deleteSecrets(projectId: string, envVars: EnvVariable[] | undefined): Promise<void> {
+  if (!envVars || envVars.length === 0) {
+    return
+  }
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const deleteResult = await secureStorageApi.deleteSecret(storageKey)
+
+      if (!deleteResult.success) {
+        console.warn(
+          `Failed to delete secret ${envVar.key} for project ${projectId}:`,
+          deleteResult.error
+        )
+      }
+    }
+  }
+}
+
+async function toPersistedProject(project: Project): Promise<PersistedProject> {
+  const redactedEnvVars = await storeSecretsAndRedact(project.id, project.envVars)
+
   return {
     id: project.id,
     name: project.name,
@@ -30,13 +133,13 @@ function toPersistedProject(project: Project): PersistedProject {
     isArchived: project.isArchived,
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
-    // TODO: Secret values (isSecret===true) should be stored in secure OS storage (keyring/secureStore)
-    // instead of plaintext. Until secure storage exists, secret keys are preserved but values are redacted.
-    envVars: toPersistedEnvVars(project)
+    envVars: redactedEnvVars
   }
 }
 
-function fromPersistedProject(persisted: PersistedProject): Project {
+async function fromPersistedProject(persisted: PersistedProject): Promise<Project> {
+  const loadedEnvVars = await loadSecrets(persisted.id, persisted.envVars)
+
   return {
     id: persisted.id,
     name: persisted.name,
@@ -45,7 +148,7 @@ function fromPersistedProject(persisted: PersistedProject): Project {
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
     defaultShell: persisted.defaultShell,
-    envVars: fromPersistedEnvVars(persisted)
+    envVars: loadedEnvVars
   }
 }
 
@@ -58,7 +161,10 @@ export function useProjectsLoader(): void {
         PersistenceKeys.projects
       )
       if (result.success && result.data) {
-        const projects = result.data.projects.map(fromPersistedProject)
+        // Load projects with secrets from secure storage
+        const projects = await Promise.all(
+          result.data.projects.map(fromPersistedProject)
+        )
         // Validate activeProjectId exists in projects
         const validActiveId = projects.some((p) => p.id === result.data.activeProjectId)
           ? result.data.activeProjectId
@@ -99,15 +205,18 @@ export function useProjectsAutoSave(): void {
         return
       }
 
-      const data: PersistedProjectData = {
-        projects: state.projects.map(toPersistedProject),
-        activeProjectId: state.activeProjectId,
-        updatedAt: new Date().toISOString()
-      }
+      // Convert projects to persisted format (async)
+      Promise.all(state.projects.map(toPersistedProject))
+        .then((persistedProjects) => {
+          const data: PersistedProjectData = {
+            projects: persistedProjects,
+            activeProjectId: state.activeProjectId,
+            updatedAt: new Date().toISOString()
+          }
 
-      // Use debounced write via API
-      persistenceApi
-        .writeDebounced(PersistenceKeys.projects, data)
+          // Use debounced write via API
+          return persistenceApi.writeDebounced(PersistenceKeys.projects, data)
+        })
         .catch((err: unknown) => {
           console.error('Failed to auto-save projects:', err)
         })
@@ -122,8 +231,9 @@ export function useProjectsAutoSave(): void {
 export function usePersistProjects(): () => Promise<void> {
   return useCallback(async () => {
     const { projects, activeProjectId } = useProjectStore.getState()
+    const persistedProjects = await Promise.all(projects.map(toPersistedProject))
     const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
+      projects: persistedProjects,
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
@@ -134,8 +244,9 @@ export function usePersistProjects(): () => Promise<void> {
 export function usePersistProjectsImmediate(): () => Promise<void> {
   return useCallback(async () => {
     const { projects, activeProjectId } = useProjectStore.getState()
+    const persistedProjects = await Promise.all(projects.map(toPersistedProject))
     const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
+      projects: persistedProjects,
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
@@ -145,6 +256,14 @@ export function usePersistProjectsImmediate(): () => Promise<void> {
 
 export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
   return useCallback(async (id: string) => {
+    // Get project before deletion to clean up secrets
+    const project = useProjectStore.getState().projects.find((p) => p.id === id)
+
+    // Delete secrets from secure storage
+    if (project) {
+      await deleteSecrets(project.id, project.envVars)
+    }
+
     // First delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
@@ -156,8 +275,9 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
 
     // Persist the updated projects list
     const { projects, activeProjectId } = useProjectStore.getState()
+    const persistedProjects = await Promise.all(projects.map(toPersistedProject))
     const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
+      projects: persistedProjects,
       activeProjectId,
       updatedAt: new Date().toISOString()
     }

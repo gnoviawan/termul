@@ -43,6 +43,9 @@ lazy_static = "1.4"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Secure storage
+keyring = "3.6"
+
 # Logging
 log = "0.4"
 env_logger = { version = "0.11", default-features = false }
