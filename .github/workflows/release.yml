@@ -172,11 +172,10 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-          cache: npm
+          bun-version: latest
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -189,8 +188,8 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Align app versions with tag
         shell: bash
@@ -243,7 +242,7 @@ jobs:
           releaseId: ${{ needs.create_release.outputs.release_id }}
           releaseDraft: true
           prerelease: ${{ needs.changelog.outputs.is_prerelease }}
-          tauriScript: npm run tauri
+          tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
   publish_release:
