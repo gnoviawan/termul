@@ -1721,11 +1721,9 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
         .next()
         .unwrap_or("tmp")
         .to_string();
-    let script_path = temp_dir.join(format!("termul-askpass-{}.bat", id));
     let password_path = temp_dir.join(format!("termul-askpass-{}.dat", id));
 
-    // Write the raw password to a separate data file to avoid batch metacharacter injection.
-    // The .bat script simply `type`s this file to stdout (SSH_ASKPASS protocol).
+    // Write the raw password to a separate data file to avoid shell metacharacter injection.
     if let Err(e) = std::fs::write(&password_path, password.as_bytes()) {
         return Ok(IpcResult::error(
             format!("Failed to create askpass data: {}", e),
@@ -1748,19 +1746,54 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
             .output();
     }
 
-    // The batch script outputs the password file contents and cleans up both files on exit.
-    let content = format!(
-        "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
-        password_path.to_string_lossy(),
-        password_path.to_string_lossy(),
-    );
-    if let Err(e) = std::fs::write(&script_path, &content) {
-        let _ = std::fs::remove_file(&password_path);
-        return Ok(IpcResult::error(
-            format!("Failed to create askpass: {}", e),
-            "SSH_ASKPASS_ERROR",
-        ));
-    }
+    // Create platform-specific askpass script
+    #[cfg(windows)]
+    let script_path = {
+        let path = temp_dir.join(format!("termul-askpass-{}.bat", id));
+        // The batch script outputs the password file contents and cleans up both files on exit.
+        let content = format!(
+            "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
+            password_path.to_string_lossy(),
+            password_path.to_string_lossy(),
+        );
+        if let Err(e) = std::fs::write(&path, &content) {
+            let _ = std::fs::remove_file(&password_path);
+            return Ok(IpcResult::error(
+                format!("Failed to create askpass: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        path
+    };
+
+    #[cfg(unix)]
+    let script_path = {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_dir.join(format!("termul-askpass-{}.sh", id));
+        // The shell script outputs the password file and cleans up both files.
+        let content = format!(
+            "#!/bin/sh\ncat \"{}\"\nrm -f \"{}\" \"$0\"\n",
+            password_path.to_string_lossy(),
+            password_path.to_string_lossy(),
+        );
+        if let Err(e) = std::fs::write(&path, &content) {
+            let _ = std::fs::remove_file(&password_path);
+            return Ok(IpcResult::error(
+                format!("Failed to create askpass: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        // Make the script executable
+        if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)) {
+            let _ = std::fs::remove_file(&password_path);
+            let _ = std::fs::remove_file(&path);
+            return Ok(IpcResult::error(
+                format!("Failed to set askpass permissions: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        path
+    };
 
     // Spawn a background cleanup task that removes both files after a timeout,
     // ensuring secrets don't persist on disk if the helper is never invoked.

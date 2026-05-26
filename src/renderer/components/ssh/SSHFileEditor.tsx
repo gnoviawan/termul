@@ -21,18 +21,25 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
 
   const handleSave = useCallback(async () => {
     if (!editingFile || !connectionId) return
-    setIsSaving(true); setSaveAnimating(true)
-    const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, editingContent)
-    if (result.success) {
-      setStoreFile({ ...editingFile, originalContent: editingContent })
-      setConfirmClose(false)
-      toast.success(`Saved: ${editingFile.name}`)
-      setTimeout(() => setSaveAnimating(false), 600)
-    } else {
-      toast.error(`Save failed: ${result.error}`)
+    setIsSaving(true)
+    setSaveAnimating(true)
+    try {
+      const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, editingContent)
+      if (result.success) {
+        setStoreFile({ ...editingFile, originalContent: editingContent })
+        setConfirmClose(false)
+        toast.success(`Saved: ${editingFile.name}`)
+        setTimeout(() => setSaveAnimating(false), 600)
+      } else {
+        toast.error(`Save failed: ${result.error}`)
+        setSaveAnimating(false)
+      }
+    } catch (error) {
+      toast.error(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
       setSaveAnimating(false)
+    } finally {
+      setIsSaving(false)
     }
-    setIsSaving(false)
   }, [editingFile, connectionId, editingContent, setStoreFile])
 
   const handleClose = useCallback(() => {

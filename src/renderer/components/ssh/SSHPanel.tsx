@@ -25,9 +25,16 @@ export function SSHPanel({ onConnect, onSelectProfile, activeProfileId }: SSHPan
     loadProfiles()
   }, [loadProfiles])
 
-  const handleConnect = (profile: SSHProfile) => {
-    if (onConnect) {
-      onConnect(profile.id)
+  const handleConnect = async (profile: SSHProfile) => {
+    setConnectingId(profile.id)
+    try {
+      if (onConnect) {
+        await onConnect(profile.id)
+      }
+    } catch (error) {
+      toast.error(`Connect failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setConnectingId(null)
     }
   }
 

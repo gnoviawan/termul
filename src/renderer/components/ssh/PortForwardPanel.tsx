@@ -17,10 +17,11 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
   const [remotePort, setRemotePort] = useState('')
 
   const handleAdd = async () => {
-    const lp = parseInt(localPort, 10)
-    const rp = parseInt(remotePort, 10)
+    const lp = Number(localPort)
+    const rp = Number(remotePort)
 
-    if (!lp || !rp || lp < 1 || lp > 65535 || rp < 1 || rp > 65535) {
+    if (!Number.isInteger(lp) || lp < 1 || lp > 65535 ||
+        !Number.isInteger(rp) || rp < 1 || rp > 65535) {
       toast.error('Invalid port numbers')
       return
     }

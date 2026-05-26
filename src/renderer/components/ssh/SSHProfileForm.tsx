@@ -20,8 +20,9 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
   const [username, setUsername] = useState(profile?.username ?? '')
   const [authMethod, setAuthMethod] = useState<SSHAuthMethod>(profile?.authMethod ?? 'key')
   const [privateKeyPath, setPrivateKeyPath] = useState(profile?.privateKeyPath ?? '')
-  const [password, setPassword] = useState(profile?.password ?? '')
-  const [passphrase, setPassphrase] = useState(profile?.passphrase ?? '')
+  // Security: never hydrate credentials from stored profile - require re-entry
+  const [password, setPassword] = useState('')
+  const [passphrase, setPassphrase] = useState('')
   const [saving, setSaving] = useState(false)
 
   const handleSelectKeyFile = async () => {

@@ -40,12 +40,16 @@ export function SSHFileExplorer({
 
   const handleOpenFile = useCallback(async (entry: SFTPEntry) => {
     if (!connectionId) return
-    const result = await sshApi.sftpReadFile(connectionId, entry.path)
-    if (result.success) {
-      setStoreFile({ path: entry.path, content: result.data, name: entry.name, originalContent: result.data })
-      setStoreContent(result.data)
-    } else {
-      toast.error(`Failed to open: ${result.error}`)
+    try {
+      const result = await sshApi.sftpReadFile(connectionId, entry.path)
+      if (result.success) {
+        setStoreFile({ path: entry.path, content: result.data, name: entry.name, originalContent: result.data })
+        setStoreContent(result.data)
+      } else {
+        toast.error(`Failed to open: ${result.error}`)
+      }
+    } catch (error) {
+      toast.error(`Failed to open: ${error instanceof Error ? error.message : String(error)}`)
     }
   }, [connectionId, setStoreFile, setStoreContent])
 

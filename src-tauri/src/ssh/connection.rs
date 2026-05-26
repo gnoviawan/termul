@@ -413,6 +413,10 @@ impl SSHConnectionManager {
 
     /// Get the SSH session for SFTP/port-forward operations.
     /// Runs the provided closure with access to the SSH session.
+    ///
+    /// # Safety
+    /// The closure `f` MUST NOT perform blocking I/O. For blocking operations,
+    /// use `clone_session()` + `spawn_blocking` instead.
     pub async fn with_session<F, R>(&self, connection_id: &str, f: F) -> Result<R, String>
     where
         F: FnOnce(&Session) -> Result<R, String>,
@@ -453,38 +457,33 @@ impl SSHConnectionManager {
     }
 
     /// Execute a command on the SSH session (for SFTP subsystem access)
+    /// Uses clone_session + spawn_blocking to avoid holding async mutex during blocking I/O.
     #[allow(dead_code)]
     pub async fn exec_command(&self, connection_id: &str, command: &str) -> Result<String, String> {
-        let state = {
-            let connections = self.connections.read();
-            connections
-                .get(connection_id)
-                .cloned()
-                .ok_or_else(|| format!("Connection not found: {}", connection_id))?
-        };
+        // Clone session out of the guard to avoid holding async mutex during blocking I/O
+        let session = self.clone_session(connection_id).await?;
+        let command = command.to_string();
 
-        let state_guard = state.lock().await;
-        let session = state_guard
-            .session
-            .as_ref()
-            .ok_or_else(|| "Not connected".to_string())?;
+        tokio::task::spawn_blocking(move || {
+            let mut channel = session
+                .channel_session()
+                .map_err(|e| format!("Failed to open channel: {}", e))?;
 
-        let mut channel = session
-            .channel_session()
-            .map_err(|e| format!("Failed to open channel: {}", e))?;
+            channel
+                .exec(&command)
+                .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-        channel
-            .exec(command)
-            .map_err(|e| format!("Failed to execute command: {}", e))?;
+            let mut output = String::new();
+            channel
+                .read_to_string(&mut output)
+                .map_err(|e| format!("Failed to read output: {}", e))?;
 
-        let mut output = String::new();
-        channel
-            .read_to_string(&mut output)
-            .map_err(|e| format!("Failed to read output: {}", e))?;
+            channel.wait_close().ok();
 
-        channel.wait_close().ok();
-
-        Ok(output)
+            Ok(output)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
     }
 
     fn emit_status(&self, info: &SSHConnectionInfo) {

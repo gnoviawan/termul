@@ -284,7 +284,6 @@ pub fn read_file_to_string(sftp: &Sftp, remote_path: &str) -> Result<String, Str
         .map_err(|e| format!("Failed to open remote file '{}': {}", remote_path, e))?;
 
     let mut contents = String::new();
-    use std::io::Read;
     file.read_to_string(&mut contents)
         .map_err(|e| format!("Failed to read remote file '{}': {}", remote_path, e))?;
 
@@ -298,7 +297,6 @@ pub fn write_file_from_string(sftp: &Sftp, remote_path: &str, content: &str) -> 
         .create(path)
         .map_err(|e| format!("Failed to create remote file '{}': {}", remote_path, e))?;
 
-    use std::io::Write;
     file.write_all(content.as_bytes())
         .map_err(|e| format!("Failed to write to remote file '{}': {}", remote_path, e))?;
     file.flush()
@@ -318,7 +316,6 @@ pub fn create_file(sftp: &Sftp, remote_path: &str) -> Result<(), String> {
     let mut file = sftp
         .create(path)
         .map_err(|e| format!("Failed to create file '{}': {}", remote_path, e))?;
-    use std::io::Write;
     file.flush().ok();
     Ok(())
 }

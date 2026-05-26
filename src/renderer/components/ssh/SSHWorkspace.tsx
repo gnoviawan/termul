@@ -1,12 +1,9 @@
-import { useCallback } from 'react'
 import { Terminal, WifiOff } from 'lucide-react'
-import { sshApi } from '@/lib/api'
-import type { SSHProfile, SFTPEntry } from '@shared/types/ssh.types'
+import type { SSHProfile } from '@shared/types/ssh.types'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
 import { useSSHEditorFile } from '@/stores/ssh-store'
 import type { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { SSHFileEditor } from './SSHFileEditor'
-import { toast } from 'sonner'
 
 interface SSHWorkspaceProps {
   profile: SSHProfile
@@ -15,60 +12,6 @@ interface SSHWorkspaceProps {
 
 export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.Element {
   const editingFile = useSSHEditorFile()
-
-  const handleMkdir = useCallback(async () => {
-    if (!conn.connectionId) return
-    const name = prompt('New folder name:')
-    if (!name) return
-    const newPath = conn.currentPath.endsWith('/') ? `${conn.currentPath}${name}` : `${conn.currentPath}/${name}`
-    try {
-      const r = await sshApi.sftpMkdir(conn.connectionId, newPath)
-      if (r.success) { toast.success(`Created: ${name}`); conn.loadDirectory(conn.currentPath) }
-      else toast.error(`Failed: ${r.error}`)
-    } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
-
-  const handleCreateFile = useCallback(async () => {
-    if (!conn.connectionId) return
-    const name = prompt('New file name:')
-    if (!name) return
-    const newPath = conn.currentPath.endsWith('/') ? `${conn.currentPath}${name}` : `${conn.currentPath}/${name}`
-    try {
-      const r = await sshApi.sftpCreateFile(conn.connectionId, newPath)
-      if (r.success) { toast.success(`Created: ${name}`); conn.loadDirectory(conn.currentPath) }
-      else toast.error(`Failed: ${r.error}`)
-    } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
-
-  const handleDelete = useCallback(async (entry: SFTPEntry) => {
-    if (!conn.connectionId) return
-    if (!confirm(`Delete ${entry.entryType} "${entry.name}"?`)) return
-    try {
-      const r = await sshApi.sftpDelete(conn.connectionId, entry.path)
-      if (r.success) { toast.success(`Deleted: ${entry.name}`); conn.loadDirectory(conn.currentPath) }
-      else toast.error(`Delete failed: ${r.error}`)
-    } catch (error) {
-      toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
-
-  const handleRename = useCallback(async (entry: SFTPEntry) => {
-    if (!conn.connectionId) return
-    const newName = prompt(`Rename "${entry.name}" to:`, entry.name)
-    if (!newName || newName === entry.name) return
-    const pp = entry.path.substring(0, entry.path.lastIndexOf('/'))
-    try {
-      const r = await sshApi.sftpRename(conn.connectionId, entry.path, `${pp}/${newName}`)
-      if (r.success) { toast.success(`Renamed: ${entry.name} → ${newName}`); conn.loadDirectory(conn.currentPath) }
-      else toast.error(`Rename failed: ${r.error}`)
-    } catch (error) {
-      toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [conn.connectionId, conn.currentPath, conn.loadDirectory])
 
   return (
     <div className="flex h-full w-full overflow-hidden rounded-xl bg-card">

@@ -78,12 +78,18 @@ export const useSSHStore = create<SSHState>((set, get) => ({
   saveProfile: async (profile: SSHProfile) => {
     const result = await sshApi.saveProfile(profile)
     if (result.success) {
+      // Security: strip sensitive fields before storing in renderer state
+      const sanitized: SSHProfile = {
+        ...profile,
+        password: undefined,
+        passphrase: undefined,
+      }
       set((state) => {
         const existing = state.profiles.findIndex((p) => p.id === profile.id)
         const profiles =
           existing >= 0
-            ? state.profiles.map((p) => (p.id === profile.id ? profile : p))
-            : [...state.profiles, profile]
+            ? state.profiles.map((p) => (p.id === profile.id ? sanitized : p))
+            : [...state.profiles, sanitized]
         return { profiles }
       })
       return true
@@ -125,7 +131,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
         profileId: result.data.profileId,
         status: result.data.status as SSHConnectionStatus,
         terminalId: result.data.terminalId,
-        activeForwards: [],
+        activeForwards: result.data.activeForwards ?? [],
         error: result.data.error,
         reconnectAttempts: result.data.reconnectAttempts,
         connectedAt: result.data.connectedAt,
@@ -227,16 +233,14 @@ export const useSSHStore = create<SSHState>((set, get) => ({
 
   updatePortForwardStatus: (connectionId: string, forward: ActivePortForward) => {
     set((state) => ({
-      connections: state.connections.map((c) =>
-        c.id === connectionId
-          ? {
-              ...c,
-              activeForwards: c.activeForwards.map((f) =>
-                f.id === forward.id ? forward : f
-              ),
-            }
-          : c
-      ),
+      connections: state.connections.map((c) => {
+        if (c.id !== connectionId) return c
+        const existingIndex = c.activeForwards.findIndex((f) => f.id === forward.id)
+        const activeForwards = existingIndex >= 0
+          ? c.activeForwards.map((f) => (f.id === forward.id ? forward : f))
+          : [...c.activeForwards, forward]
+        return { ...c, activeForwards }
+      }),
     }))
   },
 

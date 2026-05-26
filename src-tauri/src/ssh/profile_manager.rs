@@ -266,31 +266,45 @@ impl ProfileManager {
     /// Save (create or update) a profile.
     /// If password/passphrase are provided, they are stored in the OS keychain.
     pub fn save(&self, mut profile: SSHProfile) -> Result<(), String> {
-        // Store credentials in OS keychain if provided
-        if let Some(ref password) = profile.password {
-            if !password.is_empty() {
-                credential_store::store_password(&profile.id, password)?;
-                profile.has_stored_password = true;
+        // Only store credentials under the matching auth method
+        match profile.auth_method.as_str() {
+            "password" => {
+                if let Some(ref password) = profile.password {
+                    if !password.is_empty() {
+                        credential_store::store_password(&profile.id, password)?;
+                        profile.has_stored_password = true;
+                    }
+                }
+                // Clear passphrase if any (not used for password auth)
+                if profile.has_stored_passphrase {
+                    credential_store::delete_passphrase(&profile.id).ok();
+                    profile.has_stored_passphrase = false;
+                }
             }
-        }
-
-        if let Some(ref passphrase) = profile.passphrase {
-            if !passphrase.is_empty() {
-                credential_store::store_passphrase(&profile.id, passphrase)?;
-                profile.has_stored_passphrase = true;
+            "key" => {
+                if let Some(ref passphrase) = profile.passphrase {
+                    if !passphrase.is_empty() {
+                        credential_store::store_passphrase(&profile.id, passphrase)?;
+                        profile.has_stored_passphrase = true;
+                    }
+                }
+                // Clear password if any (not used for key auth)
+                if profile.has_stored_password {
+                    credential_store::delete_password(&profile.id).ok();
+                    profile.has_stored_password = false;
+                }
             }
-        }
-
-        // Clear password if auth method changed away from password
-        if profile.auth_method != "password" && profile.has_stored_password {
-            credential_store::delete_password(&profile.id)?;
-            profile.has_stored_password = false;
-        }
-
-        // Clear passphrase if auth method changed away from key
-        if profile.auth_method != "key" && profile.has_stored_passphrase {
-            credential_store::delete_passphrase(&profile.id)?;
-            profile.has_stored_passphrase = false;
+            _ => {
+                // Agent or other methods - wipe both
+                if profile.has_stored_password {
+                    credential_store::delete_password(&profile.id).ok();
+                    profile.has_stored_password = false;
+                }
+                if profile.has_stored_passphrase {
+                    credential_store::delete_passphrase(&profile.id).ok();
+                    profile.has_stored_passphrase = false;
+                }
+            }
         }
 
         // Clear transient secrets before caching (they live only in keychain)
@@ -338,7 +352,12 @@ impl ProfileManager {
     /// Update last_connected timestamp for a profile
     pub fn update_last_connected(&self, id: &str) -> Result<(), String> {
         let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
-        let mut profiles = self.load_from_store()?;
+        
+        // Use cache if available, otherwise load from store
+        let mut profiles = match cache.as_ref() {
+            Some(cached) => cached.clone(),
+            None => self.load_from_store()?,
+        };
 
         if let Some(profile) = profiles.iter_mut().find(|p| p.id == id) {
             profile.last_connected = Some(chrono::Utc::now().to_rfc3339());

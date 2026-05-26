@@ -82,13 +82,19 @@ pub fn delete_passphrase(profile_id: &str) -> Result<(), String> {
 
 /// Delete all stored credentials for a profile (both password and passphrase).
 pub fn delete_credentials(profile_id: &str) -> Result<(), String> {
+    let mut errors = Vec::new();
+
     if let Err(e) = delete_password(profile_id) {
-        log::warn!("[SSH] {}", e);
+        errors.push(format!("password: {}", e));
     }
 
     if let Err(e) = delete_passphrase(profile_id) {
-        log::warn!("[SSH] {}", e);
+        errors.push(format!("passphrase: {}", e));
     }
 
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("Failed to delete credentials: {}", errors.join("; ")))
+    }
 }

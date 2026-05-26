@@ -178,8 +178,28 @@ pub fn parse_ssh_config_content(content: &str) -> Vec<ParsedSSHProfile> {
                     profiles.push(profile);
                 }
             }
-            current_host = Some(value);
-            current_options.clear();
+            
+            // Split multi-host lines: "Host a b c" should create 3 profiles
+            let hosts: Vec<&str> = value.split_whitespace()
+                .filter(|h| !h.contains('*') && !h.contains('?')) // Skip wildcards
+                .collect();
+            
+            if hosts.is_empty() {
+                current_host = None;
+                current_options.clear();
+            } else if hosts.len() == 1 {
+                current_host = Some(hosts[0].to_string());
+                current_options.clear();
+            } else {
+                // Multiple hosts: create a profile for each with the same options
+                for host in hosts {
+                    if let Some(profile) = parse_host_block(host, &current_options) {
+                        profiles.push(profile);
+                    }
+                }
+                current_host = None;
+                current_options.clear();
+            }
         } else {
             // Store option for current host
             current_options.insert(key, value);

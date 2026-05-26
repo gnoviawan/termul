@@ -60,11 +60,20 @@ export function useSSHConnection(profile: SSHProfile | null) {
     setIsConnecting(true)
 
     try {
-      let sshCmd = `ssh ${profile.username}@${profile.host}`
-      if (profile.port !== 22) sshCmd += ` -p ${profile.port}`
-      if (profile.authMethod === 'key' && profile.privateKeyPath) sshCmd += ` -i "${profile.privateKeyPath}"`
-      sshCmd += ' -o StrictHostKeyChecking=accept-new'
-      if (profile.authMethod === 'password') sshCmd += ` -o PreferredAuthentications=password`
+      // Build SSH command as array to prevent shell injection
+      const sshArgs: string[] = ['ssh']
+      sshArgs.push(`${profile.username}@${profile.host}`)
+      if (profile.port !== 22) {
+        sshArgs.push('-p', String(profile.port))
+      }
+      if (profile.authMethod === 'key' && profile.privateKeyPath) {
+        sshArgs.push('-i', profile.privateKeyPath)
+      }
+      sshArgs.push('-o', 'StrictHostKeyChecking=accept-new')
+      if (profile.authMethod === 'password') {
+        sshArgs.push('-o', 'PreferredAuthentications=password')
+      }
+      const sshCmd = sshArgs.join(' ')
 
       let spawnEnv: Record<string, string> | undefined
       if (profile.authMethod === 'password' && profile.password) {
@@ -100,11 +109,21 @@ export function useSSHConnection(profile: SSHProfile | null) {
     }
   }, [profile, isConnecting, isConnected, markConnected, updateConnectionId])
 
-  const handleDisconnect = useCallback(() => {
+  const handleDisconnect = useCallback(async () => {
     if (!profile) return
+    // Call backend disconnect first to clean up SSH session, SFTP channels, and port forwards
+    if (connection) {
+      try {
+        await sshApi.disconnect(connection.id)
+      } catch (error) {
+        console.warn('Backend disconnect failed:', error)
+      }
+    }
     if (localTerminalPtyId) void terminalApi.kill(localTerminalPtyId)
-    if (connection) markDisconnected(profile.id)
-    setLocalTerminalPtyId(null); setSftpReady(false); setEntries([])
+    markDisconnected(profile.id)
+    setLocalTerminalPtyId(null)
+    setSftpReady(false)
+    setEntries([])
     toast.info(`Disconnected: ${profile.name}`)
   }, [localTerminalPtyId, connection, profile?.id, profile?.name, markDisconnected])
 

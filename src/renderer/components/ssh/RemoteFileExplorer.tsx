@@ -46,16 +46,22 @@ export function RemoteFileExplorer({
     async (path: string) => {
       setIsLoading(true)
       setError(null)
-
-      const result = await sshApi.sftpListDir(connectionId, path)
-      if (result.success) {
-        setEntries(result.data)
-        setCurrentPath(path)
-      } else {
-        setError(result.error ?? 'Failed to load directory')
-        toast.error(`Failed to load: ${result.error}`)
+      try {
+        const result = await sshApi.sftpListDir(connectionId, path)
+        if (result.success) {
+          setEntries(result.data)
+          setCurrentPath(path)
+        } else {
+          setError(result.error ?? 'Failed to load directory')
+          toast.error(`Failed to load: ${result.error}`)
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        setError(errorMsg)
+        toast.error(`Failed to load: ${errorMsg}`)
+      } finally {
+        setIsLoading(false)
       }
-      setIsLoading(false)
     },
     [connectionId]
   )
@@ -72,20 +78,23 @@ export function RemoteFileExplorer({
       }
 
       setLoadingDirs((prev) => new Set(prev).add(dirPath))
-
-      const result = await sshApi.sftpListDir(connectionId, dirPath)
-      if (result.success) {
-        setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
-        setExpandedDirs((prev) => new Set(prev).add(dirPath))
-      } else {
-        toast.error(`Permission denied: ${dirPath}`)
+      try {
+        const result = await sshApi.sftpListDir(connectionId, dirPath)
+        if (result.success) {
+          setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
+          setExpandedDirs((prev) => new Set(prev).add(dirPath))
+        } else {
+          toast.error(`Permission denied: ${dirPath}`)
+        }
+      } catch (error) {
+        toast.error(`Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setLoadingDirs((prev) => {
+          const next = new Set(prev)
+          next.delete(dirPath)
+          return next
+        })
       }
-
-      setLoadingDirs((prev) => {
-        const next = new Set(prev)
-        next.delete(dirPath)
-        return next
-      })
     },
     [connectionId, expandedDirs]
   )
