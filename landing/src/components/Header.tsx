@@ -67,13 +67,13 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     <>
       <header
         className={cn(
-          "fixed top-0 left-0 right-0 z-50 px-6 py-4 grid grid-cols-[1fr_auto_1fr] items-center border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
+          "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between md:grid md:grid-cols-[1fr_auto_1fr] border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
           isScrolled
             ? "bg-black/50 backdrop-blur-md border-white/10"
             : "bg-black/0 border-white/0",
         )}
       >
-        <div className="justify-self-start min-w-0">
+        <div className="min-w-0 md:justify-self-start md:col-start-1">
           <Logo
             textClassName={cn(
               "transition-colors duration-200 ease-[var(--ease-out)]",
@@ -88,7 +88,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
 
         <nav
           className={cn(
-            "hidden md:flex items-center justify-center gap-8 text-sm justify-self-center",
+            "hidden md:flex items-center justify-center gap-8 text-sm md:justify-self-center md:col-start-2",
             navTextClassName,
           )}
         >
@@ -105,7 +105,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
           ))}
         </nav>
 
-        <div className="justify-self-end flex items-center gap-3 text-sm min-w-0">
+        <div className="flex items-center gap-3 text-sm min-w-0 md:justify-self-end md:col-start-3">
           <a
             href={GITHUB_REPO_URL}
             target="_blank"
