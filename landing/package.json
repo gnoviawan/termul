@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "verify:prerender": "node --input-type=module -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); if (!html.includes('Terminal, reimagined')) { console.error('Prerender check failed: expected content not found in dist/index.html'); process.exit(1); } console.log('Prerender check passed.');\""
+    "verify:prerender": "node --input-type=module -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.4",
