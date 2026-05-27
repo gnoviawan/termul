@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:prerender": "node --input-type=module -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); if (!html.includes('Terminal, reimagined')) { console.error('Prerender check failed: expected content not found in dist/index.html'); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.4",
     "@hugeicons/react": "^1.1.6",
+    "@unhead/react": "^3.1.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "ogl": "^1.0.11",
@@ -20,7 +22,8 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwind-merge": "^3.6.0",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "vite-plugin-react-ssg": "^0.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -20,9 +20,28 @@
     <meta name="twitter:title" content="Termul — A modern, project-aware terminal manager" />
     <meta name="twitter:description" content="Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface." />
     <meta name="twitter:image" content="https://termul.dev/og-image.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Termul",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Windows, macOS, Linux",
+        "description": "A modern, project-aware terminal manager built with Tauri. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.",
+        "url": "https://termul.dev/",
+        "downloadUrl": "https://github.com/gnoviawan/termul/releases/latest",
+        "softwareVersion": "0.3.8",
+        "license": "https://github.com/gnoviawan/termul/blob/dev/LICENSE",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="app"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

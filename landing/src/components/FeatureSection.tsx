@@ -77,11 +77,11 @@ const features = [
               <HugeiconsIcon icon={ConsoleIcon} className="w-3 h-3 text-blue-400" />
               termul
             </div>
-            <div className="px-4 h-full text-[10px] text-gray-500 flex items-center gap-2 hover:bg-white/5 rounded-t-lg cursor-pointer transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-4 h-full text-[10px] text-gray-500 flex items-center gap-2 rounded-t-lg">
               <HugeiconsIcon icon={ConsoleIcon} className="w-3 h-3" />
               server
             </div>
-            <div className="px-4 h-full text-[10px] text-gray-500 flex items-center gap-2 hover:bg-white/5 rounded-t-lg cursor-pointer transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-4 h-full text-[10px] text-gray-500 flex items-center gap-2 rounded-t-lg">
               <HugeiconsIcon icon={ConsoleIcon} className="w-3 h-3" />
               client
             </div>
@@ -118,7 +118,7 @@ const features = [
                 <div className="text-xs text-white mb-0.5">Before Refactor</div>
                 <div className="text-[10px] text-gray-500">May 18, 10:42 AM • 4 tabs</div>
               </div>
-              <div className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded border border-blue-500/20 cursor-pointer transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">RESTORE</div>
+              <div className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded border border-blue-500/20">RESTORE</div>
             </div>
             <div className="bg-white/5 border border-white/10 rounded p-3 flex justify-between items-center opacity-60">
               <div>
@@ -153,19 +153,19 @@ const features = [
             </div>
           </div>
           <div className="p-2 bg-[#0d0d0d] flex flex-col gap-1 text-xs">
-            <div className="px-3 py-2 rounded bg-blue-500/10 text-white cursor-pointer flex items-center justify-between border border-blue-500/20 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-3 py-2 rounded bg-blue-500/10 text-white flex items-center justify-between border border-blue-500/20">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-blue-400"></span> PowerShell
               </div>
               <HugeiconsIcon icon={Tick01Icon} className="w-3 h-3 text-blue-400" />
             </div>
-            <div className="px-3 py-2 rounded hover:bg-white/5 text-gray-400 cursor-pointer flex items-center gap-2 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-3 py-2 rounded text-gray-400 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-white opacity-50"></span> Command Prompt
             </div>
-            <div className="px-3 py-2 rounded hover:bg-white/5 text-gray-400 cursor-pointer flex items-center gap-2 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-3 py-2 rounded text-gray-400 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-orange-400 opacity-50"></span> Ubuntu (WSL)
             </div>
-            <div className="px-3 py-2 rounded hover:bg-white/5 text-gray-400 cursor-pointer flex items-center gap-2 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]">
+            <div className="px-3 py-2 rounded text-gray-400 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-yellow-400 opacity-50"></span> Git Bash
             </div>
           </div>

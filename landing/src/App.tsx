@@ -1,38 +1,18 @@
-import { useMemo, useState } from 'react';
-import type { OverlayScrollbars } from 'overlayscrollbars';
-import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
+import { useCallback, useState } from 'react';
 import Header from './components/Header';
 import Hero from './components/Hero';
 import FeatureSection from './components/FeatureSection';
 import Footer from './components/Footer';
+import { ScrollContainer } from './components/ScrollContainer';
 
-function App() {
+export function App() {
   const [scrollTop, setScrollTop] = useState(0);
-
-  const overlayEvents = useMemo(
-    () => ({
-      initialized: (instance: OverlayScrollbars) => {
-        setScrollTop(instance.elements().scrollOffsetElement.scrollTop);
-      },
-      scroll: (instance: OverlayScrollbars) => {
-        setScrollTop(instance.elements().scrollOffsetElement.scrollTop);
-      },
-    }),
-    [],
-  );
+  const handleScrollTopChange = useCallback((nextScrollTop: number) => {
+    setScrollTop(nextScrollTop);
+  }, []);
 
   return (
-    <OverlayScrollbarsComponent
-      className="h-screen bg-black text-white selection:bg-white/30 font-sans"
-      defer
-      events={overlayEvents}
-      options={{
-        scrollbars: {
-          autoHide: 'move',
-          theme: 'os-theme-termul',
-        },
-      }}
-    >
+    <ScrollContainer onScrollTopChange={handleScrollTopChange}>
       <div className="min-h-screen">
         <a
           href="#main-content"
@@ -47,7 +27,7 @@ function App() {
         </main>
         <Footer />
       </div>
-    </OverlayScrollbarsComponent>
+    </ScrollContainer>
   );
 }
 

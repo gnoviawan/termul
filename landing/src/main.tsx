@@ -1,11 +1,17 @@
 import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+import { hydrateRoot } from 'react-dom/client'
+import { createHead, UnheadProvider } from '@unhead/react/client'
 import 'overlayscrollbars/overlayscrollbars.css'
 import './index.css'
 import App from './App.tsx'
 
-createRoot(document.getElementById('root')!).render(
+const head = createHead()
+
+hydrateRoot(
+  document.getElementById('app')!,
   <StrictMode>
-    <App />
+    <UnheadProvider head={head}>
+      <App />
+    </UnheadProvider>
   </StrictMode>,
 )
