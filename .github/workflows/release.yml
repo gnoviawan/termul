@@ -177,11 +177,10 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: 20
-          cache: npm
+          bun-version: 1.3.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -194,45 +193,13 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile
 
       - name: Align app versions with tag
-        shell: bash
         env:
           TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
-        run: |
-          node <<'NODE'
-          const fs = require('fs')
-
-          const tagVersion = process.env.TAG_VERSION
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
-          if (pkg.version !== tagVersion) {
-            throw new Error(
-              `package.json version ${pkg.version} does not match tag ${tagVersion}`
-            )
-          }
-
-          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8')
-          const cargoMatch = cargo.match(/^version\s*=\s*"([^"]+)"/m)
-          if (!cargoMatch || cargoMatch[1] !== tagVersion) {
-            const cargoVersion = cargoMatch?.[1] ?? 'missing'
-            throw new Error(
-              `src-tauri/Cargo.toml version ${cargoVersion} ` +
-                `does not match tag ${tagVersion}`
-            )
-          }
-
-          const tauri = JSON.parse(
-            fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')
-          )
-          if (tauri.version !== tagVersion) {
-            throw new Error(
-              `src-tauri/tauri.conf.json version ${tauri.version} ` +
-                `does not match tag ${tagVersion}`
-            )
-          }
-          NODE
+        run: bun scripts/align-version.ts
 
       - name: Build and publish release artifacts
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
@@ -248,7 +215,7 @@ jobs:
           releaseId: ${{ needs.create_release.outputs.release_id }}
           releaseDraft: true
           prerelease: ${{ needs.changelog.outputs.is_prerelease }}
-          tauriScript: npm run tauri
+          tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
   publish_release:
