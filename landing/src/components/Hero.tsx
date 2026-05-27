@@ -1,14 +1,23 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, GitBranchIcon, ConsoleIcon } from "@hugeicons/core-free-icons";
 import { Button } from "./Button";
+import { useReducedMotion } from "../lib/useReducedMotion";
 import { GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
 
 const Hero = () => {
+  const reducedMotion = useReducedMotion();
+
   return (
     <section className="relative pt-40 pb-20 px-6 flex flex-col items-center justify-center text-center overflow-hidden">
-      <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover z-0 opacity-100 pointer-events-none">
-        <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260424_064411_9e9d7f84-9277-41f4-ab10-59172d89e6be.mp4" type="video/mp4" />
-      </video>
+      {!reducedMotion && (
+        <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover z-0 opacity-100 pointer-events-none">
+          <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260424_064411_9e9d7f84-9277-41f4-ab10-59172d89e6be.mp4" type="video/mp4" />
+        </video>
+      )}
+      {reducedMotion && (
+        <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#e8eef5] via-[#f4f6f8] to-black/80" aria-hidden />
+      )}
+      <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/40 to-transparent z-[1] pointer-events-none" aria-hidden />
       <div className="relative z-10 w-full flex flex-col items-center text-slate-950">
       <h1 className="text-5xl md:text-7xl font-medium tracking-tighter mb-6 max-w-4xl text-balance animate-in delay-100 drop-shadow-[0_2px_16px_rgba(255,255,255,0.55)]">
         A modern, project-aware<br />

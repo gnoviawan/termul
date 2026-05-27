@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { GithubIcon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, GithubIcon, Menu01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "./Button";
 import { Logo } from "./Logo";
 import { cn } from "../lib/utils";
+import { useReducedMotion } from "../lib/useReducedMotion";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
 
 export type HeaderProps = {
@@ -13,8 +14,16 @@ export type HeaderProps = {
 
 const SCROLLED_PX = 50;
 
+const navLinks = [
+  { href: "#features", label: "Features", external: false },
+  { href: "#download", label: "Downloads", external: false },
+  { href: DOCS_URL, label: "Docs", external: true },
+] as const;
+
 const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
   const [windowScrollY, setWindowScrollY] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const reducedMotion = useReducedMotion();
   const isControlled = scrollTopProp !== undefined;
   const scrollTop = scrollTopProp ?? windowScrollY;
   const isScrolled = scrollTop > SCROLLED_PX;
@@ -31,54 +40,181 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [isControlled]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [menuOpen]);
+
+  const closeMenu = () => setMenuOpen(false);
+
+  const linkClassName = cn(
+    "transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
+    isScrolled ? "hover:text-white" : "hover:text-black",
+  );
+
+  const navTextClassName = cn(
+    "transition-colors duration-200 ease-[var(--ease-out)]",
+    isScrolled ? "text-gray-300" : "text-black/70",
+  );
+
   return (
-    <header 
-      className={cn(
-        "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
-        isScrolled 
-          ? "bg-black/50 backdrop-blur-md border-white/10" 
-          : "bg-transparent border-transparent"
-      )}
-    >
-      <Logo 
-        textClassName={cn("transition-colors duration-200 ease-[var(--ease-out)]", isScrolled ? "text-white" : "text-black")}
-        iconClassName={cn("transition-[filter] duration-200 ease-[var(--ease-out)]", isScrolled ? "" : "invert")}
-      />
-      
-      <nav className={cn(
-        "hidden md:flex items-center gap-8 text-sm absolute left-1/2 -translate-x-1/2 transition-colors duration-200 ease-[var(--ease-out)]",
-        isScrolled ? "text-gray-300" : "text-black/70"
-      )}>
-        <a href="#features" className={cn("transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]", isScrolled ? "hover:text-white" : "hover:text-black")}>Features</a>
-        <a href="#download" className={cn("transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]", isScrolled ? "hover:text-white" : "hover:text-black")}>Downloads</a>
-        <a href={DOCS_URL} target="_blank" rel="noreferrer" className={cn("transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]", isScrolled ? "hover:text-white" : "hover:text-black")}>Docs</a>
-      </nav>
-      
-      <div className="flex items-center gap-4 text-sm">
-        <a 
-          href={GITHUB_REPO_URL} 
-          target="_blank" 
-          rel="noreferrer" 
-          aria-label="GitHub"
+    <>
+      <header
+        className={cn(
+          "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
+          isScrolled
+            ? "bg-black/50 backdrop-blur-md border-white/10"
+            : "bg-black/10 backdrop-blur-sm border-white/5",
+        )}
+      >
+        <Logo
+          textClassName={cn(
+            "transition-colors duration-200 ease-[var(--ease-out)]",
+            isScrolled ? "text-white" : "text-black",
+          )}
+          iconClassName={cn(
+            "transition-[filter] duration-200 ease-[var(--ease-out)]",
+            isScrolled ? "" : "invert",
+          )}
+        />
+
+        <nav
           className={cn(
-            "flex items-center gap-2 transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
-            isScrolled ? "text-white hover:text-gray-300" : "text-black hover:text-black/70"
+            "hidden md:flex items-center gap-8 text-sm absolute left-1/2 -translate-x-1/2",
+            navTextClassName,
           )}
         >
-          <HugeiconsIcon icon={GithubIcon} className="w-4 h-4" />
-          <span className="hidden sm:inline">GitHub</span>
-        </a>
-        <Button 
-          as="a" 
-          href={LATEST_RELEASE_URL} 
-          target="_blank" 
-          rel="noreferrer" 
-          size="sm"
+          {navLinks.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              target={link.external ? "_blank" : undefined}
+              rel={link.external ? "noreferrer" : undefined}
+              className={linkClassName}
+            >
+              {link.label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="flex items-center gap-3 text-sm">
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="GitHub"
+            className={cn(
+              "hidden sm:flex items-center gap-2 transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
+              isScrolled ? "text-white hover:text-gray-300" : "text-black hover:text-black/70",
+            )}
+          >
+            <HugeiconsIcon icon={GithubIcon} className="w-4 h-4" />
+            <span>GitHub</span>
+          </a>
+          <Button
+            as="a"
+            href={LATEST_RELEASE_URL}
+            target="_blank"
+            rel="noreferrer"
+            size="sm"
+            className="hidden sm:inline-flex"
+          >
+            Download
+          </Button>
+          <button
+            type="button"
+            aria-expanded={menuOpen}
+            aria-controls="mobile-nav"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            onClick={() => setMenuOpen((open) => !open)}
+            className={cn(
+              "md:hidden flex items-center justify-center w-10 h-10 rounded-full transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
+              isScrolled
+                ? "text-white hover:bg-white/10"
+                : "text-black hover:bg-black/5",
+            )}
+          >
+            <HugeiconsIcon icon={menuOpen ? Cancel01Icon : Menu01Icon} className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      <div
+        id="mobile-nav"
+        className={cn(
+          "fixed inset-0 z-40 md:hidden",
+          menuOpen ? "pointer-events-auto" : "pointer-events-none",
+        )}
+        aria-hidden={!menuOpen}
+      >
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={closeMenu}
+          className={cn(
+            "absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
+            menuOpen ? "opacity-100" : "opacity-0",
+          )}
+        />
+        <nav
+          className={cn(
+            "absolute top-[72px] left-4 right-4 rounded-2xl border border-white/10 bg-[#0a0a0a]/95 backdrop-blur-xl p-2 shadow-2xl shadow-black/50",
+            "transition-[opacity,transform] duration-200 ease-[var(--ease-out)]",
+            menuOpen
+              ? "opacity-100 translate-y-0"
+              : cn(
+                  "opacity-0",
+                  reducedMotion ? "translate-y-0" : "-translate-y-2",
+                ),
+          )}
         >
-          Download
-        </Button>
+          {navLinks.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              target={link.external ? "_blank" : undefined}
+              rel={link.external ? "noreferrer" : undefined}
+              onClick={closeMenu}
+              className="flex items-center justify-between rounded-xl px-4 py-3.5 text-base text-gray-200 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-white/5 active:scale-[0.97]"
+            >
+              {link.label}
+            </a>
+          ))}
+          <div className="mt-2 flex flex-col gap-2 border-t border-white/10 p-2 pt-4">
+            <Button
+              as="a"
+              href={LATEST_RELEASE_URL}
+              target="_blank"
+              rel="noreferrer"
+              size="md"
+              className="w-full"
+              onClick={closeMenu}
+            >
+              Download
+            </Button>
+            <Button
+              as="a"
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noreferrer"
+              variant="dark"
+              size="md"
+              className="w-full"
+              onClick={closeMenu}
+            >
+              <HugeiconsIcon icon={GithubIcon} className="w-4 h-4" />
+              GitHub
+            </Button>
+          </div>
+        </nav>
       </div>
-    </header>
+    </>
   );
 };
 

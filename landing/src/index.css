@@ -1,8 +1,8 @@
-@import 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap';
+@import 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap';
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Neue Haas Grotesk Display Pro", "helvetica neue", helvetica, arial, sans-serif;
+  --font-sans: "Neue Haas Grotesk Display Pro", Inter, "helvetica neue", helvetica, arial, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
   
   --color-background: #000000;
@@ -85,4 +85,23 @@
   .delay-200 { transition-delay: 200ms; }
   .delay-300 { transition-delay: 300ms; }
   .delay-400 { transition-delay: 400ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-in {
+      transition: opacity 200ms ease;
+      transform: none;
+
+      @starting-style {
+        opacity: 0;
+        transform: none;
+      }
+    }
+
+    .delay-100,
+    .delay-200,
+    .delay-300,
+    .delay-400 {
+      transition-delay: 0ms;
+    }
+  }
 }
