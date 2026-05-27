@@ -29,7 +29,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Backend:** Rust `1.77+`, edition `2021`
 - **Frontend:** React `18.3.1` + React DOM `18.3.1`
 - **Language/tooling:** TypeScript `5.8.3` in strict mode, ESM-first repo (`"type": "module"`)
-- **Build/test:** Vite `5.4.19`, Vitest `4.0.16` with `jsdom`
+- **Build/test:** Vite `8.0.14`, Vitest `4.0.16` with `jsdom`
 - **Linting:** ESLint `9.32.0` + `typescript-eslint` `8.38.0`
 - **UI/state:** Tailwind CSS `3.4.17`, Zustand `5.0.9`, TanStack React Query `5.83.0`, Radix UI packages
 - **Routing:** React Router DOM `6.30.1` using hash-router patterns
@@ -161,4 +161,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules.
 - Remove rules that become obvious over time.
 
-Last Updated: 2026-05-09
+Last Updated: 2026-05-27
