@@ -67,26 +67,28 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     <>
       <header
         className={cn(
-          "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
+          "fixed top-0 left-0 right-0 z-50 px-6 py-4 grid grid-cols-[1fr_auto_1fr] items-center border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
           isScrolled
             ? "bg-black/50 backdrop-blur-md border-white/10"
-            : "bg-black/10 backdrop-blur-sm border-white/5",
+            : "bg-black/0 border-white/0",
         )}
       >
-        <Logo
-          textClassName={cn(
-            "transition-colors duration-200 ease-[var(--ease-out)]",
-            isScrolled ? "text-white" : "text-black",
-          )}
-          iconClassName={cn(
-            "transition-[filter] duration-200 ease-[var(--ease-out)]",
-            isScrolled ? "" : "invert",
-          )}
-        />
+        <div className="justify-self-start min-w-0">
+          <Logo
+            textClassName={cn(
+              "transition-colors duration-200 ease-[var(--ease-out)]",
+              isScrolled ? "text-white" : "text-black",
+            )}
+            iconClassName={cn(
+              "transition-[filter] duration-200 ease-[var(--ease-out)]",
+              isScrolled ? "" : "invert",
+            )}
+          />
+        </div>
 
         <nav
           className={cn(
-            "hidden md:flex items-center gap-8 text-sm absolute left-1/2 -translate-x-1/2",
+            "hidden md:flex items-center justify-center gap-8 text-sm justify-self-center",
             navTextClassName,
           )}
         >
@@ -103,7 +105,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
           ))}
         </nav>
 
-        <div className="flex items-center gap-3 text-sm">
+        <div className="justify-self-end flex items-center gap-3 text-sm min-w-0">
           <a
             href={GITHUB_REPO_URL}
             target="_blank"
