@@ -283,7 +283,7 @@ export function ProjectSidebar({
 		async (worktreePath: string): Promise<void> => {
 			// Use the filesystem API to open the directory in the OS file manager
 			try {
-				await (window as any).__TAURI_INTERNALS__?.invoke('open_path_in_file_manager', { path: worktreePath });
+				await (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__?.invoke('open_path_in_file_manager', { path: worktreePath });
 			} catch {
 				// Fallback — just copy the path
 				handleCopyWorktreePath(worktreePath);

@@ -90,6 +90,7 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProjectId: () => activeProject.id,
   useProjectActions: () => mockProjectActions,
   useProjectStore: Object.assign(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id }) : { projects: [activeProject], activeProjectId: activeProject.id },
     { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id }) }
   )
