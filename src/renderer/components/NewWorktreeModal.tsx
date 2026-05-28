@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
-import { X, GitBranch, Search, AlertTriangle, Loader2 } from 'lucide-react'
+import { X, GitBranch, Search, AlertTriangle, Loader2, Link2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { BranchInfo } from '@shared/types/ipc.types'
 import type { Worktree } from '@/types/project'
@@ -36,6 +36,10 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 	const [isCreating, setIsCreating] = useState(false)
 	const [validationError, setValidationError] = useState<string | null>(null)
 
+	// Symlink dirs state
+	const [enabledSymlinkDirs, setEnabledSymlinkDirs] = useState<Set<string>>(new Set())
+	const [showSymlinkSection, setShowSymlinkSection] = useState(false)
+
 	const projectPath = project?.path ?? ''
 	const isGitRepo = project?.isGitRepo ?? false
 
@@ -70,8 +74,13 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			setShowRemoteBranches(false)
 			setValidationError(null)
 			setIsCreating(false)
+			setShowSymlinkSection(false)
+
+			// Initialize symlink dirs from project settings
+			const projectSymlinkDirs = project?.symlinkDirs ?? []
+			setEnabledSymlinkDirs(new Set(projectSymlinkDirs))
 		}
-	}, [isOpen])
+	}, [isOpen, project?.symlinkDirs])
 
 	// Fetch branches when modal opens
 	useEffect(() => {
@@ -188,10 +197,52 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 					createdAt: new Date().toISOString(),
 				}
 				addWorktree(projectId, newWorktree)
-				toast({
-					title: 'Worktree created',
-					description: `"${result.data.name}" created successfully on branch "${result.data.branch}".`,
-				})
+
+				// Create symlinks for enabled directories
+				const enabledDirs = Array.from(enabledSymlinkDirs)
+				if (enabledDirs.length > 0) {
+					try {
+						const symlinkResult = await worktreeApi.createSymlinks(
+							projectPath,
+							result.data.path,
+							enabledDirs,
+						)
+						if (symlinkResult.success && symlinkResult.data) {
+							const created = symlinkResult.data.filter((r) => r.status === 'created').length
+							const skipped = symlinkResult.data.filter((r) => r.status === 'skipped').length
+							const failed = symlinkResult.data.filter((r) => r.status === 'failed').length
+							if (failed > 0) {
+								toast({
+									title: 'Worktree created with symlink warnings',
+									description: `${created} symlink(s) created, ${skipped} skipped, ${failed} failed.`,
+								})
+							} else {
+								toast({
+									title: 'Worktree created',
+									description: `"${result.data.name}" created on branch "${result.data.branch}" with ${created} symlink(s).`,
+								})
+							}
+						} else {
+							// Symlink creation failed but worktree was created successfully
+							toast({
+								title: 'Worktree created',
+								description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup had issues.`,
+							})
+						}
+					} catch {
+						// Symlink failure is non-blocking
+						toast({
+							title: 'Worktree created',
+							description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup skipped.`,
+						})
+					}
+				} else {
+					toast({
+						title: 'Worktree created',
+						description: `"${result.data.name}" created successfully on branch "${result.data.branch}".`,
+					})
+				}
+
 				onClose()
 			} else {
 				setValidationError(!result.success ? result.error : 'Failed to create worktree')
@@ -225,6 +276,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 		addWorktree,
 		setWorktreeOperationLock,
 		onClose,
+		enabledSymlinkDirs,
 	])
 
 	const handleKeyDown = useCallback(
@@ -460,6 +512,50 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 									{pathPreview}
 								</code>
 							</div>
+
+							{/* Symlink Directories section */}
+							{project.symlinkDirs && project.symlinkDirs.length > 0 && (
+								<div>
+									<button
+										onClick={() => setShowSymlinkSection(!showSymlinkSection)}
+										className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+									>
+										<Link2 size={12} />
+										<span>Symlink Directories ({project.symlinkDirs.length})</span>
+										<span className="text-[10px]">{showSymlinkSection ? '▼' : '▶'}</span>
+									</button>
+									{showSymlinkSection && (
+										<div className="mt-1.5 border border-border rounded bg-secondary/30 p-2 space-y-1">
+											{project.symlinkDirs.map((dir) => (
+												<label
+													key={dir}
+													className="flex items-center gap-2 text-xs text-foreground cursor-pointer"
+												>
+													<input
+														type="checkbox"
+														checked={enabledSymlinkDirs.has(dir)}
+														onChange={(e) => {
+															const next = new Set(enabledSymlinkDirs)
+															if (e.target.checked) {
+																next.add(dir)
+															} else {
+																next.delete(dir)
+															}
+															setEnabledSymlinkDirs(next)
+														}}
+														className="rounded border-border"
+													/>
+													<span>{dir}</span>
+												</label>
+											))}
+											<p className="text-[10px] text-muted-foreground mt-1">
+												Checked directories will be symlinked from the project root into the worktree.
+											</p>
+										</div>
+									)}
+								</div>
+							)}
+
 
 							{/* Validation error */}
 							{validationError && (

@@ -171,6 +171,18 @@ export interface RemoveResult {
 	error?: string;
 }
 
+export interface GitignoreDir {
+	dirName: string;
+	exists: boolean;
+}
+
+export interface SymlinkResult {
+	path: string;
+	target: string;
+	status: 'created' | 'skipped' | 'failed';
+	reason?: string;
+}
+
 // Dialog API for file/directory selection
 export interface DialogApi {
 	selectDirectory: () => Promise<IpcResult<string>>;

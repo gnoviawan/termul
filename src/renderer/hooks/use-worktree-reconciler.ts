@@ -69,6 +69,17 @@ export function useWorktreeReconciler(projectId: string) {
 				// Push to store — use getState to avoid stale closures
 				useProjectStore.getState().addWorktree(projectId, newWorktree)
 			}
+			// Ensure symlinks exist for each worktree
+			const symlinkDirs = project.symlinkDirs
+			if (symlinkDirs && symlinkDirs.length > 0) {
+				for (const wt of project.worktrees) {
+					try {
+						await worktreeApi.ensureSymlinks(project.path, wt.path, symlinkDirs)
+					} catch {
+						// Symlink ensure is best-effort
+					}
+				}
+			}
 		} catch {
 			// Reconciliation is best-effort
 		}

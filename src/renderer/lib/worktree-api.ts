@@ -5,6 +5,8 @@ import type {
 	BranchInfo,
 	DirtyStatus,
 	RemoveResult,
+	GitignoreDir,
+	SymlinkResult,
 } from '@shared/types/ipc.types'
 
 export const worktreeApi = {
@@ -60,4 +62,41 @@ export const worktreeApi = {
 		worktreesJson: string,
 	): Promise<IpcResult<RemoveResult[]>> =>
 		invoke('worktree_remove_all_managed', { projectPath, worktreesJson }),
+
+	/**
+	 * Parse .gitignore and return directory entries that could be symlinked.
+	 * Each entry includes whether the directory exists in the project root.
+	 */
+	parseGitignore: (projectPath: string): Promise<IpcResult<GitignoreDir[]>> =>
+		invoke('worktree_parse_gitignore', { projectPath }),
+
+	/**
+	 * Create symlinks from project root directories into a worktree.
+	 * symlinkDirs is a JSON array of directory names to symlink.
+	 */
+	createSymlinks: (
+		projectPath: string,
+		worktreePath: string,
+		symlinkDirs: string[],
+	): Promise<IpcResult<SymlinkResult[]>> =>
+		invoke('worktree_create_symlinks', {
+			projectPath,
+			worktreePath,
+			symlinkDirs: JSON.stringify(symlinkDirs),
+		}),
+
+	/**
+	 * Ensure symlinks exist for all directories in symlinkDirs.
+	 * Creates any missing symlinks. Does not remove or overwrite existing ones.
+	 */
+	ensureSymlinks: (
+		projectPath: string,
+		worktreePath: string,
+		symlinkDirs: string[],
+	): Promise<IpcResult<SymlinkResult[]>> =>
+		invoke('worktree_ensure_symlinks', {
+			projectPath,
+			worktreePath,
+			symlinkDirs: JSON.stringify(symlinkDirs),
+		}),
 }

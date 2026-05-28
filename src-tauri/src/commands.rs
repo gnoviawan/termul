@@ -332,6 +332,73 @@ pub async fn worktree_remove_all_managed(
     }
 }
 
+/// Parse `.gitignore` and return directory entries that could be symlinked into worktrees.
+/// Returns simple directory entries with whether they exist in the project root.
+#[tauri::command]
+pub async fn worktree_parse_gitignore(
+    project_path: String,
+) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
+    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+        Ok(dirs) => {
+            let infos: Vec<GitignoreDirInfo> = dirs
+                .into_iter()
+                .map(|d| GitignoreDirInfo {
+                    dir_name: d.dir_name,
+                    exists: d.exists,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create symlinks from project root directories into a worktree.
+/// `symlink_dirs` is a JSON array of directory names to symlink (e.g. ["node_modules", "dist"]).
+#[tauri::command]
+pub async fn worktree_create_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs: Vec<String> = serde_json::from_str(&symlink_dirs)
+        .map_err(|e| format!("Failed to parse symlink_dirs: {}", e))?;
+    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
+/// Ensure symlinks exist for all directories in symlink_dirs.
+/// Creates any missing symlinks. Does not remove or overwrite existing ones.
+#[tauri::command]
+pub async fn worktree_ensure_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs2: Vec<String> = serde_json::from_str(&symlink_dirs)
+        .map_err(|e| format!("Failed to parse symlink_dirs: {}", e))?;
+    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
 /// Worktree info for IPC response
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,6 +440,25 @@ impl From<BranchEntry> for BranchInfo {
             upstream: entry.upstream,
         }
     }
+}
+
+/// Gitignore directory info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreDirInfo {
+    pub dir_name: String,
+    pub exists: bool,
+}
+
+/// Symlink result info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymlinkResultInfo {
+    pub path: String,
+    pub target: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 // ==================== Browser Tab Commands ====================

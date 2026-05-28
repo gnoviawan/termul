@@ -11,6 +11,7 @@ import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
 
 export interface SpawnTerminalOptions {
 	/** Shell path/name. If omitted, resolves from project default → app default. */
@@ -66,6 +67,11 @@ export async function spawnTerminalInPane(
 	// Resolve shell: explicit → project default → app default → undefined (backend picks)
 	const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
 	const shell = options?.shell ?? project?.defaultShell ?? undefined
+
+	// Ensure worktree symlinks are present when spawning into a worktree path
+	if (project?.worktrees?.some((w) => w.path === cwd)) {
+		await ensureWorktreeSymlinks(projectId)
+	}
 
 	// Resolve project env vars for spawn
 	const { env, hasProjectEnv } = resolveEnvForSpawn(options?.envVars ?? project?.envVars, {})

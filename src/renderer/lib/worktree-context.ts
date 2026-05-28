@@ -7,6 +7,7 @@
 
 import { useProjectStore } from '@/stores/project-store'
 import type { Project, Worktree } from '@/types/project'
+import { worktreeApi } from '@/lib/api'
 
 /**
  * Get the default CWD for a project, resolving from the active worktree if set.
@@ -67,4 +68,34 @@ export function isWorktreePathStale(worktreePath: string): boolean {
 	// This is a placeholder that returns false; actual staleness detection
 	// should be done in the reconciliation hook (useWorktreeReconciler).
 	return false
+}
+
+/**
+ * Ensure symlinks exist for the active worktree of a project.
+ * Reads the project's symlinkDirs setting and creates any missing symlinks.
+ * Best-effort: logs warnings on failure but does not block terminal spawn.
+ */
+export async function ensureWorktreeSymlinks(projectId: string): Promise<void> {
+	const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+	if (!project?.path || !project.isGitRepo) return
+	if (!project.activeWorktreeId) return
+
+	const worktree = project.worktrees?.find((w) => w.id === project.activeWorktreeId)
+	if (!worktree) return
+
+	const symlinkDirs = project.symlinkDirs
+	if (!symlinkDirs || symlinkDirs.length === 0) return
+
+	try {
+		const result = await worktreeApi.ensureSymlinks(
+			project.path,
+			worktree.path,
+			symlinkDirs,
+		)
+		if (!result.success) {
+			console.warn('[WorktreeSymlinks] Ensure symlinks failed:', result.error)
+		}
+	} catch (err) {
+		console.warn('[WorktreeSymlinks] Ensure symlinks error:', err)
+	}
 }

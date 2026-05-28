@@ -38,6 +38,7 @@ export interface Project {
   worktrees?: Worktree[]
   activeWorktreeId?: string | null
   isGitRepo?: boolean
+  symlinkDirs?: string[] // Directories to symlink from project root into worktrees
 }
 
 // Helper getters for worktree operations

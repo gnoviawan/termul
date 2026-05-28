@@ -753,6 +753,9 @@ pub fn run() {
             commands::worktree_branches,
             commands::worktree_check_dirty,
             commands::worktree_remove_all_managed,
+            commands::worktree_parse_gitignore,
+            commands::worktree_create_symlinks,
+            commands::worktree_ensure_symlinks,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,

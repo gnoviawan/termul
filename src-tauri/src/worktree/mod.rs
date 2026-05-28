@@ -2,6 +2,53 @@ use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
 
+/// Directories that should never be symlinked into worktrees.
+const SYMLINK_EXCLUSION_LIST: &[&str] = &[
+    ".git",
+    ".termul",
+    ".worktrees",
+    ".claude",
+    ".codex",
+    ".opencode",
+    ".pi",
+    ".pi-lens",
+    ".agents",
+    ".auto-claude",
+    ".vscode",
+    ".idea",
+    "_bmad",
+    "_bmad-output",
+    "_bmad-bkp",
+];
+
+/// Check if a directory name is in the hardcoded exclusion list.
+fn is_excluded_dir(dir_name: &str) -> bool {
+    SYMLINK_EXCLUSION_LIST
+        .iter()
+        .any(|excluded| dir_name == *excluded || dir_name.starts_with(&format!("{}{}", *excluded, "/")))
+}
+
+// ============================================================================
+// Symlink Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreDir {
+    pub dir_name: String,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymlinkResult {
+    pub path: String,
+    pub target: String,
+    pub status: String, // "created", "skipped", "failed"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // ============================================================================
 // Data Types
 // ============================================================================
@@ -547,6 +594,208 @@ impl WorktreeManager {
         let _ = run_git(&["worktree", "prune"], Some(project_path));
 
         Ok(results)
+    }
+
+    /// Parse `.gitignore` and return directory entries that could be symlinked.
+    /// Only returns simple directory patterns (no globs, no negations).
+    /// Each entry includes whether it exists as a directory in the project root.
+    pub fn parse_gitignore_dirs(project_path: &str) -> Result<Vec<GitignoreDir>, WorktreeError> {
+        let gitignore_path = Path::new(project_path).join(".gitignore");
+        if !gitignore_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = std::fs::read_to_string(&gitignore_path)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        let project_root = Path::new(project_path);
+        let mut seen = std::collections::HashSet::<String>::new();
+        let mut dirs = Vec::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+
+            // Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // Skip negation patterns
+            if line.starts_with('!') {
+                continue;
+            }
+
+            // Skip glob patterns
+            if line.contains('*') || line.contains('?') || line.contains('[') {
+                continue;
+            }
+
+            // Strip trailing slash
+            let dir_name = line.trim_end_matches('/').trim();
+
+            // Skip empty after trimming
+            if dir_name.is_empty() {
+                continue;
+            }
+
+            // Skip if it contains path separators (subdirectory patterns like src/dist/)
+            if dir_name.contains('/') || dir_name.contains('\\') {
+                continue;
+            }
+
+            // Skip if in exclusion list
+            if is_excluded_dir(dir_name) {
+                continue;
+            }
+
+            // Deduplicate
+            if seen.contains(dir_name) {
+                continue;
+            }
+            seen.insert(dir_name.to_string());
+
+            // Check if it exists as a directory in the project root
+            let full_path = project_root.join(dir_name);
+            let exists = full_path.is_dir();
+
+            dirs.push(GitignoreDir {
+                dir_name: dir_name.to_string(),
+                exists,
+            });
+        }
+
+        Ok(dirs)
+    }
+
+    /// Create symlinks (or directory junctions on Windows) from the project root
+    /// to the worktree for each directory in `symlink_dirs`.
+    ///
+    /// Only creates symlinks for directories that exist in the project root.
+    /// Skips entries where the target already exists (as a real dir or symlink).
+    /// Returns a result for each attempted symlink.
+    pub fn create_symlinks(
+        project_path: &str,
+        worktree_path: &str,
+        symlink_dirs: &[String],
+    ) -> Vec<SymlinkResult> {
+        let project_root = Path::new(project_path);
+        let worktree_root = Path::new(worktree_path);
+        let mut results = Vec::new();
+
+        for dir_name in symlink_dirs {
+            let source = project_root.join(dir_name);
+            let target = worktree_root.join(dir_name);
+
+            // Skip if source doesn't exist as a directory
+            if !source.is_dir() {
+                results.push(SymlinkResult {
+                    path: target.to_string_lossy().to_string(),
+                    target: source.to_string_lossy().to_string(),
+                    status: "skipped".to_string(),
+                    reason: Some(format!(
+                        "Source directory does not exist: {}",
+                        source.to_string_lossy()
+                    )),
+                });
+                continue;
+            }
+
+            // Skip if target already exists (real dir or symlink)
+            if target.exists() {
+                results.push(SymlinkResult {
+                    path: target.to_string_lossy().to_string(),
+                    target: source.to_string_lossy().to_string(),
+                    status: "skipped".to_string(),
+                    reason: Some(format!(
+                        "Target already exists: {}",
+                        target.to_string_lossy()
+                    )),
+                });
+                continue;
+            }
+
+            // Try to create symlink/junction
+            let link_result = create_dir_symlink(&source, &target);
+            match link_result {
+                Ok(()) => results.push(SymlinkResult {
+                    path: target.to_string_lossy().to_string(),
+                    target: source.to_string_lossy().to_string(),
+                    status: "created".to_string(),
+                    reason: None,
+                }),
+                Err(e) => results.push(SymlinkResult {
+                    path: target.to_string_lossy().to_string(),
+                    target: source.to_string_lossy().to_string(),
+                    status: "failed".to_string(),
+                    reason: Some(e.to_string()),
+                }),
+            }
+        }
+
+        results
+    }
+
+    /// Ensure symlinks exist for all directories in `symlink_dirs`.
+    /// Creates any missing symlinks. Does not remove or overwrite existing ones.
+    /// Returns a result for each directory checked/created.
+    pub fn ensure_symlinks(
+        project_path: &str,
+        worktree_path: &str,
+        symlink_dirs: &[String],
+    ) -> Vec<SymlinkResult> {
+        Self::create_symlinks(project_path, worktree_path, symlink_dirs)
+    }
+}
+
+/// Create a directory symlink from `target` pointing to `source`.
+///
+/// On Windows, tries `symlink_dir()` first, falls back to creating a junction.
+/// On Unix, uses `symlink()`.
+fn create_dir_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    // Ensure the parent directory of the target exists
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, try symlink_dir first (requires developer mode or admin)
+        use std::os::windows::fs::symlink_dir;
+        if symlink_dir(source, target).is_ok() {
+            return Ok(());
+        }
+
+        // Fallback: create a directory junction using `mklink /J`
+        let source_str = source.to_string_lossy().to_string();
+        let target_str = target.to_string_lossy().to_string();
+        let output = Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &target_str,
+                &source_str,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run mklink: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!(
+                "Failed to create symlink or junction for {}: {}",
+                target.to_string_lossy(),
+                stderr.trim()
+            ))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::os::unix::fs::symlink(source, target)
+            .map_err(|e| format!("Failed to create symlink: {}", e))
     }
 }
 
