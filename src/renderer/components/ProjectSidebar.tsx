@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent } from "react";
-import { Reorder } from "framer-motion";
+import { Reorder, AnimatePresence, motion } from "framer-motion";
 import {
 	Plus,
 	Archive,
@@ -904,47 +904,55 @@ const ProjectItem = memo(function ProjectItem({
 			</button>
 
 			{/* Worktree sub-items */}
-			{isExpanded && hasWorktrees && (
-				<div className="ml-5 border-l border-sidebar-border">
-					{/* Root item */}
-					<WorktreeItem
-						name="Root"
-						branch={project.gitBranch ?? "main"}
-						path={project.path ?? ""}
-						isRoot
-						isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
-						onClick={() => onWorktreeSelect(null)}
-					/>
-					{/* Worktree items */}
-					{worktrees.map((wt) => (
+			<AnimatePresence initial={false}>
+				{isExpanded && hasWorktrees && (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: 0.15, ease: "easeInOut" }}
+						className="ml-5 border-l border-sidebar-border overflow-hidden"
+					>
+						{/* Root item */}
 						<WorktreeItem
-							key={wt.id}
-							name={wt.name}
-							branch={wt.branch}
-							path={wt.path}
-							isActive={project.activeWorktreeId === wt.id}
-							isTermulManaged={isWorktreeTermulManaged(wt)}
-							onClick={() => onWorktreeSelect(wt.id)}
-							onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+							name="Root"
+							branch={project.gitBranch ?? "main"}
+							path={project.path ?? ""}
+							isRoot
+							isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
+							onClick={() => onWorktreeSelect(null)}
 						/>
-					))}
-					{/* New Worktree button */}
-					{project.isGitRepo && (
-						<button
-							onClick={(e) => {
-								e.stopPropagation();
-								onNewWorktree(project.id);
-							}}
-							disabled={isWorktreeOperationLocked}
-							className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
-							title={isWorktreeOperationLocked ? "Another worktree operation in progress" : "Create new worktree"}
-						>
-							<Plus size={10} className="mr-1.5" />
-							New Worktree
-						</button>
-					)}
-				</div>
-			)}
+						{/* Worktree items */}
+						{worktrees.map((wt) => (
+							<WorktreeItem
+								key={wt.id}
+								name={wt.name}
+								branch={wt.branch}
+								path={wt.path}
+								isActive={project.activeWorktreeId === wt.id}
+								isTermulManaged={isWorktreeTermulManaged(wt)}
+								onClick={() => onWorktreeSelect(wt.id)}
+								onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+							/>
+						))}
+						{/* New Worktree button */}
+						{project.isGitRepo && (
+							<button
+								onClick={(e) => {
+									e.stopPropagation();
+									onNewWorktree(project.id);
+								}}
+								disabled={isWorktreeOperationLocked}
+								className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
+								title={isWorktreeOperationLocked ? "Another worktree operation in progress" : "Create new worktree"}
+							>
+								<Plus size={10} className="mr-1.5" />
+								New Worktree
+							</button>
+						)}
+					</motion.div>
+				)}
+			</AnimatePresence>
 		</div>
 	);
 });
@@ -981,9 +989,9 @@ const WorktreeItem = memo(function WorktreeItem({
 			)}
 			title={isRoot ? `Project root (${branch})` : `${name} (${branch})`}
 		>
-			<span className="mr-1.5 flex-shrink-0" aria-hidden="true">
-				{isRoot ? "🏠" : "🌿"}
-			</span>
+			<div className="mr-1.5 flex-shrink-0 inline-flex items-center" aria-hidden="true">
+				{isRoot ? <Home size={12} className="text-muted-foreground" /> : <GitBranch size={12} className="text-primary/70" />}
+			</div>
 			<span className="truncate flex-1">{isRoot ? "Root" : name}</span>
 			<span className="text-[10px] text-muted-foreground ml-1 truncate max-w-[60px]">
 				{branch}
