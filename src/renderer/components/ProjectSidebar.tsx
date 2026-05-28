@@ -43,6 +43,8 @@ import type { WorktreeHealthStatus } from "@/types/worktree-status";
 import { getWorktreeStatusFromCache } from "@/hooks/use-worktree-status";
 import { useWorktreeStatus } from "@/hooks/use-worktree-status";
 import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
+import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
+import { filterWorktrees } from "@/lib/worktree-filter";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -844,6 +846,10 @@ const ProjectItem = memo(function ProjectItem({
 	const hasWorktrees = (project.worktrees?.length ?? 0) > 0 || project.isGitRepo;
 	const worktrees = project.worktrees ?? [];
 
+	// Worktree search and group collapse state
+	const [worktreeSearchQuery, setWorktreeSearchQuery] = useState("");
+	const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
 	return (
 		<div data-testid={`project-item-${project.id}`}>
 			<button
@@ -942,7 +948,19 @@ const ProjectItem = memo(function ProjectItem({
 						transition={{ duration: 0.15, ease: "easeInOut" }}
 						className="ml-5 border-l border-sidebar-border overflow-hidden"
 					>
-						{/* Root item */}
+						{/* Worktree search bar - visible at 10+ worktrees */}
+					{worktrees.length >= 10 && (
+						<div className="px-2 py-1">
+							<input
+								type="text"
+								placeholder="Search worktrees..."
+								value={worktreeSearchQuery}
+								onChange={(e) => setWorktreeSearchQuery(e.target.value)}
+								className="w-full text-xs bg-sidebar-accent border border-border rounded px-2 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary"
+							/>
+						</div>
+					)}
+					{/* Root item */}
 						<WorktreeItem
 							name="Root"
 							branch={project.gitBranch ?? "main"}
@@ -951,20 +969,53 @@ const ProjectItem = memo(function ProjectItem({
 							isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
 							onClick={() => onWorktreeSelect(null)}
 						/>
-						{/* Worktree items */}
-						{worktrees.map((wt) => (
-							<WorktreeItem
-								key={wt.id}
-								name={wt.name}
-								branch={wt.branch}
-								path={wt.path}
-								worktreeId={wt.id}
-								isActive={project.activeWorktreeId === wt.id}
-								isTermulManaged={isWorktreeTermulManaged(wt)}
-								onClick={() => onWorktreeSelect(wt.id)}
-								onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
-							/>
-						))}
+						{/* Grouped worktree items with search filter */}
+						{(() => {
+							const filtered = worktreeSearchQuery
+								? filterWorktrees(worktrees, { searchQuery: worktreeSearchQuery })
+								: worktrees;
+							const groups = groupWorktrees(filtered);
+							return groups.map((group) => {
+								const isCollapsed = collapsedGroups.has(group.id);
+								return (
+									<div key={group.id} className="mb-1">
+										{group.id !== 'other' && group.items.length > 1 && (
+											<button
+												onClick={() => {
+													setCollapsedGroups((prev) => {
+														const next = new Set(prev);
+														if (next.has(group.id)) {
+															next.delete(group.id);
+														} else {
+															next.add(group.id);
+														}
+														return next;
+													});
+												}}
+												className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
+											>
+												<span>{isCollapsed ? '▶' : '▼'}</span>
+												<span className="ml-1">{group.name}</span>
+												<span className="ml-auto text-[9px] font-normal text-muted-foreground/40">{group.items.length}</span>
+											</button>
+										)}
+										{(!isCollapsed || group.id === 'other' || group.items.length <= 1) && group.items.map((wt) => (
+											<WorktreeItem
+												key={wt.id}
+												name={wt.name}
+												branch={wt.branch}
+												path={wt.path}
+												worktreeId={wt.id}
+												isActive={project.activeWorktreeId === wt.id}
+												isTermulManaged={isWorktreeTermulManaged(wt)}
+												onClick={() => onWorktreeSelect(wt.id)}
+												onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+											/>
+										))}
+									</div>
+								);
+							})
+						})()}
 						{/* New Worktree button */}
 						{project.isGitRepo && (
 							<button

@@ -9,6 +9,16 @@ import type {
 	SymlinkResult,
 } from '@shared/types/ipc.types'
 
+export interface MergePreviewInfo {
+	direction: string
+	sourceBranch: string
+	targetBranch: string
+	conflictFiles: { path: string; severity: string; conflictCount: number; isLockFile: boolean }[]
+	changedFiles: string[]
+	totalChanges: number
+	detectionMode: string
+}
+
 export const worktreeApi = {
 	/**
 	 * List all worktrees for a git repo at the given path.
@@ -99,4 +109,35 @@ export const worktreeApi = {
 			worktreePath,
 			symlinkDirs: JSON.stringify(symlinkDirs),
 		}),
+
+	/**
+	 * Archive a worktree by moving it to `.termul/archives/<name>-<timestamp>/`.
+	 * The worktree is recoverable until the 30-day retention expires.
+	 */
+	archive: (projectPath: string, worktreePath: string): Promise<IpcResult<void>> =>
+		invoke('worktree_archive', { projectPath, worktreePath }),
+
+	/**
+	 * Restore an archived worktree back to its original location.
+	 */
+	restore: (projectPath: string, archivePath: string): Promise<IpcResult<void>> =>
+		invoke('worktree_restore', { projectPath, archivePath }),
+
+	/**
+	 * Generate a merge preview for a worktree against a target branch.
+	 */
+	mergePreview: (
+		worktreePath: string,
+		targetBranch: string,
+	): Promise<IpcResult<MergePreviewInfo>> =>
+		invoke('worktree_merge_preview', { worktreePath, targetBranch }),
+
+	/**
+	 * Execute a merge from the worktree's current branch to target_branch.
+	 */
+	mergeExecute: (
+		worktreePath: string,
+		targetBranch: string,
+	): Promise<IpcResult<string>> =>
+		invoke('worktree_merge_execute', { worktreePath, targetBranch }),
 }

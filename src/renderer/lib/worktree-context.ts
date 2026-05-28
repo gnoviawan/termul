@@ -59,6 +59,18 @@ export function getWorktreeTabContext(projectId: string): string | null {
 }
 
 /**
+ * Get the active worktree root path for a project, if any.
+ * Returns the worktree path if an active worktree is set, or null if on project root.
+ * This is useful for the file explorer to root at the worktree path.
+ */
+export function getActiveWorktreeRoot(projectId: string): string | null {
+	const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+	if (!project?.activeWorktreeId) return null
+	const worktree = project.worktrees?.find((w) => w.id === project.activeWorktreeId)
+	return worktree?.path ?? null
+}
+
+/**
  * Check if a path still exists on disk by attempting to verify it.
  * This is a synchronous check that can be used to detect stale worktree paths.
  * Note: Actual file system checks should be done async via the Rust backend.

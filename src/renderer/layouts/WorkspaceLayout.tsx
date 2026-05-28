@@ -85,13 +85,14 @@ import {
 	waitForPendingAppSettingsPersistence,
 } from "@/hooks/use-app-settings";
 import { useFileWatcher } from "@/hooks/use-file-watcher";
+import { useWorktreeShortcuts } from "@/hooks/use-worktree-shortcuts";
 import { useEditorPersistence } from "@/hooks/use-editor-persistence";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
-import { getDefaultCwdForProject } from "@/lib/worktree-context";
+import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
 import { spawnTerminalInPane } from "@/lib/terminal-spawn";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
@@ -182,6 +183,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// File watcher hook
 	useFileWatcher();
+
+	// Worktree shortcut handlers
+	useWorktreeShortcuts();
 
 	// Sync file explorer root path and register project root watcher when project changes
 	useEffect(() => {

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
@@ -90,6 +90,52 @@ pub struct RemoveResult {
 }
 
 // ============================================================================
+// Archive Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveEntry {
+    pub original_path: String,
+    pub archive_path: String,
+    pub archived_at: String,
+    pub expires_at: String,
+    pub branch_name: String,
+    pub worktree_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveManifest {
+    pub entries: Vec<ArchiveEntry>,
+}
+
+// ============================================================================
+// Merge Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFile {
+    pub path: String,
+    pub severity: String,
+    pub conflict_count: usize,
+    pub is_lock_file: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreview {
+    pub direction: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub conflict_files: Vec<ConflictFile>,
+    pub changed_files: Vec<String>,
+    pub total_changes: usize,
+    pub detection_mode: String,
+}
+
+// ============================================================================
 // Error Handling
 // ============================================================================
 
@@ -103,6 +149,9 @@ pub enum WorktreeError {
     WorktreeRemoveFailed,
     PathTooLong,
     WorktreeLocked,
+    ArchiveFailed,
+    ArchiveNotFound,
+    MergeFailed,
     IoError(String),
     GitError(String),
 }
@@ -119,6 +168,9 @@ impl WorktreeError {
             Self::BranchNotFound => "WORKTREE_NOT_FOUND",
             Self::WorktreeLocked => "WORKTREE_EXISTS",
             Self::IoError(_) | Self::GitError(_) => "WORKTREE_CREATE_FAILED",
+            Self::ArchiveFailed => "ARCHIVE_FAILED",
+            Self::MergeFailed => "MERGE_FAILED",
+            Self::ArchiveNotFound => "ARCHIVE_NOT_FOUND",
         }
     }
 }
@@ -142,6 +194,9 @@ impl std::fmt::Display for WorktreeError {
                 write!(f, "The worktree path is too long. Choose a shorter name.")
             }
             Self::WorktreeLocked => write!(f, "Git is busy. Try again in a moment."),
+            Self::ArchiveFailed => write!(f, "Failed to archive worktree."),
+            Self::ArchiveNotFound => write!(f, "Archive not found."),
+            Self::MergeFailed => write!(f, "Merge operation failed. There may be conflicts."),
             Self::IoError(msg) => write!(f, "Filesystem error: {}", msg),
             Self::GitError(msg) => write!(f, "Git error: {}", msg),
         }
@@ -745,6 +800,287 @@ impl WorktreeManager {
     ) -> Vec<SymlinkResult> {
         Self::create_symlinks(project_path, worktree_path, symlink_dirs)
     }
+
+    /// Archive a worktree by moving it to `.termul/archives/<name>-<timestamp>/`.
+    /// Creates an archive manifest entry for later recovery.
+    pub fn archive(project_path: &str, worktree_path: &str) -> Result<(), WorktreeError> {
+        let project_root = Path::new(project_path);
+        let wt_path = Path::new(worktree_path);
+
+        // Verify the worktree path is under the project
+        if !worktree_path.starts_with(project_path) {
+            return Err(WorktreeError::ArchiveFailed);
+        }
+
+        // Get worktree name from path
+        let wt_name = wt_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(WorktreeError::ArchiveFailed)?;
+
+        // Create archive directory
+        let archive_dir = project_root.join(".termul").join("archives");
+        let timestamp = chrono_timestamp();
+        let archive_path = archive_dir.join(format!("{}-{}", wt_name, timestamp));
+
+        std::fs::create_dir_all(&archive_dir)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        // Move the worktree directory to the archive
+        std::fs::rename(wt_path, &archive_path)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        // Read existing manifest or create new one
+        let manifest_path = archive_dir.join("archive-manifest.json");
+        let mut manifest = if manifest_path.exists() {
+            let content = std::fs::read_to_string(&manifest_path)
+                .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+            serde_json::from_str::<ArchiveManifest>(&content)
+                .unwrap_or(ArchiveManifest { entries: Vec::new() })
+        } else {
+            ArchiveManifest { entries: Vec::new() }
+        };
+
+        // Add entry
+        let branch_name = Self::get_worktree_branch(worktree_path).unwrap_or_else(|_| wt_name.to_string());
+        let archived_at = timestamp.clone();
+        let expires_at = thirty_days_from_now();
+
+        manifest.entries.push(ArchiveEntry {
+            original_path: worktree_path.to_string(),
+            archive_path: archive_path.to_string_lossy().to_string(),
+            archived_at,
+            expires_at,
+            branch_name,
+            worktree_path: worktree_path.to_string(),
+        });
+
+        // Write manifest
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        std::fs::write(&manifest_path, manifest_json)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        // Prune git worktree metadata
+        let _ = run_git(&["worktree", "prune"], Some(project_path));
+
+        Ok(())
+    }
+
+    /// Restore an archived worktree back to its original location.
+    pub fn restore(project_path: &str, archive_path: &str) -> Result<(), WorktreeError> {
+        let project_root = Path::new(project_path);
+        let archive_dir = project_root.join(".termul").join("archives");
+        let manifest_path = archive_dir.join("archive-manifest.json");
+
+        if !manifest_path.exists() {
+            return Err(WorktreeError::ArchiveNotFound);
+        }
+
+        let content = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        let mut manifest = serde_json::from_str::<ArchiveManifest>(&content)
+            .map_err(|_| WorktreeError::ArchiveNotFound)?;
+
+        // Find the archive entry
+        let index = manifest.entries.iter().position(|e| e.archive_path == archive_path)
+            .ok_or(WorktreeError::ArchiveNotFound)?;
+
+        let entry = &manifest.entries[index];
+        let src = Path::new(&entry.archive_path);
+        let dst = Path::new(&entry.original_path);
+
+        if !src.exists() {
+            return Err(WorktreeError::ArchiveNotFound);
+        }
+
+        // Move back to original location
+        std::fs::rename(src, dst)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        // Remove from manifest
+        manifest.entries.remove(index);
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        std::fs::write(&manifest_path, manifest_json)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Generate a merge preview by running `git merge --no-commit --no-ff --dry-run`.
+    /// Parses output to identify conflicting and changed files.
+    pub fn merge_preview(worktree_path: &str, target_branch: &str) -> Result<MergePreview, WorktreeError> {
+        let current_branch = Self::get_current_branch(worktree_path)?;
+
+        // Try accurate detection first
+        match run_git(&["merge", "--no-commit", "--no-ff", "--dry-run", target_branch], Some(worktree_path)) {
+            Ok((stdout, _stderr)) => {
+                // Parse git diff-tree --stat style output for changed files
+                let changed = stdout.lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>();
+
+                Ok(MergePreview {
+                    direction: format!("{} → {}", current_branch, target_branch),
+                    source_branch: current_branch,
+                    target_branch: target_branch.to_string(),
+                    conflict_files: Vec::new(),
+                    changed_files: changed.clone(),
+                    total_changes: changed.len(),
+                    detection_mode: "accurate".to_string(),
+                })
+            }
+            Err(e) => {
+                // Check if the error is due to conflicts
+                let err_str = e.to_string();
+                if err_str.contains("conflict") || err_str.contains("merge failed") {
+                    // Fast detection fallback: check `git status --porcelain`
+                    let conflict_files = Self::detect_conflict_files(worktree_path)?;
+                    Ok(MergePreview {
+                        direction: format!("{} → {}", current_branch, target_branch),
+                        source_branch: current_branch,
+                        target_branch: target_branch.to_string(),
+                        conflict_files,
+                        changed_files: Vec::new(),
+                        total_changes: 0,
+                        detection_mode: "fast".to_string(),
+                    })
+                } else {
+                    Err(WorktreeError::MergeFailed)
+                }
+            }
+        }
+    }
+
+    /// Execute a merge from the worktree's current branch to target_branch.
+    pub fn merge_execute(worktree_path: &str, target_branch: &str) -> Result<String, WorktreeError> {
+        let (stdout, _) = run_git(&["merge", target_branch], Some(worktree_path))
+            .map_err(|_| WorktreeError::MergeFailed)?;
+        Ok(stdout.trim().to_string())
+    }
+
+    /// Get the current branch name of a git repo.
+    fn get_current_branch(worktree_path: &str) -> Result<String, WorktreeError> {
+        let (stdout, _) = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(worktree_path))?;
+        Ok(stdout.trim().to_string())
+    }
+
+    /// Get the branch name of a worktree by reading its git HEAD.
+    fn get_worktree_branch(worktree_path: &str) -> Result<String, WorktreeError> {
+        let (stdout, _) = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(worktree_path))?;
+        let branch = stdout.trim().to_string();
+        if branch == "HEAD" {
+            Err(WorktreeError::BranchNotFound)
+        } else {
+            Ok(branch)
+        }
+    }
+
+    /// Detect conflict files by parsing `git status --porcelain` for conflicted entries.
+    fn detect_conflict_files(worktree_path: &str) -> Result<Vec<ConflictFile>, WorktreeError> {
+        let (stdout, _) = run_git(&["status", "--porcelain"], Some(worktree_path))?;
+        let mut conflict_files = Vec::new();
+
+        // Porcelain format: XY filename
+        // Conflicted entries have status codes: DD, AU, UD, UA, DU, AA, UU
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.len() >= 2 {
+                let code = &trimmed[..2];
+                let path = trimmed[3..].trim();
+
+                // Unmerged/conflicted paths start with U or have DD/AA
+                let is_conflict = code.contains('U') || code == "DD" || code == "AA";
+                if is_conflict && !path.is_empty() {
+                    let is_lock = path.ends_with(".lock") || path.contains("package-lock") || path.contains("yarn.lock");
+                    conflict_files.push(ConflictFile {
+                        path: path.to_string(),
+                        severity: if is_lock { "low".to_string() } else { "high".to_string() },
+                        conflict_count: 1,
+                        is_lock_file: is_lock,
+                    });
+                }
+            }
+        }
+
+        Ok(conflict_files)
+    }
+}
+
+/// Get an ISO 8601 timestamp string for the current time.
+fn chrono_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    // Use chrono-compatible ISO 8601 format: YYYY-MM-DDTHHMMSSZ
+    // Approximate Gregorian calendar from Unix timestamp
+    let mut days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+
+    // Civil date from days since epoch (proleptic Gregorian)
+    let mut y = 1970i64;
+    loop {
+        let year_days = if is_leap(y) { 366 } else { 365 };
+        if days < year_days { break; }
+        days -= year_days;
+        y += 1;
+    }
+    let month_days = if is_leap(y) {
+        [31,29,31,30,31,30,31,31,30,31,30,31]
+    } else {
+        [31,28,31,30,31,30,31,31,30,31,30,31]
+    };
+    let mut m = 0;
+    for &md in &month_days {
+        if days < md { break; }
+        days -= md;
+        m += 1;
+    }
+    format!("{:04}-{:02}-{:02}T{:02}{:02}{:02}Z", y, m + 1, days as u32 + 1, hours, minutes, seconds)
+}
+
+/// Check if a year is a leap year.
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Get a timestamp 30 days from now as ISO string.
+fn thirty_days_from_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() + 30 * 86400;
+    let mut days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+
+    let mut y = 1970i64;
+    loop {
+        let year_days = if is_leap(y) { 366 } else { 365 };
+        if days < year_days { break; }
+        days -= year_days;
+        y += 1;
+    }
+    let month_days = if is_leap(y) {
+        [31,29,31,30,31,30,31,31,30,31,30,31]
+    } else {
+        [31,28,31,30,31,30,31,31,30,31,30,31]
+    };
+    let mut m = 0;
+    for &md in &month_days {
+        if days < md { break; }
+        days -= md;
+        m += 1;
+    }
+    format!("{:04}-{:02}-{:02}T{:02}{:02}{:02}Z", y, m + 1, days as u32 + 1, hours, minutes, seconds)
 }
 
 /// Create a directory symlink from `target` pointing to `source`.

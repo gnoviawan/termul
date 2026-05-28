@@ -399,6 +399,70 @@ pub async fn worktree_ensure_symlinks(
     Ok(IpcResult::success(infos))
 }
 
+/// Archive a worktree by moving it to `.termul/archives/`.
+#[tauri::command]
+pub async fn worktree_archive(
+    project_path: String,
+    worktree_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::archive(&project_path, &worktree_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Restore an archived worktree back to its original location.
+#[tauri::command]
+pub async fn worktree_restore(
+    project_path: String,
+    archive_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::restore(&project_path, &archive_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Generate a merge preview for a worktree against a target branch.
+#[tauri::command]
+pub async fn worktree_merge_preview(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<MergePreviewInfo>, String> {
+    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+        Ok(preview) => {
+            let info = MergePreviewInfo {
+                direction: preview.direction,
+                source_branch: preview.source_branch,
+                target_branch: preview.target_branch,
+                conflict_files: preview.conflict_files.into_iter().map(|f| ConflictFileInfo {
+                    path: f.path,
+                    severity: f.severity,
+                    conflict_count: f.conflict_count,
+                    is_lock_file: f.is_lock_file,
+                }).collect(),
+                changed_files: preview.changed_files,
+                total_changes: preview.total_changes,
+                detection_mode: preview.detection_mode,
+            };
+            Ok(IpcResult::success(info))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Execute a merge from the worktree's current branch to target_branch.
+#[tauri::command]
+pub async fn worktree_merge_execute(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<String>, String> {
+    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+        Ok(result) => Ok(IpcResult::success(result)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
 /// Worktree info for IPC response
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -459,6 +523,29 @@ pub struct SymlinkResultInfo {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// Merge preview info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreviewInfo {
+    pub direction: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub conflict_files: Vec<ConflictFileInfo>,
+    pub changed_files: Vec<String>,
+    pub total_changes: usize,
+    pub detection_mode: String,
+}
+
+/// Conflict file info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileInfo {
+    pub path: String,
+    pub severity: String,
+    pub conflict_count: usize,
+    pub is_lock_file: bool,
 }
 
 // ==================== Browser Tab Commands ====================

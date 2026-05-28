@@ -8,7 +8,7 @@ import {
   MouseEvent,
   WheelEvent
 } from 'react'
-import { X, Plus, Terminal as TerminalIcon, Edit2, Skull, ChevronDown } from 'lucide-react'
+import { X, Plus, Terminal as TerminalIcon, Edit2, Skull, ChevronDown, GitBranch } from 'lucide-react'
 import { Reorder } from 'framer-motion'
 import type { Terminal } from '@/types/project'
 import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { ContextMenu, ContextMenuItem } from './ContextMenu'
 import { Skeleton } from './ui/skeleton'
 import { shellApi } from '@/lib/api'
+import { useProjectStore } from '@/stores/project-store'
 
 interface TerminalTabBarProps {
   terminals: Terminal[]
@@ -231,6 +232,13 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Worktree context: check if this terminal's project has an active worktree
+  const projects = useProjectStore((state) => state.projects)
+  const project = projects.find((p) => p.id === terminal.projectId)
+  const activeWorktree = project?.activeWorktreeId
+    ? project.worktrees?.find((w) => w.id === project.activeWorktreeId)
+    : null
+
   useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus()
@@ -335,12 +343,20 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
-          <span
-            onDoubleClick={handleDoubleClick}
-            className={cn('text-[11px] font-medium', isActive && 'text-foreground')}
-          >
-            {terminal.name}
-          </span>
+          <>
+            <span
+              onDoubleClick={handleDoubleClick}
+              className={cn('text-[11px] font-medium truncate max-w-[80px]', isActive && 'text-foreground')}
+            >
+              {terminal.name}
+            </span>
+            {activeWorktree && (
+              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent-foreground/80 leading-none">
+                <GitBranch size={8} />
+                <span className="max-w-[50px] truncate">{activeWorktree.name}</span>
+              </span>
+            )}
+          </>
         )}
         <button
           onClick={(e) => {

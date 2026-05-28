@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { AlertTriangle, Trash2, Loader2, GitBranch } from 'lucide-react'
+import { AlertTriangle, Trash2, Loader2, GitBranch, Archive } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Worktree } from '@/types/project'
 import { isWorktreeTermulManaged } from '@/types/project'
@@ -33,10 +33,12 @@ export function RemoveWorktreeDialog({
 	const [dirtyLoading, setDirtyLoading] = useState(false)
 	const [isRemoving, setIsRemoving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const [actionMode, setActionMode] = useState<'archive' | 'delete'>('archive')
 
 	const isTermulManaged = worktree ? isWorktreeTermulManaged(worktree) : false
 	const isMainBranch = worktree ? ['main', 'master'].includes(worktree.branch) : false
 	const hasUncommittedChanges = dirtyStatus?.hasChanges ?? false
+	// Note: unpushed-commits check requires 'ahead' field in DirtyStatus (future)
 
 	// Fetch dirty status when dialog opens
 	useEffect(() => {
@@ -79,6 +81,31 @@ export function RemoveWorktreeDialog({
 		window.addEventListener('keydown', handleEscape)
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [isOpen, onClose])
+
+	const handleArchive = useCallback(async () => {
+		if (!worktree) return
+		setIsRemoving(true)
+		setError(null)
+		setWorktreeOperationLock(true)
+		try {
+			const result = await worktreeApi.archive(projectPath, worktree.path)
+			if (result.success) {
+				removeWorktree(projectId, worktree.id)
+				toast({
+					title: 'Worktree archived',
+					description: `"${worktree.name}" has been archived and can be recovered.`,
+				})
+				onClose()
+			} else {
+				setError(result.error || 'Failed to archive worktree')
+			}
+		} catch (err) {
+			setError(err instanceof Error ? err.message : 'An unexpected error occurred')
+		} finally {
+			setIsRemoving(false)
+			setWorktreeOperationLock(false)
+		}
+	}, [worktree, projectPath, projectId, removeWorktree, setWorktreeOperationLock, onClose])
 
 	const handleRemove = useCallback(async () => {
 		if (!worktree) return

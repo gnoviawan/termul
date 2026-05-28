@@ -41,6 +41,10 @@ export default function ProjectSettings() {
   const [shellsLoading, setShellsLoading] = useState(true)
   const [importError, setImportError] = useState<string | null>(null)
   const [importWarnings, setImportWarnings] = useState<string | null>(null)
+  // TODO: Persist these to app-settings-store (localStorage) for across-session retention
+  const [skipConfirmations, setSkipConfirmations] = useState(false)
+  const [skipGitignoreSelection, setSkipGitignoreSelection] = useState(false)
+  const [defaultBranchPrefix, setDefaultBranchPrefix] = useState('feature/')
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -537,6 +541,63 @@ export default function ProjectSettings() {
                         </div>
                       ))
                     )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Emergency Mode & Expert Workflows Section */}
+            <section>
+              <div className="flex items-start gap-6">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Power-user workflow settings for incident response and rapid worktree operations.
+                  </p>
+                </div>
+                <div className="w-2/3">
+                  <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Skip Confirmation Dialogs</p>
+                        <p className="text-xs text-muted-foreground">Bypass non-essential prompts during worktree operations.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={skipConfirmations}
+                          onChange={(e) => setSkipConfirmations(e.target.checked)}
+                        />
+                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Skip .gitignore Selection</p>
+                        <p className="text-xs text-muted-foreground">Use default symlink settings when creating worktrees.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={skipGitignoreSelection}
+                          onChange={(e) => setSkipGitignoreSelection(e.target.checked)}
+                        />
+                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      </label>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">Default Branch Prefix</label>
+                      <input
+                        type="text"
+                        value={defaultBranchPrefix}
+                        onChange={(e) => setDefaultBranchPrefix(e.target.value)}
+                        placeholder="feature/"
+                        className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">Prefix for new branch naming (e.g. "feature/", "hotfix/").</p>
+                    </div>
                   </div>
                 </div>
               </div>

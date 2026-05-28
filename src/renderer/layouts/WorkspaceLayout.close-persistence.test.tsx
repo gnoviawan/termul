@@ -88,7 +88,11 @@ vi.mock('@/stores/project-store', () => ({
   useProjects: () => [activeProject],
   useActiveProject: () => activeProject,
   useActiveProjectId: () => activeProject.id,
-  useProjectActions: () => mockProjectActions
+  useProjectActions: () => mockProjectActions,
+  useProjectStore: Object.assign(
+    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id }) : { projects: [activeProject], activeProjectId: activeProject.id },
+    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id }) }
+  )
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
