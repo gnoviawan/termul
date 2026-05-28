@@ -91,6 +91,7 @@ import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
 import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
+import { getDefaultCwdForProject } from "@/lib/worktree-context";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 function getShortcutTargetContext(target: EventTarget | null): {
@@ -499,7 +500,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				activeProject?.defaultShell ||
 				appDefaultShell ||
 				undefined;
-			const cwd = activeProject?.path;
+			const cwd = getDefaultCwdForProject(activeProjectId);
 
 			// Resolve project env vars for spawn
 			// TODO: Pass actual system env from backend for variable expansion
@@ -536,7 +537,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		},
 		[
 			activeProject?.defaultShell,
-			activeProject?.path,
 			activeProject?.envVars,
 			activeProjectId,
 			addTerminal,
