@@ -19,6 +19,8 @@ import {
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
 
+import { waitForVisibility } from '@/lib/visibility-signal'
+
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
 
@@ -317,6 +319,17 @@ export function useTerminalRestore(): void {
         // Check for cancellation before starting
         if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] before restore`)
+          return
+        }
+
+        // Wait for the app window to become visible before spawning terminals.
+        // In production builds, Tauri window starts with `visible: false` and
+        // `showWindow()` resolves asynchronously. Spawning during the hidden phase
+        // causes the Rust backend to defer PTY cleanup (manager.rs:993), leading
+        // to accumulated zombie terminals and RAM growth.
+        await waitForVisibility()
+        if (isCancelled()) {
+          debugLog('useTerminalRestore', `CANCELLED [${callId}] after visibility wait`)
           return
         }
 
