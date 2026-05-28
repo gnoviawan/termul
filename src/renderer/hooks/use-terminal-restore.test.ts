@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { PaneNode } from '@/types/workspace.types'
 import { normalizeShellForStartup, useTerminalRestore } from './use-terminal-restore'
-import { markVisible } from '@/lib/visibility-signal'
 
 const {
   mockRecordTerminalContinuityEvent,
@@ -49,8 +48,6 @@ vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   beginProjectContinuityCorrelation: mockBeginProjectContinuityCorrelation,
   recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
 }))
-
-
 
 const mockProjectState = {
   activeProjectId: '',
@@ -141,10 +138,6 @@ beforeEach(() => {
   mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-1' } })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
   mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
-
-  // Ensure visibility gate is open: under vi.useFakeTimers(), the 5s safety
-  // timeout in waitForVisibility() never fires. Resolve the signal directly.
-  markVisible()
 })
 
 afterEach(() => {
