@@ -35,7 +35,10 @@ import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { shellApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectStore, useProjectActions } from "@/stores/project-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { toast } from "@/hooks/use-toast";
+import { spawnTerminalInPane } from "@/lib/terminal-spawn";
+import { useAppSettingsStore } from "@/stores/app-settings-store";
 import type { WorktreeHealthStatus } from "@/types/worktree-status";
 import { getWorktreeStatusFromCache } from "@/hooks/use-worktree-status";
 import { useWorktreeStatus } from "@/hooks/use-worktree-status";
@@ -534,11 +537,22 @@ export function ProjectSidebar({
 				{
 					label: "Open Terminal Here",
 					icon: <Terminal size={14} />,
-					onClick: () => {
-						// This terminal spawn is handled by the app's terminal spawning logic
-						// which reads the active worktree's path for new terminals
+					onClick: async () => {
 						handleWorktreeSelect(projectId, worktree.id);
-						navigate("/");
+						const paneId = useWorkspaceStore.getState().activePaneId;
+						if (!paneId) {
+							toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
+							return;
+						}
+						const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject;
+						const result = await spawnTerminalInPane(paneId, projectId, worktree.path, {
+							maxTerminalsPerProject,
+						});
+						if (result.success) {
+							toast({ title: "Terminal opened", description: `Terminal opened in "${worktree.name}"` });
+						} else {
+							toast({ title: "Failed to open terminal", description: result.error || "Could not create a terminal in this worktree." });
+						}
 					},
 				},
 				{

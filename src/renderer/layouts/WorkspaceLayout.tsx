@@ -92,6 +92,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { getDefaultCwdForProject } from "@/lib/worktree-context";
+import { spawnTerminalInPane } from "@/lib/terminal-spawn";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 function getShortcutTargetContext(target: EventTarget | null): {
@@ -490,59 +491,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Terminal creation callbacks - defined before keyboard shortcut useEffect
 	const handleCreateTerminalInPane = useCallback(
 		async (paneId: string, shellName?: string) => {
-			if (terminals.length >= maxTerminals) {
-				toast.error(`Maximum ${maxTerminals} terminals per project`);
-				return;
-			}
-
-			const shell =
-				shellName ||
-				activeProject?.defaultShell ||
-				appDefaultShell ||
-				undefined;
 			const cwd = getDefaultCwdForProject(activeProjectId);
 
-			// Resolve project env vars for spawn
-			// TODO: Pass actual system env from backend for variable expansion
-			const { env, hasProjectEnv } = resolveEnvForSpawn(
-				activeProject?.envVars,
-				{},
-			);
-
-			const spawnResult = await terminalApi.spawn({
-				shell,
-				cwd,
-				...(hasProjectEnv ? { env } : {}),
+			const result = await spawnTerminalInPane(paneId, activeProjectId, cwd, {
+				shell: shellName || activeProject?.defaultShell || appDefaultShell || undefined,
+				envVars: activeProject?.envVars,
+				maxTerminalsPerProject: maxTerminals,
 			});
-			if (!spawnResult.success) {
-				toast.error(spawnResult.error || "Failed to create terminal");
-				return;
+			if (!result.success) {
+				toast.error(result.error || "Failed to create terminal");
 			}
-
-			const terminal = addTerminal(
-				`Terminal ${terminals.length + 1}`,
-				activeProjectId,
-				shell,
-				cwd,
-			);
-			useTerminalStore
-				.getState()
-				.setTerminalPtyId(terminal.id, spawnResult.data.id);
-
-			useWorkspaceStore.getState().addTabToPane(paneId, {
-				type: "terminal",
-				id: `term-${terminal.id}`,
-				terminalId: terminal.id,
-			});
 		},
 		[
 			activeProject?.defaultShell,
 			activeProject?.envVars,
 			activeProjectId,
-			addTerminal,
 			appDefaultShell,
 			maxTerminals,
-			terminals.length,
 		],
 	);
 
