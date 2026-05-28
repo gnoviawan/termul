@@ -10,6 +10,8 @@ const mockReorderTabsInPane = vi.fn()
 const mockCloseTab = vi.fn()
 const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
+const mockRemoveBrowserTab = vi.fn()
+const mockClearAnnotationsForTab = vi.fn()
 
 const mockWorkspaceStoreState = {
   fullscreenPaneId: null as string | null,
@@ -57,6 +59,29 @@ vi.mock('@/stores/terminal-store', () => ({
       ]
     })
   )
+}))
+
+vi.mock('@/stores/browser-session-store', () => ({
+  useBrowserSessionStore: Object.assign(
+    vi.fn((selector: (state: { getTab: (id: string) => { title: string; url: string } | null }) => unknown) =>
+      selector({
+        getTab: () => ({ title: 'Docs', url: 'https://example.com' })
+      })
+    ),
+    {
+      getState: () => ({
+        removeTab: mockRemoveBrowserTab
+      })
+    }
+  )
+}))
+
+vi.mock('@/stores/annotation-store', () => ({
+  useAnnotationStore: {
+    getState: () => ({
+      clearAnnotationsForTab: mockClearAnnotationsForTab
+    })
+  }
 }))
 
 const mockStartTabDrag = vi.hoisted(() => vi.fn())
@@ -118,6 +143,8 @@ beforeEach(() => {
   mockCloseTab.mockReset()
   mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
+  mockRemoveBrowserTab.mockReset()
+  mockClearAnnotationsForTab.mockReset()
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
@@ -350,6 +377,55 @@ describe('WorkspaceTabBar', () => {
 
     expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
     expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('closes terminal tab on middle click without affecting regular click behavior', async () => {
+    const onCloseTerminal = vi.fn()
+    const tabs: WorkspaceTab[] = [{ type: 'terminal', id: 'tab-1', terminalId: 'term-1' }]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="tab-1"
+        onCloseTerminal={onCloseTerminal}
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEl = container.querySelector('[draggable="true"]') as HTMLElement
+    expect(tabEl).toBeTruthy()
+
+    fireEvent.click(tabEl)
+    expect(mockSetActiveTab).toHaveBeenCalledWith('pane-a', 'tab-1')
+    expect(onCloseTerminal).not.toHaveBeenCalled()
+
+    fireEvent(tabEl, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
+    expect(onCloseTerminal).toHaveBeenCalledWith('term-1', 'tab-1')
+  })
+
+  it('closes browser tab on middle click', async () => {
+    const tabs: WorkspaceTab[] = [{ type: 'browser', id: 'browser-1', browserTabId: 'btab-1' }]
+
+    const { container } = render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="browser-1"
+      />
+    )
+
+    await flushShellEffect()
+
+    const tabEl = container.querySelector('[draggable="true"]') as HTMLElement
+    expect(tabEl).toBeTruthy()
+
+    fireEvent(tabEl, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
+
+    expect(mockRemoveBrowserTab).toHaveBeenCalledWith('btab-1')
+    expect(mockClearAnnotationsForTab).toHaveBeenCalledWith('btab-1')
+    expect(mockCloseTab).toHaveBeenCalledWith('pane-a', 'browser-1')
   })
 
   it('calls startTabDrag when dragging a terminal tab', async () => {

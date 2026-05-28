@@ -113,6 +113,14 @@ function TerminalTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					if (!isClosing) {
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -354,6 +362,12 @@ function BrowserTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					onClose();
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
