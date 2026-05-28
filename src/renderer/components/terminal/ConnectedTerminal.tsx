@@ -202,6 +202,10 @@ function ConnectedTerminalComponent({
 	>(null);
 	// Track WebGL context loss for recovery decisions
 	const webglContextLostRef = useRef<boolean>(false);
+	// Track visibility prop for recovery path guards (tab-active, not window-visible).
+	// Ref avoids stale closures in event listeners referencing isVisible directly.
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
 
 	// Get font settings from app settings store
 	const fontFamily = useTerminalFontFamily();
@@ -1485,9 +1489,15 @@ function ConnectedTerminalComponent({
 		let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 		const handleWindowFocus = (): void => {
+			// Always clear pending timeout first to prevent stale recovery calls.
 			if (recoveryTimeoutId) {
 				clearTimeout(recoveryTimeoutId);
+				recoveryTimeoutId = null;
 			}
+			// Skip recovery for terminals that are not the active tab in their pane
+			// (isVisible is tab-active, not window-visible — see PaneContent.tsx).
+			// Hidden instances recover via the isVisible-change useEffect instead.
+			if (!isVisibleRef.current) return;
 			recoveryTimeoutId = setTimeout(() => {
 				recoveryTimeoutId = null;
 				performTerminalRecovery();
