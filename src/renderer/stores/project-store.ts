@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Project, ProjectColor } from '@/types/project'
+import type { Project, ProjectColor, Worktree } from '@/types/project'
 
 export interface ProjectState {
   // State
   projects: Project[]
   activeProjectId: string
   isLoaded: boolean
+  isWorktreeOperationLocked: boolean
 
   // Actions
   selectProject: (id: string) => void
@@ -17,12 +18,17 @@ export interface ProjectState {
   restoreProject: (id: string) => void
   reorderProjects: (activeProjectIds: string[]) => void
   setProjects: (projects: Project[], activeProjectId?: string) => void
+  addWorktree: (projectId: string, worktree: Worktree) => void
+  removeWorktree: (projectId: string, worktreeId: string) => void
+  setActiveWorktree: (projectId: string, worktreeId: string | null) => void
+  setWorktreeOperationLock: (locked: boolean) => void
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   activeProjectId: '',
   isLoaded: false,
+  isWorktreeOperationLocked: false,
 
   selectProject: (id: string): void => {
     set((state) => ({
@@ -104,6 +110,44 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeProjectId: activeProjectId ?? (projects.length > 0 ? projects[0].id : ''),
       isLoaded: true
     })
+  },
+
+  addWorktree: (projectId: string, worktree: Worktree): void => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, worktrees: [...(p.worktrees ?? []), worktree] }
+          : p
+      )
+    }))
+  },
+
+  removeWorktree: (projectId: string, worktreeId: string): void => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              worktrees: (p.worktrees ?? []).filter((w) => w.id !== worktreeId),
+              activeWorktreeId: p.activeWorktreeId === worktreeId ? null : p.activeWorktreeId,
+            }
+          : p
+      ),
+    }))
+  },
+
+  setActiveWorktree: (projectId: string, worktreeId: string | null): void => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, activeWorktreeId: worktreeId }
+          : p
+      )
+    }))
+  },
+
+  setWorktreeOperationLock: (locked: boolean): void => {
+    set({ isWorktreeOperationLocked: locked })
   }
 }))
 
@@ -126,6 +170,12 @@ export function useProjectsLoaded(): boolean {
   return useProjectStore((state) => state.isLoaded)
 }
 
+export function getActiveWorktreeFromStore(projectId: string): Worktree | undefined {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  if (!project?.activeWorktreeId) return undefined
+  return project.worktrees?.find((w) => w.id === project.activeWorktreeId)
+}
+
 export function useProjectActions(): Pick<
   ProjectState,
   | 'selectProject'
@@ -135,6 +185,10 @@ export function useProjectActions(): Pick<
   | 'archiveProject'
   | 'restoreProject'
   | 'reorderProjects'
+  | 'addWorktree'
+  | 'removeWorktree'
+  | 'setActiveWorktree'
+  | 'setWorktreeOperationLock'
 > {
   return useProjectStore(
     useShallow((state) => ({
@@ -144,7 +198,11 @@ export function useProjectActions(): Pick<
       deleteProject: state.deleteProject,
       archiveProject: state.archiveProject,
       restoreProject: state.restoreProject,
-      reorderProjects: state.reorderProjects
+      reorderProjects: state.reorderProjects,
+      addWorktree: state.addWorktree,
+      removeWorktree: state.removeWorktree,
+      setActiveWorktree: state.setActiveWorktree,
+      setWorktreeOperationLock: state.setWorktreeOperationLock
     }))
   )
 }

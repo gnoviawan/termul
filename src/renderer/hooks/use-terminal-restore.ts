@@ -7,6 +7,7 @@ import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stor
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -934,14 +935,23 @@ async function createDefaultTerminal(
     // TODO: Pass actual system env from backend for variable expansion
     const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
+    const cwd = getDefaultCwdForProject(projectId)
+
+    // Ensure worktree symlinks are reconciled before spawning
+    try {
+      await ensureWorktreeSymlinks(projectId)
+    } catch {
+      // Symlink reconciliation is best-effort during restore
+    }
+
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
-      cwd: project?.path
+      cwd
     })
 
     const spawnResult = await terminalApi.spawn({
       shell,
-      cwd: project?.path,
+      cwd,
       ...(hasProjectEnv ? { env } : {})
     })
 
@@ -975,7 +985,7 @@ async function createDefaultTerminal(
     SPAWN_CALL_COUNT++
 
     // Create default terminal - addTerminal also sets it as active
-    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
+    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, cwd)
     terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
 
     // Explicitly select to ensure activeTerminalId is set correctly
