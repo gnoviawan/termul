@@ -49,11 +49,7 @@ vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
 }))
 
-vi.mock('@/lib/visibility-signal', () => ({
-  waitForVisibility: () => Promise.resolve(),
-  markVisible: vi.fn(),
-  isVisibleReady: () => true
-}))
+
 
 const mockProjectState = {
   activeProjectId: '',
