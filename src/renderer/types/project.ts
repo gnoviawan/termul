@@ -48,7 +48,9 @@ export function getActiveWorktree(project: Project): Worktree | undefined {
 }
 
 export function isWorktreeTermulManaged(worktree: Worktree): boolean {
-  return worktree.path.includes('.termul/worktrees/')
+  // Normalize path separators for cross-platform detection
+  const normalizedPath = worktree.path.replace(/\\/g, '/')
+  return normalizedPath.includes('.termul/worktrees/')
 }
 
 export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'

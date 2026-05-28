@@ -79,14 +79,21 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
   const Icon = TOOL_ICONS[selectedTemplate.toolName] ?? MessageSquare
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ai-prompt-dialog-title"
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
+    >
       <div className="w-[600px] max-w-[90vw] max-h-[80vh] bg-popover border border-border rounded-lg shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">AI Conflict Resolution Prompts</h2>
+          <h2 id="ai-prompt-dialog-title" className="text-sm font-semibold text-foreground">AI Conflict Resolution Prompts</h2>
           <button
             onClick={onClose}
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground"
+            aria-label="Close"
           >
             ✕
           </button>

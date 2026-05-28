@@ -89,15 +89,21 @@ export default function ProjectSettings() {
         }))
         .filter((envVar) => envVar.key !== '')
 
+      // Normalize symlinkDirs: trim whitespace and remove empty/whitespace-only entries
+      const normalizedSymlinkDirs = symlinkDirs
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0)
+
       updateProject(activeProject.id, {
         name: projectName,
         color: selectedColor,
         path: rootPath,
         envVars: normalizedEnvVars,
         defaultShell: shell,
-        symlinkDirs: symlinkDirs,
+        symlinkDirs: normalizedSymlinkDirs,
       })
       setEnvVars(normalizedEnvVars)
+      setSymlinkDirs(normalizedSymlinkDirs)
       setHasChanges(false)
     }
   }
@@ -567,7 +573,10 @@ export default function ProjectSettings() {
                           type="checkbox"
                           className="sr-only peer"
                           checked={skipConfirmations}
-                          onChange={(e) => setSkipConfirmations(e.target.checked)}
+                          onChange={(e) => {
+                            setSkipConfirmations(e.target.checked)
+                            setHasChanges(true)
+                          }}
                         />
                         <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                       </label>
@@ -582,7 +591,10 @@ export default function ProjectSettings() {
                           type="checkbox"
                           className="sr-only peer"
                           checked={skipGitignoreSelection}
-                          onChange={(e) => setSkipGitignoreSelection(e.target.checked)}
+                          onChange={(e) => {
+                            setSkipGitignoreSelection(e.target.checked)
+                            setHasChanges(true)
+                          }}
                         />
                         <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                       </label>
@@ -592,7 +604,10 @@ export default function ProjectSettings() {
                       <input
                         type="text"
                         value={defaultBranchPrefix}
-                        onChange={(e) => setDefaultBranchPrefix(e.target.value)}
+                        onChange={(e) => {
+                          setDefaultBranchPrefix(e.target.value)
+                          setHasChanges(true)
+                        }}
                         placeholder="feature/"
                         className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                       />

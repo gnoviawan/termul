@@ -155,7 +155,7 @@ export interface BranchInfo {
 	name: string;
 	isRemote: boolean;
 	isCurrent: boolean;
-	upstream?: string;
+	upstream?: string | null;
 }
 
 export interface DirtyStatus {
@@ -168,7 +168,7 @@ export interface DirtyStatus {
 export interface RemoveResult {
 	worktreePath: string;
 	success: boolean;
-	error?: string;
+	error?: string | null;
 }
 
 export interface GitignoreDir {

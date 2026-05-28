@@ -88,9 +88,11 @@ export function useWorktreeShortcuts(): void {
 				e.preventDefault()
 				const wts = project.worktrees ?? []
 				if (wts.length === 0) return
-				const currentIdx = project.activeWorktreeId
+				const idx = project.activeWorktreeId
 					? wts.findIndex((w) => w.id === project.activeWorktreeId)
 					: wts.length
+				// Normalize -1 (orphaned ID) to wts.length so prev wraps to last element
+				const currentIdx = idx === -1 ? wts.length : idx
 				const prevIdx = (currentIdx - 1 + wts.length) % wts.length
 				setActiveWorktree(project.id, wts[prevIdx].id)
 				return

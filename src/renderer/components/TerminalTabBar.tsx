@@ -232,11 +232,11 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Worktree context: check if this terminal's project has an active worktree
+  // Worktree context: resolve the worktree associated with this specific terminal
   const projects = useProjectStore((state) => state.projects)
   const project = projects.find((p) => p.id === terminal.projectId)
-  const activeWorktree = project?.activeWorktreeId
-    ? project.worktrees?.find((w) => w.id === project.activeWorktreeId)
+  const terminalWorktree = terminal.worktreeId
+    ? project?.worktrees?.find((w) => w.id === terminal.worktreeId)
     : null
 
   useEffect(() => {
@@ -350,10 +350,10 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             >
               {terminal.name}
             </span>
-            {activeWorktree && (
+            {terminalWorktree && (
               <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent-foreground/80 leading-none">
                 <GitBranch size={8} />
-                <span className="max-w-[50px] truncate">{activeWorktree.name}</span>
+                <span className="max-w-[50px] truncate">{terminalWorktree.name}</span>
               </span>
             )}
           </>

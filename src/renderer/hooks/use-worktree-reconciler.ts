@@ -27,7 +27,8 @@ export function useWorktreeReconciler(projectId: string) {
 
 	const reconcile = useCallback(async () => {
 		const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-		if (!project?.path || !project.isGitRepo || !project.worktrees?.length) return
+		// Allow empty worktrees array (still reconcile to discover newly created worktrees)
+		if (!project?.path || !project.isGitRepo || project.worktrees === undefined) return
 
 		try {
 			const result = await worktreeApi.list(project.path)

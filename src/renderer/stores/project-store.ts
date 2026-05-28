@@ -126,9 +126,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       projects: state.projects.map((p) =>
         p.id === projectId
-          ? { ...p, worktrees: (p.worktrees ?? []).filter((w) => w.id !== worktreeId) }
+          ? {
+              ...p,
+              worktrees: (p.worktrees ?? []).filter((w) => w.id !== worktreeId),
+              activeWorktreeId: p.activeWorktreeId === worktreeId ? null : p.activeWorktreeId,
+            }
           : p
-      )
+      ),
     }))
   },
 

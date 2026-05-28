@@ -361,8 +361,15 @@ pub async fn worktree_create_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
-    let dirs: Vec<String> = serde_json::from_str(&symlink_dirs)
-        .map_err(|e| format!("Failed to parse symlink_dirs: {}", e))?;
+    let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
     let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
@@ -384,8 +391,15 @@ pub async fn worktree_ensure_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
-    let dirs2: Vec<String> = serde_json::from_str(&symlink_dirs)
-        .map_err(|e| format!("Failed to parse symlink_dirs: {}", e))?;
+    let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
     let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()

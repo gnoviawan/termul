@@ -68,48 +68,58 @@ export async function spawnTerminalInPane(
 	const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
 	const shell = options?.shell ?? project?.defaultShell ?? undefined
 
-	// Ensure worktree symlinks are present when spawning into a worktree path
-	if (project?.worktrees?.some((w) => w.path === cwd)) {
-		await ensureWorktreeSymlinks(projectId)
-	}
+	try {
+		// Ensure worktree symlinks are present when spawning into a worktree path
+		if (project?.worktrees?.some((w) => w.path === cwd)) {
+			await ensureWorktreeSymlinks(projectId)
+		}
 
-	// Resolve project env vars for spawn
-	const { env, hasProjectEnv } = resolveEnvForSpawn(options?.envVars ?? project?.envVars, {})
+		// Resolve project env vars for spawn
+		const { env, hasProjectEnv } = resolveEnvForSpawn(
+			options?.envVars ?? project?.envVars,
+			{},
+		)
 
-	const spawnResult = await terminalApi.spawn({
-		shell,
-		cwd,
-		...(hasProjectEnv ? { env } : {}),
-	})
+		const spawnResult = await terminalApi.spawn({
+			shell,
+			cwd,
+			...(hasProjectEnv ? { env } : {}),
+		})
 
-	if (!spawnResult.success) {
+		if (!spawnResult.success) {
+			return {
+				success: false,
+				error: spawnResult.error || 'Failed to create terminal',
+			}
+		}
+
+		// Create terminal record in store
+		const terminalCount = terminalStore.terminals.length
+		const terminal = terminalStore.addTerminal(
+			`Terminal ${terminalCount + 1}`,
+			projectId,
+			shell,
+			cwd,
+		)
+
+		// Link PTY ID to terminal record
+		terminalStore.setTerminalPtyId(terminal.id, spawnResult.data.id)
+
+		// Add terminal tab to the workspace pane
+		workspaceStore.addTabToPane(paneId, {
+			type: 'terminal',
+			id: `term-${terminal.id}`,
+			terminalId: terminal.id,
+		})
+
+		return {
+			success: true,
+			terminalId: terminal.id,
+		}
+	} catch (err) {
 		return {
 			success: false,
-			error: spawnResult.error || 'Failed to create terminal',
+			error: err instanceof Error ? err.message : String(err),
 		}
-	}
-
-	// Create terminal record in store
-	const terminalCount = terminalStore.terminals.length
-	const terminal = terminalStore.addTerminal(
-		`Terminal ${terminalCount + 1}`,
-		projectId,
-		shell,
-		cwd,
-	)
-
-	// Link PTY ID to terminal record
-	terminalStore.setTerminalPtyId(terminal.id, spawnResult.data.id)
-
-	// Add terminal tab to the workspace pane
-	workspaceStore.addTabToPane(paneId, {
-		type: 'terminal',
-		id: `term-${terminal.id}`,
-		terminalId: terminal.id,
-	})
-
-	return {
-		success: true,
-		terminalId: terminal.id,
 	}
 }

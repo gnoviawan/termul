@@ -127,11 +127,13 @@ export function useWorktreeStatus(
 		if (!activeWorktreePath || !activeWorktreeId) return
 
 		const health = await pollWorktree(activeWorktreeId, activeWorktreePath)
-		if (health !== null && health !== lastHealthRef.current) {
-			lastHealthRef.current = health
+		if (health !== null) {
 			const cached = statusCache.get(activeWorktreeId)
 			if (cached) {
+				// Always update the UI when the cached status object changes
+				// (counts can change even if health stays the same, e.g. "dirty")
 				setCurrentStatus(cached)
+				lastHealthRef.current = health
 			}
 		}
 	}, [activeWorktreePath, activeWorktreeId])

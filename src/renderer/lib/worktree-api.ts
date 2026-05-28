@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { Worktree } from '@/types/project'
 import type {
 	IpcResult,
 	WorktreeInfo,
@@ -66,12 +67,16 @@ export const worktreeApi = {
 	/**
 	 * Remove all Termul-managed worktrees for a project.
 	 * Used during project cascade delete. Reports per-worktree results.
+	 * Accepts a typed Worktree array; serializes to JSON internally.
 	 */
 	removeAllManaged: (
 		projectPath: string,
-		worktreesJson: string,
+		worktrees: Worktree[],
 	): Promise<IpcResult<RemoveResult[]>> =>
-		invoke('worktree_remove_all_managed', { projectPath, worktreesJson }),
+		invoke('worktree_remove_all_managed', {
+			projectPath,
+			worktreesJson: JSON.stringify(worktrees),
+		}),
 
 	/**
 	 * Parse .gitignore and return directory entries that could be symlinked.

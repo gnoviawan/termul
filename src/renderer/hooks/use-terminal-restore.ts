@@ -7,7 +7,7 @@ import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stor
 import { terminalApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -936,6 +936,13 @@ async function createDefaultTerminal(
     const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
     const cwd = getDefaultCwdForProject(projectId)
+
+    // Ensure worktree symlinks are reconciled before spawning
+    try {
+      await ensureWorktreeSymlinks(projectId)
+    } catch {
+      // Symlink reconciliation is best-effort during restore
+    }
 
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,

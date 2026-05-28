@@ -308,13 +308,21 @@ export function ProjectSidebar({
 					if (project?.path) {
 						const listResult = await worktreeApi.list(project.path);
 						if (listResult.success && listResult.data) {
-							const updatedWorktrees: Worktree[] = listResult.data.map((wt) => ({
-								id: crypto.randomUUID(),
-								name: wt.name,
-								branch: wt.branch,
-								path: wt.path,
-								createdAt: new Date().toISOString(),
-							}));
+							// Preserve existing IDs for stable references (activeWorktreeId, status cache)
+							const existingWorktrees = useProjectStore.getState().projects
+								.find((p) => p.id === projectId)?.worktrees ?? []
+							const existingByPath = new Map(existingWorktrees.map((w) => [w.path, w]))
+
+							const updatedWorktrees: Worktree[] = listResult.data.map((wt) => {
+								const existing = existingByPath.get(wt.path)
+								return existing ?? {
+									id: crypto.randomUUID(),
+									name: wt.name,
+									branch: wt.branch,
+									path: wt.path,
+									createdAt: new Date().toISOString(),
+								}
+							});
 							useProjectStore.getState().updateProject(projectId, { worktrees: updatedWorktrees });
 						}
 					}
@@ -853,11 +861,19 @@ const ProjectItem = memo(function ProjectItem({
 
 	return (
 		<div data-testid={`project-item-${project.id}`}>
-			<button
+			<div
 				onClick={isEditing ? undefined : onClick}
 				onContextMenu={onContextMenu}
+				role="button"
+				tabIndex={0}
+				onKeyDown={(e) => {
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault();
+						if (!isEditing) onClick();
+					}
+				}}
 				className={cn(
-					"w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2",
+					"w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer",
 					isActive
 						? `${colors.border} bg-sidebar-accent`
 						: `${colors.borderMuted} hover:bg-sidebar-accent/50`,
@@ -937,7 +953,7 @@ const ProjectItem = memo(function ProjectItem({
 						<Settings size={12} className="text-muted-foreground" />
 					</button>
 				)}
-			</button>
+			</div>
 
 			{/* Worktree sub-items */}
 			<AnimatePresence initial={false}>

@@ -104,6 +104,7 @@ describe('useWorktreeReconciler', () => {
 
 		await vi.waitFor(() => {
 			expect(mockRemoveWorktree).toHaveBeenCalled()
+			expect(mockUpdateProject).toHaveBeenCalledWith('proj-1', { activeWorktreeId: null })
 		})
 	})
 

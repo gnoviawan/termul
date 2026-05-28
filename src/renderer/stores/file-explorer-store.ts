@@ -189,7 +189,10 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   },
 
   setWorktreeRoot: (path: string | null): void => {
-    set({ worktreeRoot: path ? normalizePath(path) : null, rootPath: path ? normalizePath(path) : null })
+    const { setRootPath } = get()
+    const newRoot = path ? normalizePath(path) : null
+    setRootPath(newRoot)
+    set({ worktreeRoot: newRoot })
   },
 
   toggleDirectory: async (path: string): Promise<void> => {

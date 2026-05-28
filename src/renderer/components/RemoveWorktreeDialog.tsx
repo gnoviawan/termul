@@ -43,22 +43,35 @@ export function RemoveWorktreeDialog({
 	// Fetch dirty status when dialog opens
 	useEffect(() => {
 		if (!isOpen || !worktree?.path) return
+
+		let cancelled = false
+		const currentPath = worktree.path
+
 		setDirtyLoading(true)
 		setDirtyStatus(null)
 
 		const checkDirty = async () => {
 			try {
-				const result = await worktreeApi.checkDirty(worktree.path)
-				if (result.success && result.data) {
-					setDirtyStatus(result.data)
+				const result = await worktreeApi.checkDirty(currentPath)
+				// Only update state if the effect hasn't been cancelled or re-triggered
+				if (!cancelled && worktree?.path === currentPath) {
+					if (result.success && result.data) {
+						setDirtyStatus(result.data)
+					}
 				}
 			} catch {
 				// Dirty check is best-effort
 			} finally {
-				setDirtyLoading(false)
+				if (!cancelled) {
+					setDirtyLoading(false)
+				}
 			}
 		}
 		void checkDirty()
+
+		return () => {
+			cancelled = true
+		}
 	}, [isOpen, worktree?.path])
 
 	// Reset state when dialog opens

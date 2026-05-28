@@ -135,7 +135,16 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
 
   if (changed) {
     const finalList = updatedWorktrees.filter((w) => !staleIds.includes(w.id))
-    useProjectStore.getState().updateProject(project.id, { worktrees: finalList })
+
+    // Reconcile activeWorktreeId: if the active worktree was pruned, reset it
+    const currentProject = useProjectStore.getState().projects.find((p) => p.id === project.id)
+    const activeId = currentProject?.activeWorktreeId
+    const newActiveId = activeId && staleIds.includes(activeId) ? null : activeId
+
+    useProjectStore.getState().updateProject(project.id, {
+      worktrees: finalList,
+      activeWorktreeId: newActiveId,
+    })
   }
 }
 
@@ -146,14 +155,17 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
  */
 export function useWorktreeReconciler(): void {
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
-  const projects = useProjectStore((state) => state.projects)
+  // Use a stable selector that returns only what we need to avoid retriggers on store writes
+  const projectRef = useRef<Project | null>(null)
 
   useEffect(() => {
-    const activeProject = projects.find((p) => p.id === activeProjectId)
-    if (!activeProject?.path) return
+    const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
+    if (!project?.path) return
+
+    projectRef.current = project
 
     // Reconcile on project selection
-    reconcileProjectWorktrees(activeProject)
+    reconcileProjectWorktrees(project)
 
     // Periodic reconciliation every 60s for active project
     const interval = setInterval(() => {
@@ -166,7 +178,7 @@ export function useWorktreeReconciler(): void {
     }, 60_000)
 
     return () => clearInterval(interval)
-  }, [activeProjectId, projects])
+  }, [activeProjectId])
 }
 
 /**

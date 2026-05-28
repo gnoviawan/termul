@@ -74,8 +74,9 @@ export function getActiveWorktreeRoot(projectId: string): string | null {
  * Check if a path still exists on disk by attempting to verify it.
  * This is a synchronous check that can be used to detect stale worktree paths.
  * Note: Actual file system checks should be done async via the Rust backend.
+ * TODO: Move staleness detection to useWorktreeReconciler
  */
-export function isWorktreePathStale(worktreePath: string): boolean {
+function isWorktreePathStale(_worktreePath: string): boolean {
 	// We can't check the filesystem synchronously from the renderer.
 	// This is a placeholder that returns false; actual staleness detection
 	// should be done in the reconciliation hook (useWorktreeReconciler).

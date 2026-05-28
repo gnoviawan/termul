@@ -165,8 +165,8 @@ impl WorktreeError {
             Self::NotAGitRepo => "NOT_A_GIT_REPO",
             Self::GitNotFound => "GIT_NOT_FOUND",
             Self::PathTooLong => "PATH_TOO_LONG",
-            Self::BranchNotFound => "WORKTREE_NOT_FOUND",
-            Self::WorktreeLocked => "WORKTREE_EXISTS",
+            Self::BranchNotFound => "BRANCH_NOT_FOUND",
+            Self::WorktreeLocked => "WORKTREE_LOCKED",
             Self::IoError(_) | Self::GitError(_) => "WORKTREE_CREATE_FAILED",
             Self::ArchiveFailed => "ARCHIVE_FAILED",
             Self::MergeFailed => "MERGE_FAILED",
@@ -618,7 +618,12 @@ impl WorktreeManager {
                 .to_string();
 
             // Only remove Termul-managed worktrees
-            if !path.contains(".termul/worktrees/") {
+            // Use Path components for cross-platform detection (Windows uses backslashes)
+            let wt_path_obj = std::path::Path::new(&path);
+            let is_managed = wt_path_obj.components().collect::<Vec<_>>().windows(2).any(|w| {
+                w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees"
+            });
+            if !is_managed {
                 results.push(RemoveResult {
                     worktree_path: path.clone(),
                     success: true,
@@ -738,6 +743,23 @@ impl WorktreeManager {
         let mut results = Vec::new();
 
         for dir_name in symlink_dirs {
+            // Validate: reject absolute paths and path-traversal components
+            let dir_path = Path::new(dir_name);
+            if dir_path.is_absolute()
+                || dir_path.components().any(|c| c == std::path::Component::ParentDir)
+            {
+                results.push(SymlinkResult {
+                    path: worktree_root.join(dir_name).to_string_lossy().to_string(),
+                    target: project_root.join(dir_name).to_string_lossy().to_string(),
+                    status: "skipped".to_string(),
+                    reason: Some(format!(
+                        "Invalid symlink directory name (absolute or path traversal): {}",
+                        dir_name
+                    )),
+                });
+                continue;
+            }
+
             let source = project_root.join(dir_name);
             let target = worktree_root.join(dir_name);
 
@@ -807,8 +829,13 @@ impl WorktreeManager {
         let project_root = Path::new(project_path);
         let wt_path = Path::new(worktree_path);
 
-        // Verify the worktree path is under the project
-        if !worktree_path.starts_with(project_path) {
+        // Verify the worktree path is under the project using canonicalized paths
+        // to prevent prefix-traversal bypasses (e.g., "/project" matching "/project-evil")
+        let canonical_project = std::fs::canonicalize(project_root)
+            .map_err(|_| WorktreeError::ArchiveFailed)?;
+        let canonical_worktree = std::fs::canonicalize(wt_path)
+            .map_err(|_| WorktreeError::ArchiveFailed)?;
+        if !canonical_worktree.starts_with(&canonical_project) {
             return Err(WorktreeError::ArchiveFailed);
         }
 
@@ -826,6 +853,9 @@ impl WorktreeManager {
         std::fs::create_dir_all(&archive_dir)
             .map_err(|e| WorktreeError::IoError(e.to_string()))?;
 
+        // Read branch metadata BEFORE the rename (get_worktree_branch reads git data from the path)
+        let branch_name = Self::get_worktree_branch(worktree_path).unwrap_or_else(|_| wt_name.to_string());
+
         // Move the worktree directory to the archive
         std::fs::rename(wt_path, &archive_path)
             .map_err(|e| WorktreeError::IoError(e.to_string()))?;
@@ -840,9 +870,6 @@ impl WorktreeManager {
         } else {
             ArchiveManifest { entries: Vec::new() }
         };
-
-        // Add entry
-        let branch_name = Self::get_worktree_branch(worktree_path).unwrap_or_else(|_| wt_name.to_string());
         let archived_at = timestamp.clone();
         let expires_at = thirty_days_from_now();
 

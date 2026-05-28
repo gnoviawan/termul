@@ -163,7 +163,7 @@ describe('worktreeApi', () => {
 			}
 			mockInvoke.mockResolvedValue(mockResult)
 
-			const result = await worktreeApi.removeAllManaged('/test/project', worktreesJson)
+			const result = await worktreeApi.removeAllManaged('/test/project', JSON.parse(worktreesJson))
 
 			expect(mockInvoke).toHaveBeenCalledWith('worktree_remove_all_managed', {
 				projectPath: '/test/project',

@@ -80,7 +80,13 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			const projectSymlinkDirs = project?.symlinkDirs ?? []
 			setEnabledSymlinkDirs(new Set(projectSymlinkDirs))
 		}
-	}, [isOpen, project?.symlinkDirs])
+	}, [isOpen])
+
+	// Keep symlink dirs in sync with project settings without resetting the form
+	useEffect(() => {
+		const dirs = project?.symlinkDirs ?? []
+		setEnabledSymlinkDirs(new Set(dirs))
+	}, [project?.symlinkDirs])
 
 	// Fetch branches when modal opens
 	useEffect(() => {
@@ -133,6 +139,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
 		if (branchType === 'new') {
 			if (!newBranchName.trim()) return 'Branch name is required'
+			// Also validate that the sanitized branch name is non-empty
+			if (!sanitizeBranchName(newBranchName).trim()) return 'Branch name is required'
 		} else {
 			if (!selectedBranch) return 'Select a branch'
 		}

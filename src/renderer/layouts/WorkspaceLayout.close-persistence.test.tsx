@@ -91,8 +91,8 @@ vi.mock('@/stores/project-store', () => ({
   useProjectActions: () => mockProjectActions,
   useProjectStore: Object.assign(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id }) : { projects: [activeProject], activeProjectId: activeProject.id },
-    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id }) }
+    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) : { projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false },
+    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) }
   )
 }))
 

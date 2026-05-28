@@ -124,13 +124,30 @@ export function validateTemplate(template: string): { valid: boolean; errors: st
 		errors.push('Unclosed conditional blocks: {{#if}} count doesn\'t match {{/if}} count')
 	}
 
-	// Check for valid variable references
-	const vars = template.match(/\{\{(\w+)\}\}/g) ?? []
-	for (const v of vars) {
+	// Check for valid variable references and reject unknown placeholder names
+	const allVars = template.match(/\{\{(\w+)\}\}/g) ?? []
+	const knownVariables: string[] = [
+		'sourceBranch',
+		'targetBranch',
+		'conflictFiles',
+		'worktreePath',
+		'projectName',
+		'diffContent',
+	]
+
+	for (const v of allVars) {
+		// Skip Handlebars control tokens
 		if (v.startsWith('{{#if') || v.startsWith('{{/if')) continue
+
 		const name = v.slice(2, -2)
 		if (!/^[a-zA-Z_]\w*$/.test(name)) {
 			errors.push(`Invalid variable name: ${v}`)
+			continue
+		}
+
+		// Reject unknown placeholder names
+		if (!knownVariables.includes(name)) {
+			errors.push(`Unknown template variable: ${v}`)
 		}
 	}
 
