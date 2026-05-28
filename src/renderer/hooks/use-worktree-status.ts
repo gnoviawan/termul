@@ -122,6 +122,15 @@ export function useWorktreeStatus(
 		return project.worktrees.filter((w) => w.id !== project.activeWorktreeId).length
 	})
 
+	// Ref to track last meaningful status fields to avoid re-renders on lastChecked-only changes
+	const lastMeaningfulRef = useRef<{
+		health: WorktreeHealthStatus | null
+		modified: number
+		staged: number
+		untracked: number
+		conflictCount: number
+	} | null>(null)
+
 	// Poll the active worktree
 	const pollActive = useCallback(async () => {
 		if (!activeWorktreePath || !activeWorktreeId) return
@@ -130,9 +139,25 @@ export function useWorktreeStatus(
 		if (health !== null) {
 			const cached = statusCache.get(activeWorktreeId)
 			if (cached) {
-				// Always update the UI when the cached status object changes
-				// (counts can change even if health stays the same, e.g. "dirty")
-				setCurrentStatus(cached)
+				// Only update UI when meaningful fields change (not lastChecked-only changes)
+				const last = lastMeaningfulRef.current
+				if (
+					!last ||
+					last.health !== cached.health ||
+					last.modified !== cached.modified ||
+					last.staged !== cached.staged ||
+					last.untracked !== cached.untracked ||
+					last.conflictCount !== cached.conflictCount
+				) {
+					setCurrentStatus(cached)
+					lastMeaningfulRef.current = {
+						health: cached.health,
+						modified: cached.modified,
+						staged: cached.staged,
+						untracked: cached.untracked,
+						conflictCount: cached.conflictCount,
+					}
+				}
 				lastHealthRef.current = health
 			}
 		}

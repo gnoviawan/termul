@@ -19,6 +19,9 @@ const mockRemoveWorktree = vi.fn()
 const mockUpdateProject = vi.fn()
 const mockAddWorktree = vi.fn()
 
+// Mutable activeWorktreeId — tests can override this per-scenario
+let mockActiveWorktreeId: string | null = null
+
 vi.mock('@/stores/project-store', () => ({
 	useProjectStore: {
 		getState: () => ({
@@ -32,7 +35,7 @@ vi.mock('@/stores/project-store', () => ({
 						{ id: 'wt-1', name: 'feat-1', branch: 'feat-1', path: '/test/project/.termul/worktrees/feat-1', createdAt: '2026-01-01' },
 						{ id: 'wt-2', name: 'feat-2', branch: 'feat-2', path: '/test/project/.termul/worktrees/feat-2', createdAt: '2026-01-01' },
 					],
-					activeWorktreeId: null,
+					activeWorktreeId: mockActiveWorktreeId,
 				},
 			],
 			addWorktree: mockAddWorktree,
@@ -51,6 +54,7 @@ import { worktreeApi } from '@/lib/api'
 describe('useWorktreeReconciler', () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		mockActiveWorktreeId = null
 	})
 
 	it('removes orphaned worktrees that no longer exist in git', async () => {
@@ -92,7 +96,9 @@ describe('useWorktreeReconciler', () => {
 	})
 
 	it('resets active worktree if it becomes orphaned', async () => {
-		// Override store mock to have active worktree be the one being orphaned
+		// Set active worktree to the one that will be orphaned by git (only feat-1 remains)
+		mockActiveWorktreeId = 'wt-2'
+
 		vi.mocked(worktreeApi.list).mockResolvedValue({
 			success: true,
 			data: [
@@ -103,7 +109,7 @@ describe('useWorktreeReconciler', () => {
 		renderHook(() => useWorktreeReconciler('proj-1'))
 
 		await vi.waitFor(() => {
-			expect(mockRemoveWorktree).toHaveBeenCalled()
+			expect(mockRemoveWorktree).toHaveBeenCalledWith('proj-1', 'wt-2')
 			expect(mockUpdateProject).toHaveBeenCalledWith('proj-1', { activeWorktreeId: null })
 		})
 	})
@@ -117,10 +123,10 @@ describe('useWorktreeReconciler', () => {
 
 		renderHook(() => useWorktreeReconciler('proj-1'))
 
-		// Give time for async operations
-		await new Promise((r) => setTimeout(r, 100))
-
-		expect(mockRemoveWorktree).not.toHaveBeenCalled()
-		expect(mockAddWorktree).not.toHaveBeenCalled()
+		// Wait for async operations
+		await vi.waitFor(() => {
+			expect(mockRemoveWorktree).not.toHaveBeenCalled()
+			expect(mockAddWorktree).not.toHaveBeenCalled()
+		})
 	})
 })
