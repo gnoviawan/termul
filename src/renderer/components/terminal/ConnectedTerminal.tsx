@@ -1442,18 +1442,12 @@ function ConnectedTerminalComponent({
 			}
 		}
 
-		// Re-fit terminal to current dimensions
-		performFit(true);
-
-		// Sync PTY dimensions
-		const terminal = terminalRef.current;
-		const ptyId = ptyIdRef.current;
-		if (terminal && ptyId) {
-			terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
-				// Ignore resize errors - terminal may have been killed
-			});
-		}
-	}, []);
+		// Re-fit and sync PTY dimensions via the v2 hook's forced path.
+		// forceResizeFit clears any pending v2 debounce timers, fits with
+		// force=true (bypassing the dimension-sameness check), and immediately
+		// calls onPtyResize — keeping the v2 hook's dimension trackers in sync.
+		forceResizeFit();
+	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {
@@ -1479,6 +1473,33 @@ function ConnectedTerminalComponent({
 				clearTimeout(recoveryTimeoutId);
 			}
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
+		};
+	}, [performTerminalRecovery]);
+
+	// Recovery handler for window focus — critical for Tauri minimize/restore
+	// on Windows where document.visibilitychange is unreliable.
+	// The window 'focus' event reliably fires when the window is restored from
+	// taskbar minimize. performTerminalRecovery re-fits the terminal to its
+	// container and syncs PTY dimensions (SIGWINCH to the shell process).
+	useEffect(() => {
+		let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+		const handleWindowFocus = (): void => {
+			if (recoveryTimeoutId) {
+				clearTimeout(recoveryTimeoutId);
+			}
+			recoveryTimeoutId = setTimeout(() => {
+				recoveryTimeoutId = null;
+				performTerminalRecovery();
+			}, VISIBILITY_RECOVERY_DELAY_MS);
+		};
+
+		window.addEventListener("focus", handleWindowFocus);
+		return () => {
+			if (recoveryTimeoutId) {
+				clearTimeout(recoveryTimeoutId);
+			}
+			window.removeEventListener("focus", handleWindowFocus);
 		};
 	}, [performTerminalRecovery]);
 

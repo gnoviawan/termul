@@ -2083,6 +2083,69 @@ describe('ConnectedTerminal', () => {
     })
   })
 
+  describe('Window focus recovery (Tauri minimize/restore)', () => {
+    it('should register window focus listener on mount', async () => {
+      const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      expect(addEventListenerSpy).toHaveBeenCalledWith('focus', expect.any(Function))
+
+      addEventListenerSpy.mockRestore()
+    })
+
+    it('should trigger fit and resize on window focus with debounce', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      mockFitAddonInstance.fit.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+
+      // Dispatch window focus event
+      window.dispatchEvent(new Event('focus'))
+
+      // Should not fire immediately (debounced)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(mockFitAddonInstance.fit).not.toHaveBeenCalled()
+
+      // Should fire after 150ms debounce
+      await vi.advanceTimersByTimeAsync(100)
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
+        'terminal-123',
+        expect.any(Number),
+        expect.any(Number)
+      )
+
+      vi.useRealTimers()
+    })
+
+    it('should cleanup window focus listener on unmount', async () => {
+      const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
+
+      const { unmount } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      unmount()
+
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('focus', expect.any(Function))
+
+      removeEventListenerSpy.mockRestore()
+    })
+  })
+
   describe('Regression: Visibility transition + recovery scenarios', () => {
     /**
      * REGRESSION TEST: Ensure terminal properly handles visibility state transitions
