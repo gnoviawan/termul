@@ -3,6 +3,7 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
+use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -218,6 +219,160 @@ pub async fn terminal_set_visibility(
     cwd_tracker.set_visibility(request.is_visible);
     git_tracker.set_visibility(request.is_visible);
     Ok(IpcResult::success(()))
+}
+
+// ==================== Worktree Commands ====================
+
+/// List all worktrees for a git repo at the given path.
+/// Filters out bare worktrees and detached-HEAD worktrees.
+#[tauri::command]
+pub async fn worktree_list(
+    project_path: String,
+) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
+    match WorktreeManager::list(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<WorktreeInfo> = entries
+                .into_iter()
+                .map(|e| WorktreeInfo {
+                    name: e.name,
+                    branch: e.branch,
+                    path: e.path,
+                    head_commit: e.head_commit,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create a new worktree.
+#[tauri::command]
+pub async fn worktree_create(
+    project_path: String,
+    name: String,
+    branch: String,
+    is_new_branch: bool,
+    start_ref: Option<String>,
+    target_path: Option<String>,
+) -> Result<IpcResult<WorktreeInfo>, String> {
+    match WorktreeManager::create(
+        &project_path,
+        &name,
+        &branch,
+        is_new_branch,
+        start_ref.as_deref(),
+        target_path.as_deref(),
+    ) {
+        Ok(entry) => Ok(IpcResult::success(WorktreeInfo {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        })),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove a worktree. Uses --force if requested. Runs `git worktree prune` after.
+#[tauri::command]
+pub async fn worktree_remove(
+    worktree_path: String,
+    force: bool,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::remove(&worktree_path, force) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// List local and remote branches for a git repo.
+#[tauri::command]
+pub async fn worktree_branches(
+    project_path: String,
+) -> Result<IpcResult<Vec<BranchInfo>>, String> {
+    match WorktreeManager::branches(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<BranchInfo> = entries
+                .into_iter()
+                .map(|e| BranchInfo {
+                    name: e.name,
+                    is_remote: e.is_remote,
+                    is_current: e.is_current,
+                    upstream: e.upstream,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Check dirty status for a worktree checkout.
+#[tauri::command]
+pub async fn worktree_check_dirty(
+    worktree_path: String,
+) -> Result<IpcResult<DirtyStatus>, String> {
+    match WorktreeManager::check_dirty(&worktree_path) {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove all Termul-managed worktrees for a project.
+/// Reports per-worktree success/failure.
+#[tauri::command]
+pub async fn worktree_remove_all_managed(
+    project_path: String,
+    worktrees_json: String,
+) -> Result<IpcResult<Vec<RemoveResult>>, String> {
+    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+        Ok(results) => Ok(IpcResult::success(results)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Worktree info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub name: String,
+    pub branch: String,
+    pub path: String,
+    pub head_commit: String,
+}
+
+impl From<GitWorktreeEntry> for WorktreeInfo {
+    fn from(entry: GitWorktreeEntry) -> Self {
+        Self {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        }
+    }
+}
+
+/// Branch info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_remote: bool,
+    pub is_current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+impl From<BranchEntry> for BranchInfo {
+    fn from(entry: BranchEntry) -> Self {
+        Self {
+            name: entry.name,
+            is_remote: entry.is_remote,
+            is_current: entry.is_current,
+            upstream: entry.upstream,
+        }
+    }
 }
 
 // ==================== Browser Tab Commands ====================

@@ -5,6 +5,7 @@ mod migrations;
 mod pty;
 mod shell_paths;
 mod trackers;
+mod worktree;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -745,6 +746,13 @@ pub fn run() {
             commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
             commands::browser_tab_report_annotation_marker_clicked,
+            // Worktree commands
+            commands::worktree_list,
+            commands::worktree_create,
+            commands::worktree_remove,
+            commands::worktree_branches,
+            commands::worktree_check_dirty,
+            commands::worktree_remove_all_managed,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,
