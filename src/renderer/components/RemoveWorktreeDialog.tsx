@@ -1,15 +1,12 @@
 import { useState, useCallback, useEffect } from 'react'
-import { AlertTriangle, Archive, Trash2, Loader2, GitBranch } from 'lucide-react'
+import { AlertTriangle, Trash2, Loader2, GitBranch } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Worktree } from '@/types/project'
 import { isWorktreeTermulManaged } from '@/types/project'
 import { worktreeApi } from '@/lib/api'
 import { useProjectStore, useProjectActions } from '@/stores/project-store'
 import { toast } from '@/hooks/use-toast'
-import { cn } from '@/lib/utils'
 import type { DirtyStatus } from '@shared/types/ipc.types'
-
-type RemovalMode = 'archive' | 'delete'
 
 interface RemoveWorktreeDialogProps {
 	isOpen: boolean
@@ -32,8 +29,6 @@ export function RemoveWorktreeDialog({
 	const { removeWorktree, setWorktreeOperationLock } = useProjectActions()
 
 	// State
-	const [mode, setMode] = useState<RemovalMode>('archive')
-	const [deleteLocalBranch, setDeleteLocalBranch] = useState(false)
 	const [dirtyStatus, setDirtyStatus] = useState<DirtyStatus | null>(null)
 	const [dirtyLoading, setDirtyLoading] = useState(false)
 	const [isRemoving, setIsRemoving] = useState(false)
@@ -67,8 +62,6 @@ export function RemoveWorktreeDialog({
 	// Reset state when dialog opens
 	useEffect(() => {
 		if (isOpen) {
-			setMode('archive')
-			setDeleteLocalBranch(false)
 			setError(null)
 			setIsRemoving(false)
 		}
@@ -87,42 +80,7 @@ export function RemoveWorktreeDialog({
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [isOpen, onClose])
 
-	const handleArchive = useCallback(async () => {
-		if (!worktree || !isTermulManaged) return
-
-		setIsRemoving(true)
-		setError(null)
-		setWorktreeOperationLock(true)
-
-		try {
-			// For archive, we just remove the worktree normally.
-			// The actual archiving (moving to .termul/archives/) would be a Rust-side operation.
-			// For now, we use the standard remove which cleans up properly.
-			const result = await worktreeApi.remove(worktree.path, false)
-			if (result.success) {
-				removeWorktree(projectId, worktree.id)
-				toast({
-					title: 'Worktree archived',
-					description: `"${worktree.name}" has been archived and can be recovered within 30 days.`,
-				})
-				onClose()
-			} else {
-				setError(result.error ?? 'Failed to archive worktree')
-				toast({
-					title: 'Failed to archive worktree',
-					description: result.error ?? 'Unknown error',
-					variant: 'destructive',
-				})
-			}
-		} catch (err) {
-			setError(String(err))
-		} finally {
-			setIsRemoving(false)
-			setWorktreeOperationLock(false)
-		}
-	}, [worktree, isTermulManaged, projectId, removeWorktree, setWorktreeOperationLock, onClose])
-
-	const handleDelete = useCallback(async () => {
+	const handleRemove = useCallback(async () => {
 		if (!worktree) return
 
 		setIsRemoving(true)
@@ -130,19 +88,20 @@ export function RemoveWorktreeDialog({
 		setWorktreeOperationLock(true)
 
 		try {
-			// Force remove for permanent deletion
-			const result = await worktreeApi.remove(worktree.path, true)
+			// Use --force when there are uncommitted changes so git doesn't block removal
+			const force = hasUncommittedChanges
+			const result = await worktreeApi.remove(worktree.path, force)
 			if (result.success) {
 				removeWorktree(projectId, worktree.id)
 				toast({
-					title: 'Worktree deleted',
-					description: `"${worktree.name}" has been permanently deleted.`,
+					title: 'Worktree removed',
+					description: `"${worktree.name}" has been permanently removed.`,
 				})
 				onClose()
 			} else {
-				setError(result.error ?? 'Failed to delete worktree')
+				setError(result.error ?? 'Failed to remove worktree')
 				toast({
-					title: 'Failed to delete worktree',
+					title: 'Failed to remove worktree',
 					description: result.error ?? 'Unknown error',
 					variant: 'destructive',
 				})
@@ -153,15 +112,7 @@ export function RemoveWorktreeDialog({
 			setIsRemoving(false)
 			setWorktreeOperationLock(false)
 		}
-	}, [worktree, projectId, removeWorktree, setWorktreeOperationLock, onClose])
-
-	const handleConfirm = useCallback(() => {
-		if (mode === 'archive') {
-			void handleArchive()
-		} else {
-			void handleDelete()
-		}
-	}, [mode, handleArchive, handleDelete])
+	}, [worktree, projectId, removeWorktree, setWorktreeOperationLock, onClose, hasUncommittedChanges])
 
 	if (!worktree) return null
 
@@ -223,6 +174,9 @@ export function RemoveWorktreeDialog({
 										<span className="ml-1">
 											{dirtyStatus?.modified ?? 0} modified, {dirtyStatus?.staged ?? 0} staged, {dirtyStatus?.untracked ?? 0} untracked
 										</span>
+										<div className="mt-1 text-muted-foreground">
+											These changes will be lost when the worktree is removed.
+										</div>
 									</div>
 								</div>
 							)}
@@ -243,63 +197,11 @@ export function RemoveWorktreeDialog({
 								</div>
 							)}
 
-							{/* Removal mode selection */}
-							<div className="space-y-2">
-								<label className="block text-xs font-medium text-muted-foreground">
-									Removal Method
-								</label>
-								<div className="space-y-2">
-									{/* Archive option */}
-									<button
-										onClick={() => setMode('archive')}
-										className={cn(
-											'w-full flex items-start gap-3 p-3 rounded border text-left transition-colors',
-											mode === 'archive'
-												? 'border-primary bg-primary/5'
-												: 'border-border hover:bg-sidebar-accent/50',
-										)}
-									>
-										<Archive size={16} className={cn('mt-0.5 flex-shrink-0', mode === 'archive' ? 'text-primary' : 'text-muted-foreground')} />
-										<div>
-											<div className="text-xs font-medium text-foreground">Archive (Recommended)</div>
-											<div className="text-[10px] text-muted-foreground mt-0.5">
-												Moves to .termul/archives/. Recoverable for 30 days.
-											</div>
-										</div>
-									</button>
-									{/* Delete option */}
-									<button
-										onClick={() => setMode('delete')}
-										className={cn(
-											'w-full flex items-start gap-3 p-3 rounded border text-left transition-colors',
-											mode === 'delete'
-												? 'border-red-500 bg-red-500/5'
-												: 'border-border hover:bg-sidebar-accent/50',
-										)}
-									>
-										<Trash2 size={16} className={cn('mt-0.5 flex-shrink-0', mode === 'delete' ? 'text-red-500' : 'text-muted-foreground')} />
-										<div>
-											<div className="text-xs font-medium text-foreground">Delete Permanently</div>
-											<div className="text-[10px] text-muted-foreground mt-0.5">
-												Permanently deletes the worktree directory. Cannot be undone.
-											</div>
-										</div>
-									</button>
-								</div>
+							{/* Permanent deletion notice */}
+							<div className="flex items-start gap-2 text-xs text-muted-foreground bg-secondary/30 border border-border rounded px-3 py-2">
+								<Trash2 size={12} className="flex-shrink-0 mt-0.5" />
+								This will permanently remove the worktree directory. This action cannot be undone.
 							</div>
-
-							{/* Delete local branch checkbox */}
-							{mode === 'delete' && (
-								<label className="flex items-center gap-2 text-xs cursor-pointer">
-									<input
-										type="checkbox"
-										checked={deleteLocalBranch}
-										onChange={(e) => setDeleteLocalBranch(e.target.checked)}
-										className="rounded border-border"
-									/>
-									<span className="text-muted-foreground">Also delete local branch "{worktree.branch}"</span>
-								</label>
-							)}
 
 							{/* Error */}
 							{error && (
@@ -320,20 +222,12 @@ export function RemoveWorktreeDialog({
 								Cancel
 							</button>
 							<button
-								onClick={handleConfirm}
-								disabled={isRemoving || isWorktreeOperationLocked || !isTermulManaged}
-								className={cn(
-									'px-3 py-1.5 text-xs font-medium rounded transition-all flex items-center gap-1.5',
-									mode === 'delete'
-										? 'bg-red-500 text-white hover:bg-red-600 shadow-md'
-										: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20',
-									'disabled:opacity-50 disabled:cursor-not-allowed',
-								)}
+								onClick={() => void handleRemove()}
+								disabled={isRemoving || isWorktreeOperationLocked}
+								className="px-3 py-1.5 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
 							>
 								{isRemoving && <Loader2 size={12} className="animate-spin" />}
-								{isRemoving
-									? mode === 'archive' ? 'Archiving...' : 'Deleting...'
-									: mode === 'archive' ? 'Archive Worktree' : 'Delete Worktree'}
+								{isRemoving ? 'Removing...' : 'Remove Worktree'}
 							</button>
 						</div>
 					</motion.div>

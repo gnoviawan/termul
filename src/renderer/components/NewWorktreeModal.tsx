@@ -8,27 +8,6 @@ import { useProjectStore, useProjectActions } from '@/stores/project-store'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
-// Security-sensitive .gitignore patterns that default to NO COPY
-const SENSITIVE_GITIGNORE_PATTERNS = [
-	{ pattern: '.env*', label: '.env files', copy: false },
-	{ pattern: '*.key', label: 'Key files', copy: false },
-	{ pattern: '*.pem', label: 'PEM certificates', copy: false },
-	{ pattern: '*.p12', label: 'PKCS12 keystores', copy: false },
-]
-
-// Common .gitignore patterns that default to COPY
-const COMMON_GITIGNORE_PATTERNS = [
-	{ pattern: 'node_modules/', label: 'node_modules', copy: true },
-	{ pattern: 'dist/', label: 'Build output', copy: true },
-	{ pattern: '.cache/', label: 'Cache directories', copy: true },
-]
-
-interface GitignoreEntry {
-	pattern: string
-	label: string
-	copy: boolean // true = copy to worktree, false = don't copy
-}
-
 interface NewWorktreeModalProps {
 	isOpen: boolean
 	onClose: () => void
@@ -52,10 +31,6 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 	const [showRemoteBranches, setShowRemoteBranches] = useState(false)
 	const [branchSearch, setBranchSearch] = useState('')
 	const [branchesLoading, setBranchesLoading] = useState(false)
-
-	// .gitignore state
-	const [gitignoreEntries, setGitignoreEntries] = useState<GitignoreEntry[]>([])
-	const [showGitignore, setShowGitignore] = useState(false)
 
 	// Operation state
 	const [isCreating, setIsCreating] = useState(false)
@@ -95,10 +70,6 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			setShowRemoteBranches(false)
 			setValidationError(null)
 			setIsCreating(false)
-			setGitignoreEntries([
-				...SENSITIVE_GITIGNORE_PATTERNS.map((p) => ({ ...p, copy: false })),
-				...COMMON_GITIGNORE_PATTERNS.map((p) => ({ ...p, copy: true })),
-			])
 		}
 	}, [isOpen])
 
@@ -153,10 +124,6 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
 		if (branchType === 'new') {
 			if (!newBranchName.trim()) return 'Branch name is required'
-			const sanitized = sanitizeBranchName(newBranchName)
-			if (sanitized !== newBranchName) {
-				// Will be sanitized automatically — not an error
-			}
 		} else {
 			if (!selectedBranch) return 'Select a branch'
 		}
@@ -492,74 +459,6 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 								<code className="block text-[10px] text-muted-foreground bg-secondary/50 border border-border rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
 									{pathPreview}
 								</code>
-							</div>
-
-							{/* .gitignore handler */}
-							<div>
-								<button
-									onClick={() => setShowGitignore(!showGitignore)}
-									className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-								>
-									<GitBranch size={10} />
-									.gitignore handling
-									<span className="text-[10px]">{showGitignore ? '▲' : '▼'}</span>
-								</button>
-								{showGitignore && (
-									<div className="mt-2 border border-border rounded p-3 bg-secondary/30 space-y-1.5">
-										{/* Security-sensitive patterns */}
-										<div className="mb-2">
-											<div className="flex items-center gap-1 text-[10px] text-amber-500 mb-1">
-												<AlertTriangle size={10} />
-												Security-sensitive (default: don't copy)
-											</div>
-											{gitignoreEntries
-												.filter((e) => SENSITIVE_GITIGNORE_PATTERNS.some((s) => s.pattern === e.pattern))
-												.map((entry, idx) => (
-													<label key={entry.pattern} className="flex items-center gap-2 text-xs cursor-pointer">
-														<input
-															type="checkbox"
-															checked={entry.copy}
-															onChange={() => {
-																const updated = [...gitignoreEntries]
-																const realIdx = gitignoreEntries.findIndex((e) => e.pattern === entry.pattern)
-																updated[realIdx] = { ...updated[realIdx], copy: !updated[realIdx].copy }
-																setGitignoreEntries(updated)
-															}}
-															className="rounded border-border"
-														/>
-														<span className="text-muted-foreground">{entry.label}</span>
-														{!entry.copy && (
-															<span className="text-[10px] text-amber-500">⚠ won't copy</span>
-														)}
-													</label>
-												))}
-										</div>
-										{/* Common patterns */}
-										<div>
-											<div className="text-[10px] text-muted-foreground mb-1">
-												Common patterns (default: copy)
-											</div>
-											{gitignoreEntries
-												.filter((e) => COMMON_GITIGNORE_PATTERNS.some((s) => s.pattern === e.pattern))
-												.map((entry, idx) => (
-													<label key={entry.pattern} className="flex items-center gap-2 text-xs cursor-pointer">
-														<input
-															type="checkbox"
-															checked={entry.copy}
-															onChange={() => {
-																const updated = [...gitignoreEntries]
-																const realIdx = gitignoreEntries.findIndex((e) => e.pattern === entry.pattern)
-																updated[realIdx] = { ...updated[realIdx], copy: !updated[realIdx].copy }
-																setGitignoreEntries(updated)
-															}}
-															className="rounded border-border"
-														/>
-														<span className="text-muted-foreground">{entry.label}</span>
-													</label>
-												))}
-										</div>
-									</div>
-								)}
 							</div>
 
 							{/* Validation error */}

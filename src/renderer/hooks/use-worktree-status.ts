@@ -1,9 +1,12 @@
 /**
  * Worktree status polling hook.
  *
- * Efficiently polls the active worktree's git status using the
- * Tauri worktree_check_dirty command. Only polls the active worktree
- * by default, with 2-second debounce intervals.
+ * Polls git status for worktrees using the Tauri worktree_check_dirty command.
+ * The active worktree is polled every 2s; other visible worktrees every 10s.
+ * Re-renders only on status change, not on every poll.
+ *
+ * Status cache is shared across hook instances so sidebar items can
+ * read health badges without subscribing to polling state.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -56,75 +59,96 @@ function updateCache(worktreeId: string, status: Partial<WorktreeStatus>): void 
 }
 
 /**
- * Hook to poll the active worktree's status.
- *
- * Only polls the currently active worktree for efficiency.
- * Debounced to 2-second intervals.
- * Re-renders only on status change, not on every poll.
- *
- * @param projectId - The project to watch for active worktree
- * @param pollIntervalMs - Polling interval in ms (default: 2000)
+ * Poll a single worktree's dirty status and update the cache.
  */
-export function useWorktreeStatus(projectId: string, pollIntervalMs = 2000) {
+async function pollWorktree(worktreeId: string, worktreePath: string): Promise<WorktreeHealthStatus | null> {
+	try {
+		const result = await worktreeApi.checkDirty(worktreePath)
+		if (result.success && result.data) {
+			const health = mapDirtyToHealth(result.data)
+			updateCache(worktreeId, {
+				health,
+				modified: result.data.modified,
+				staged: result.data.staged,
+				untracked: result.data.untracked,
+				lastChecked: Date.now(),
+				lastAccessed: Date.now(),
+			})
+			return health
+		}
+	} catch {
+		// Polling errors are best-effort
+	}
+	return null
+}
+
+/**
+ * Hook to poll worktree status for a project.
+ *
+ * Polls the active worktree frequently (2s) and other visible
+ * worktrees less frequently (10s). Uses shared status cache so
+ * sidebar items can read health badges without subscribing.
+ *
+ * @param projectId - The project to watch
+ * @param activePollIntervalMs - Polling interval for active worktree (default: 2000)
+ * @param inactivePollIntervalMs - Polling interval for other worktrees (default: 10000)
+ */
+export function useWorktreeStatus(
+	projectId: string,
+	activePollIntervalMs = 2000,
+	inactivePollIntervalMs = 10000,
+) {
 	const [currentStatus, setCurrentStatus] = useState<WorktreeStatus | null>(null)
 	const [isPolling, setIsPolling] = useState(false)
 	const lastHealthRef = useRef<WorktreeHealthStatus | null>(null)
-	const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+	const activeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+	const inactiveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-	// Get active worktree ID from store
+	// Subscribe to project state — use stable primitive selectors to avoid re-render loops
 	const activeWorktreeId = useProjectStore(
 		(state) => state.projects.find((p) => p.id === projectId)?.activeWorktreeId,
 	)
 
-	// Get worktree path from store
-	const worktreePath = useProjectStore((state) => {
+	const activeWorktreePath = useProjectStore((state) => {
 		const project = state.projects.find((p) => p.id === projectId)
 		if (!project?.activeWorktreeId) return null
 		return project.worktrees?.find((w) => w.id === project.activeWorktreeId)?.path ?? null
 	})
 
-	const pollStatus = useCallback(async () => {
-		if (!worktreePath || !activeWorktreeId) return
+	// Inactive worktree count (primitive — stable for selector equality)
+	const inactiveWorktreeCount = useProjectStore((state) => {
+		const project = state.projects.find((p) => p.id === projectId)
+		if (!project?.worktrees) return 0
+		return project.worktrees.filter((w) => w.id !== project.activeWorktreeId).length
+	})
 
-		try {
-			const result = await worktreeApi.checkDirty(worktreePath)
-			if (result.success && result.data) {
-				const health = mapDirtyToHealth(result.data)
+	// Poll the active worktree
+	const pollActive = useCallback(async () => {
+		if (!activeWorktreePath || !activeWorktreeId) return
 
-				// Only update state if health status changed (prevents unnecessary re-renders)
-				if (health !== lastHealthRef.current) {
-					lastHealthRef.current = health
-					const newStatus: WorktreeStatus = {
-						worktreeId: activeWorktreeId,
-						health,
-						modified: result.data.modified,
-						staged: result.data.staged,
-						untracked: result.data.untracked,
-						conflictCount: 0,
-						lastChecked: Date.now(),
-						lastAccessed: Date.now(),
-						ciStatus: 'unknown',
-					}
-					updateCache(activeWorktreeId, newStatus)
-					setCurrentStatus(newStatus)
-				} else {
-					// Update cache even if status hasn't changed (refresh timestamp)
-					updateCache(activeWorktreeId, {
-						modified: result.data.modified,
-						staged: result.data.staged,
-						untracked: result.data.untracked,
-						lastChecked: Date.now(),
-					})
-				}
+		const health = await pollWorktree(activeWorktreeId, activeWorktreePath)
+		if (health !== null && health !== lastHealthRef.current) {
+			lastHealthRef.current = health
+			const cached = statusCache.get(activeWorktreeId)
+			if (cached) {
+				setCurrentStatus(cached)
 			}
-		} catch {
-			// Polling errors are best-effort
 		}
-	}, [worktreePath, activeWorktreeId])
+	}, [activeWorktreePath, activeWorktreeId])
+
+	// Poll inactive worktrees — read store directly to avoid selector instability
+	const pollInactive = useCallback(async () => {
+		const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+		if (!project?.worktrees) return
+		const inactive = project.worktrees.filter((w) => w.id !== project.activeWorktreeId)
+		for (const wt of inactive) {
+			await pollWorktree(wt.id, wt.path)
+		}
+	}, [projectId])
 
 	// Start/stop polling based on active worktree
 	useEffect(() => {
-		if (!activeWorktreeId || !worktreePath) {
+		if (!activeWorktreeId || !activeWorktreePath) {
 			setCurrentStatus(null)
 			setIsPolling(false)
 			lastHealthRef.current = null
@@ -140,26 +164,36 @@ export function useWorktreeStatus(projectId: string, pollIntervalMs = 2000) {
 
 		setIsPolling(true)
 
-		// Initial poll
-		void pollStatus()
+		// Initial poll — active + inactive
+		void pollActive()
+		void pollInactive()
 
-		// Set up interval with debounce
-		pollTimerRef.current = setInterval(() => {
-			void pollStatus()
-		}, pollIntervalMs)
+		// Active worktree: frequent polling
+		activeTimerRef.current = setInterval(() => {
+			void pollActive()
+		}, activePollIntervalMs)
+
+		// Inactive worktrees: less frequent polling
+		inactiveTimerRef.current = setInterval(() => {
+			void pollInactive()
+		}, inactivePollIntervalMs)
 
 		return () => {
-			if (pollTimerRef.current) {
-				clearInterval(pollTimerRef.current)
-				pollTimerRef.current = null
+			if (activeTimerRef.current) {
+				clearInterval(activeTimerRef.current)
+				activeTimerRef.current = null
+			}
+			if (inactiveTimerRef.current) {
+				clearInterval(inactiveTimerRef.current)
+				inactiveTimerRef.current = null
 			}
 			setIsPolling(false)
 		}
-	}, [activeWorktreeId, worktreePath, pollIntervalMs, pollStatus])
+	}, [activeWorktreeId, activeWorktreePath, activePollIntervalMs, inactivePollIntervalMs, pollActive, pollInactive])
 
 	return {
 		status: currentStatus,
 		isPolling,
-		refreshNow: pollStatus,
+		refreshNow: pollActive,
 	}
 }

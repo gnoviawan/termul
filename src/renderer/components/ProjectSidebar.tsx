@@ -15,6 +15,11 @@ import {
 	FolderOpen,
 	Copy,
 	Home,
+	CheckCircle2,
+	AlertCircle,
+	ArrowUpCircle,
+	ArrowDownCircle,
+	XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor, Worktree } from "@/types/project";
@@ -31,6 +36,10 @@ import { ColorPickerPopover } from "./ColorPickerPopover";
 import { shellApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectStore, useProjectActions } from "@/stores/project-store";
 import { toast } from "@/hooks/use-toast";
+import type { WorktreeHealthStatus } from "@/types/worktree-status";
+import { getWorktreeStatusFromCache } from "@/hooks/use-worktree-status";
+import { useWorktreeStatus } from "@/hooks/use-worktree-status";
+import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -104,6 +113,12 @@ export function ProjectSidebar({
 	const navigate = useNavigate();
 	const { selectProject, setActiveWorktree, setWorktreeOperationLock } = useProjectActions();
 	const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked);
+
+	// Poll worktree status for the active project (populates shared cache for sidebar badges)
+	useWorktreeStatus(activeProjectId);
+
+	// Reconcile stored worktrees against actual git state (detects orphaned entries)
+	useWorktreeReconciler(activeProjectId);
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
@@ -929,6 +944,7 @@ const ProjectItem = memo(function ProjectItem({
 								name={wt.name}
 								branch={wt.branch}
 								path={wt.path}
+								worktreeId={wt.id}
 								isActive={project.activeWorktreeId === wt.id}
 								isTermulManaged={isWorktreeTermulManaged(wt)}
 								onClick={() => onWorktreeSelect(wt.id)}
@@ -964,19 +980,49 @@ interface WorktreeItemProps {
 	isRoot?: boolean;
 	isActive: boolean;
 	isTermulManaged?: boolean;
+	worktreeId?: string;
 	onClick: () => void;
 	onContextMenu?: (e: React.MouseEvent) => void;
+}
+
+/** Icon + color for worktree health status */
+function HealthBadge({ status }: { status: WorktreeHealthStatus | undefined }) {
+	if (!status || status === 'clean') return null
+
+	const config: Record<WorktreeHealthStatus, { icon: typeof CheckCircle2; className: string }> = {
+		clean: { icon: CheckCircle2, className: 'text-green-500' },
+		dirty: { icon: AlertCircle, className: 'text-yellow-500' },
+		ahead: { icon: ArrowUpCircle, className: 'text-blue-500' },
+		behind: { icon: ArrowDownCircle, className: 'text-orange-500' },
+		conflicted: { icon: XCircle, className: 'text-red-500' },
+	}
+
+	const { icon: Icon, className } = config[status]
+	return <Icon size={10} className={cn('flex-shrink-0', className)} />
 }
 
 const WorktreeItem = memo(function WorktreeItem({
 	name,
 	branch,
+	path,
 	isRoot,
 	isActive,
 	isTermulManaged,
+	worktreeId,
 	onClick,
 	onContextMenu,
 }: WorktreeItemProps): React.JSX.Element {
+	// Read health status from cache (updated by useWorktreeStatus polling in ProjectSidebar)
+	// This reads a shared Map — no hook subscription needed; the parent sidebar
+	// re-renders on status changes, which causes this item to re-render too.
+	const healthStatus: WorktreeHealthStatus | undefined = worktreeId
+		? getWorktreeStatusFromCache(worktreeId)?.health
+		: undefined
+
+	const tooltip = isRoot
+		? `Project root (${branch})`
+		: `${name} on ${branch}${path ? ` — ${path}` : ''}${isTermulManaged === false ? ' — External worktree' : ''}`
+
 	return (
 		<button
 			onClick={onClick}
@@ -987,18 +1033,19 @@ const WorktreeItem = memo(function WorktreeItem({
 					? "bg-primary/15 text-foreground"
 					: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 			)}
-			title={isRoot ? `Project root (${branch})` : `${name} (${branch})`}
+			title={tooltip}
 		>
 			<div className="mr-1.5 flex-shrink-0 inline-flex items-center" aria-hidden="true">
 				{isRoot ? <Home size={12} className="text-muted-foreground" /> : <GitBranch size={12} className="text-primary/70" />}
 			</div>
 			<span className="truncate flex-1">{isRoot ? "Root" : name}</span>
+			{!isRoot && <HealthBadge status={healthStatus} />}
 			<span className="text-[10px] text-muted-foreground ml-1 truncate max-w-[60px]">
 				{branch}
 			</span>
 			{!isRoot && isTermulManaged === false && (
-				<span className="text-[10px] text-muted-foreground ml-1" title="Not a Termul-managed worktree">
-					*
+				<span className="text-[10px] text-amber-500/70 ml-1" title="External worktree (not created by Termul)">
+					ext
 				</span>
 			)}
 		</button>
