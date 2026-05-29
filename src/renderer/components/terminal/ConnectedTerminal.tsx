@@ -1451,6 +1451,13 @@ function ConnectedTerminalComponent({
 		// force=true (bypassing the dimension-sameness check), and immediately
 		// calls onPtyResize — keeping the v2 hook's dimension trackers in sync.
 		forceResizeFit();
+
+		// Force full repaint so buffer content is visible after context restoration.
+		// After minimize→restore the WebGL surface can be cleared while xterm's
+		// internal buffer retains all content. Without refresh(), the terminal
+		// renders blank until the user switches tabs (which triggers refresh
+		// via the cached-terminal reattach path at line ~646).
+		terminalRef.current.refresh(0, terminalRef.current.rows - 1);
 	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)

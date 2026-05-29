@@ -57,6 +57,8 @@ const mockTerminalInstance = {
   write: vi.fn(),
   clear: vi.fn(),
   focus: vi.fn(),
+  refresh: vi.fn(),
+  scrollToLine: vi.fn(),
   dispose: vi.fn(),
   cols: 80,
   rows: 24,
@@ -118,6 +120,8 @@ vi.mock('@xterm/xterm', () => ({
     write = mockTerminalInstance.write
     clear = mockTerminalInstance.clear
     focus = mockTerminalInstance.focus
+    refresh = mockTerminalInstance.refresh
+    scrollToLine = mockTerminalInstance.scrollToLine
     dispose = mockTerminalInstance.dispose
     cols = mockTerminalInstance.cols
     rows = mockTerminalInstance.rows
@@ -2125,6 +2129,8 @@ describe('ConnectedTerminal', () => {
         expect.any(Number),
         expect.any(Number)
       )
+      // Should repaint buffer after recovery to prevent blank screen
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
 
       vi.useRealTimers()
     })
