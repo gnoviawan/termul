@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: read
+  deployments: write
 
 jobs:
   deploy:
@@ -47,11 +48,9 @@ jobs:
         working-directory: landing
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@f8b90208e58c36b827abff47336a813f4532b402 # v1
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: termul-landing
-          directory: landing/dist
-          branch: ${{ github.ref_name == 'main' && 'main' || github.head_ref || github.ref_name }}
+          command: pages deploy landing/dist --project-name=termul-landing --branch=${{ github.ref_name == 'main' && 'main' || github.head_ref || github.ref_name }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
