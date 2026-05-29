@@ -257,7 +257,8 @@ vi.mock('@/lib/api', () => ({
   },
   clipboardApi: {
     readText: vi.fn(),
-    writeText: vi.fn()
+    writeText: vi.fn(),
+    hasImage: vi.fn(() => Promise.resolve({ success: true, data: false }))
   }
 }))
 
