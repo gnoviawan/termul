@@ -101,7 +101,7 @@ static GIT_BINARY: OnceLock<String> = OnceLock::new();
 /// On Unix, runs `which -a git`.
 /// Skips any path that contains "laragon" (case-insensitive).
 /// Falls back to plain `"git"` if no suitable path is found.
-fn resolve_git_binary() -> &'static str {
+pub fn resolve_git_binary() -> &'static str {
     GIT_BINARY.get_or_init(|| {
         #[cfg(target_os = "windows")]
         {
@@ -163,7 +163,17 @@ pub struct GitStatus {
     pub modified: u32,
     pub staged: u32,
     pub untracked: u32,
+    pub ahead: u32,
+    pub behind: u32,
     pub has_changes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusDetail {
+    pub path: String,
+    pub status: String,
+    pub staged: bool,
 }
 
 impl GitStatus {
@@ -173,6 +183,8 @@ impl GitStatus {
             modified: 0,
             staged: 0,
             untracked: 0,
+            ahead: 0,
+            behind: 0,
             has_changes: false,
         }
     }
@@ -588,7 +600,7 @@ impl GitTracker {
         .unwrap_or((None, None))
     }
 
-    fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
+    pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
         let mut child = backend_command(resolve_git_binary())
             .args(args)
             .current_dir(cwd)
@@ -621,7 +633,6 @@ impl GitTracker {
         }
     }
 
-    /// Shutdown the tracker and stop polling
     pub fn shutdown(&self) {
         // Abort the polling task if running
         let mut poll_handle_guard = self.poll_handle.write();
@@ -634,6 +645,119 @@ impl GitTracker {
         #[cfg(target_os = "windows")]
         self.cwd_poll_states.write().clear();
     }
+}
+
+pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> {
+    let output = GitTracker::run_git_command(cwd, &["status", "--porcelain"])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(git_get_status_detail_from_output(&stdout))
+}
+
+fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDetail> {
+    let mut details = Vec::new();
+
+    for line in output.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+
+        let index_status = line.chars().next().unwrap_or(' ');
+        let work_tree_status = line.chars().nth(1).unwrap_or(' ');
+        let raw_path = &line[3..];
+        let path = if index_status == 'R' || work_tree_status == 'R' {
+            raw_path
+                .rsplit_once(" -> ")
+                .map(|(_, new_path)| new_path)
+                .unwrap_or(raw_path)
+                .to_string()
+        } else {
+            raw_path.to_string()
+        };
+
+        if index_status != ' ' && index_status != '?' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match index_status {
+                    'A' => "added",
+                    'M' => "modified",
+                    'D' => "deleted",
+                    'R' => "renamed",
+                    _ => "modified",
+                }
+                .to_string(),
+                staged: true,
+            });
+        }
+
+        if work_tree_status != ' ' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match work_tree_status {
+                    'M' => "modified",
+                    'D' => "deleted",
+                    '?' => "untracked",
+                    _ => "modified",
+                }
+                .to_string(),
+                staged: false,
+            });
+        }
+    }
+
+    details
+}
+
+pub fn git_get_diff(cwd: &str, path: &str) -> Result<String, String> {
+    if is_git_ignored(cwd, path)? {
+        return Ok(String::new());
+    }
+
+    // First check if file is untracked (but not ignored)
+    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", "--", path])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    let is_untracked = status_str.starts_with("??");
+
+    let args = if is_untracked {
+        vec!["diff", "--no-index", "--", "/dev/null", path]
+    } else {
+        vec!["diff", "HEAD", "--", path]
+    };
+
+    let output = GitTracker::run_git_command(cwd, &args)
+        .ok_or_else(|| "Failed to run git diff".to_string())?;
+
+    // git diff returns 1 if there are differences, which is "success" for us
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if stdout.is_empty() && is_untracked {
+        // Fallback for untracked files if diff --no-index fails or returns empty
+        return std::fs::read_to_string(std::path::Path::new(cwd).join(path))
+            .map_err(|e| e.to_string());
+    }
+
+    Ok(stdout)
+}
+
+fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
+    let output = GitTracker::run_git_command(cwd, &["check-ignore", "--quiet", "--", path])
+        .ok_or_else(|| "Failed to run git check-ignore".to_string())?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+    }
+}
+
+impl GitTracker {
 
     /// Start the polling task
     ///
@@ -838,7 +962,8 @@ impl GitTracker {
 
     /// Check the git status for a directory
     ///
-    /// Runs `git status --porcelain` and returns parsed status.
+    /// Runs `git status --porcelain` and `git rev-list --left-right --count HEAD...@{u}`
+    /// and returns parsed status.
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
         log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
@@ -848,9 +973,35 @@ impl GitTracker {
             return None;
         }
 
-        Some(Self::parse_git_status(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let mut status = Self::parse_git_status(&String::from_utf8_lossy(&output.stdout));
+
+        log::debug!("[GitTracker] Fetching ahead/behind for cwd: {}", cwd);
+        // Get ahead/behind count
+        if let Some(rev_output) =
+            Self::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
+            if rev_output.status.success() {
+                let counts = String::from_utf8_lossy(&rev_output.stdout);
+                let parts: Vec<&str> = counts.split_whitespace().collect();
+                if parts.len() == 2 {
+                    status.ahead = parts[0].parse().unwrap_or(0);
+                    status.behind = parts[1].parse().unwrap_or(0);
+                    log::debug!(
+                        "[GitTracker] CWD: {}, ahead: {}, behind: {}",
+                        cwd,
+                        status.ahead,
+                        status.behind
+                    );
+                }
+            } else {
+                log::debug!(
+                    "[GitTracker] rev-list failed (possibly no upstream): {}",
+                    String::from_utf8_lossy(&rev_output.stderr)
+                );
+            }
+        }
+
+        Some(status)
     }
 
     /// Parse git status --porcelain output
@@ -1052,6 +1203,49 @@ mod tests {
         assert_eq!(status.untracked, 1);
         assert_eq!(status.modified, 0);
         assert!(status.has_changes);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_skips_short_lines() {
+        let details = git_get_status_detail_from_output("M\n\n?? file.txt\n");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].path, "file.txt");
+        assert_eq!(details[0].status, "untracked");
+        assert!(!details[0].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_parses_staged_and_unstaged_entries() {
+        let details = git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
+        assert_eq!(details.len(), 4);
+
+        assert_eq!(details[0].path, "both.txt");
+        assert_eq!(details[0].status, "modified");
+        assert!(details[0].staged);
+
+        assert_eq!(details[1].path, "both.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
+
+        assert_eq!(details[2].path, "added.txt");
+        assert_eq!(details[2].status, "added");
+        assert!(details[2].staged);
+
+        assert_eq!(details[3].path, "deleted.txt");
+        assert_eq!(details[3].status, "deleted");
+        assert!(!details[3].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_uses_rename_destination_path() {
+        let details = git_get_status_detail_from_output("RM old.txt -> new.txt\n");
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].path, "new.txt");
+        assert_eq!(details[0].status, "renamed");
+        assert!(details[0].staged);
+        assert_eq!(details[1].path, "new.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
     }
 
     // ========== Windows-specific tests for CWD dedupe and throttling ==========

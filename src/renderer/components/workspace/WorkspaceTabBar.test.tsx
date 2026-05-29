@@ -35,7 +35,7 @@ vi.mock('@/stores/workspace-store', () => ({
       getState: () => mockWorkspaceStoreState
     }
   ),
-  useFullscreenPaneId: () => null,
+  useFullscreenPaneId: () => mockWorkspaceStoreState.fullscreenPaneId,
   useLeafCount: () => 3,
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
@@ -58,7 +58,9 @@ vi.mock('@/stores/terminal-store', () => ({
         { id: 'term-3', name: 'Terminal 3', shell: 'bash' }
       ]
     })
-  )
+  ),
+  useProjectsWithActivity: () => [],
+  useProjectsWithErrors: () => new Set()
 }))
 
 vi.mock('@/stores/browser-session-store', () => ({
@@ -239,7 +241,7 @@ describe('WorkspaceTabBar', () => {
     expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a focus control for non-fullscreen panes and toggles fullscreen for the current pane', async () => {
+  it('renders fullscreen focus button when leafCount > 1', async () => {
     render(
       <WorkspaceTabBar
         paneId="pane-a"
@@ -250,12 +252,11 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    fireEvent.click(screen.getByTitle('Focus pane'))
-
-    expect(mockTogglePaneFullscreen).toHaveBeenCalledWith('pane-a')
+    expect(screen.getByTitle('Focus pane')).toBeInTheDocument()
+    expect(screen.queryByTitle('Restore pane layout')).not.toBeInTheDocument()
   })
 
-  it('shows a restore control for the fullscreen pane', async () => {
+  it('renders restore button when pane is fullscreen', async () => {
     mockWorkspaceStoreState.fullscreenPaneId = 'pane-a'
 
     render(

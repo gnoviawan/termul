@@ -9,7 +9,11 @@ import {
 	Globe,
 	Maximize2,
 	Minimize2,
+	GitBranch,
+	GitPullRequest,
 } from "lucide-react";
+import { useGitStatusStore, type GitStatusState } from "@/stores/git-status-store";
+import type { GitStatusDetail } from "@shared/types/ipc.types";
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -425,6 +429,114 @@ function BrowserTabInline({
 	);
 }
 
+function GitTabInline({
+	tab,
+	isActive,
+	isDragging,
+	isDropTarget,
+	dropPosition,
+	onSelect,
+	onClose,
+	onDragStart,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: {
+	tab: { type: "git"; id: string; cwd: string };
+	isActive: boolean;
+	isDragging: boolean;
+	isDropTarget: boolean;
+	dropPosition: TabReorderPosition | null;
+	onSelect: () => void;
+	onClose: () => void;
+	onDragStart: (e: React.DragEvent) => void;
+	onDragOver: (e: React.DragEvent) => void;
+	onDragLeave: () => void;
+	onDrop: (e: React.DragEvent) => void;
+}) {
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
+
+	const totalChanges = useGitStatusStore((state: GitStatusState) => (state.statuses[tab.cwd] || []).length);
+
+	return (
+		<>
+			<div
+				draggable
+				onDragStart={onDragStart}
+				onDragOver={onDragOver}
+				onDragLeave={onDragLeave}
+				onDrop={onDrop}
+				onClick={onSelect}
+				onContextMenu={(e) => {
+					e.preventDefault();
+					setContextMenu({ x: e.clientX, y: e.clientY });
+				}}
+				className={cn(
+					"group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors",
+					isActive
+						? "bg-secondary text-foreground"
+						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+					isDragging && "opacity-50",
+					isDropTarget &&
+						dropPosition === "before" &&
+						"border-l-2 border-l-primary",
+					isDropTarget &&
+						dropPosition === "after" &&
+						"border-r-2 border-r-primary",
+				)}
+			>
+				<GitBranch size={12} className={isActive ? "text-primary" : ""} />
+				<span className="truncate text-[11px] font-medium flex-1">
+					Git Changes
+				</span>
+				{totalChanges > 0 && (
+					<span
+						className={cn(
+							"px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-[9px] font-bold",
+							isActive
+								? "bg-primary text-primary-foreground"
+								: "bg-muted-foreground/20 text-muted-foreground",
+						)}
+					>
+						{totalChanges}
+					</span>
+				)}
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onClose();
+					}}
+					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
+				>
+					<XIcon size={10} />
+				</button>
+
+				{isActive && (
+					<div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />
+				)}
+			</div>
+
+			{contextMenu && (
+				<ContextMenu
+					items={[
+						{
+							label: "Close",
+							icon: <XIcon size={12} />,
+							onClick: onClose,
+						},
+					]}
+					x={contextMenu.x}
+					y={contextMenu.y}
+					onClose={() => setContextMenu(null)}
+				/>
+			)}
+		</>
+	);
+}
+
 interface WorkspaceTabBarProps {
 	paneId: string;
 	tabs: WorkspaceTab[];
@@ -432,6 +544,7 @@ interface WorkspaceTabBarProps {
 	closingTerminalIds?: string[];
 	onAddTerminal?: (shell?: ShellInfo) => void;
 	onAddBrowserTab?: () => void;
+	onAddGitTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -445,6 +558,7 @@ export function WorkspaceTabBar({
 	closingTerminalIds = [],
 	onAddTerminal,
 	onAddBrowserTab,
+	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -685,7 +799,9 @@ export function WorkspaceTabBar({
 		return a.displayName.localeCompare(b.displayName);
 	});
 
-	const terminalStoreTerminals = useTerminalStore((state) => state.terminals);
+	const terminalStoreTerminals = useTerminalStore(
+		useShallow((state) => state.terminals),
+	);
 	const isFullscreenPane = fullscreenPaneId === paneId;
 
 	// Check if this tab is being dragged
@@ -783,6 +899,25 @@ export function WorkspaceTabBar({
 											onCopyPath={() =>
 												void clipboardApi.writeText(tab.filePath)
 											}
+											onDragStart={(e) => handleTabDragStart(tab.id, e)}
+											onDragOver={(e) => handleTabDragOver(tab.id, e)}
+											onDragLeave={handleTabDragLeave}
+											onDrop={(e) => handleTabDrop(tab.id, e)}
+										/>
+									) : tab.type === "git" ? (
+										<GitTabInline
+											tab={tab as { type: "git"; id: string; cwd: string }}
+											isActive={tab.id === activeTabId}
+											isDragging={dragging}
+											isDropTarget={isTarget}
+											dropPosition={position}
+											onSelect={() => {
+												setActiveTab(paneId, tab.id);
+												setActivePane(paneId);
+											}}
+											onClose={() => {
+												useWorkspaceStore.getState().removeTab(tab.id);
+											}}
 											onDragStart={(e) => handleTabDragStart(tab.id, e)}
 											onDragOver={(e) => handleTabDragOver(tab.id, e)}
 											onDragLeave={handleTabDragLeave}
@@ -892,6 +1027,16 @@ export function WorkspaceTabBar({
 						title="New Browser Tab"
 					>
 						<Globe size={12} />
+					</button>
+				)}
+
+				{onAddGitTab && (
+					<button
+						onClick={onAddGitTab}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title="Git Changes"
+					>
+						<GitBranch size={12} />
 					</button>
 				)}
 			</div>

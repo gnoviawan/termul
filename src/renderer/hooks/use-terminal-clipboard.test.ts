@@ -296,7 +296,7 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockTerminal.paste).toHaveBeenCalledWith(clipboardText)
+      expect(mockTerminal.paste).toHaveBeenCalledWith('Line 1\rLine 2\rLine 3')
     })
 
     it('should paste text with special characters correctly', async () => {
@@ -327,7 +327,7 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockTerminal.paste).toHaveBeenCalledWith(clipboardText)
+      expect(mockTerminal.paste).toHaveBeenCalledWith('function hello() {\r  console.log("Hello, World!");\r  return true;\r}')
     })
 
     it('should not paste content exceeding max size', async () => {

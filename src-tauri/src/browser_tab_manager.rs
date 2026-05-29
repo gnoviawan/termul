@@ -467,6 +467,13 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    pub fn open_devtools(&self, tab_id: &str) -> Result<(), String> {
+        let webview = self.get_webview(tab_id)?;
+        webview.open_devtools();
+        Ok(())
+    }
+
+
     pub fn destroy_all(&self) {
         let mut tabs = self.tabs.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<String> = tabs.keys().cloned().collect();

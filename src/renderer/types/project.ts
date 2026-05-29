@@ -53,7 +53,7 @@ export function isWorktreeTermulManaged(worktree: Worktree): boolean {
   return normalizedPath.includes('.termul/worktrees/')
 }
 
-export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated'
+export type TerminalHealthStatus = 'running' | 'crashed' | 'hibernated' | 'disconnected'
 
 export interface Terminal {
   id: string

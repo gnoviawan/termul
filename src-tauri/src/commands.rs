@@ -4,7 +4,7 @@ use crate::migrations::{
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -675,6 +675,19 @@ pub async fn browser_tab_reload(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RELOAD_FAILED")),
     }
 }
+
+/// Open DevTools for a browser tab
+#[tauri::command]
+pub async fn browser_tab_open_devtools(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.open_devtools(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
+    }
+}
+
 
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
@@ -1660,6 +1673,27 @@ pub async fn data_migration_rollback(
     migration_manager: State<'_, Arc<MigrationManager>>,
 ) -> Result<IpcResult<()>, String> {
     Ok(migration_manager.rollback_migration(request.version))
+}
+
+// ==================== Git Commands ====================
+
+/// Get git status for a repository
+#[tauri::command]
+pub async fn git_get_status(
+    cwd: String,
+) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd)
+        .map_err(|e: String| e)
+}
+
+/// Get git diff for a file
+#[tauri::command]
+pub async fn git_get_diff(
+    cwd: String,
+    path: String,
+) -> Result<String, String> {
+    crate::trackers::git_tracker::git_get_diff(&cwd, &path)
+        .map_err(|e: String| e)
 }
 
 /// Get available shells

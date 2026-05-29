@@ -1,16 +1,21 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
+import { GitPanel } from "@/components/git/GitPanel";
 import { useWorkspaceStore, getAllLeafPanes } from "@/stores/workspace-store";
 import { useTerminalStore, useTerminalActions } from "@/stores/terminal-store";
+import { useProjectStore } from "@/stores/project-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
 import type { LeafNode } from "@/types/workspace.types";
 import type { WorkspaceTab } from "@/stores/workspace-store";
-import type { ShellInfo } from "@shared/types/ipc.types";
+import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
+import { Button } from "@/components/ui/button";
+import { Terminal as TerminalIcon } from "lucide-react";
+import { shellApi } from "@/lib/api";
 
 // Import useShallow for selective re-rendering
 import { useShallow } from "zustand/shallow";
@@ -19,6 +24,7 @@ interface PaneContentProps {
 	pane: LeafNode;
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
+	onAddGitTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -30,6 +36,7 @@ export function PaneContent({
 	pane,
 	onAddTerminal,
 	onAddBrowserTab,
+	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -48,10 +55,13 @@ export function PaneContent({
 	);
 
 	// CRITICAL FIX: Only subscribe to terminals' essential properties (not output!)
-	// This prevents re-renders when terminal output changes
+	// and ENSURE we only show terminals belonging to the active project to prevent "leaks"
+	const activeProjectId = useProjectStore((state) => state.activeProjectId);
 	const terminalsInPane = useTerminalStore(
 		useShallow((state) =>
-			state.terminals.filter((t) => terminalIdsInPane.has(t.id)),
+			state.terminals.filter(
+				(t) => terminalIdsInPane.has(t.id) && t.projectId === activeProjectId,
+			),
 		),
 	);
 
@@ -107,6 +117,32 @@ export function PaneContent({
 						? "-translate-y-2"
 						: "";
 
+	const [shells, setShells] = useState<DetectedShells | null>(null);
+
+	useEffect(() => {
+		const fetchShells = async (): Promise<void> => {
+			try {
+				const result = await shellApi.getAvailableShells();
+				if (result.success) {
+					setShells(result.data);
+				}
+			} catch {
+				setShells(null);
+			}
+		};
+		void fetchShells();
+	}, []);
+
+	const sortedShells = useMemo(() => {
+		return shells?.available?.slice().sort((a, b) => {
+			if (defaultShell) {
+				if (a.name === defaultShell) return -1;
+				if (b.name === defaultShell) return 1;
+			}
+			return a.displayName.localeCompare(b.displayName);
+		});
+	}, [shells, defaultShell]);
+
 	return (
 		<div
 			className={cn(
@@ -128,6 +164,10 @@ export function PaneContent({
 				onAddBrowserTab={useMemo(
 					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
 					[onAddBrowserTab, pane.id],
+				)}
+				onAddGitTab={useMemo(
+					() => (onAddGitTab ? () => onAddGitTab(pane.id) : undefined),
+					[onAddGitTab, pane.id],
 				)}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
@@ -197,6 +237,11 @@ export function PaneContent({
 									);
 								}
 								const isVisible = activeTab?.id === tab.id;
+								const connectedTerminalSpawnOptions = {
+									projectId: terminal.projectId,
+									shell: terminal.shell,
+									cwd: terminal.cwd,
+								};
 								return (
 									<div
 										key={tab.id}
@@ -210,11 +255,7 @@ export function PaneContent({
 											terminalId={terminal.ptyId}
 											storeTerminalId={terminal.id}
 											autoSpawn={false}
-											spawnOptions={{
-												projectId: terminal.projectId,
-												shell: terminal.shell,
-												cwd: terminal.cwd,
-											}}
+											spawnOptions={connectedTerminalSpawnOptions}
 											onBoundToStoreTerminal={(ptyId) => {
 												if (terminal.ptyId !== ptyId) {
 													setTerminalPtyId(terminal.id, ptyId);
@@ -276,13 +317,54 @@ export function PaneContent({
 								);
 							})}
 
-						{pane.tabs.length === 0 && (
-							<div className="absolute inset-0 flex items-center justify-center">
-								<span className="text-muted-foreground text-sm">
-									Drag a tab or file here
-								</span>
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "git" } =>
+									t.type === "git",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<GitPanel cwd={tab.cwd} isVisible={isVisible} />
+									</div>
+								);
+							})}
+
+						{pane.tabs.length === 0 ? (
+							<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8">
+								<div className="flex flex-col items-center gap-2 text-center">
+									<span className="text-muted-foreground text-sm font-medium">
+										Drag a tab or file here
+									</span>
+									<span className="text-muted-foreground/50 text-xs">
+										or open a new terminal or tab
+									</span>
+								</div>
+
+								<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
+									{sortedShells?.map((shell) => (
+										<Button
+											key={shell.name}
+											variant="outline"
+											size="sm"
+											className="h-8 text-[11px] gap-2"
+											onClick={() => onAddTerminal?.(pane.id, shell)}
+										>
+											<TerminalIcon size={12} />
+											{shell.displayName}
+										</Button>
+									))}
+								</div>
 							</div>
-						)}
+						) : null}
 					</div>
 				</div>
 

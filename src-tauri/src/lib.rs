@@ -279,13 +279,14 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
-    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
         "cmd"
             | "cmd.exe"
             | "powershell"
             | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
             | "wsl"
             | "wsl.exe"
     )
@@ -736,6 +737,7 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            commands::browser_tab_open_devtools,
             commands::browser_tab_inject_annotation,
             commands::browser_tab_remove_annotation_overlay,
             commands::browser_tab_inject_annotation_markers,
@@ -774,6 +776,9 @@ pub fn run() {
             commands::data_migration_get_schema_info,
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
+            // Git commands
+            commands::git_get_status,
+            commands::git_get_diff,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,

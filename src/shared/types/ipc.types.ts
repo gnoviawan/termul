@@ -64,7 +64,22 @@ export interface GitStatus {
 	modified: number;
 	staged: number;
 	untracked: number;
+	ahead: number;
+	behind: number;
 	hasChanges: boolean;
+}
+
+export type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "staged";
+
+export interface GitStatusDetail {
+	path: string;
+	status: GitFileStatus;
+	staged: boolean;
+}
+
+export interface GitApi {
+	getStatus: (cwd: string) => Promise<GitStatusDetail[]>;
+	getDiff: (cwd: string, path: string) => Promise<string>;
 }
 
 // Terminal API exposed via preload

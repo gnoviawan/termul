@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent } from "react";
+import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent, useMemo } from "react";
+import type { ChangeEvent, MouseEvent } from "react";
 import { Reorder, AnimatePresence, motion } from "framer-motion";
 import {
 	Plus,
@@ -10,9 +11,13 @@ import {
 	RotateCcw,
 	ChevronDown,
 	ChevronRight,
+	Loader2,
+	AlertTriangle,
 	Settings,
-	GitBranch,
+	Folder,
 	FolderOpen,
+	X,
+	GitBranch,
 	Copy,
 	Home,
 	CheckCircle2,
@@ -25,7 +30,7 @@ import { useNavigate } from "react-router-dom";
 import type { Project, ProjectColor, Worktree } from "@/types/project";
 import type { DetectedShells } from "@shared/types/ipc.types";
 import { isWorktreeTermulManaged } from "@/types/project";
-import { getColorClasses } from "@/lib/colors";
+import { getColorClasses, availableColors } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
@@ -33,7 +38,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
-import { shellApi, worktreeApi, clipboardApi } from "@/lib/api";
+import { Skeleton } from "@/components/ui/skeleton";
+import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
+import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 import { useProjectStore, useProjectActions } from "@/stores/project-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { toast } from "@/hooks/use-toast";
@@ -71,6 +78,11 @@ interface DeleteConfirmState {
 	isOpen: boolean;
 	projectId: string;
 	projectName: string;
+}
+
+interface SettingsDialogState {
+	isOpen: boolean;
+	projectId: string;
 }
 
 interface NewWorktreeModalState {
@@ -187,11 +199,24 @@ export function ProjectSidebar({
 		projectName: "",
 	});
 
+	// Settings dialog state
+	const [settingsDialog, setSettingsDialog] = useState<SettingsDialogState>({
+		isOpen: false,
+		projectId: "",
+	});
+
 	// New worktree modal state
 	const [newWorktreeModal, setNewWorktreeModal] = useState<NewWorktreeModalState>({
 		isOpen: false,
 		projectId: "",
 	});
+
+	// Settings form state
+	const [settingsName, setSettingsName] = useState("");
+	const [settingsPath, setSettingsPath] = useState("");
+	const [settingsShell, setSettingsShell] = useState("");
+	const [settingsColor, setSettingsColor] = useState<ProjectColor>("blue");
+	const [settingsPathLoading, setSettingsPathLoading] = useState(false);
 
 	// Available shells state
 	const [availableShells, setAvailableShells] = useState<DetectedShells | null>(
@@ -212,6 +237,10 @@ export function ProjectSidebar({
 		};
 		void fetchShells();
 	}, []);
+
+	// Optimized subscription: only re-render sidebar if which projects have activity changes.
+	// This prevents re-renders when terminal text output changes.
+	const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()];
 
 	const toggleProjectExpanded = useCallback((projectId: string): void => {
 		setExpandedProjects((prev) => {
@@ -432,6 +461,56 @@ export function ProjectSidebar({
 		setDeleteConfirm({ isOpen: false, projectId: "", projectName: "" });
 	}, []);
 
+	const handleOpenSettings = useCallback((projectId: string): void => {
+		setSettingsDialog({ isOpen: true, projectId });
+	}, []);
+
+	const handleCloseSettings = useCallback((): void => {
+		setSettingsDialog({ isOpen: false, projectId: "" });
+	}, []);
+
+	// Populate form when dialog opens
+	useEffect(() => {
+		if (settingsDialog.isOpen && settingsDialog.projectId) {
+			const project = projects.find((p) => p.id === settingsDialog.projectId);
+			if (project) {
+				setSettingsName(project.name);
+				setSettingsPath(project.path || "");
+				setSettingsShell(project.defaultShell || "");
+				setSettingsColor(project.color || "blue");
+			}
+		}
+	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
+
+	const handleSaveSettings = useCallback(() => {
+		const name = settingsName.trim();
+		if (!name || !settingsDialog.projectId) {
+			return;
+		}
+
+		onUpdateProject(settingsDialog.projectId, {
+			name,
+			path: settingsPath.trim() || undefined,
+			defaultShell: settingsShell || undefined,
+			color: settingsColor,
+			});
+		handleCloseSettings();
+	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
+
+	const handleBrowsePath = useCallback(async (): Promise<void> => {
+		try {
+			setSettingsPathLoading(true);
+			const result = await dialogApi.selectDirectory();
+			if (result.success && result.data) {
+				setSettingsPath(result.data);
+			}
+		} catch (err) {
+			console.error("Failed to select directory:", err);
+		} finally {
+			setSettingsPathLoading(false);
+		}
+	}, []);
+
 	const getContextMenuItems = useCallback(
 		(projectId: string): ContextMenuItem[] => {
 			const project = projects.find((p) => p.id === projectId);
@@ -463,6 +542,11 @@ export function ProjectSidebar({
 					label: "Rename",
 					icon: <Edit2 size={14} />,
 					onClick: () => handleStartRename(projectId),
+				},
+				{
+					label: "Project Settings",
+					icon: <Settings size={14} />,
+					onClick: () => handleOpenSettings(projectId),
 				},
 				{
 					label: "Change Color",
@@ -513,6 +597,7 @@ export function ProjectSidebar({
 			contextMenu.x,
 			contextMenu.y,
 			handleStartRename,
+			handleOpenSettings,
 			handleOpenColorPicker,
 			onUpdateProject,
 			onArchiveProject,
@@ -651,42 +736,48 @@ export function ProjectSidebar({
 							className="flex flex-col"
 							data-testid="active-projects-container"
 						>
-							{activeProjects.map((project) => (
-								<Reorder.Item
-									key={project.id}
-									value={project}
-									className="list-none"
-									whileDrag={{
-										scale: 1.02,
-										boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-									}}
-								>
-									<ProjectItem
-										project={project}
-										isActive={project.id === activeProjectId}
-										isExpanded={expandedProjects.has(project.id)}
-										onToggleExpand={() => toggleProjectExpanded(project.id)}
-										isEditing={editingId === project.id}
-										editName={editName}
-										onClick={() => {
-											onSelectProject(project.id);
-											navigate("/");
+							{activeProjects.map((project, index) => {
+								const hasActivity = projectActivityIds.includes(project.id);
+								return (
+									<Reorder.Item
+										key={project.id}
+										value={project}
+										className="list-none"
+										whileDrag={{
+											scale: 1.02,
+											boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
 										}}
-										onContextMenu={(e) => handleContextMenu(e, project.id)}
-										onEditNameChange={setEditName}
-										onSaveRename={() => handleSaveRename(project.id)}
-										onCancelRename={handleCancelRename}
-										onSettingsClick={() => {
-											selectProject(project.id);
-											navigate("/settings");
-										}}
-										onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
-										onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
-										isWorktreeOperationLocked={isWorktreeOperationLocked}
-										onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
-									/>
-								</Reorder.Item>
-							))}
+									>
+										<ProjectItem
+											project={project}
+											isActive={project.id === activeProjectId}
+											isExpanded={expandedProjects.has(project.id)}
+											onToggleExpand={() => toggleProjectExpanded(project.id)}
+											isEditing={editingId === project.id}
+											editName={editName}
+											shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
+											hasActivity={hasActivity}
+											hasError={projectErrorIds.has(project.id)}
+											onClick={() => {
+												onSelectProject(project.id);
+												navigate("/");
+											}}
+											onContextMenu={(e) => handleContextMenu(e, project.id)}
+											onEditNameChange={setEditName}
+											onSaveRename={() => handleSaveRename(project.id)}
+											onCancelRename={handleCancelRename}
+											onSettingsClick={() => {
+												selectProject(project.id);
+												navigate("/settings");
+											}}
+											onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
+											onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
+											isWorktreeOperationLocked={isWorktreeOperationLocked}
+											onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
+										/>
+									</Reorder.Item>
+								);
+							})}
 						</Reorder.Group>
 
 						{/* Archived Projects Section */}
@@ -706,17 +797,22 @@ export function ProjectSidebar({
 									Archived ({archivedProjects.length})
 								</button>
 								{showArchived &&
-									archivedProjects.map((project) => (
-										<ArchivedProjectItem
-											key={project.id}
-											project={project}
-											onClick={() => {
-												onSelectProject(project.id);
-												navigate("/");
-											}}
-											onContextMenu={(e) => handleContextMenu(e, project.id)}
-										/>
-									))}
+									archivedProjects.map((project) => {
+										const hasActivity = projectActivityIds.includes(project.id);
+										return (
+											<ArchivedProjectItem
+												key={project.id}
+												project={project}
+												hasActivity={hasActivity}
+												hasError={projectErrorIds.has(project.id)}
+												onClick={() => {
+													onSelectProject(project.id);
+													navigate("/");
+												}}
+												onContextMenu={(e) => handleContextMenu(e, project.id)}
+											/>
+										);
+									})}
 							</div>
 						)}
 					</>
@@ -761,6 +857,140 @@ export function ProjectSidebar({
 				/>
 			)}
 
+			{/* Project Settings Dialog */}
+			{settingsDialog.isOpen && (
+				<motion.div
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
+					exit={{ opacity: 0 }}
+					className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+					onClick={handleCloseSettings}
+				>
+					<motion.div
+						initial={{ opacity: 0, scale: 0.95, y: 10 }}
+						animate={{ opacity: 1, scale: 1, y: 0 }}
+						exit={{ opacity: 0, scale: 0.95, y: 10 }}
+						transition={{ duration: 0.15 }}
+						className="bg-card rounded-lg shadow-2xl w-[500px] border border-border overflow-hidden"
+						onClick={(e) => e.stopPropagation()}
+					>
+						{/* Header */}
+						<div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
+							<h3 className="text-sm font-semibold text-foreground">Project Settings</h3>
+							<button
+								onClick={handleCloseSettings}
+								className="text-muted-foreground hover:text-foreground transition-colors"
+							>
+								<X size={14} />
+							</button>
+						</div>
+
+						{/* Form */}
+						<div className="p-6 space-y-4">
+							{/* Name Field */}
+							<div className="space-y-2">
+								<label className="text-xs font-medium text-muted-foreground">Project Name</label>
+								<input
+									type="text"
+									value={settingsName}
+									onChange={(e) => setSettingsName(e.target.value)}
+										className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+									placeholder="My Project"
+								/>
+							</div>
+
+							{/* Path Field */}
+							<div className="space-y-2">
+								<label className="text-xs font-medium text-muted-foreground">Project Path</label>
+								<div className="flex gap-2">
+									<input
+										type="text"
+										value={settingsPath}
+										onChange={(e) => setSettingsPath(e.target.value)}
+										className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+										placeholder="No directory selected"
+									/>
+									<button
+										onClick={handleBrowsePath}
+										disabled={settingsPathLoading}
+										className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										Browse
+								</button>
+								</div>
+								<p className="text-xs text-muted-foreground">Optional: leave empty to use default project directory</p>
+							</div>
+
+							{/* Color Picker */}
+							<div className="space-y-2 mt-4">
+								<label className="block text-xs font-medium text-muted-foreground mb-1">Color</label>
+								<div className="flex gap-2">
+									{availableColors.map((color) => {
+										const colors = getColorClasses(color)
+										return (
+											<button
+												key={color}
+												type="button"
+												onClick={() => setSettingsColor(color)}
+												className={cn(
+													"w-6 h-6 rounded-full transition-all",
+													colors.bg,
+													settingsColor === color
+														? "ring-2 ring-offset-2 ring-offset-card ring-current"
+														: "hover:opacity-80",
+												)}
+											/>
+										)
+									})}
+									</div>
+							</div>
+
+							{/* Shell Field */}
+							<div className="space-y-2">
+								<label className="block text-xs font-medium text-muted-foreground mb-1">Default Terminal</label>
+								{availableShells ? (
+									<div className="relative">
+										<select
+											value={settingsShell}
+											onChange={(e) => setSettingsShell(e.target.value)}
+											className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+										>
+											{availableShells.available.map((shell) => (
+												<option key={shell.path} value={shell.path}>
+													{shell.displayName}
+												</option>
+											))}
+										</select>
+										<div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+											<ChevronDown size={14} />
+										</div>
+								</div>
+							) : (
+									<Skeleton className="w-full h-9 rounded" />
+								)}
+							</div>
+
+						</div>
+
+						{/* Footer */}
+						<div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
+							<button
+								onClick={handleCloseSettings}
+								className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleSaveSettings}
+								className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-colors"
+							>
+								Save Changes
+							</button>
+						</div>
+					</motion.div>
+				</motion.div>
+			)}
+
 			{/* Delete Confirmation Dialog */}
 			<ConfirmDialog
 				isOpen={deleteConfirm.isOpen}
@@ -800,6 +1030,9 @@ interface ProjectItemProps {
 	onToggleExpand: () => void;
 	isEditing: boolean;
 	editName: string;
+	shortcut?: string;
+	hasActivity: boolean;
+	hasError?: boolean;
 	onClick: () => void;
 	onContextMenu: (e: React.MouseEvent) => void;
 	onEditNameChange: (name: string) => void;
@@ -819,6 +1052,9 @@ const ProjectItem = memo(function ProjectItem({
 	onToggleExpand,
 	isEditing,
 	editName,
+	shortcut,
+	hasActivity,
+	hasError,
 	onClick,
 	onContextMenu,
 	onEditNameChange,
@@ -940,6 +1176,21 @@ const ProjectItem = memo(function ProjectItem({
 						{project.name}
 					</span>
 				)}
+				{hasError && (
+					<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+						<AlertTriangle size={12} />
+					</span>
+				)}
+				{!isEditing && shortcut && (
+					<span
+						className={cn(
+							"text-xs font-mono text-muted-foreground transition-opacity mr-3",
+							isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+						)}
+					>
+						{shortcut}
+					</span>
+				)}
 				{!isEditing && (
 					<button
 						onClick={(e) => {
@@ -952,6 +1203,14 @@ const ProjectItem = memo(function ProjectItem({
 					>
 						<Settings size={12} className="text-muted-foreground" />
 					</button>
+				)}
+				{!isEditing && hasActivity && (
+					<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>
+						<Loader2
+							size={12}
+							className={"animate-spin text-primary opacity-100"}
+						/>
+					</span>
 				)}
 			</div>
 
@@ -1135,6 +1394,8 @@ const WorktreeItem = memo(function WorktreeItem({
 });
 
 interface ArchivedProjectItemProps {
+	hasActivity: boolean;
+	hasError?: boolean;
 	project: Project;
 	onClick: () => void;
 	onContextMenu: (e: React.MouseEvent) => void;
@@ -1142,6 +1403,8 @@ interface ArchivedProjectItemProps {
 
 function ArchivedProjectItem({
 	project,
+	hasActivity,
+	hasError,
 	onClick,
 	onContextMenu,
 }: ArchivedProjectItemProps): React.JSX.Element {
@@ -1177,6 +1440,16 @@ function ArchivedProjectItem({
 			<span className="text-sm text-muted-foreground group-hover:text-foreground flex-1">
 				{project.name}
 			</span>
+			{hasActivity && (
+				<span className="flex items-center mr-2" title="Terminal activity" style={{ isolation: "isolate" }}>
+					<Loader2 size={10} className="animate-spin text-primary opacity-60" />
+				</span>
+			)}
+			{hasError && (
+				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+					<AlertTriangle size={10} />
+				</span>
+			)}
 			<Archive size={12} className="text-muted-foreground mr-3" />
 		</button>
 	);

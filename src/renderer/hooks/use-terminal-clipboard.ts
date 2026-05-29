@@ -4,6 +4,7 @@ import { clipboardApi } from '@/lib/api'
 
 export interface UseTerminalClipboardOptions {
   terminal: Terminal | null
+  pasteText?: (text: string) => Promise<void> | void
   onImagePaste?: () => Promise<void> | void
 }
 
@@ -15,11 +16,17 @@ export interface UseTerminalClipboardReturn {
 
 // Maximum clipboard content size (10MB)
 const MAX_CLIPBOARD_SIZE = 10 * 1024 * 1024
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+
+function normalizePasteText(text: string): string {
+  return text.replace(/\r?\n/g, '\r')
+}
 
 export function useTerminalClipboard(
   options: UseTerminalClipboardOptions
 ): UseTerminalClipboardReturn {
-  const { terminal, onImagePaste } = options
+  const { terminal, pasteText, onImagePaste } = options
   const [hasSelection, setHasSelection] = useState<boolean>(false)
   // Use a ref to track the current terminal instance for async operations
   const terminalRef = useRef<Terminal | null>(terminal)
@@ -104,7 +111,12 @@ export function useTerminalClipboard(
           console.error('Clipboard content too large')
           return
         }
-        currentTerminal.paste(result.data)
+        const normalizedText = normalizePasteText(result.data)
+        if (pasteText) {
+          await pasteText(`${BRACKETED_PASTE_START}${normalizedText}${BRACKETED_PASTE_END}`)
+        } else {
+          currentTerminal.paste(normalizedText)
+        }
       } else if (!result.success) {
         console.error('Failed to read from clipboard:', result.error)
       }
@@ -114,7 +126,7 @@ export function useTerminalClipboard(
         isPastingRef.current = false
       }, 100)
     }
-  }, [onImagePaste])
+  }, [pasteText, onImagePaste])
 
   return {
     copySelection,

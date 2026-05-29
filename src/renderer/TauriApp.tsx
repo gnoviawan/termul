@@ -14,6 +14,7 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useCrashRecovery } from './hooks/use-crash-recovery'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useCwd } from './hooks/use-cwd'
 import { useGitBranch } from './hooks/use-git-branch'
@@ -35,6 +36,7 @@ const queryClient = new QueryClient()
 function AppEffects(): null {
   useTerminalAutoSave()
   useTerminalRestore()
+  useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()

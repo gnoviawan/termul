@@ -4,8 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
 
-const { mockGetAvailableShells } = vi.hoisted(() => ({
-  mockGetAvailableShells: vi.fn()
+const { mockGetAvailableShells, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
+  mockGetAvailableShells: vi.fn(),
+  mockUseProjectsWithActivity: vi.fn(),
+  mockUseProjectsWithErrors: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -13,6 +15,15 @@ vi.mock('@/lib/api', () => ({
     getAvailableShells: mockGetAvailableShells
   }
 }))
+
+vi.mock('@/stores/terminal-store', async () => {
+  const actual = await vi.importActual('@/stores/terminal-store')
+  return {
+    ...actual,
+    useProjectsWithActivity: () => mockUseProjectsWithActivity(),
+    useProjectsWithErrors: () => mockUseProjectsWithErrors()
+  }
+})
 
 vi.mock('@/lib/utils', async () => {
   const actual = await vi.importActual('@/lib/utils')
@@ -33,6 +44,10 @@ beforeEach(() => {
       ]
     }
   })
+  mockUseProjectsWithActivity.mockReset()
+  mockUseProjectsWithActivity.mockReturnValue([])
+  mockUseProjectsWithErrors.mockReset()
+  mockUseProjectsWithErrors.mockReturnValue(new Set())
 })
 
 const mockProjects: Project[] = [
@@ -427,5 +442,37 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     fireEvent.click(screen.getByText('Zsh'))
 
     expect(onUpdateProject).toHaveBeenCalledWith('1', { defaultShell: '/usr/bin/zsh' })
+  })
+})
+
+describe('ProjectSidebar Terminal Activity Indicator', () => {
+  it('should not show activity indicator when hasActivity is false', () => {
+    mockUseProjectsWithActivity.mockReturnValue([])
+    renderWithRouter()
+
+    const item = screen.getByTestId('project-item-1')
+    const spinner = item.querySelector('svg.animate-spin')
+    expect(spinner).toBeNull()
+  })
+
+  it('should show activity indicator when hasActivity is true and project is not active', () => {
+    mockUseProjectsWithActivity.mockReturnValue(['2'])
+    renderWithRouter()
+
+    const item = screen.getByTestId('project-item-2')
+    const spinner = item.querySelector('svg.animate-spin')
+    expect(spinner).not.toBeNull()
+
+    const wrapper = spinner!.closest('span')
+    expect(wrapper).toHaveAttribute('title', 'Terminal activity')
+  })
+
+  it('should show activity indicator even when project is active if hasActivity is true', () => {
+    mockUseProjectsWithActivity.mockReturnValue(['1'])
+    renderWithRouter()
+
+    const item = screen.getByTestId('project-item-1')
+    const spinner = item.querySelector('svg.animate-spin')
+    expect(spinner).not.toBeNull()
   })
 })
