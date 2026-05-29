@@ -85,7 +85,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   };
 
   return (
-    <div className="flex h-full w-full bg-background overflow-hidden border-t border-border">
+    <div className="flex h-full w-full bg-background overflow-hidden">
       {/* File List Sidebar */}
       <div className="w-80 border-r border-border flex flex-col shrink-0">
         <div className="p-3 border-b border-border flex items-center justify-between gap-2">
@@ -180,7 +180,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
-                <div className="p-4 whitespace-pre">
+                <div className="p-4 whitespace-pre" style={{ tabSize: 4, MozTabSize: 4 }}>
                   {currentDiff.split('\n').map((line: string, i: number) => {
                     const isAddition = line.startsWith('+');
                     const isDeletion = line.startsWith('-');
