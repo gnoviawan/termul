@@ -1421,28 +1421,24 @@ function ConnectedTerminalComponent({
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Only recreate WebGL addon if context was actually lost, the current preference still
-		// allows WebGL, and we're not already recovering.
-		if (
-			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
-			webglContextLostRef.current &&
-			!webglAddonRef.current
-		) {
-			try {
-				// Cancel any pending auto-recovery timeout to avoid double-creation race
-				if (webglRecoveryTimeoutRef.current) {
-					clearTimeout(webglRecoveryTimeoutRef.current);
-					webglRecoveryTimeoutRef.current = null;
-				}
-				console.warn(
-					"WebGL context was lost, recreating addon during recovery",
-				);
-				// Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
-				if (loadWebglAddonRef.current && terminalRef.current) {
-					loadWebglAddonRef.current(terminalRef.current, true);
-				}
-			} catch (error) {
-				console.warn("WebGL context recovery failed:", error);
+		// Cancel any pending auto-recovery timeout to avoid double-creation race
+		if (webglRecoveryTimeoutRef.current) {
+			clearTimeout(webglRecoveryTimeoutRef.current);
+			webglRecoveryTimeoutRef.current = null;
+		}
+
+		// Force-recreate the WebGL addon on every recovery, regardless of whether
+		// onContextLoss fired. On Windows, minimizing a Tauri window can silently
+		// corrupt the WebGL rendering surface without triggering the contextloss
+		// event, leaving webglContextLostRef === false. The addon's GPU context is
+		// broken but xterm.js still tries to paint through it — resulting in a
+		// blank screen that only tab-switching fixes (cached reattach creates a
+		// fresh addon). By dispose+recreate here we guarantee a healthy renderer.
+		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+			disposeWebglAddon();
+			webglContextLostRef.current = false;
+			if (loadWebglAddonRef.current && terminalRef.current) {
+				loadWebglAddonRef.current(terminalRef.current, true);
 			}
 		}
 
@@ -1451,14 +1447,7 @@ function ConnectedTerminalComponent({
 		// force=true (bypassing the dimension-sameness check), and immediately
 		// calls onPtyResize — keeping the v2 hook's dimension trackers in sync.
 		forceResizeFit();
-
-		// Force full repaint so buffer content is visible after context restoration.
-		// After minimize→restore the WebGL surface can be cleared while xterm's
-		// internal buffer retains all content. Without refresh(), the terminal
-		// renders blank until the user switches tabs (which triggers refresh
-		// via the cached-terminal reattach path at line ~646).
-		terminalRef.current.refresh(0, terminalRef.current.rows - 1);
-	}, [forceResizeFit]);
+	}, [forceResizeFit, disposeWebglAddon]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {

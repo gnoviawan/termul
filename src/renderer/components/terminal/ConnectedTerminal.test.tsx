@@ -2111,8 +2111,14 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
+      // Advance past the initial requestAnimationFrame so WebGL addon is loaded
+      await vi.advanceTimersByTimeAsync(50)
+      expect(webglAddonCreateCount).toBeGreaterThanOrEqual(1)
+
+      // Clear mocks before dispatching focus event
       mockFitAddonInstance.fit.mockClear()
       vi.mocked(terminalApi).resize.mockClear()
+      const webglInstanceBeforeFocus = lastCreatedWebglInstance
 
       // Dispatch window focus event
       window.dispatchEvent(new Event('focus'))
@@ -2129,8 +2135,11 @@ describe('ConnectedTerminal', () => {
         expect.any(Number),
         expect.any(Number)
       )
-      // Should repaint buffer after recovery to prevent blank screen
-      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
+      // WebGL addon should be disposed and recreated to prevent blank screen
+      // from silent GPU context corruption on Windows minimize
+      expect(webglInstanceBeforeFocus?.dispose).toHaveBeenCalled()
+      // A new WebGL addon instance should have been created
+      expect(webglAddonCreateCount).toBeGreaterThanOrEqual(2)
 
       vi.useRealTimers()
     })
