@@ -57,6 +57,8 @@ const mockTerminalInstance = {
   write: vi.fn(),
   clear: vi.fn(),
   focus: vi.fn(),
+  refresh: vi.fn(),
+  scrollToLine: vi.fn(),
   dispose: vi.fn(),
   cols: 80,
   rows: 24,
@@ -68,7 +70,9 @@ const mockTerminalInstance = {
           index === 0 ? 'missing.ts src/renderer/App.tsx' : ''
       }))
     }
-  }
+  },
+  // Real DOM element so recovery's CSS visibility re-composite can be tested.
+  element: (typeof document !== 'undefined' ? document.createElement('div') : undefined) as HTMLDivElement | undefined
 }
 
 let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
@@ -118,11 +122,15 @@ vi.mock('@xterm/xterm', () => ({
     write = mockTerminalInstance.write
     clear = mockTerminalInstance.clear
     focus = mockTerminalInstance.focus
+    refresh = mockTerminalInstance.refresh
+    scrollToLine = mockTerminalInstance.scrollToLine
     dispose = mockTerminalInstance.dispose
     cols = mockTerminalInstance.cols
     rows = mockTerminalInstance.rows
     options = mockTerminalInstance.options
     buffer = mockTerminalInstance.buffer
+    // Real DOM element so recovery's CSS visibility re-composite can be tested.
+    element = mockTerminalInstance.element
   }
 }))
 
@@ -2099,8 +2107,12 @@ describe('ConnectedTerminal', () => {
       addEventListenerSpy.mockRestore()
     })
 
-    it('should trigger fit and resize on window focus with debounce', async () => {
+    it('should re-fit and re-composite on window focus once layout is stable', async () => {
       vi.useFakeTimers()
+
+      // Note: the global beforeEach already stubs HTMLDivElement.prototype
+      // getBoundingClientRect to 800x600, so the terminal container reports a
+      // usable size and recovery's layout-wait proceeds on the first frame.
 
       render(<ConnectedTerminal />)
 
@@ -2108,24 +2120,41 @@ describe('ConnectedTerminal', () => {
         expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
       })
 
-      mockFitAddonInstance.fit.mockClear()
-      vi.mocked(terminalApi).resize.mockClear()
+      // Advance past the initial requestAnimationFrame so WebGL addon is loaded
+      await vi.advanceTimersByTimeAsync(50)
+      expect(webglAddonCreateCount).toBeGreaterThanOrEqual(1)
 
-      // Dispatch window focus event
+      // Clear mocks before dispatching focus event
+      mockFitAddonInstance.fit.mockClear()
+      mockTerminalInstance.refresh.mockClear()
+      vi.mocked(terminalApi).resize.mockClear()
+      const webglCountBeforeFocus = webglAddonCreateCount
+      const termEl = mockTerminalInstance.element as HTMLDivElement
+
+      // Dispatch window focus event — recovery fires immediately (no debounce),
+      // but waits for a stable layout via requestAnimationFrame before fitting.
       window.dispatchEvent(new Event('focus'))
 
-      // Should not fire immediately (debounced)
-      await vi.advanceTimersByTimeAsync(100)
-      expect(mockFitAddonInstance.fit).not.toHaveBeenCalled()
+      // Advance frames so the layout-wait + recovery + re-composite all run
+      await vi.advanceTimersByTimeAsync(40)
 
-      // Should fire after 150ms debounce
-      await vi.advanceTimersByTimeAsync(100)
-      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+      // Fit + PTY resize happened against the (now usable) container size
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
         expect.any(Number)
       )
+      // Buffer repainted to redraw into the re-composited layer
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(
+        0,
+        mockTerminalInstance.rows - 1
+      )
+      // WebGL addon is NOT disposed/recreated — the context is healthy, only the
+      // compositor needs a nudge. Recreating would add a needless blank gap.
+      expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
+      // Visibility flip completed (restored to visible after the re-composite)
+      expect(termEl.style.visibility).toBe('')
 
       vi.useRealTimers()
     })
@@ -2144,6 +2173,39 @@ describe('ConnectedTerminal', () => {
       expect(removeEventListenerSpy).toHaveBeenCalledWith('focus', expect.any(Function))
 
       removeEventListenerSpy.mockRestore()
+    })
+
+    it('should coalesce overlapping recovery triggers (single-flight)', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      await vi.advanceTimersByTimeAsync(50)
+      mockFitAddonInstance.fit.mockClear()
+
+      // On a real window restore, visibilitychange and focus fire close together.
+      // Dispatch focus twice before the first recovery completes its RAF cycle.
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('focus'))
+
+      // Let the layout-wait + recovery + trailing visibility-flip RAF complete.
+      await vi.advanceTimersByTimeAsync(40)
+
+      // The single-flight guard coalesces the duplicate trigger: fit runs once,
+      // not twice, avoiding overlapping resize + visibility-flip cycles.
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      // After recovery fully completes, a subsequent focus can recover again.
+      mockFitAddonInstance.fit.mockClear()
+      window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(40)
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      vi.useRealTimers()
     })
   })
 
