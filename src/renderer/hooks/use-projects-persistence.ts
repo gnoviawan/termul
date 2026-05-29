@@ -109,12 +109,15 @@ async function storeSecretsAndRedact(
       const storeResult = await secureStorageApi.setSecret(storageKey, envVar.value)
 
       if (!storeResult.success) {
-        console.error(
-          `Failed to store secret ${envVar.key} for project ${projectId}:`,
-          storeResult.error
+        // Abort the save instead of writing the raw secret to disk. Throwing
+        // keeps the recoverable plaintext value in the in-memory store while
+        // ensuring neither the secret nor a misleading [REDACTED] placeholder
+        // is persisted when the keychain write fails.
+        throw new Error(
+          `Failed to store secret ${envVar.key} for project ${projectId}: ${
+            storeResult.error ?? 'unknown error'
+          }`
         )
-        result.push(envVar)
-        continue
       }
 
       // Add redacted version to result

@@ -110,7 +110,7 @@ describe('use-projects-persistence secure storage integration', () => {
     unmount()
   })
 
-  it('keeps the recoverable secret value in persistence when secure storage write fails', async () => {
+  it('aborts the persist instead of writing the raw secret when secure storage write fails', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     apiMocks.secureStorageSet.mockResolvedValue({
       success: false,
@@ -136,20 +136,26 @@ describe('use-projects-persistence secure storage integration', () => {
     })
 
     await waitFor(() => {
-      expect(apiMocks.persistenceWriteDebounced).toHaveBeenCalled()
+      expect(apiMocks.secureStorageSet).toHaveBeenCalledWith(
+        'project:test-project:env:API_KEY',
+        'secret-value'
+      )
     })
 
-    expect(apiMocks.secureStorageSet).toHaveBeenCalledWith(
-      'project:test-project:env:API_KEY',
-      'secret-value'
-    )
-    expect(getLastPersistedData(apiMocks.persistenceWriteDebounced).projects[0].envVars).toEqual([
+    await waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to auto-save projects:',
+        expect.any(Error)
+      )
+    })
+
+    // The keychain write failed, so the persist must be aborted entirely.
+    // No plaintext secret (and no misleading [REDACTED] placeholder) is written to disk,
+    // and the recoverable value stays in the in-memory store.
+    expect(apiMocks.persistenceWriteDebounced).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().projects[0].envVars).toEqual([
       { key: 'API_KEY', value: 'secret-value', isSecret: true }
     ])
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Failed to store secret API_KEY for project test-project:',
-      'Storage failed'
-    )
 
     unmount()
   })

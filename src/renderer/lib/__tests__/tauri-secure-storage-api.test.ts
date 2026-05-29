@@ -29,8 +29,10 @@ describe('tauri-secure-storage-api', () => {
 
       expect(result.success).toBe(true)
       expect(invoke).toHaveBeenCalledWith('secure_storage_set', {
-        key: 'test-key',
-        value: 'test-value'
+        request: {
+          key: 'test-key',
+          value: 'test-value'
+        }
       })
     })
 
@@ -77,7 +79,9 @@ describe('tauri-secure-storage-api', () => {
         expect(result.data).toBe('test-value')
       }
       expect(invoke).toHaveBeenCalledWith('secure_storage_get', {
-        key: 'test-key'
+        request: {
+          key: 'test-key'
+        }
       })
     })
 
@@ -118,7 +122,9 @@ describe('tauri-secure-storage-api', () => {
 
       expect(result.success).toBe(true)
       expect(invoke).toHaveBeenCalledWith('secure_storage_delete', {
-        key: 'test-key'
+        request: {
+          key: 'test-key'
+        }
       })
     })
 

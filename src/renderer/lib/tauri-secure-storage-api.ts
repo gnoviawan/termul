@@ -35,7 +35,7 @@ export function createTauriSecureStorageApi(): SecureStorageApi {
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'secure_storage_set',
-          { key, value }
+          { request: { key, value } }
         )
 
         if (!response.success) {
@@ -63,7 +63,7 @@ export function createTauriSecureStorageApi(): SecureStorageApi {
           data?: string
           error?: string
           code?: string
-        }>('secure_storage_get', { key })
+        }>('secure_storage_get', { request: { key } })
 
         if (!response.success) {
           return {
@@ -87,7 +87,7 @@ export function createTauriSecureStorageApi(): SecureStorageApi {
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'secure_storage_delete',
-          { key }
+          { request: { key } }
         )
 
         if (!response.success) {
