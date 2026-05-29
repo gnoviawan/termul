@@ -3,6 +3,4 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "3080:80"
     restart: unless-stopped
