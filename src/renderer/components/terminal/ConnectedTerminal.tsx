@@ -1427,26 +1427,43 @@ function ConnectedTerminalComponent({
 			webglRecoveryTimeoutRef.current = null;
 		}
 
-		// Force-recreate the WebGL addon on every recovery, regardless of whether
-		// onContextLoss fired. On Windows, minimizing a Tauri window can silently
-		// corrupt the WebGL rendering surface without triggering the contextloss
-		// event, leaving webglContextLostRef === false. The addon's GPU context is
-		// broken but xterm.js still tries to paint through it — resulting in a
-		// blank screen that only tab-switching fixes (cached reattach creates a
-		// fresh addon). By dispose+recreate here we guarantee a healthy renderer.
+		// On Windows, minimizing a Tauri window can silently corrupt the WebGL
+		// rendering surface without firing onContextLoss. The addon's GPU context
+		// becomes broken but xterm still routes all rendering through it, leaving
+		// the terminal blank. Tab-switching fixes this because the cached-reattach
+		// path recreates a fresh addon.
+		//
+		// Recovery strategy (eliminates visible blank flash):
+		//   1. Dispose the broken WebGL addon. Xterm reverts to its built-in DOM
+		//      renderer (the .xterm-rows divs are always maintained internally).
+		//   2. Synchronously re-fit + refresh via DOM renderer — user sees
+		//      terminal content immediately with zero blank gap.
+		//   3. Recreate the WebGL addon on the next animation frame. Once painted,
+		//      it seamlessly takes over from the DOM renderer (~16ms later).
 		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
 			disposeWebglAddon();
 			webglContextLostRef.current = false;
-			if (loadWebglAddonRef.current && terminalRef.current) {
-				loadWebglAddonRef.current(terminalRef.current, true);
-			}
 		}
 
 		// Re-fit and sync PTY dimensions via the v2 hook's forced path.
-		// forceResizeFit clears any pending v2 debounce timers, fits with
-		// force=true (bypassing the dimension-sameness check), and immediately
-		// calls onPtyResize — keeping the v2 hook's dimension trackers in sync.
 		forceResizeFit();
+
+		// Force an immediate repaint through the currently-active renderer.
+		// After disposing WebGL above, this is the DOM renderer which paints
+		// synchronously — the user sees content with no blank gap.
+		if (terminalRef.current) {
+			terminalRef.current.refresh(0, terminalRef.current.rows - 1);
+		}
+
+		// Defer WebGL recreation to the next animation frame. The DOM rows are
+		// visible during the ~16ms gap, then WebGL seamlessly takes over.
+		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+			requestAnimationFrame(() => {
+				if (loadWebglAddonRef.current && terminalRef.current) {
+					loadWebglAddonRef.current(terminalRef.current, true);
+				}
+			});
+		}
 	}, [forceResizeFit, disposeWebglAddon]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
@@ -1482,29 +1499,20 @@ function ConnectedTerminalComponent({
 	// taskbar minimize. performTerminalRecovery re-fits the terminal to its
 	// container and syncs PTY dimensions (SIGWINCH to the shell process).
 	useEffect(() => {
-		let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
 		const handleWindowFocus = (): void => {
-			// Always clear pending timeout first to prevent stale recovery calls.
-			if (recoveryTimeoutId) {
-				clearTimeout(recoveryTimeoutId);
-				recoveryTimeoutId = null;
-			}
 			// Skip recovery for terminals that are not the active tab in their pane
 			// (isVisible is tab-active, not window-visible — see PaneContent.tsx).
 			// Hidden instances recover via the isVisible-change useEffect instead.
 			if (!isVisibleRef.current) return;
-			recoveryTimeoutId = setTimeout(() => {
-				recoveryTimeoutId = null;
-				performTerminalRecovery();
-			}, VISIBILITY_RECOVERY_DELAY_MS);
+			// Fire recovery immediately — the window is already visible when
+			// 'focus' fires (unlike visibilitychange which needs DOM reflow time).
+			// The recovery sequence (dispose WebGL -> DOM refresh -> RAF recreate
+			// WebGL) handles timing internally, so no external debounce is needed.
+			performTerminalRecovery();
 		};
 
 		window.addEventListener("focus", handleWindowFocus);
 		return () => {
-			if (recoveryTimeoutId) {
-				clearTimeout(recoveryTimeoutId);
-			}
 			window.removeEventListener("focus", handleWindowFocus);
 		};
 	}, [performTerminalRecovery]);

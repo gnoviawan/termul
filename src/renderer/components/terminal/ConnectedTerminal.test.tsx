@@ -2102,7 +2102,7 @@ describe('ConnectedTerminal', () => {
       addEventListenerSpy.mockRestore()
     })
 
-    it('should trigger fit and resize on window focus with debounce', async () => {
+    it('should trigger fit and resize immediately on window focus (no debounce)', async () => {
       vi.useFakeTimers()
 
       render(<ConnectedTerminal />)
@@ -2120,25 +2120,25 @@ describe('ConnectedTerminal', () => {
       vi.mocked(terminalApi).resize.mockClear()
       const webglInstanceBeforeFocus = lastCreatedWebglInstance
 
-      // Dispatch window focus event
+      // Dispatch window focus event — recovery fires IMMEDIATELY (no debounce).
+      // The window is already visible when focus fires, so waiting serves no purpose.
       window.dispatchEvent(new Event('focus'))
 
-      // Should not fire immediately (debounced)
-      await vi.advanceTimersByTimeAsync(100)
-      expect(mockFitAddonInstance.fit).not.toHaveBeenCalled()
-
-      // Should fire after 150ms debounce
-      await vi.advanceTimersByTimeAsync(100)
+      // Fit and resize should fire synchronously (immediate recovery)
       expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
         expect.any(Number)
       )
-      // WebGL addon should be disposed and recreated to prevent blank screen
-      // from silent GPU context corruption on Windows minimize
+      // WebGL addon should be disposed to break the corrupted GPU surface
       expect(webglInstanceBeforeFocus?.dispose).toHaveBeenCalled()
-      // A new WebGL addon instance should have been created
+      // Buffer should be repainted through DOM renderer immediately
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
+
+      // WebGL recreation is deferred to next animation frame — advance past it
+      await vi.advanceTimersByTimeAsync(20)
+      // A new WebGL addon instance should have been created on the next RAF
       expect(webglAddonCreateCount).toBeGreaterThanOrEqual(2)
 
       vi.useRealTimers()
