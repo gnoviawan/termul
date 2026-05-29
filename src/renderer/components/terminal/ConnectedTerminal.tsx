@@ -202,6 +202,15 @@ function ConnectedTerminalComponent({
 	>(null);
 	// Track WebGL context loss for recovery decisions
 	const webglContextLostRef = useRef<boolean>(false);
+	// Single-flight guard for performTerminalRecovery. On a window restore both
+	// the visibilitychange and focus handlers (and sometimes power-resume) can
+	// fire close together; without this guard each would start its own
+	// layout-wait RAF loop and overlapping fit + visibility-flip cycles.
+	const recoveryInProgressRef = useRef<boolean>(false);
+	// Track visibility prop for recovery path guards (tab-active, not window-visible).
+	// Ref avoids stale closures in event listeners referencing isVisible directly.
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
 
 	// Get font settings from app settings store
 	const fontFamily = useTerminalFontFamily();
@@ -339,6 +348,12 @@ function ConnectedTerminalComponent({
 	const { copySelection, pasteFromClipboard, hasSelection } =
 		useTerminalClipboard({
 			terminal: terminalInstance,
+			onImagePaste: async () => {
+				const ptyId = ptyIdRef.current;
+				if (!ptyId) return;
+				// Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
+				await terminalApi.write(ptyId, '\x16');
+			},
 		});
 
 	// Sync ptyIdRef with external terminal ID when provided
@@ -1413,47 +1428,88 @@ function ConnectedTerminalComponent({
 		}
 	}, [isVisible, forceResizeFit]);
 
-	// Shared terminal recovery logic - re-fit and check WebGL health
+	// Shared terminal recovery logic - re-fit once layout is stable, then nudge
+	// the compositor to re-present the canvas layer.
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Only recreate WebGL addon if context was actually lost, the current preference still
-		// allows WebGL, and we're not already recovering.
-		if (
-			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
-			webglContextLostRef.current &&
-			!webglAddonRef.current
-		) {
-			try {
-				// Cancel any pending auto-recovery timeout to avoid double-creation race
-				if (webglRecoveryTimeoutRef.current) {
-					clearTimeout(webglRecoveryTimeoutRef.current);
-					webglRecoveryTimeoutRef.current = null;
-				}
-				console.warn(
-					"WebGL context was lost, recreating addon during recovery",
-				);
-				// Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
-				if (loadWebglAddonRef.current && terminalRef.current) {
-					loadWebglAddonRef.current(terminalRef.current, true);
-				}
-			} catch (error) {
-				console.warn("WebGL context recovery failed:", error);
+		// Single-flight: if a recovery is already running (layout-wait poll or the
+		// trailing visibility-flip RAF), skip duplicate triggers. On a window
+		// restore both visibilitychange and focus typically fire close together.
+		if (recoveryInProgressRef.current) return;
+		recoveryInProgressRef.current = true;
+
+		// Cancel any pending WebGL auto-recovery timeout to avoid double-creation
+		// race with the genuine onContextLoss path.
+		if (webglRecoveryTimeoutRef.current) {
+			clearTimeout(webglRecoveryTimeoutRef.current);
+			webglRecoveryTimeoutRef.current = null;
+		}
+
+		// Root cause (verified via live forensics + xterm.js #4841 / #5357):
+		//
+		// After minimize→restore on Windows the webview reflows over several
+		// frames. If fit() runs while the container height is still collapsed,
+		// the terminal grid shrinks to 1-2 rows (PTY redraws tiny → "1-2 lines"
+		// of text) until a later resize corrects it. The fit pipeline now guards
+		// against collapsed dimensions (use-terminal-resize-v2), so an early fit
+		// is a safe no-op rather than a destructive shrink.
+		//
+		// Additionally, the WebView2 compositor may not re-present the WebGL
+		// canvas layer after restore (xterm 6.x has no DOM-row fallback; the
+		// context itself stays healthy). A CSS visibility flip forces a
+		// re-composite — the same mechanism that makes tab-switching work.
+		//
+		// Strategy: wait for the container to report a usable size (poll across a
+		// few RAFs), then forceResizeFit + refresh, then flip visibility to
+		// guarantee the layer re-composites.
+		const termEl = terminalRef.current.element as HTMLElement | undefined;
+		const container = containerRef.current;
+
+		const MIN_USABLE = 40;
+		const MAX_LAYOUT_WAIT_FRAMES = 30; // ~0.5s at 60fps
+
+		const runRecovery = (): void => {
+			const terminal = terminalRef.current;
+			if (!terminal) {
+				recoveryInProgressRef.current = false;
+				return;
 			}
-		}
+			// Re-fit (guarded against collapsed dims) + redraw the buffer.
+			forceResizeFit();
+			terminal.refresh(0, terminal.rows - 1);
 
-		// Re-fit terminal to current dimensions
-		performFit(true);
+			// Nudge the compositor to re-present the canvas layer. Clear the
+			// single-flight guard only after the trailing refresh completes.
+			if (termEl) {
+				termEl.style.visibility = "hidden";
+				requestAnimationFrame(() => {
+					termEl.style.visibility = "";
+					const t = terminalRef.current;
+					if (t) t.refresh(0, t.rows - 1);
+					recoveryInProgressRef.current = false;
+				});
+			} else {
+				recoveryInProgressRef.current = false;
+			}
+		};
 
-		// Sync PTY dimensions
-		const terminal = terminalRef.current;
-		const ptyId = ptyIdRef.current;
-		if (terminal && ptyId) {
-			terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
-				// Ignore resize errors - terminal may have been killed
-			});
-		}
-	}, []);
+		// Wait until the container has reflowed to a usable size before fitting,
+		// so we never collapse the grid. Bail out after MAX_LAYOUT_WAIT_FRAMES.
+		let frames = 0;
+		const waitForStableLayout = (): void => {
+			const rect = container?.getBoundingClientRect();
+			const ready =
+				!!rect && rect.width >= MIN_USABLE && rect.height >= MIN_USABLE;
+			if (ready || frames >= MAX_LAYOUT_WAIT_FRAMES) {
+				runRecovery();
+				return;
+			}
+			frames += 1;
+			requestAnimationFrame(waitForStableLayout);
+		};
+		waitForStableLayout();
+	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {
@@ -1479,6 +1535,30 @@ function ConnectedTerminalComponent({
 				clearTimeout(recoveryTimeoutId);
 			}
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
+		};
+	}, [performTerminalRecovery]);
+
+	// Recovery handler for window focus — critical for Tauri minimize/restore
+	// on Windows where document.visibilitychange is unreliable.
+	// The window 'focus' event reliably fires when the window is restored from
+	// taskbar minimize. performTerminalRecovery re-fits the terminal to its
+	// container and syncs PTY dimensions (SIGWINCH to the shell process).
+	useEffect(() => {
+		const handleWindowFocus = (): void => {
+			// Skip recovery for terminals that are not the active tab in their pane
+			// (isVisible is tab-active, not window-visible — see PaneContent.tsx).
+			// Hidden instances recover via the isVisible-change useEffect instead.
+			if (!isVisibleRef.current) return;
+			// Fire recovery immediately — the window is already visible when
+			// 'focus' fires (unlike visibilitychange which needs DOM reflow time).
+			// performTerminalRecovery internally waits for a stable layout before
+			// fitting and is single-flight guarded, so this is safe to call eagerly.
+			performTerminalRecovery();
+		};
+
+		window.addEventListener("focus", handleWindowFocus);
+		return () => {
+			window.removeEventListener("focus", handleWindowFocus);
 		};
 	}, [performTerminalRecovery]);
 
@@ -1539,7 +1619,6 @@ function ConnectedTerminalComponent({
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
 				<div
-					ref={containerRef}
 					className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
 					onClick={handleContainerClick}
 					onMouseDown={(e) => {
@@ -1550,7 +1629,9 @@ function ConnectedTerminalComponent({
 							terminalRef.current.focus();
 						}
 					}}
-				/>
+				>
+					<div ref={containerRef} className="w-full h-full" />
+				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="w-40">
 				<ContextMenuItem

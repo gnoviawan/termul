@@ -79,11 +79,22 @@ export function useTerminalResizeV2(
 			const width = Math.round(rect.width)
 			const height = Math.round(rect.height)
 
+			// Guard against fitting to a collapsed container. After a Windows
+			// minimize→restore the webview reflows over several frames; during that
+			// window getBoundingClientRect() can report a tiny height. Calling fit()
+			// then collapses the terminal grid to 1-2 rows (the PTY redraws tiny,
+			// showing "1-2 lines" until a later fit corrects it). Never fit unless
+			// the container is large enough to hold a usable grid — this protects
+			// every caller (ResizeObserver, forceFit, recovery).
+			const MIN_FIT_WIDTH = 40
+			const MIN_FIT_HEIGHT = 40
+			if (width < MIN_FIT_WIDTH || height < MIN_FIT_HEIGHT) {
+				return false
+			}
+
 			// Skip if dimensions haven't changed (and not forced)
 			if (
 				!force &&
-				width > 0 &&
-				height > 0 &&
 				width === lastContainerWidthRef.current &&
 				height === lastContainerHeightRef.current
 			) {

@@ -168,6 +168,24 @@ bun install
 bun run dev
 ```
 
+### Landing Page
+
+This repository also includes a standalone Vite landing page under `landing/`.
+
+```bash
+# Install landing page dependencies (from landing/)
+cd landing && bun install
+
+# Start the landing page dev server
+bun run landing:dev
+
+# Lint the landing page
+bun run landing:lint
+
+# Build the landing page for production
+bun run landing:build
+```
+
 ### Building for Production
 
 ```bash

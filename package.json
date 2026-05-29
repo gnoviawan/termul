@@ -38,7 +38,11 @@
 		"build:tauri:linux": "tauri build --target x86_64-unknown-linux-gnu --config src-tauri/tauri.conf.prod.json",
 		"tauri": "tauri",
 		"prepare": "husky",
-		"build:frontend:tauri": "vite build --config vite.config.tauri.ts"
+		"build:frontend:tauri": "vite build --config vite.config.tauri.ts",
+		"landing:dev": "bun run --cwd landing dev",
+		"landing:build": "bun run --cwd landing build",
+		"landing:lint": "bun run --cwd landing lint",
+		"landing:preview": "bun run --cwd landing preview"
 	},
 	"dependencies": {
 		"@blocknote/code-block": "^0.46.2",

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Save, Info, Plus, X, ChevronDown, Upload } from 'lucide-react'
+import { Settings, Save, Info, Plus, X, ChevronDown, Upload, Link2, RefreshCw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -14,7 +14,7 @@ import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
-import { dialogApi, shellApi, filesystemApi } from '@/lib/api'
+import { dialogApi, shellApi, filesystemApi, worktreeApi } from '@/lib/api'
 import { parseEnvFile, mergeEnvVars } from '@/lib/env-parser'
 
 export default function ProjectSettings() {
@@ -35,10 +35,16 @@ export default function ProjectSettings() {
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
   const [startupCommand, setStartupCommand] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
+  const [symlinkDirs, setSymlinkDirs] = useState<string[]>(activeProject?.symlinkDirs ?? [])
+  const [symlinkLoading, setSymlinkLoading] = useState(false)
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [shellsLoading, setShellsLoading] = useState(true)
   const [importError, setImportError] = useState<string | null>(null)
   const [importWarnings, setImportWarnings] = useState<string | null>(null)
+  // TODO: Persist these to app-settings-store (localStorage) for across-session retention
+  const [skipConfirmations, setSkipConfirmations] = useState(false)
+  const [skipGitignoreSelection, setSkipGitignoreSelection] = useState(false)
+  const [defaultBranchPrefix, setDefaultBranchPrefix] = useState('feature/')
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -69,6 +75,7 @@ export default function ProjectSettings() {
       setRootPath(activeProject.path || '')
       setEnvVars(activeProject.envVars || [])
       setShell(activeProject.defaultShell || availableShells?.default?.name || fallbackShell)
+      setSymlinkDirs(activeProject.symlinkDirs ?? [])
       setHasChanges(false)
     }
   }, [activeProject, availableShells?.default?.name, fallbackShell])
@@ -82,14 +89,21 @@ export default function ProjectSettings() {
         }))
         .filter((envVar) => envVar.key !== '')
 
+      // Normalize symlinkDirs: trim whitespace and remove empty/whitespace-only entries
+      const normalizedSymlinkDirs = symlinkDirs
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0)
+
       updateProject(activeProject.id, {
         name: projectName,
         color: selectedColor,
         path: rootPath,
         envVars: normalizedEnvVars,
-        defaultShell: shell
+        defaultShell: shell,
+        symlinkDirs: normalizedSymlinkDirs,
       })
       setEnvVars(normalizedEnvVars)
+      setSymlinkDirs(normalizedSymlinkDirs)
       setHasChanges(false)
     }
   }
@@ -102,6 +116,46 @@ export default function ProjectSettings() {
   const removeEnvVar = (index: number) => {
     setEnvVars(envVars.filter((_, i) => i !== index))
     setHasChanges(true)
+  }
+
+  const addSymlinkDir = () => {
+    setSymlinkDirs([...symlinkDirs, ''])
+    setHasChanges(true)
+  }
+
+  const removeSymlinkDir = (index: number) => {
+    setSymlinkDirs(symlinkDirs.filter((_, i) => i !== index))
+    setHasChanges(true)
+  }
+
+  const updateSymlinkDir = (index: number, value: string) => {
+    const newDirs = [...symlinkDirs]
+    newDirs[index] = value
+    setSymlinkDirs(newDirs)
+    setHasChanges(true)
+  }
+
+  const syncFromGitignore = async () => {
+    if (!activeProject?.path) return
+    setSymlinkLoading(true)
+    try {
+      const result = await worktreeApi.parseGitignore(activeProject.path)
+      if (result.success && result.data) {
+        const existing = new Set(symlinkDirs.filter(d => d !== ''))
+        const newDirs = result.data
+          .filter(d => d.exists && !existing.has(d.dirName))
+          .map(d => d.dirName)
+        if (newDirs.length > 0) {
+          // Merge: add new dirs that aren't already in the list
+          setSymlinkDirs([...symlinkDirs.filter(d => d !== ''), ...newDirs])
+          setHasChanges(true)
+        }
+      }
+    } catch {
+      // Best-effort
+    } finally {
+      setSymlinkLoading(false)
+    }
   }
 
   const handleImportEnvFile = async () => {
@@ -437,6 +491,128 @@ export default function ProjectSettings() {
                     <p className="text-xs text-muted-foreground mt-2">
                       Command to execute immediately when a new terminal session starts.
                     </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Worktree Symlink Directories Section */}
+            <section>
+              <div className="flex items-start gap-6">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Directories to symlink from the project root into worktrees. This allows shared dependencies (like <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>) across worktrees without reinstalling.
+                  </p>
+                  <div className="mt-4 space-y-2">
+                    <button
+                      onClick={() => void syncFromGitignore()}
+                      disabled={symlinkLoading || !activeProject?.isGitRepo}
+                      className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw size={14} className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`} />
+                      Sync from .gitignore
+                    </button>
+                    <button
+                      onClick={addSymlinkDir}
+                      className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
+                    >
+                      <Plus size={14} className="mr-1" /> Add Directory
+                    </button>
+                  </div>
+                </div>
+                <div className="w-2/3">
+                  <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
+                    {symlinkDirs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-4">
+                        No symlink directories configured. Click "Sync from .gitignore" to auto-detect.
+                      </p>
+                    ) : (
+                      symlinkDirs.map((dir, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <Link2 size={12} className="text-muted-foreground flex-shrink-0" />
+                          <input
+                            type="text"
+                            value={dir}
+                            onChange={(e) => updateSymlinkDir(index, e.target.value)}
+                            placeholder="e.g. node_modules"
+                            className="flex-1 bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                          />
+                          <button
+                            onClick={() => removeSymlinkDir(index)}
+                            className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Emergency Mode & Expert Workflows Section */}
+            <section>
+              <div className="flex items-start gap-6">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Power-user workflow settings for incident response and rapid worktree operations.
+                  </p>
+                </div>
+                <div className="w-2/3">
+                  <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Skip Confirmation Dialogs</p>
+                        <p className="text-xs text-muted-foreground">Bypass non-essential prompts during worktree operations.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={skipConfirmations}
+                          onChange={(e) => {
+                            setSkipConfirmations(e.target.checked)
+                            setHasChanges(true)
+                          }}
+                        />
+                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Skip .gitignore Selection</p>
+                        <p className="text-xs text-muted-foreground">Use default symlink settings when creating worktrees.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={skipGitignoreSelection}
+                          onChange={(e) => {
+                            setSkipGitignoreSelection(e.target.checked)
+                            setHasChanges(true)
+                          }}
+                        />
+                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      </label>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1">Default Branch Prefix</label>
+                      <input
+                        type="text"
+                        value={defaultBranchPrefix}
+                        onChange={(e) => {
+                          setDefaultBranchPrefix(e.target.value)
+                          setHasChanges(true)
+                        }}
+                        placeholder="feature/"
+                        className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">Prefix for new branch naming (e.g. "feature/", "hotfix/").</p>
+                    </div>
                   </div>
                 </div>
               </div>

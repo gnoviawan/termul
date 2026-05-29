@@ -88,7 +88,12 @@ vi.mock('@/stores/project-store', () => ({
   useProjects: () => [activeProject],
   useActiveProject: () => activeProject,
   useActiveProjectId: () => activeProject.id,
-  useProjectActions: () => mockProjectActions
+  useProjectActions: () => mockProjectActions,
+  useProjectStore: Object.assign(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) : { projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false },
+    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) }
+  )
 }))
 
 vi.mock('@/stores/terminal-store', () => ({

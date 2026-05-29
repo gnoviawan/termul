@@ -44,8 +44,13 @@ export interface FileClipboard {
   paths: string[]
 }
 
+/** Worktree root override - when set, explorer roots at worktree path instead of project root */
+export type WorktreeRootOverride = string | null;
+
 export interface FileExplorerState {
   rootPath: string | null
+  /** Active worktree root override */
+  worktreeRoot: string | null
   expandedDirs: Set<string>
   directoryContents: Map<string, DirectoryEntry[]>
   selectedPaths: Set<string>
@@ -66,6 +71,7 @@ export interface FileExplorerState {
   searchLastCompletedQuery: string
 
   setRootPath: (path: string | null) => void
+  setWorktreeRoot: (path: string | null) => void
   toggleDirectory: (path: string) => Promise<void>
   refreshDirectory: (path: string) => Promise<void>
   selectPath: (path: string | null) => void
@@ -131,6 +137,7 @@ function ensureSearchStreamSubscription(
 
 export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   rootPath: null,
+  worktreeRoot: null,
   expandedDirs: new Set<string>(),
   directoryContents: new Map<string, DirectoryEntry[]>(),
   selectedPaths: new Set<string>(),
@@ -179,6 +186,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       searchRequestId: 0,
       searchLastCompletedQuery: ''
     })
+  },
+
+  setWorktreeRoot: (path: string | null): void => {
+    const { setRootPath } = get()
+    const newRoot = path ? normalizePath(path) : null
+    setRootPath(newRoot)
+    set({ worktreeRoot: newRoot })
   },
 
   toggleDirectory: async (path: string): Promise<void> => {
@@ -710,6 +724,7 @@ export function useFileExplorer(): Pick<
 export function useFileExplorerActions(): Pick<
   FileExplorerState,
   | 'setRootPath'
+  | 'setWorktreeRoot'
   | 'toggleDirectory'
   | 'refreshDirectory'
   | 'selectPath'
@@ -734,6 +749,7 @@ export function useFileExplorerActions(): Pick<
   return useFileExplorerStore(
     useShallow((state) => ({
       setRootPath: state.setRootPath,
+    setWorktreeRoot: state.setWorktreeRoot,
       toggleDirectory: state.toggleDirectory,
       refreshDirectory: state.refreshDirectory,
       selectPath: state.selectPath,
