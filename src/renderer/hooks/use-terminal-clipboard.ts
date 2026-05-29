@@ -5,6 +5,7 @@ import { clipboardApi } from '@/lib/api'
 export interface UseTerminalClipboardOptions {
   terminal: Terminal | null
   pasteText?: (text: string) => Promise<void> | void
+  onImagePaste?: () => Promise<void> | void
 }
 
 export interface UseTerminalClipboardReturn {
@@ -25,7 +26,7 @@ function normalizePasteText(text: string): string {
 export function useTerminalClipboard(
   options: UseTerminalClipboardOptions
 ): UseTerminalClipboardReturn {
-  const { terminal, pasteText } = options
+  const { terminal, pasteText, onImagePaste } = options
   const [hasSelection, setHasSelection] = useState<boolean>(false)
   // Use a ref to track the current terminal instance for async operations
   const terminalRef = useRef<Terminal | null>(terminal)
@@ -96,6 +97,13 @@ export function useTerminalClipboard(
     isPastingRef.current = true
     
     try {
+      // Check for image first - if present, delegate to onImagePaste callback
+      const imageResult = await clipboardApi.hasImage()
+      if (imageResult.success && imageResult.data && onImagePaste) {
+        await onImagePaste()
+        return
+      }
+      
       const result = await clipboardApi.readText()
       if (result.success && result.data) {
         // Validate clipboard content size
@@ -118,7 +126,7 @@ export function useTerminalClipboard(
         isPastingRef.current = false
       }, 100)
     }
-  }, [pasteText])
+  }, [pasteText, onImagePaste])
 
   return {
     copySelection,

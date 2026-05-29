@@ -35,7 +35,12 @@ export const TERMINAL_THEME: ITheme = {
 };
 
 export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
-	fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+	// Cross-platform monospace stack:
+	// - JetBrains Mono Variable: bundled via @fontsource-variable, available everywhere.
+	// - Cascadia / Menlo / Consolas / SF Mono: native fallbacks per OS.
+	// - Ubuntu Mono / DejaVu Sans Mono: ships with most Linux distros.
+	fontFamily:
+		'"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
 	fontSize: 14,
 	lineHeight: 1.2,
 	theme: TERMINAL_THEME,

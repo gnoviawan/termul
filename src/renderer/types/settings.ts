@@ -94,7 +94,7 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
 
 // Terminal renderer strategy options
 export const TERMINAL_RENDERER_OPTIONS = [
-	{ value: "auto", label: "Auto (WebGL with DOM fallback)" },
+	{ value: "auto", label: "Auto (Prefer WebGL, DOM fallback)" },
 	{ value: "webgl", label: "WebGL" },
 	{ value: "dom", label: "DOM" },
 ];
@@ -113,7 +113,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
 	terminalFontSize: 14,
 	terminalBufferSize: 10000,
-	terminalRenderer: "auto",
+	terminalRenderer: "webgl",
 	defaultShell: "",
 	defaultProjectColor: "blue",
 	maxTerminalsPerProject: 10,
@@ -251,6 +251,56 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		label: "Delete Files",
 		description: "Delete selected files",
 		defaultKey: "delete",
+	},
+
+	// Worktree shortcuts
+	worktreeCreate: {
+		id: "worktreeCreate",
+		label: "Create Worktree",
+		description: "Open the new worktree creation modal",
+		defaultKey: "ctrl+shift+alt+n",
+	},
+	worktreeSwitchNext: {
+		id: "worktreeSwitchNext",
+		label: "Switch to Next Worktree",
+		description: "Cycle to the next worktree in the sidebar",
+		defaultKey: "ctrl+shift+downarrow",
+	},
+	worktreeSwitchPrev: {
+		id: "worktreeSwitchPrev",
+		label: "Switch to Previous Worktree",
+		description: "Cycle to the previous worktree in the sidebar",
+		defaultKey: "ctrl+shift+uparrow",
+	},
+	worktreeOpenTerminal: {
+		id: "worktreeOpenTerminal",
+		label: "Open Terminal in Worktree",
+		description: "Spawn a new terminal in the active worktree",
+		defaultKey: "ctrl+shift+alt+t",
+	},
+	worktreeMergeToMain: {
+		id: "worktreeMergeToMain",
+		label: "Merge Worktree to Main",
+		description: "Start merge workflow: worktree branch to main",
+		defaultKey: "ctrl+shift+m",
+	},
+	worktreeSyncMain: {
+		id: "worktreeSyncMain",
+		label: "Sync Main into Worktree",
+		description: "Start merge workflow: main into worktree branch",
+		defaultKey: "ctrl+shift+alt+s",
+	},
+	worktreeArchive: {
+		id: "worktreeArchive",
+		label: "Archive Active Worktree",
+		description: "Archive the current active worktree",
+		defaultKey: "ctrl+shift+a",
+	},
+	worktreeSwitchRoot: {
+		id: "worktreeSwitchRoot",
+		label: "Switch to Project Root",
+		description: "Switch active context to the project root directory",
+		defaultKey: "ctrl+shift+home",
 	},
 };
 

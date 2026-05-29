@@ -5,6 +5,7 @@ import {
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalBufferSize,
+  useTerminalRenderer,
   useDefaultShell,
   useDefaultProjectColor,
   useMaxTerminalsPerProject,
@@ -19,6 +20,7 @@ import {
   BUFFER_SIZE_OPTIONS,
   MAX_TERMINALS_OPTIONS,
   ORPHAN_TIMEOUT_OPTIONS,
+  TERMINAL_RENDERER_OPTIONS,
   TERMINAL_URL_OPEN_MODE_OPTIONS,
   type TerminalUrlOpenMode
 } from '@/types/settings'
@@ -44,6 +46,7 @@ export default function AppPreferences(): React.JSX.Element {
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
+  const terminalRenderer = useTerminalRenderer()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
@@ -93,6 +96,12 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleBufferSizeChange = (value: number) => {
     updateSetting('terminalBufferSize', value)
+  }
+
+  const handleRendererChange = (value: string) => {
+    if (value === 'auto' || value === 'webgl' || value === 'dom') {
+      updateSetting('terminalRenderer', value)
+    }
   }
 
   const handleDefaultShellChange = (value: string) => {
@@ -284,6 +293,27 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Maximum number of terminal tabs allowed per project.
+                  </p>
+                </div>
+
+                {/* Terminal Renderer */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Terminal Renderer
+                  </label>
+                  <select
+                    value={terminalRenderer}
+                    onChange={(e) => handleRendererChange(e.target.value)}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                  >
+                    {TERMINAL_RENDERER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    GPU-accelerated rendering for terminal output. WebGL provides best performance. Changes apply to new terminals.
                   </p>
                 </div>
 

@@ -450,8 +450,9 @@ describe('ProjectSidebar Terminal Activity Indicator', () => {
     mockUseProjectsWithActivity.mockReturnValue([])
     renderWithRouter()
 
-    const projectItem = screen.getByText('Project One')
-    expect(projectItem.closest('button')).not.toContainHTML('animate-spin')
+    const item = screen.getByTestId('project-item-1')
+    const spinner = item.querySelector('svg.animate-spin')
+    expect(spinner).toBeNull()
   })
 
   it('should show activity indicator when hasActivity is true and project is not active', () => {

@@ -77,4 +77,25 @@ export interface PersistedProject {
   gitBranch?: string
   defaultShell?: string
   envVars?: PersistedEnvVariable[]
+  // Worktree fields (added by worktree feature)
+  worktrees?: PersistedWorktree[]
+  activeWorktreeId?: string | null
+  // Git detection (cached)
+  isGitRepo?: boolean
+}
+
+// ============================================================================
+// Worktree Persistence Types
+// ============================================================================
+
+/**
+ * Persisted worktree data (subset of Worktree for storage)
+ * Stored as part of the project record — no separate persistence hook.
+ */
+export interface PersistedWorktree {
+  id: string
+  name: string
+  branch: string
+  path: string
+  createdAt: string // ISO timestamp
 }

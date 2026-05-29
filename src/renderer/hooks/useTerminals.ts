@@ -13,7 +13,7 @@ const mockOutput: TerminalLine[] = [
     content:
       'Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows'
   },
-  { type: 'success', content: '➜  web-app git:(main) npm run dev' },
+  { type: 'success', content: '➜  web-app git:(main) bun run dev' },
   { type: 'output', content: '> web-app@0.1.0 dev' },
   { type: 'output', content: '> next dev' },
   { type: 'output', content: '' },

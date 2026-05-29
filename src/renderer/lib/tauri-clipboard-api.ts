@@ -1,4 +1,4 @@
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { readText, writeText, readImage } from '@tauri-apps/plugin-clipboard-manager';
 import type { IpcResult } from '@shared/types/ipc.types';
 
 const MAX_CLIPBOARD_SIZE = 10 * 1024 * 1024; // 10MB
@@ -27,6 +27,20 @@ export const tauriClipboardApi = {
       return { success: true, data: undefined };
     } catch (err) {
       return { success: false, error: String(err), code: 'WRITE_ERROR' };
+    }
+  },
+
+  async hasImage(): Promise<IpcResult<boolean>> {
+    try {
+      // readImage() resolves with an Image when image data is on the clipboard,
+      // and throws when no image is present or on unsupported platforms.
+      await readImage();
+      return { success: true, data: true };
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn('hasImage: readImage() rejected:', err);
+      }
+      return { success: true, data: false };
     }
   },
 };

@@ -85,11 +85,15 @@ import {
 	waitForPendingAppSettingsPersistence,
 } from "@/hooks/use-app-settings";
 import { useFileWatcher } from "@/hooks/use-file-watcher";
+import { useWorktreeShortcuts } from "@/hooks/use-worktree-shortcuts";
 import { useEditorPersistence } from "@/hooks/use-editor-persistence";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
+import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
+import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
+import { spawnTerminalInPane } from "@/lib/terminal-spawn";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 
 function getShortcutTargetContext(target: EventTarget | null): {
@@ -195,6 +199,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		};
 	}, [activeProjectId]);
 
+	// Worktree shortcut handlers
+	useWorktreeShortcuts();
 
 	// Sync file explorer root path and register project root watcher when project changes
 	useEffect(() => {
@@ -496,60 +502,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// Terminal creation callbacks - defined before keyboard shortcut useEffect
 	const handleCreateTerminalInPane = useCallback(
 		async (paneId: string, shellName?: string) => {
-			if (terminals.length >= maxTerminals) {
-				toast.error(`Maximum ${maxTerminals} terminals per project`);
-				return;
-			}
+			const cwd = getDefaultCwdForProject(activeProjectId);
 
-			const shell =
-				shellName ||
-				activeProject?.defaultShell ||
-				appDefaultShell ||
-				undefined;
-			const cwd = activeProject?.path;
-
-			// Resolve project env vars for spawn
-			// TODO: Pass actual system env from backend for variable expansion
-			const { env, hasProjectEnv } = resolveEnvForSpawn(
-				activeProject?.envVars,
-				{},
-			);
-
-			const spawnResult = await terminalApi.spawn({
-				shell,
-				cwd,
-				...(hasProjectEnv ? { env } : {}),
+			const result = await spawnTerminalInPane(paneId, activeProjectId, cwd, {
+				shell: shellName || activeProject?.defaultShell || appDefaultShell || undefined,
+				envVars: activeProject?.envVars,
+				maxTerminalsPerProject: maxTerminals,
 			});
-			if (!spawnResult.success) {
-				toast.error(spawnResult.error || "Failed to create terminal");
-				return;
+			if (!result.success) {
+				toast.error(result.error || "Failed to create terminal");
 			}
-
-			const terminal = addTerminal(
-				`Terminal ${terminals.length + 1}`,
-				activeProjectId,
-				shell,
-				cwd,
-			);
-			useTerminalStore
-				.getState()
-				.setTerminalPtyId(terminal.id, spawnResult.data.id);
-
-			useWorkspaceStore.getState().addTabToPane(paneId, {
-				type: "terminal",
-				id: `term-${terminal.id}`,
-				terminalId: terminal.id,
-			});
 		},
 		[
 			activeProject?.defaultShell,
-			activeProject?.path,
 			activeProject?.envVars,
 			activeProjectId,
-			addTerminal,
 			appDefaultShell,
 			maxTerminals,
-			terminals.length,
 		],
 	);
 
@@ -1105,6 +1074,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	if (!isLoaded) {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
+				<ResizeEdges />
 				<TitleBar
 					isShortcutsOpen={isShortcutMenuOpen}
 					onShortcutsOpenChange={setIsShortcutMenuOpen}
@@ -1118,6 +1088,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
+			<ResizeEdges />
 			<TitleBar
 				isShortcutsOpen={isShortcutMenuOpen}
 				onShortcutsOpenChange={setIsShortcutMenuOpen}

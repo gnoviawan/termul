@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Terminal as TerminalRecord } from '@/types/project'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
@@ -7,6 +7,7 @@ import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stor
 import { terminalApi, sessionApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -17,6 +18,10 @@ import {
   beginProjectContinuityCorrelation,
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+
+import { isVisibleReady } from '@/lib/visibility-signal'
+
+const DEFERRED_RETRY_MS = 50
 
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
@@ -279,6 +284,8 @@ export function useTerminalRestore(): void {
   const previousProjectIdRef = useRef<string>('')
   // FIX #4: Use Set instead of boolean to track multiple restoring projects
   const isRestoringRef = useRef<Set<string>>(new Set())
+  // Retry counter for visibility-deferred restore
+  const [visibilityRetry, setVisibilityRetry] = useState(0)
 
   useEffect(() => {
     const callId = Math.random().toString(36).slice(2, 9)
@@ -356,6 +363,19 @@ export function useTerminalRestore(): void {
         // Check for cancellation before starting
         if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] before restore`)
+          return
+        }
+
+        // Gate: don't spawn terminals until the app window is visible.
+        // In production builds, Tauri starts with `visible: false` and
+        // `showWindow()` resolves asynchronously. Spawning during the hidden
+        // phase causes the Rust backend to defer PTY cleanup, accumulating
+        // zombie PTYs and RAM growth (manager.rs:993).
+        // When `isAppHidden` flips to `false`, the effect re-runs via the
+        // `visibilityRetry` dependency, and this check passes.
+        if (!isVisibleReady()) {
+          debugLog('useTerminalRestore', `DEFERRED [${callId}]: window not visible yet`)
+          setTimeout(() => setVisibilityRetry((v) => v + 1), DEFERRED_RETRY_MS)
           return
         }
 
@@ -640,7 +660,7 @@ export function useTerminalRestore(): void {
       // and prevents a race condition where terminals are wiped before being saved to disk.
       // PTYs are managed by the backend and their lifecycle is independent of the renderer store.
     }
-  }, [activeProjectId])
+  }, [activeProjectId, visibilityRetry])
 }
 
 /**
@@ -1070,9 +1090,18 @@ async function createDefaultTerminal(
     // TODO: Pass actual system env from backend for variable expansion
     const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
+    const cwd = getDefaultCwdForProject(projectId)
+
+    // Ensure worktree symlinks are reconciled before spawning
+    try {
+      await ensureWorktreeSymlinks(projectId)
+    } catch {
+      // Symlink reconciliation is best-effort during restore
+    }
+
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
-      cwd: project?.path
+      cwd
     })
 
     // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
@@ -1082,7 +1111,7 @@ async function createDefaultTerminal(
       (async () => {
         const result = await terminalApi.spawn({
           shell,
-          cwd: project?.path,
+          cwd,
           ...(hasProjectEnv ? { env } : {})
         })
         if (spawnTimeout) {
@@ -1146,7 +1175,7 @@ async function createDefaultTerminal(
     SPAWN_CALL_COUNT++
 
     // Create default terminal - addTerminal also sets it as active
-    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, project?.path)
+    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, cwd)
     terminalStore.setTerminalPtyId(newTerminal.id, spawnData.id)
 
     // Explicitly select to ensure activeTerminalId is set correctly

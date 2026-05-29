@@ -20,7 +20,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore, useLeafCount, editorTabId } from "@/stores/workspace-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTerminalStore } from "@/stores/terminal-store";
-import { useProjectStore } from "@/stores/project-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
 import type { WorkspaceTab } from "@/stores/workspace-store";
 import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
@@ -118,6 +117,14 @@ function TerminalTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					if (!isClosing) {
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -359,6 +366,12 @@ function BrowserTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					onClose();
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -786,13 +799,8 @@ export function WorkspaceTabBar({
 		return a.displayName.localeCompare(b.displayName);
 	});
 
-	const activeProjectId = useProjectStore((state) => state.activeProjectId);
 	const terminalStoreTerminals = useTerminalStore(
-		useShallow((state) =>
-			activeProjectId
-				? state.terminals.filter((t) => t.projectId === activeProjectId)
-				: [],
-		),
+		useShallow((state) => state.terminals),
 	);
 	const isFullscreenPane = fullscreenPaneId === paneId;
 
