@@ -274,6 +274,29 @@ export function ProjectSidebar({
 		[setActiveWorktree],
 	);
 
+	// Activate a worktree AND open a terminal in it, in one action.
+	// Shared by the row hover terminal button and the "Open Terminal Here" context menu.
+	const handleOpenTerminalInWorktree = useCallback(
+		async (projectId: string, worktreeId: string | null, worktreePath: string, worktreeName: string): Promise<void> => {
+			setActiveWorktree(projectId, worktreeId);
+			const paneId = useWorkspaceStore.getState().activePaneId;
+			if (!paneId) {
+				toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
+				return;
+			}
+			const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject;
+			const result = await spawnTerminalInPane(paneId, projectId, worktreePath, {
+				maxTerminalsPerProject,
+			});
+			if (result.success) {
+				toast({ title: "Terminal opened", description: `Terminal opened in "${worktreeName}"` });
+			} else {
+				toast({ title: "Failed to open terminal", description: result.error || "Could not create a terminal in this worktree." });
+			}
+		},
+		[setActiveWorktree],
+	);
+
 	const handleWorktreeContextMenu = useCallback(
 		(e: React.MouseEvent, projectId: string, worktree: Worktree): void => {
 			e.preventDefault();
@@ -633,23 +656,7 @@ export function ProjectSidebar({
 				{
 					label: "Open Terminal Here",
 					icon: <Terminal size={14} />,
-					onClick: async () => {
-						handleWorktreeSelect(projectId, worktree.id);
-						const paneId = useWorkspaceStore.getState().activePaneId;
-						if (!paneId) {
-							toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
-							return;
-						}
-						const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject;
-						const result = await spawnTerminalInPane(paneId, projectId, worktree.path, {
-							maxTerminalsPerProject,
-						});
-						if (result.success) {
-							toast({ title: "Terminal opened", description: `Terminal opened in "${worktree.name}"` });
-						} else {
-							toast({ title: "Failed to open terminal", description: result.error || "Could not create a terminal in this worktree." });
-						}
-					},
+					onClick: () => void handleOpenTerminalInWorktree(projectId, worktree.id, worktree.path, worktree.name),
 				},
 				{
 					label: "Open in File Explorer",
@@ -672,7 +679,7 @@ export function ProjectSidebar({
 				},
 			];
 		},
-		[handleWorktreeSelect, handleOpenInFileExplorer, handleCopyWorktreePath, isWorktreeOperationLocked],
+		[handleOpenTerminalInWorktree, handleOpenInFileExplorer, handleCopyWorktreePath, isWorktreeOperationLocked],
 	);
 
 	const colorPickerProject = projects.find(
@@ -772,6 +779,9 @@ export function ProjectSidebar({
 											}}
 											onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
 											onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
+											onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
+												void handleOpenTerminalInWorktree(project.id, worktreeId, worktreePath, worktreeName)
+											}
 											isWorktreeOperationLocked={isWorktreeOperationLocked}
 											onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
 										/>
@@ -1041,6 +1051,7 @@ interface ProjectItemProps {
 	onSettingsClick: () => void;
 	onWorktreeSelect: (worktreeId: string | null) => void;
 	onWorktreeContextMenu: (e: React.MouseEvent, worktree: Worktree) => void;
+	onOpenTerminalInWorktree: (worktreeId: string | null, worktreePath: string, worktreeName: string) => void;
 	isWorktreeOperationLocked: boolean;
 	onNewWorktree: (projectId: string) => void;
 }
@@ -1063,6 +1074,7 @@ const ProjectItem = memo(function ProjectItem({
 	onSettingsClick,
 	onWorktreeSelect,
 	onWorktreeContextMenu,
+	onOpenTerminalInWorktree,
 	isWorktreeOperationLocked,
 	onNewWorktree,
 }: ProjectItemProps): React.JSX.Element {
@@ -1244,6 +1256,7 @@ const ProjectItem = memo(function ProjectItem({
 							isRoot
 							isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
 							onClick={() => onWorktreeSelect(null)}
+							onOpenTerminal={project.path ? () => onOpenTerminalInWorktree(null, project.path as string, "project root") : undefined}
 						/>
 						{/* Grouped worktree items with search filter */}
 						{(() => {
@@ -1286,6 +1299,7 @@ const ProjectItem = memo(function ProjectItem({
 												isTermulManaged={isWorktreeTermulManaged(wt)}
 												onClick={() => onWorktreeSelect(wt.id)}
 												onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+												onOpenTerminal={() => onOpenTerminalInWorktree(wt.id, wt.path, wt.name)}
 											/>
 										))}
 									</div>
@@ -1324,6 +1338,7 @@ interface WorktreeItemProps {
 	worktreeId?: string;
 	onClick: () => void;
 	onContextMenu?: (e: React.MouseEvent) => void;
+	onOpenTerminal?: () => void;
 }
 
 /** Icon + color for worktree health status */
@@ -1352,6 +1367,7 @@ const WorktreeItem = memo(function WorktreeItem({
 	worktreeId,
 	onClick,
 	onContextMenu,
+	onOpenTerminal,
 }: WorktreeItemProps): React.JSX.Element {
 	// Read health status from cache (updated by useWorktreeStatus polling in ProjectSidebar)
 	// This reads a shared Map — no hook subscription needed; the parent sidebar
@@ -1365,31 +1381,56 @@ const WorktreeItem = memo(function WorktreeItem({
 		: `${name} on ${branch}${path ? ` — ${path}` : ''}${isTermulManaged === false ? ' — External worktree' : ''}`
 
 	return (
-		<button
+		<div
 			onClick={onClick}
 			onContextMenu={onContextMenu}
+			role="button"
+			tabIndex={0}
+			onKeyDown={(e) => {
+				// Only activate row-select for keys on the row itself, not on nested
+				// controls (e.g. the terminal button), which handle their own keys.
+				if (e.target !== e.currentTarget) return;
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					onClick();
+				}
+			}}
 			className={cn(
-				"w-full flex items-center px-2 py-1 text-xs transition-colors text-left",
+				"group w-full flex items-center px-2 py-1 text-xs transition-colors text-left cursor-pointer",
 				isActive
 					? "bg-primary/15 text-foreground"
 					: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 			)}
 			title={tooltip}
+			aria-current={isActive ? "page" : undefined}
+			aria-label={isRoot ? `Project root on ${branch}` : `Worktree ${name} on ${branch}`}
 		>
 			<div className="mr-1.5 flex-shrink-0 inline-flex items-center" aria-hidden="true">
 				{isRoot ? <Home size={12} className="text-muted-foreground" /> : <GitBranch size={12} className="text-primary/70" />}
 			</div>
 			<span className="truncate flex-1">{isRoot ? "Root" : name}</span>
 			{!isRoot && <HealthBadge status={healthStatus} />}
-			<span className="text-[10px] text-muted-foreground ml-1 truncate max-w-[60px]">
-				{branch}
-			</span>
 			{!isRoot && isTermulManaged === false && (
 				<span className="text-[10px] text-amber-500/70 ml-1" title="External worktree (not created by Termul)">
 					ext
 				</span>
 			)}
-		</button>
+			{onOpenTerminal && (
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation();
+						onOpenTerminal();
+					}}
+					onKeyDown={(e) => e.stopPropagation()}
+					className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-sidebar-accent transition-all ml-1 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+					title={`Open terminal in ${isRoot ? "project root" : name}`}
+					aria-label={`Open terminal in ${isRoot ? "project root" : name}`}
+				>
+					<Terminal size={12} className="text-muted-foreground" aria-hidden="true" />
+				</button>
+			)}
+		</div>
 	);
 });
 

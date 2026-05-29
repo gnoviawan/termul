@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Settings, Save, Info, Plus, X, ChevronDown, Upload, Link2, RefreshCw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { NewProjectModal } from '@/components/NewProjectModal'
@@ -67,6 +67,12 @@ export default function ProjectSettings() {
     fetchShells()
   }, [])
 
+  // Tracks which project's form fields have been initialized, so a late async
+  // availableShells load (which re-runs the sync effect) cannot wipe fields the
+  // user — or the D5 auto-fill — has since changed.
+  const symlinkInitProjectRef = useRef<string | null>(null)
+  const autoFilledSymlinkRef = useRef<string | null>(null)
+
   // Sync state when activeProject changes
   useEffect(() => {
     if (activeProject) {
@@ -75,10 +81,56 @@ export default function ProjectSettings() {
       setRootPath(activeProject.path || '')
       setEnvVars(activeProject.envVars || [])
       setShell(activeProject.defaultShell || availableShells?.default?.name || fallbackShell)
-      setSymlinkDirs(activeProject.symlinkDirs ?? [])
-      setHasChanges(false)
+      // Only (re)initialize symlinkDirs the first time we see a given project.
+      // The effect also re-runs when availableShells resolves; without this guard
+      // that late run would reset symlinkDirs to the (empty) stored value and wipe
+      // the D5 .gitignore auto-fill held in local state.
+      if (symlinkInitProjectRef.current !== activeProject.id) {
+        symlinkInitProjectRef.current = activeProject.id
+        setSymlinkDirs(activeProject.symlinkDirs ?? [])
+        setHasChanges(false)
+      }
     }
   }, [activeProject, availableShells?.default?.name, fallbackShell])
+
+  // D5: default worktree symlinks ON. For a git project that has never configured
+  // symlink dirs, pre-fill them from .gitignore so fresh worktrees inherit shared
+  // deps (e.g. node_modules) and don't break with "module not found". Runs once per
+  // project and never overwrites a list the user has already configured (non-empty).
+  useEffect(() => {
+    const proj = activeProject
+    if (!proj?.path || !proj.isGitRepo) return
+    if ((proj.symlinkDirs ?? []).length > 0) return
+    if (autoFilledSymlinkRef.current === proj.id) return
+
+    let cancelled = false
+    const projId = proj.id
+    const projPath = proj.path
+    autoFilledSymlinkRef.current = projId
+    void (async () => {
+      try {
+        const result = await worktreeApi.parseGitignore(projPath)
+        // Ignore the result if the effect was cleaned up or the selected project changed.
+        if (cancelled || activeProject?.id !== projId) return
+        if (result.success && result.data) {
+          const dirs = result.data.filter((d) => d.exists).map((d) => d.dirName)
+          if (dirs.length > 0) {
+            setSymlinkDirs(dirs)
+            setHasChanges(true)
+          }
+        }
+      } catch {
+        // Best-effort: leave the list empty if .gitignore can't be parsed.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Keyed on project identity only: this must run once per project selection and
+    // not re-fire when other activeProject fields change (which would re-parse and
+    // fight user edits). The in-closure activeProject read is a freshness guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id, activeProject?.path, activeProject?.isGitRepo])
 
   const handleSave = () => {
     if (activeProject) {
