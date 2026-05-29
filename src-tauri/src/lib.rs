@@ -3,6 +3,7 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
+mod secure_storage;
 mod shell_paths;
 mod trackers;
 mod worktree;
@@ -778,6 +779,10 @@ pub fn run() {
             // Git commands
             commands::git_get_status,
             commands::git_get_diff,
+            // Secure storage commands
+            secure_storage::secure_storage_set,
+            secure_storage::secure_storage_get,
+            secure_storage::secure_storage_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

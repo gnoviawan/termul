@@ -7,10 +7,15 @@ import {
   useProjectsLoader
 } from './use-projects-persistence'
 
-const { mockPersistenceRead, mockPersistenceWrite } = vi.hoisted(() => ({
-  mockPersistenceRead: vi.fn(),
-  mockPersistenceWrite: vi.fn()
-}))
+const REDACTED_VALUE = '[REDACTED]'
+
+const { mockPersistenceRead, mockPersistenceWrite, mockSecureStorageGet, mockSecureStorageSet } =
+  vi.hoisted(() => ({
+    mockPersistenceRead: vi.fn(),
+    mockPersistenceWrite: vi.fn(),
+    mockSecureStorageGet: vi.fn(),
+    mockSecureStorageSet: vi.fn()
+  }))
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
@@ -18,12 +23,22 @@ vi.mock('@/lib/api', () => ({
     write: mockPersistenceWrite,
     writeDebounced: vi.fn(),
     delete: vi.fn()
+  },
+  secureStorageApi: {
+    getSecret: mockSecureStorageGet,
+    setSecret: mockSecureStorageSet,
+    deleteSecret: vi.fn()
   }
 }))
 
 describe('use-projects-persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPersistenceRead.mockResolvedValue({ success: false })
+    mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
+    mockSecureStorageGet.mockResolvedValue({ success: false, code: 'KEY_NOT_FOUND' })
+    mockSecureStorageSet.mockResolvedValue({ success: true, data: undefined })
+
     useProjectStore.setState({
       projects: [],
       activeProjectId: '',
@@ -31,7 +46,7 @@ describe('use-projects-persistence', () => {
     })
   })
 
-  it('redacts secret env var values before persisting projects', async () => {
+  it('stores secret env vars in secure storage and persists redacted placeholders', async () => {
     useProjectStore.setState({
       projects: [
         {
@@ -49,11 +64,13 @@ describe('use-projects-persistence', () => {
       isLoaded: true
     })
 
-    mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
-
     const { result } = renderHook(() => usePersistProjectsImmediate())
     await result.current()
 
+    expect(mockSecureStorageSet).toHaveBeenCalledWith(
+      'project:project-1:env:API_TOKEN',
+      'super-secret-token'
+    )
     expect(mockPersistenceWrite).toHaveBeenCalledWith(
       PersistenceKeys.projects,
       expect.objectContaining({
@@ -61,7 +78,7 @@ describe('use-projects-persistence', () => {
           expect.objectContaining({
             envVars: [
               { key: 'PUBLIC_URL', value: 'https://example.com', isSecret: undefined },
-              { key: 'API_TOKEN', value: '', isSecret: true }
+              { key: 'API_TOKEN', value: REDACTED_VALUE, isSecret: true }
             ]
           })
         ]
@@ -69,7 +86,7 @@ describe('use-projects-persistence', () => {
     )
   })
 
-  it('restores secret env vars as blank values after loading persisted projects', async () => {
+  it('hydrates redacted secret env vars from secure storage during load', async () => {
     mockPersistenceRead.mockResolvedValue({
       success: true,
       data: {
@@ -81,13 +98,17 @@ describe('use-projects-persistence', () => {
             gitBranch: 'main',
             envVars: [
               { key: 'PUBLIC_URL', value: 'https://example.com' },
-              { key: 'API_TOKEN', value: 'persisted-secret-should-not-survive', isSecret: true }
+              { key: 'API_TOKEN', value: REDACTED_VALUE, isSecret: true }
             ]
           }
         ],
         activeProjectId: 'project-1',
         updatedAt: '2026-05-25T00:00:00.000Z'
       }
+    })
+    mockSecureStorageGet.mockResolvedValue({
+      success: true,
+      data: 'restored-from-secure-storage'
     })
 
     renderHook(() => useProjectsLoader())
@@ -101,7 +122,7 @@ describe('use-projects-persistence', () => {
         id: 'project-1',
         envVars: [
           { key: 'PUBLIC_URL', value: 'https://example.com', isSecret: undefined },
-          { key: 'API_TOKEN', value: '', isSecret: true }
+          { key: 'API_TOKEN', value: 'restored-from-secure-storage', isSecret: true }
         ]
       })
     ])
