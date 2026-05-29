@@ -3,6 +3,7 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
+mod secure_storage;
 mod shell_paths;
 mod trackers;
 mod worktree;
@@ -773,6 +774,10 @@ pub fn run() {
             commands::data_migration_get_schema_info,
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
+            // Secure storage commands
+            secure_storage::secure_storage_set,
+            secure_storage::secure_storage_get,
+            secure_storage::secure_storage_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
