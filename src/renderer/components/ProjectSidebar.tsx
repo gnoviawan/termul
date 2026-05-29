@@ -669,8 +669,18 @@ export function ProjectSidebar({
 				{
 					label: "Remove Worktree",
 					icon: <Trash2 size={14} />,
-					onClick: () =>
-						setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree }),
+					onClick: () => {
+						const projectPath = useProjectStore.getState().projects.find((p) => p.id === projectId)?.path;
+						if (!projectPath) {
+							toast({
+								title: "Failed to remove worktree",
+								description: "Project path not found",
+								variant: "destructive",
+							});
+							return;
+						}
+						setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree });
+					},
 					variant: "danger" as const,
 					disabled: !canRemove || isWorktreeOperationLocked,
 				},
