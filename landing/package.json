@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "bun@1.3.11",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "verify:prerender": "node --input-type=module -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
+    "verify:prerender": "bun -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.4",

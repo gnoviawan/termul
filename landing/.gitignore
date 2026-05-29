@@ -1,3 +1,8 @@
+# Other package managers (Bun only)
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
 # Logs
 logs
 *.log
