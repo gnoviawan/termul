@@ -277,10 +277,11 @@ pub async fn worktree_create(
 /// Remove a worktree. Uses --force if requested. Runs `git worktree prune` after.
 #[tauri::command]
 pub async fn worktree_remove(
+    project_path: String,
     worktree_path: String,
     force: bool,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::remove(&worktree_path, force) {
+    match WorktreeManager::remove(&project_path, &worktree_path, force) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
