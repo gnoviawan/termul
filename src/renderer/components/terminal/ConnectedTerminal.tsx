@@ -202,6 +202,11 @@ function ConnectedTerminalComponent({
 	>(null);
 	// Track WebGL context loss for recovery decisions
 	const webglContextLostRef = useRef<boolean>(false);
+	// Single-flight guard for performTerminalRecovery. On a window restore both
+	// the visibilitychange and focus handlers (and sometimes power-resume) can
+	// fire close together; without this guard each would start its own
+	// layout-wait RAF loop and overlapping fit + visibility-flip cycles.
+	const recoveryInProgressRef = useRef<boolean>(false);
 	// Track visibility prop for recovery path guards (tab-active, not window-visible).
 	// Ref avoids stale closures in event listeners referencing isVisible directly.
 	const isVisibleRef = useRef(isVisible);
@@ -1422,6 +1427,12 @@ function ConnectedTerminalComponent({
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
+		// Single-flight: if a recovery is already running (layout-wait poll or the
+		// trailing visibility-flip RAF), skip duplicate triggers. On a window
+		// restore both visibilitychange and focus typically fire close together.
+		if (recoveryInProgressRef.current) return;
+		recoveryInProgressRef.current = true;
+
 		// Cancel any pending WebGL auto-recovery timeout to avoid double-creation
 		// race with the genuine onContextLoss path.
 		if (webglRecoveryTimeoutRef.current) {
@@ -1454,19 +1465,26 @@ function ConnectedTerminalComponent({
 
 		const runRecovery = (): void => {
 			const terminal = terminalRef.current;
-			if (!terminal) return;
+			if (!terminal) {
+				recoveryInProgressRef.current = false;
+				return;
+			}
 			// Re-fit (guarded against collapsed dims) + redraw the buffer.
 			forceResizeFit();
 			terminal.refresh(0, terminal.rows - 1);
 
-			// Nudge the compositor to re-present the canvas layer.
+			// Nudge the compositor to re-present the canvas layer. Clear the
+			// single-flight guard only after the trailing refresh completes.
 			if (termEl) {
 				termEl.style.visibility = "hidden";
 				requestAnimationFrame(() => {
 					termEl.style.visibility = "";
 					const t = terminalRef.current;
 					if (t) t.refresh(0, t.rows - 1);
+					recoveryInProgressRef.current = false;
 				});
+			} else {
+				recoveryInProgressRef.current = false;
 			}
 		};
 
@@ -1527,8 +1545,8 @@ function ConnectedTerminalComponent({
 			if (!isVisibleRef.current) return;
 			// Fire recovery immediately — the window is already visible when
 			// 'focus' fires (unlike visibilitychange which needs DOM reflow time).
-			// The recovery sequence (dispose WebGL -> DOM refresh -> RAF recreate
-			// WebGL) handles timing internally, so no external debounce is needed.
+			// performTerminalRecovery internally waits for a stable layout before
+			// fitting and is single-flight guarded, so this is safe to call eagerly.
 			performTerminalRecovery();
 		};
 

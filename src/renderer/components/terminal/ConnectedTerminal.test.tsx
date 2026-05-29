@@ -2109,22 +2109,9 @@ describe('ConnectedTerminal', () => {
     it('should re-fit and re-composite on window focus once layout is stable', async () => {
       vi.useFakeTimers()
 
-      // jsdom reports 0x0 rects by default; recovery waits for a usable size
-      // before fitting (guards against collapsing the grid to 1-2 rows). Stub a
-      // usable container size so recovery proceeds on the first frame.
-      const rectSpy = vi
-        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-        .mockReturnValue({
-          width: 800,
-          height: 600,
-          top: 0,
-          left: 0,
-          right: 800,
-          bottom: 600,
-          x: 0,
-          y: 0,
-          toJSON: () => ({})
-        } as DOMRect)
+      // Note: the global beforeEach already stubs HTMLDivElement.prototype
+      // getBoundingClientRect to 800x600, so the terminal container reports a
+      // usable size and recovery's layout-wait proceeds on the first frame.
 
       render(<ConnectedTerminal />)
 
@@ -2158,14 +2145,15 @@ describe('ConnectedTerminal', () => {
         expect.any(Number)
       )
       // Buffer repainted to redraw into the re-composited layer
-      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(
+        0,
+        mockTerminalInstance.rows - 1
+      )
       // WebGL addon is NOT disposed/recreated — the context is healthy, only the
       // compositor needs a nudge. Recreating would add a needless blank gap.
       expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
       // Visibility flip completed (restored to visible after the re-composite)
       expect(termEl.style.visibility).toBe('')
-
-      rectSpy.mockRestore()
 
       vi.useRealTimers()
     })
@@ -2184,6 +2172,39 @@ describe('ConnectedTerminal', () => {
       expect(removeEventListenerSpy).toHaveBeenCalledWith('focus', expect.any(Function))
 
       removeEventListenerSpy.mockRestore()
+    })
+
+    it('should coalesce overlapping recovery triggers (single-flight)', async () => {
+      vi.useFakeTimers()
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      await vi.advanceTimersByTimeAsync(50)
+      mockFitAddonInstance.fit.mockClear()
+
+      // On a real window restore, visibilitychange and focus fire close together.
+      // Dispatch focus twice before the first recovery completes its RAF cycle.
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('focus'))
+
+      // Let the layout-wait + recovery + trailing visibility-flip RAF complete.
+      await vi.advanceTimersByTimeAsync(40)
+
+      // The single-flight guard coalesces the duplicate trigger: fit runs once,
+      // not twice, avoiding overlapping resize + visibility-flip cycles.
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      // After recovery fully completes, a subsequent focus can recover again.
+      mockFitAddonInstance.fit.mockClear()
+      window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(40)
+      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+
+      vi.useRealTimers()
     })
   })
 
