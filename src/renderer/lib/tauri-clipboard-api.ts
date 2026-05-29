@@ -32,15 +32,13 @@ export const tauriClipboardApi = {
 
   async hasImage(): Promise<IpcResult<boolean>> {
     try {
-      const image = await readImage();
-      // readImage() returns an Image object when image data is present,
-      // and returns null when no image is on the clipboard.
-      return { success: true, data: image != null };
+      // readImage() resolves with an Image when image data is on the clipboard,
+      // and throws when no image is present or on unsupported platforms.
+      await readImage();
+      return { success: true, data: true };
     } catch (err) {
-      // readImage() throws on unsupported platforms or when clipboard has no image.
-      // Log unexpected errors but never block paste.
       if (import.meta.env.DEV) {
-        console.warn('hasImage check failed:', err);
+        console.warn('hasImage: readImage() rejected:', err);
       }
       return { success: true, data: false };
     }
