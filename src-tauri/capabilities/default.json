@@ -66,6 +66,10 @@
     "opener:default",
     "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",
-    "mcp-bridge:default"
+    "mcp-bridge:default",
+    "notification:default",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
   ]
 }

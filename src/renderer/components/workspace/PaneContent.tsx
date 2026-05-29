@@ -84,6 +84,8 @@ export function PaneContent({
 	const isFullscreenPane = fullscreenPaneId === pane.id;
 	const isActivePane = activePaneId === pane.id;
 	const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
+	const activeTerminalIdInPane =
+		activeTab?.type === "terminal" ? activeTab.terminalId : null;
 	const panePreviewPosition =
 		previewTarget?.paneId === pane.id && !isFullscreenPane
 			? previewTarget.position
@@ -93,7 +95,32 @@ export function PaneContent({
 		if (!isActivePane) {
 			setActivePane(pane.id);
 		}
-	}, [isActivePane, setActivePane, pane.id]);
+		// Clicking into the pane is an explicit acknowledgment of its visible terminal:
+		// clear the finished-terminal highlight. This is the ONLY clear path — we do not
+		// auto-clear on tab-switch or remount, so a flagged background tab keeps its border
+		// until the user actually looks at it.
+		if (activeTerminalIdInPane) {
+			const store = useTerminalStore.getState();
+			const term = store.terminals.find((t) => t.id === activeTerminalIdInPane);
+			if (term?.needsAttention) {
+				store.setTerminalNeedsAttention(activeTerminalIdInPane, false);
+			}
+		}
+	}, [isActivePane, setActivePane, pane.id, activeTerminalIdInPane]);
+
+	// Keyboard parity for the mouse acknowledgment above: a keystroke directed at this
+	// pane's visible terminal is an explicit "I'm looking at it" signal, so clear the
+	// highlight. Capture phase + a real key event means this never fires on a passive
+	// tab-switch (which only auto-focuses the terminal, no keypress), avoiding the
+	// flash-and-vanish that auto-clear-on-visibility caused.
+	const handleKeyDownCapture = useCallback(() => {
+		if (!activeTerminalIdInPane) return;
+		const store = useTerminalStore.getState();
+		const term = store.terminals.find((t) => t.id === activeTerminalIdInPane);
+		if (term?.needsAttention) {
+			store.setTerminalNeedsAttention(activeTerminalIdInPane, false);
+		}
+	}, [activeTerminalIdInPane]);
 
 	const previewSpaceClass =
 		panePreviewPosition === "left"
@@ -151,6 +178,7 @@ export function PaneContent({
 				isFullscreenPane && "ring-1 ring-primary/30 rounded-xl overflow-hidden",
 			)}
 			onMouseDown={handleFocus}
+			onKeyDownCapture={handleKeyDownCapture}
 		>
 			<WorkspaceTabBar
 				paneId={pane.id}
@@ -245,11 +273,18 @@ export function PaneContent({
 								return (
 									<div
 										key={tab.id}
-										className={
+										className={cn(
 											isVisible
 												? "w-full h-full"
-												: "w-full h-full absolute inset-0 invisible"
-										}
+												: "w-full h-full absolute inset-0 invisible",
+											// In-app highlight: ring the whole terminal content when its
+											// process finished while unfocused. Distinct amber accent,
+											// inset so it stays inside the pane and clear of the
+											// active-pane primary ring and drop overlays. Pulse is
+											// disabled under prefers-reduced-motion.
+											terminal.needsAttention &&
+												"rounded-sm ring-2 ring-inset ring-amber-400/70 animate-pulse motion-reduce:animate-none",
+										)}
 									>
 										<ConnectedTerminal
 											terminalId={terminal.ptyId}

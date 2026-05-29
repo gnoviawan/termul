@@ -607,7 +607,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());

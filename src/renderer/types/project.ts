@@ -79,6 +79,7 @@ export interface Terminal {
   appHiddenSince?: number // Timestamp when the app-hidden retention window started
   hasActivity?: boolean // Whether terminal has recent output activity
   lastActivityTimestamp?: number // Timestamp when last activity occurred
+  needsAttention?: boolean // Whether this terminal's process finished while it was not the focused/visible terminal; drives the in-app highlight border
 }
 
 export interface TerminalLine {
