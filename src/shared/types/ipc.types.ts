@@ -261,6 +261,7 @@ export interface WindowApi {
 export interface ClipboardApi {
 	readText: () => Promise<IpcResult<string>>;
 	writeText: (text: string) => Promise<IpcResult<void>>;
+	hasImage: () => Promise<IpcResult<boolean>>;
 }
 
 // Visibility API for renderer to notify main process of visibility changes

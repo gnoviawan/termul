@@ -343,6 +343,12 @@ function ConnectedTerminalComponent({
 	const { copySelection, pasteFromClipboard, hasSelection } =
 		useTerminalClipboard({
 			terminal: terminalInstance,
+			onImagePaste: async () => {
+				const ptyId = ptyIdRef.current;
+				if (!ptyId) return;
+				// Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
+				await terminalApi.write(ptyId, '\x16');
+			},
 		});
 
 	// Sync ptyIdRef with external terminal ID when provided
