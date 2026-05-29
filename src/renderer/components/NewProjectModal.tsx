@@ -76,10 +76,13 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   }, [isOpen, onClose])
 
   const handleCreate = useCallback(() => {
-    if (name.trim()) {
+    const trimmedName = name.trim()
+    const trimmedPath = path.trim()
+
+    if (trimmedName && trimmedPath) {
       // Use selected shell or fallback
       const shellToUse = selectedShell || fallbackShell
-      onCreateProject(name.trim(), selectedColor, path || undefined, shellToUse)
+      onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse)
       onClose()
     }
   }, [name, selectedColor, path, selectedShell, fallbackShell, onCreateProject, onClose])
@@ -93,7 +96,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Enter' && name.trim()) {
+      if (e.key === 'Enter' && name.trim() && path.trim()) {
         e.preventDefault()
         handleCreate()
       } else if (e.key === 'Escape') {
@@ -101,7 +104,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         onClose()
       }
     },
-    [name, handleCreate, onClose]
+    [name, path, handleCreate, onClose]
   )
 
   return (
@@ -152,7 +155,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Root Directory (optional)
+                  Root Directory
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -236,7 +239,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
               </button>
               <button
                 onClick={handleCreate}
-                disabled={!name.trim()}
+                disabled={!name.trim() || !path.trim()}
                 className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Create

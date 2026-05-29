@@ -1,9 +1,45 @@
 import { useEffect, useCallback, useRef } from 'react'
 import { useProjectStore } from '@/stores/project-store'
-import { persistenceApi } from '@/lib/api'
+import { persistenceApi, worktreeApi } from '@/lib/api'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
-import type { PersistedProjectData, PersistedProject } from '../../shared/types/persistence.types'
-import type { Project, ProjectColor } from '@/types/project'
+import type { PersistedProjectData, PersistedProject, PersistedWorktree } from '../../shared/types/persistence.types'
+import type { Project, ProjectColor, Worktree } from '@/types/project'
+
+function toPersistedEnvVars(project: Project): PersistedProject['envVars'] {
+  return project.envVars?.map((envVar) => ({
+    key: envVar.key,
+    value: envVar.isSecret ? '' : envVar.value,
+    isSecret: envVar.isSecret
+  }))
+}
+
+function fromPersistedEnvVars(persisted: PersistedProject): Project['envVars'] {
+  return persisted.envVars?.map((envVar) => ({
+    key: envVar.key,
+    value: envVar.isSecret ? '' : envVar.value,
+    isSecret: envVar.isSecret
+  }))
+}
+
+function toPersistedWorktree(worktree: Worktree): PersistedWorktree {
+  return {
+    id: worktree.id,
+    name: worktree.name,
+    branch: worktree.branch,
+    path: worktree.path,
+    createdAt: worktree.createdAt,
+  }
+}
+
+function fromPersistedWorktree(persisted: PersistedWorktree): Worktree {
+  return {
+    id: persisted.id,
+    name: persisted.name,
+    branch: persisted.branch,
+    path: persisted.path,
+    createdAt: persisted.createdAt,
+  }
+}
 
 function toPersistedProject(project: Project): PersistedProject {
   return {
@@ -15,13 +51,11 @@ function toPersistedProject(project: Project): PersistedProject {
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
     // TODO: Secret values (isSecret===true) should be stored in secure OS storage (keyring/secureStore)
-    // instead of plaintext. For now, we persist all values but this is a security concern.
-    // A future PR should implement secure storage for secrets.
-    envVars: project.envVars?.map((envVar) => ({
-      key: envVar.key,
-      value: envVar.value,
-      isSecret: envVar.isSecret
-    }))
+    // instead of plaintext. Until secure storage exists, secret keys are preserved but values are redacted.
+    envVars: toPersistedEnvVars(project),
+    worktrees: project.worktrees?.map(toPersistedWorktree),
+    activeWorktreeId: project.activeWorktreeId,
+    isGitRepo: project.isGitRepo,
   }
 }
 
@@ -34,11 +68,127 @@ function fromPersistedProject(persisted: PersistedProject): Project {
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
     defaultShell: persisted.defaultShell,
-    envVars: persisted.envVars?.map((envVar) => ({
-      key: envVar.key,
-      value: envVar.value,
-      isSecret: envVar.isSecret
-    }))
+    envVars: fromPersistedEnvVars(persisted),
+    worktrees: persisted.worktrees?.map(fromPersistedWorktree),
+    activeWorktreeId: persisted.activeWorktreeId,
+    isGitRepo: persisted.isGitRepo,
+  }
+}
+
+/**
+ * Reconcile worktrees for a single project against `git worktree list --porcelain`.
+ * Adds worktrees that git knows about but we don't; removes stale entries.
+ * All actions are logged with [WorktreeReconciler] prefix for debugging.
+ */
+async function reconcileProjectWorktrees(project: Project): Promise<void> {
+  if (!project.path) return
+
+  const result = await worktreeApi.list(project.path)
+  if (!result.success) {
+    // Not a git repo or git not available
+    if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
+      useProjectStore.getState().updateProject(project.id, { isGitRepo: false })
+      console.debug(`[WorktreeReconciler] Not a git repo or git not found: ${project.name}`)
+    }
+    return
+  }
+
+  // Mark project as a git repo
+  useProjectStore.getState().updateProject(project.id, { isGitRepo: true })
+
+  const gitWorktrees = result.data
+  if (!gitWorktrees) return
+
+  const storedWorktrees = project.worktrees ?? []
+  const storedByPath = new Map(storedWorktrees.map((w) => [w.path, w]))
+  const gitByPath = new Map(gitWorktrees.map((w) => [w.path, w]))
+
+  let changed = false
+  const updatedWorktrees = [...storedWorktrees]
+
+  // Git has worktree not in store → add it
+  for (const gitWt of gitWorktrees) {
+    if (!storedByPath.has(gitWt.path)) {
+      const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
+      updatedWorktrees.push({
+        id: crypto.randomUUID(),
+        name: gitWt.name,
+        branch: gitWt.branch,
+        path: gitWt.path,
+        createdAt: new Date().toISOString(),
+      })
+      console.debug(`[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`)
+      changed = true
+    }
+  }
+
+  // Store has worktree git doesn't show → remove stale entry
+  // But only remove if we can verify (the path no longer exists or git doesn't list it)
+  const staleIds: string[] = []
+  for (const storedWt of storedWorktrees) {
+    if (!gitByPath.has(storedWt.path)) {
+      staleIds.push(storedWt.id)
+      console.debug(`[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    const finalList = updatedWorktrees.filter((w) => !staleIds.includes(w.id))
+
+    // Reconcile activeWorktreeId: if the active worktree was pruned, reset it
+    const currentProject = useProjectStore.getState().projects.find((p) => p.id === project.id)
+    const activeId = currentProject?.activeWorktreeId
+    const newActiveId = activeId && staleIds.includes(activeId) ? null : activeId
+
+    useProjectStore.getState().updateProject(project.id, {
+      worktrees: finalList,
+      activeWorktreeId: newActiveId,
+    })
+  }
+}
+
+/**
+ * Hook that reconciles worktrees for the active project.
+ * Runs on project selection and periodically (every 60s).
+ * Also reconciles all projects on initial load.
+ */
+export function useWorktreeReconciler(): void {
+  const activeProjectId = useProjectStore((state) => state.activeProjectId)
+  // Use a stable selector that returns only what we need to avoid retriggers on store writes
+  const projectRef = useRef<Project | null>(null)
+
+  useEffect(() => {
+    const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
+    if (!project?.path) return
+
+    projectRef.current = project
+
+    // Reconcile on project selection
+    reconcileProjectWorktrees(project)
+
+    // Periodic reconciliation every 60s for active project
+    const interval = setInterval(() => {
+      const currentProject = useProjectStore.getState().projects.find(
+        (p) => p.id === activeProjectId
+      )
+      if (currentProject?.path) {
+        reconcileProjectWorktrees(currentProject)
+      }
+    }, 60_000)
+
+    return () => clearInterval(interval)
+  }, [activeProjectId])
+}
+
+/**
+ * Force-reconcile worktrees for a specific project after create/remove operations.
+ * Always re-lists from git to ensure consistency.
+ */
+export async function reconcileProjectWorktreesNow(projectId: string): Promise<void> {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  if (project) {
+    await reconcileProjectWorktrees(project)
   }
 }
 
@@ -59,6 +209,15 @@ export function useProjectsLoader(): void {
             ? projects[0].id
             : ''
         setProjects(projects, validActiveId)
+
+        // Reconcile all projects against git in parallel after loading
+        for (const project of projects) {
+          if (project.path) {
+            reconcileProjectWorktrees(project).catch((err) =>
+              console.debug('[WorktreeReconciler] Reconciliation error:', err)
+            )
+          }
+        }
       } else {
         // No saved projects - start with empty state
         setProjects([])
@@ -138,7 +297,7 @@ export function usePersistProjectsImmediate(): () => Promise<void> {
 
 export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
   return useCallback(async (id: string) => {
-    // First delete the project from the store
+    // Delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
     // Cascade delete: remove terminal layout and snapshots for this project

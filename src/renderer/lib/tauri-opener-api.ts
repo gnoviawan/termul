@@ -7,11 +7,12 @@
  * Uses @tauri-apps/plugin-opener for cross-platform file operations.
  */
 
-import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
+import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { IpcResult } from '@shared/types/ipc.types'
 
 export interface OpenerApi {
   openWithExternalApp: (path: string) => Promise<IpcResult<void>>
+  openUrlWithSystemBrowser: (url: string) => Promise<IpcResult<void>>
   revealInFileManager: (path: string) => Promise<IpcResult<void>>
 }
 
@@ -26,6 +27,19 @@ function createTauriOpenerApi(): OpenerApi {
           success: false,
           error: error instanceof Error ? error.message : String(error),
           code: 'OPEN_ERROR'
+        }
+      }
+    },
+
+    async openUrlWithSystemBrowser(url: string): Promise<IpcResult<void>> {
+      try {
+        await openUrl(url)
+        return { success: true, data: undefined }
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          code: 'OPEN_URL_ERROR'
         }
       }
     },

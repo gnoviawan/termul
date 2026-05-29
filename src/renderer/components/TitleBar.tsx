@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Minus, Square, Copy, X, PanelLeft, PanelRight, Settings, SlidersHorizontal } from 'lucide-react'
+import { Minus, Square, Copy, X, PanelLeft, PanelRight, SlidersHorizontal } from 'lucide-react'
+import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
@@ -10,7 +11,15 @@ import { isMac } from '@/lib/platform'
 
 const focusableButtonClass = 'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
-export function TitleBar(): React.JSX.Element {
+interface TitleBarProps {
+  isShortcutsOpen?: boolean
+  onShortcutsOpenChange?: (open: boolean) => void
+}
+
+export function TitleBar({
+  isShortcutsOpen,
+  onShortcutsOpenChange
+}: TitleBarProps = {}): React.JSX.Element {
   const [isMaximized, setIsMaximized] = useState(false)
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
@@ -102,18 +111,11 @@ export function TitleBar(): React.JSX.Element {
           />
         </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}
-          className={focusableButtonClass}
-          title="Settings"
-          aria-label="Open settings"
-          aria-current={location.pathname === '/settings' ? 'page' : undefined}
-        >
-          <Settings
-            size={16}
-            className={location.pathname === '/settings' ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
+        <TitleBarShortcutsPopover
+          buttonClassName={focusableButtonClass}
+          open={isShortcutsOpen}
+          onOpenChange={onShortcutsOpenChange}
+        />
 
         <button
           onClick={(e) => { e.stopPropagation(); navigate('/preferences'); }}

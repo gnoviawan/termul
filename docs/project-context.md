@@ -2,7 +2,16 @@
 project_name: 'termul'
 user_name: 'Althio'
 date: '2026-05-09'
-sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'quality_rules', 'workflow_rules', 'anti_patterns']
+sections_completed:
+  [
+    'technology_stack',
+    'language_rules',
+    'framework_rules',
+    'testing_rules',
+    'quality_rules',
+    'workflow_rules',
+    'anti_patterns'
+  ]
 status: 'complete'
 rule_count: 57
 optimized_for_llm: true
@@ -20,7 +29,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Backend:** Rust `1.77+`, edition `2021`
 - **Frontend:** React `18.3.1` + React DOM `18.3.1`
 - **Language/tooling:** TypeScript `5.8.3` in strict mode, ESM-first repo (`"type": "module"`)
-- **Build/test:** Vite `5.4.19`, Vitest `4.0.16` with `jsdom`
+- **Build/test:** Vite `8.0.14`, Vitest `4.0.16` with `jsdom`
 - **Linting:** ESLint `9.32.0` + `typescript-eslint` `8.38.0`
 - **UI/state:** Tailwind CSS `3.4.17`, Zustand `5.0.9`, TanStack React Query `5.83.0`, Radix UI packages
 - **Routing:** React Router DOM `6.30.1` using hash-router patterns
@@ -98,7 +107,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ### Development Workflow Rules
 
-- Follow the repo’s existing validation flow before considering a change complete: `npm run lint`, `npm run typecheck`, and `npm test`.
+- Follow the repo’s existing validation flow before considering a change complete: `bun run lint`, `bun run typecheck`, and `bun run test`.
 - Keep changes aligned with the current Tauri-first architecture and cleanup/parity-hardening direction of the repo.
 - Use conventional commit message style when preparing commit-ready changes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
 - Prefer incremental changes that fit existing structure over large unsolicited architectural rewrites.
@@ -136,7 +145,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 7. Reuse existing Zustand, routing, Radix/shadcn, and Tailwind patterns.
 8. Add or update colocated `*.test.ts` / `*.test.tsx` tests compatible with `Vitest + jsdom`.
 9. Prefer extending existing patterns over introducing new frameworks or parallel abstractions.
-10. Run `npm run lint`, `npm run typecheck`, and `npm test` before considering the change complete.
+10. Run `bun run lint`, `bun run typecheck`, and `bun run test` before considering the change complete.
 
 **For AI Agents:**
 
@@ -152,4 +161,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules.
 - Remove rules that become obvious over time.
 
-Last Updated: 2026-05-09
+Last Updated: 2026-05-27

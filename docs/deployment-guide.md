@@ -36,17 +36,17 @@ Important configured values include:
 ## Local Production Build
 
 ```bash
-npm run build
+bun run build
 ```
 
 Additional targeted builds:
 
 ```bash
-npm run build:tauri:debug
-npm run build:tauri:win
-npm run build:tauri:mac-arm
-npm run build:tauri:mac-x64
-npm run build:tauri:linux
+bun run build:tauri:debug
+bun run build:tauri:win
+bun run build:tauri:mac-arm
+bun run build:tauri:mac-x64
+bun run build:tauri:linux
 ```
 
 ## Release Workflow
@@ -72,12 +72,13 @@ The main release pipeline is `.github/workflows/release.yml`.
    - Windows x64
    - Linux x64
    - macOS arm64
+   - macOS x64 / Intel
 
 4. **Validate versions**
    - `package.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/tauri.conf.json`
-   must all match the tag version
+     must all match the tag version
 
 5. **Publish via Tauri action**
    - builds bundles
@@ -134,6 +135,7 @@ git push origin v0.3.7
 ## Platform-Specific Notes
 
 ### Linux
+
 The release workflow installs Linux build dependencies such as:
 
 - `libwebkit2gtk-4.1-dev`
@@ -142,14 +144,17 @@ The release workflow installs Linux build dependencies such as:
 - `patchelf`
 
 ### Windows
+
 Windows builds target:
 
 - `x86_64-pc-windows-msvc`
 
 ### macOS
+
 Release workflow currently targets:
 
 - `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
 
 Repository scripts also support Intel macOS builds locally.
 
@@ -172,7 +177,7 @@ The repository also contains `.github/workflows/publish-aur.yml`, which updates 
 
 ## Recommended Release Checklist
 
-1. Run local validation (`npm run lint`, `npm run typecheck`, `npm test`)
+1. Run local validation (`bun run lint`, `bun run typecheck`, `bun run test`)
 2. Run Rust validation in `src-tauri/`
 3. Confirm version parity in all three version files
 4. Confirm signing secrets are available in GitHub

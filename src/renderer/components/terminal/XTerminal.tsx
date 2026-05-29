@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { DEFAULT_TERMINAL_OPTIONS } from "@/components/terminal/terminal-config";
+import type { PoolSlot } from "@/components/terminal/terminal-renderer-pool";
 import "@xterm/xterm/css/xterm.css";
 
 export interface XTerminalProps {
@@ -11,6 +12,10 @@ export interface XTerminalProps {
 	onResize?: (cols: number, rows: number) => void;
 	onReady?: (terminal: Terminal) => void;
 	className?: string;
+	/** Optional pool slot to use instead of creating a new Terminal instance. */
+	poolSlot?: PoolSlot;
+	/** Renderer preference: "auto" | "webgl" | "dom". Defaults to "webgl". */
+	renderer?: "auto" | "webgl" | "dom";
 }
 
 const TERMINAL_OPTIONS = {
@@ -24,6 +29,8 @@ function XTerminalComponent({
 	onResize,
 	onReady,
 	className = "",
+	poolSlot,
+	renderer = "webgl",
 }: XTerminalProps): React.JSX.Element {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const terminalRef = useRef<Terminal | null>(null);
@@ -33,38 +40,63 @@ function XTerminalComponent({
 	useEffect(() => {
 		if (!containerRef.current) return;
 
-		const terminal = new Terminal(TERMINAL_OPTIONS);
-		terminalRef.current = terminal;
+		let terminal: Terminal;
+		let fitAddon: FitAddon;
 
-		const fitAddon = new FitAddon();
-		fitAddonRef.current = fitAddon;
-		terminal.loadAddon(fitAddon);
+		if (poolSlot) {
+			// Use the pool slot's pre-configured terminal
+			terminal = poolSlot.term;
+			fitAddon = poolSlot.fitAddon;
+			terminalRef.current = terminal;
+			fitAddonRef.current = fitAddon;
 
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
+			// Move the slot's host div into this container
+			containerRef.current.appendChild(poolSlot.host);
+		} else {
+			// Create a new terminal as before
+			terminal = new Terminal(TERMINAL_OPTIONS);
+			terminalRef.current = terminal;
 
-		terminal.open(containerRef.current);
+			fitAddon = new FitAddon();
+			fitAddonRef.current = fitAddon;
+			terminal.loadAddon(fitAddon);
 
-		try {
-			const webglAddon = new WebglAddon();
-			webglAddon.onContextLoss(() => {
-				webglAddon.dispose();
-			});
-			terminal.loadAddon(webglAddon);
-		} catch {
-			console.warn(
-				"WebGL addon failed to load, falling back to DOM renderer",
-			);
+			const webLinksAddon = new WebLinksAddon();
+			terminal.loadAddon(webLinksAddon);
+
+			terminal.open(containerRef.current);
+
+			if (renderer !== "dom") {
+				try {
+					const webglAddon = new WebglAddon();
+					webglAddon.onContextLoss(() => {
+						webglAddon.dispose();
+					});
+					terminal.loadAddon(webglAddon);
+				} catch {
+					console.warn(
+						"WebGL addon failed to load, falling back to DOM renderer",
+					);
+				}
+			}
 		}
 
-		fitAddon.fit();
+		// Fit the terminal to its container
+		try {
+			fitAddon.fit();
+		} catch {
+			// Ignore fit errors during initialization
+		}
+
+		let onDataDisposable: { dispose: () => void } | undefined;
+		let onResizeDisposable: { dispose: () => void } | undefined;
 
 		if (onData) {
-			terminal.onData(onData);
+			onDataDisposable = terminal.onData(onData);
 		}
 
 		if (onResize) {
-			terminal.onResize(({ cols, rows }) => {
+			onResizeDisposable = terminal.onResize(({ cols, rows }) => {
 				onResize(cols, rows);
 			});
 		}
@@ -73,6 +105,7 @@ function XTerminalComponent({
 			onReady(terminal);
 		}
 
+		// Set up ResizeObserver for terminal fitting
 		const resizeObserver = new ResizeObserver(() => {
 			requestAnimationFrame(() => {
 				if (fitAddonRef.current && terminalRef.current) {
@@ -90,11 +123,20 @@ function XTerminalComponent({
 
 		return () => {
 			resizeObserver.disconnect();
-			terminal.dispose();
-			terminalRef.current = null;
-			fitAddonRef.current = null;
+
+			// Dispose event subscriptions
+			onDataDisposable?.dispose();
+			onResizeDisposable?.dispose();
+
+			// Only dispose the terminal if we created it (not a pool slot)
+			if (!poolSlot) {
+				terminal.dispose();
+				terminalRef.current = null;
+				fitAddonRef.current = null;
+			}
+			// If poolSlot was provided, the pool owns the lifecycle
 		};
-	}, [onData, onResize, onReady]);
+	}, [onData, onResize, onReady, poolSlot]);
 
 	return (
 		<div

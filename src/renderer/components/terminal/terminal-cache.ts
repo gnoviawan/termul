@@ -22,10 +22,29 @@ const cache = new Map<string, Terminal>();
 /**
  * Store a terminal in the cache and detach its DOM element.
  * Call this in the cleanup (unmount) path instead of terminal.dispose().
+ *
+ * If a terminal is already cached for the same PTY ID (which can happen
+ * during rapid project switches A -> B -> A -> B where React schedules
+ * effects across two renders), we dispose the previous occupant before
+ * caching the new one. Without this, the older xterm instance leaks and
+ * its detached element keeps event listeners alive that can starve the
+ * live renderer of focus / keystrokes — visible to users as "terminal
+ * freezes after rapid switching".
  */
 export function cacheTerminal(ptyId: string, terminal: Terminal): void {
-	if (cache.has(ptyId)) {
-		// Already cached — shouldn't happen, but avoid double-cache
+	const existing = cache.get(ptyId);
+	if (existing && existing !== terminal) {
+		// Different instance already cached for this PTY — dispose the old
+		// one to release its WebGL context, addons, and DOM node.
+		try {
+			existing.dispose();
+		} catch {
+			// Already disposed in some other path — ignore.
+		}
+		cache.delete(ptyId);
+	} else if (existing === terminal) {
+		// Same instance re-cached — only ensure DOM is detached.
+		terminal.element?.remove();
 		return;
 	}
 

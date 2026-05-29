@@ -35,6 +35,8 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
 
 export const TOC_SETTINGS_KEY = "settings/toc";
 
+export type TerminalUrlOpenMode = "system" | "termul";
+
 // Application-wide settings
 export interface AppSettings {
 	terminalFontFamily: string;
@@ -47,6 +49,7 @@ export interface AppSettings {
 	orphanDetectionEnabled: boolean; // Enable automatic cleanup of inactive terminals
 	orphanDetectionTimeout: number | null; // Timeout in ms, null = disabled
 	confirmTerminalClose: boolean; // Show a confirmation dialog before closing a terminal
+	terminalUrlOpenMode: TerminalUrlOpenMode; // Controls how Ctrl/Cmd+Click terminal URLs are opened
 	sidebarVisible: boolean;
 	fileExplorerVisible: boolean;
 }
@@ -91,9 +94,18 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
 
 // Terminal renderer strategy options
 export const TERMINAL_RENDERER_OPTIONS = [
-	{ value: "auto", label: "Auto (WebGL with DOM fallback)" },
+	{ value: "auto", label: "Auto (Prefer WebGL, DOM fallback)" },
 	{ value: "webgl", label: "WebGL" },
 	{ value: "dom", label: "DOM" },
+];
+
+// Terminal URL opening mode options
+export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
+	value: TerminalUrlOpenMode;
+	label: string;
+}> = [
+	{ value: "system", label: "System Default Browser" },
+	{ value: "termul", label: "Termul Browser" },
 ];
 
 // Default application settings
@@ -101,13 +113,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
 	terminalFontSize: 14,
 	terminalBufferSize: 10000,
-	terminalRenderer: "auto",
+	terminalRenderer: "webgl",
 	defaultShell: "",
 	defaultProjectColor: "blue",
 	maxTerminalsPerProject: 10,
 	orphanDetectionEnabled: true,
 	orphanDetectionTimeout: 600000, // 10 minutes
 	confirmTerminalClose: true,
+	terminalUrlOpenMode: "system",
 	sidebarVisible: true,
 	fileExplorerVisible: true,
 };
@@ -238,6 +251,56 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 		label: "Delete Files",
 		description: "Delete selected files",
 		defaultKey: "delete",
+	},
+
+	// Worktree shortcuts
+	worktreeCreate: {
+		id: "worktreeCreate",
+		label: "Create Worktree",
+		description: "Open the new worktree creation modal",
+		defaultKey: "ctrl+shift+alt+n",
+	},
+	worktreeSwitchNext: {
+		id: "worktreeSwitchNext",
+		label: "Switch to Next Worktree",
+		description: "Cycle to the next worktree in the sidebar",
+		defaultKey: "ctrl+shift+downarrow",
+	},
+	worktreeSwitchPrev: {
+		id: "worktreeSwitchPrev",
+		label: "Switch to Previous Worktree",
+		description: "Cycle to the previous worktree in the sidebar",
+		defaultKey: "ctrl+shift+uparrow",
+	},
+	worktreeOpenTerminal: {
+		id: "worktreeOpenTerminal",
+		label: "Open Terminal in Worktree",
+		description: "Spawn a new terminal in the active worktree",
+		defaultKey: "ctrl+shift+alt+t",
+	},
+	worktreeMergeToMain: {
+		id: "worktreeMergeToMain",
+		label: "Merge Worktree to Main",
+		description: "Start merge workflow: worktree branch to main",
+		defaultKey: "ctrl+shift+m",
+	},
+	worktreeSyncMain: {
+		id: "worktreeSyncMain",
+		label: "Sync Main into Worktree",
+		description: "Start merge workflow: main into worktree branch",
+		defaultKey: "ctrl+shift+alt+s",
+	},
+	worktreeArchive: {
+		id: "worktreeArchive",
+		label: "Archive Active Worktree",
+		description: "Archive the current active worktree",
+		defaultKey: "ctrl+shift+a",
+	},
+	worktreeSwitchRoot: {
+		id: "worktreeSwitchRoot",
+		label: "Switch to Project Root",
+		description: "Switch active context to the project root directory",
+		defaultKey: "ctrl+shift+home",
 	},
 };
 

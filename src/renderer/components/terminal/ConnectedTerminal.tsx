@@ -12,11 +12,11 @@ import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalSpawnOptions } from "../../../shared/types/ipc.types";
-import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from "./terminal-config";
+import { getTerminalOptions } from "./terminal-config";
+import { useTerminalResizeV2 } from "@/hooks/use-terminal-resize-v2";
 import {
 	registerTerminal,
 	unregisterTerminal,
@@ -49,6 +49,11 @@ import {
 	buildTerminalPathLinks,
 	openFilePathFromTerminal,
 } from "@/lib/file-path-links";
+import {
+	buildTerminalUrlLinks,
+	isSupportedTerminalUrl,
+} from "@/lib/terminal-url-links";
+import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
 import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
@@ -58,10 +63,12 @@ import {
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
 
-// Common readline/shell Ctrl sequences that should always pass through to the
-// PTY regardless of platform. On macOS these are already protected by the
-// isMac guard, but on Windows/Linux they would otherwise be swallowed when a
-// matching app shortcut exists (e.g. commandPalette=ctrl+k, commandHistory=ctrl+r).
+// Common readline/shell Ctrl sequences that pass through to the PTY only when
+// no configured app shortcut claims them. Checking these LAST (after app
+// shortcuts) ensures that app bindings like commandPalette=ctrl+k,
+// commandHistory=ctrl+r, newProject=ctrl+n work from terminal focus.
+// On macOS readline Ctrl sequences are already protected by matchesShortcut's
+// isMac guard (Ctrl+key never triggers app shortcuts on macOS).
 const READLINE_PASSTHROUGH_KEYS = new Set([
 	"a", // Ctrl+A  move to beginning of line
 	"e", // Ctrl+E  move to end of line
@@ -91,18 +98,22 @@ function isAppOwnedTerminalShortcut(
 	event: KeyboardEvent,
 	shortcuts: ReturnType<typeof useKeyboardShortcutsStore.getState>["shortcuts"],
 ): boolean {
-	// Ctrl+letter readline bindings must reach the PTY on every platform.
-	// On macOS the isMac guard below handles this, but on Windows/Linux the
-	// same Ctrl+key might be configured as an app shortcut — pass them through.
-	if (!isMac && isReadlinePassthrough(event)) {
-		return false;
-	}
-
+	// 1. App shortcuts take priority over readline passthrough.
+	// This ensures commandPalette, commandHistory, etc. work from terminal
+	// focus even though their Ctrl+key also matches a readline binding.
 	for (const shortcut of Object.values(shortcuts)) {
 		const activeKey = shortcut.customKey ?? shortcut.defaultKey;
 		if (matchesShortcut(event, activeKey)) {
 			return true;
 		}
+	}
+
+	// 2. No app shortcut matched — check readline passthrough.
+	// Ctrl+letter readline bindings must reach the PTY on every platform.
+	// On macOS the isMac guard in matchesShortcut already prevents Ctrl+key
+	// from matching app shortcuts, so the readline behavior is preserved.
+	if (isReadlinePassthrough(event)) {
+		return false;
 	}
 
 	return false;
@@ -191,6 +202,15 @@ function ConnectedTerminalComponent({
 	>(null);
 	// Track WebGL context loss for recovery decisions
 	const webglContextLostRef = useRef<boolean>(false);
+	// Single-flight guard for performTerminalRecovery. On a window restore both
+	// the visibilitychange and focus handlers (and sometimes power-resume) can
+	// fire close together; without this guard each would start its own
+	// layout-wait RAF loop and overlapping fit + visibility-flip cycles.
+	const recoveryInProgressRef = useRef<boolean>(false);
+	// Track visibility prop for recovery path guards (tab-active, not window-visible).
+	// Ref avoids stale closures in event listeners referencing isVisible directly.
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
 
 	// Get font settings from app settings store
 	const fontFamily = useTerminalFontFamily();
@@ -231,11 +251,11 @@ function ConnectedTerminalComponent({
 	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
 	const terminalInitializedForRef = useRef<string | undefined>(undefined);
 	const needsResizeOnReadyRef = useRef<boolean>(false);
-	// Resize debounce timer ref
-	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 	// Track last fitted container dimensions to avoid redundant fit() calls
 	const lastContainerWidthRef = useRef<number>(0);
 	const lastContainerHeightRef = useRef<number>(0);
+
 	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Debounced activity tracking refs
@@ -244,6 +264,28 @@ function ConnectedTerminalComponent({
 
 	// Rate limiting for clipboard operations
 	const lastClipboardOpRef = useRef<number>(0);
+
+	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
+	const handlePtyResize = useCallback(
+		async (cols: number, rows: number): Promise<void> => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+			try {
+				await terminalApi.resize(ptyId, cols, rows);
+			} catch {
+				// Ignore resize errors during rapid resize
+			}
+		},
+		[],
+	);
+
+	const { forceFit: forceResizeFit } = useTerminalResizeV2({
+		onPtyResize: handlePtyResize,
+		terminalRef,
+		fitAddonRef,
+		containerRef,
+		isVisible,
+	});
 
 	// State to track terminal instance for clipboard hook
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
@@ -306,6 +348,12 @@ function ConnectedTerminalComponent({
 	const { copySelection, pasteFromClipboard, hasSelection } =
 		useTerminalClipboard({
 			terminal: terminalInstance,
+			onImagePaste: async () => {
+				const ptyId = ptyIdRef.current;
+				if (!ptyId) return;
+				// Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
+				await terminalApi.write(ptyId, '\x16');
+			},
 		});
 
 	// Sync ptyIdRef with external terminal ID when provided
@@ -396,31 +444,7 @@ function ConnectedTerminalComponent({
 		[onError],
 	);
 
-	// Handle resize events with debouncing to prevent IPC flooding
-	const handleResize = useCallback(
-		async (cols: number, rows: number): Promise<void> => {
-			const ptyId = ptyIdRef.current;
-			if (!ptyId) return;
 
-			// Clear existing timeout
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
-
-			// Debounce resize IPC calls - re-read ptyId inside timeout to avoid stale closure
-			resizeTimeoutRef.current = setTimeout(async () => {
-				const currentPtyId = ptyIdRef.current;
-				if (!currentPtyId) return;
-
-				try {
-					await terminalApi.resize(currentPtyId, cols, rows);
-				} catch {
-					// Ignore resize errors during rapid resize
-				}
-			}, RESIZE_DEBOUNCE_MS);
-		},
-		[],
-	);
 
 	// Expose search methods via ref
 	useImperativeHandle(
@@ -548,9 +572,6 @@ function ConnectedTerminalComponent({
 		fitAddonRef.current = fitAddon;
 		terminal.loadAddon(fitAddon);
 
-		const webLinksAddon = new WebLinksAddon();
-		terminal.loadAddon(webLinksAddon);
-
 		const handleFilePathActivate = async (
 			event: MouseEvent,
 			uri: string,
@@ -578,10 +599,35 @@ function ConnectedTerminalComponent({
 			}
 		};
 
+		const handleUrlActivate = async (
+			event: MouseEvent,
+			url: string,
+		): Promise<void> => {
+			if (!event.ctrlKey && !event.metaKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			if (!isSupportedTerminalUrl(url)) {
+				toast.error("Only http/https URLs are supported from terminal output.");
+				return;
+			}
+
+			try {
+				await openTerminalUrl(url);
+			} catch (error) {
+				console.error("[Terminal URL Link Open Failed]", error);
+				toast.error("Failed to open URL from terminal output.");
+			}
+		};
+
 		fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
 			provideLinks(y, callback) {
 				const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-				callback(buildTerminalPathLinks(line, y, handleFilePathActivate));
+				const pathLinks = buildTerminalPathLinks(line, y, handleFilePathActivate);
+				const urlLinks = buildTerminalUrlLinks(line, y, handleUrlActivate);
+				callback([...urlLinks, ...pathLinks]);
 			},
 		});
 
@@ -596,6 +642,17 @@ function ConnectedTerminalComponent({
 			if (containerRef.current && terminal.element) {
 				containerRef.current.appendChild(terminal.element);
 			}
+
+			// Note: the actual fix for "frozen terminal after rapid project
+			// switches" lives in terminal-cache.ts (cacheTerminal disposes any
+			// stale prior occupant before storing a new one). The fresh
+			// component instance always arrives here with webglAddonRef.current
+			// === null (the previous instance disposed its addon during cleanup),
+			// so a guarded dispose here would be a no-op. We just reset the
+			// context-lost flag so the WebGL addon load further down treats this
+			// as a clean mount.
+			webglContextLostRef.current = false;
+
 			// Force a full refresh so the renderer repaints after DOM reattachment.
 			terminal.refresh(0, terminal.rows - 1);
 		} else {
@@ -789,24 +846,16 @@ function ConnectedTerminalComponent({
 		}
 
 		// Set up resize observer
-		const resizeObserver = new ResizeObserver(() => {
-			requestAnimationFrame(() => {
-				performFit();
-			});
-		});
-		resizeObserver.observe(containerRef.current);
+
 
 		// Listen for input from xterm
 		const dataDisposable = terminal.onData(handleTerminalData);
-		const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-			handleResize(cols, rows);
-		});
 
 		// Set up IPC listeners BEFORE spawning to avoid missing data
 		// Cache ptyId -> terminalId mapping to avoid repeated store lookups
 		let cachedTerminalId: string | null = null;
 		cleanupDataListenerRef.current = terminalApi.onData(
-			(id: string, data: string) => {
+			(id: string, data: Uint8Array) => {
 				if (id === ptyIdRef.current && terminalRef.current) {
 					terminalRef.current.write(data);
 					// Resolve terminal record ID (cached to avoid linear scan)
@@ -1244,9 +1293,7 @@ function ConnectedTerminalComponent({
 			}
 
 			// PTY lifecycle is handled by explicit terminal close, not component unmount
-			resizeObserver.disconnect();
 			dataDisposable.dispose();
-			resizeDisposable.dispose();
 			if (cleanupDataListenerRef.current) {
 				cleanupDataListenerRef.current();
 				cleanupDataListenerRef.current = null;
@@ -1255,10 +1302,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current();
 				cleanupExitListenerRef.current = null;
 			}
-			// Clean up resize debounce timer
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
+
 			// Clean up activity timeout timer
 			if (activityTimeoutRef.current) {
 				clearTimeout(activityTimeoutRef.current);
@@ -1342,13 +1386,16 @@ function ConnectedTerminalComponent({
 	}, [disposeWebglAddon, rendererPreference]);
 
 	// Trigger fit + PTY resize when terminal becomes visible
-	// Uses double requestAnimationFrame for proper timing after pane transitions
+	// Uses the two-stage resize pipeline via forceResizeFit,
+	// which skips both debounces for immediate responsiveness.
 	useEffect(() => {
 		if (isVisible && fitAddonRef.current && terminalRef.current) {
 			// Double RAF ensures DOM is fully rendered after pane transition
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					const didFit = performFit();
+					// Use forceResizeFit for immediate fit + PTY resize
+					// This bypasses both debounce stages for visibility changes
+					forceResizeFit();
 
 					const terminal = terminalRef.current;
 					if (!terminal) return;
@@ -1370,18 +1417,6 @@ function ConnectedTerminalComponent({
 
 					const ptyId = ptyIdRef.current;
 					if (ptyId) {
-						// Always sync PTY dimensions on visibility change for safety,
-						// but only trigger fit when container dimensions actually changed.
-						const resizePromise = terminalApi.resize(
-							ptyId,
-							terminal.cols,
-							terminal.rows,
-						);
-						if (resizePromise && typeof resizePromise.catch === "function") {
-							resizePromise.catch(() => {
-								// Ignore resize errors when toggling visibility
-							});
-						}
 						// Restore scroll position after fit (in case of pane transition)
 						restoreScrollPosition(ptyId, terminal);
 					} else {
@@ -1391,49 +1426,90 @@ function ConnectedTerminalComponent({
 				});
 			});
 		}
-	}, [isVisible]);
+	}, [isVisible, forceResizeFit]);
 
-	// Shared terminal recovery logic - re-fit and check WebGL health
+	// Shared terminal recovery logic - re-fit once layout is stable, then nudge
+	// the compositor to re-present the canvas layer.
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Only recreate WebGL addon if context was actually lost, the current preference still
-		// allows WebGL, and we're not already recovering.
-		if (
-			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
-			webglContextLostRef.current &&
-			!webglAddonRef.current
-		) {
-			try {
-				// Cancel any pending auto-recovery timeout to avoid double-creation race
-				if (webglRecoveryTimeoutRef.current) {
-					clearTimeout(webglRecoveryTimeoutRef.current);
-					webglRecoveryTimeoutRef.current = null;
-				}
-				console.warn(
-					"WebGL context was lost, recreating addon during recovery",
-				);
-				// Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
-				if (loadWebglAddonRef.current && terminalRef.current) {
-					loadWebglAddonRef.current(terminalRef.current, true);
-				}
-			} catch (error) {
-				console.warn("WebGL context recovery failed:", error);
+		// Single-flight: if a recovery is already running (layout-wait poll or the
+		// trailing visibility-flip RAF), skip duplicate triggers. On a window
+		// restore both visibilitychange and focus typically fire close together.
+		if (recoveryInProgressRef.current) return;
+		recoveryInProgressRef.current = true;
+
+		// Cancel any pending WebGL auto-recovery timeout to avoid double-creation
+		// race with the genuine onContextLoss path.
+		if (webglRecoveryTimeoutRef.current) {
+			clearTimeout(webglRecoveryTimeoutRef.current);
+			webglRecoveryTimeoutRef.current = null;
+		}
+
+		// Root cause (verified via live forensics + xterm.js #4841 / #5357):
+		//
+		// After minimize→restore on Windows the webview reflows over several
+		// frames. If fit() runs while the container height is still collapsed,
+		// the terminal grid shrinks to 1-2 rows (PTY redraws tiny → "1-2 lines"
+		// of text) until a later resize corrects it. The fit pipeline now guards
+		// against collapsed dimensions (use-terminal-resize-v2), so an early fit
+		// is a safe no-op rather than a destructive shrink.
+		//
+		// Additionally, the WebView2 compositor may not re-present the WebGL
+		// canvas layer after restore (xterm 6.x has no DOM-row fallback; the
+		// context itself stays healthy). A CSS visibility flip forces a
+		// re-composite — the same mechanism that makes tab-switching work.
+		//
+		// Strategy: wait for the container to report a usable size (poll across a
+		// few RAFs), then forceResizeFit + refresh, then flip visibility to
+		// guarantee the layer re-composites.
+		const termEl = terminalRef.current.element as HTMLElement | undefined;
+		const container = containerRef.current;
+
+		const MIN_USABLE = 40;
+		const MAX_LAYOUT_WAIT_FRAMES = 30; // ~0.5s at 60fps
+
+		const runRecovery = (): void => {
+			const terminal = terminalRef.current;
+			if (!terminal) {
+				recoveryInProgressRef.current = false;
+				return;
 			}
-		}
+			// Re-fit (guarded against collapsed dims) + redraw the buffer.
+			forceResizeFit();
+			terminal.refresh(0, terminal.rows - 1);
 
-		// Re-fit terminal to current dimensions
-		performFit(true);
+			// Nudge the compositor to re-present the canvas layer. Clear the
+			// single-flight guard only after the trailing refresh completes.
+			if (termEl) {
+				termEl.style.visibility = "hidden";
+				requestAnimationFrame(() => {
+					termEl.style.visibility = "";
+					const t = terminalRef.current;
+					if (t) t.refresh(0, t.rows - 1);
+					recoveryInProgressRef.current = false;
+				});
+			} else {
+				recoveryInProgressRef.current = false;
+			}
+		};
 
-		// Sync PTY dimensions
-		const terminal = terminalRef.current;
-		const ptyId = ptyIdRef.current;
-		if (terminal && ptyId) {
-			terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
-				// Ignore resize errors - terminal may have been killed
-			});
-		}
-	}, []);
+		// Wait until the container has reflowed to a usable size before fitting,
+		// so we never collapse the grid. Bail out after MAX_LAYOUT_WAIT_FRAMES.
+		let frames = 0;
+		const waitForStableLayout = (): void => {
+			const rect = container?.getBoundingClientRect();
+			const ready =
+				!!rect && rect.width >= MIN_USABLE && rect.height >= MIN_USABLE;
+			if (ready || frames >= MAX_LAYOUT_WAIT_FRAMES) {
+				runRecovery();
+				return;
+			}
+			frames += 1;
+			requestAnimationFrame(waitForStableLayout);
+		};
+		waitForStableLayout();
+	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {
@@ -1459,6 +1535,30 @@ function ConnectedTerminalComponent({
 				clearTimeout(recoveryTimeoutId);
 			}
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
+		};
+	}, [performTerminalRecovery]);
+
+	// Recovery handler for window focus — critical for Tauri minimize/restore
+	// on Windows where document.visibilitychange is unreliable.
+	// The window 'focus' event reliably fires when the window is restored from
+	// taskbar minimize. performTerminalRecovery re-fits the terminal to its
+	// container and syncs PTY dimensions (SIGWINCH to the shell process).
+	useEffect(() => {
+		const handleWindowFocus = (): void => {
+			// Skip recovery for terminals that are not the active tab in their pane
+			// (isVisible is tab-active, not window-visible — see PaneContent.tsx).
+			// Hidden instances recover via the isVisible-change useEffect instead.
+			if (!isVisibleRef.current) return;
+			// Fire recovery immediately — the window is already visible when
+			// 'focus' fires (unlike visibilitychange which needs DOM reflow time).
+			// performTerminalRecovery internally waits for a stable layout before
+			// fitting and is single-flight guarded, so this is safe to call eagerly.
+			performTerminalRecovery();
+		};
+
+		window.addEventListener("focus", handleWindowFocus);
+		return () => {
+			window.removeEventListener("focus", handleWindowFocus);
 		};
 	}, [performTerminalRecovery]);
 
@@ -1519,7 +1619,6 @@ function ConnectedTerminalComponent({
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
 				<div
-					ref={containerRef}
 					className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
 					onClick={handleContainerClick}
 					onMouseDown={(e) => {
@@ -1530,7 +1629,9 @@ function ConnectedTerminalComponent({
 							terminalRef.current.focus();
 						}
 					}}
-				/>
+				>
+					<div ref={containerRef} className="w-full h-full" />
+				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="w-40">
 				<ContextMenuItem

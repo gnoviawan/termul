@@ -6,6 +6,7 @@ import {
   useTerminalStore
 } from '@/stores/terminal-store'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { markVisible } from '@/lib/visibility-signal'
 
 function debugLogMemoryStats(): void {
   if (!import.meta.env.DEV) return
@@ -33,6 +34,14 @@ function debugLogMemoryStats(): void {
 }
 
 function applyAppHiddenState(isVisible: boolean): void {
+  // Signal the visibility gate so terminal restore and other spawn-sensitive
+  // hooks can proceed. In production builds the Tauri window starts with
+  // `visible: false`; this fires once `showWindow()` resolves and the first
+  // visibility sync determines the window is shown.
+  if (isVisible) {
+    markVisible()
+  }
+
   const store = useTerminalStore.getState()
   store.setAppHidden(!isVisible)
 

@@ -98,6 +98,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 		mermaid.initialize({
 			startOnLoad: false,
 			theme: isDark ? "dark" : "default",
+			suppressErrorRendering: true,
 		});
 
 		const id = `mb-${Math.random().toString(36).slice(2, 11)}`;

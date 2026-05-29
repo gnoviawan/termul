@@ -10,6 +10,7 @@ import {
 	getTerminalOptions,
 	RESIZE_DEBOUNCE_MS,
 } from "@/components/terminal/terminal-config";
+import { useTerminalRenderer } from "@/stores/app-settings-store";
 import "@xterm/xterm/css/xterm.css";
 
 const MAX_WEBGL_RETRIES = 3;
@@ -27,6 +28,9 @@ export function TauriTerminal(): React.JSX.Element {
 		[],
 	);
 	const disposedRef = useRef(false);
+	const rendererPreference = useTerminalRenderer();
+	const rendererPreferenceRef = useRef(rendererPreference);
+	rendererPreferenceRef.current = rendererPreference;
 	const [status, setStatus] = useState<TerminalStatus>("loading");
 	const [errorMsg, setErrorMsg] = useState<string>("");
 
@@ -53,34 +57,37 @@ export function TauriTerminal(): React.JSX.Element {
 			term.open(containerRef.current);
 			fitAddon.fit();
 
-			// WebGL addon with fallback
-			let webglAttempts = 0;
-			const loadWebgl = (): void => {
-				if (disposedRef.current || webglAttempts >= MAX_WEBGL_RETRIES) {
-					if (webglAttempts >= MAX_WEBGL_RETRIES) {
-						console.warn(
-							"[TauriTerminal] WebGL failed after max retries, using DOM renderer",
-						);
+			// WebGL addon with fallback (respects renderer preference)
+			const shouldLoadWebgl = rendererPreferenceRef.current !== "dom";
+			if (shouldLoadWebgl) {
+				let webglAttempts = 0;
+				const loadWebgl = (): void => {
+					if (disposedRef.current || webglAttempts >= MAX_WEBGL_RETRIES) {
+						if (webglAttempts >= MAX_WEBGL_RETRIES) {
+							console.warn(
+								"[TauriTerminal] WebGL failed after max retries, using DOM renderer",
+							);
+						}
+						return;
 					}
-					return;
-				}
-				try {
-					const webglAddon = new WebglAddon();
-					webglAddonRef.current = webglAddon;
-					webglAddon.onContextLoss(() => {
-						webglAddon.dispose();
-						webglAddonRef.current = null;
+					try {
+						const webglAddon = new WebglAddon();
+						webglAddonRef.current = webglAddon;
+						webglAddon.onContextLoss(() => {
+							webglAddon.dispose();
+							webglAddonRef.current = null;
+							webglAttempts++;
+							loadWebgl();
+						});
+						term.loadAddon(webglAddon);
+					} catch {
 						webglAttempts++;
+						console.warn(`[TauriTerminal] WebGL attempt ${webglAttempts} failed`);
 						loadWebgl();
-					});
-					term.loadAddon(webglAddon);
-				} catch {
-					webglAttempts++;
-					console.warn(`[TauriTerminal] WebGL attempt ${webglAttempts} failed`);
-					loadWebgl();
-				}
-			};
-			loadWebgl();
+					}
+				};
+				loadWebgl();
+			}
 
 			// Shell detection
 			let shellInfo: ShellInfo;
@@ -269,7 +276,7 @@ export function TauriTerminal(): React.JSX.Element {
 	return (
 		<div className="flex-1 relative bg-[#1e1e1e]">
 			{status === "loading" && (
-				<div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-sm z-10">
+				<div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm z-10">
 					Loading terminal...
 				</div>
 			)}

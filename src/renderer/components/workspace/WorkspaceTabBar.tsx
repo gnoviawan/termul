@@ -7,11 +7,13 @@ import {
 	Loader2,
 	Skull,
 	Globe,
+	Maximize2,
+	Minimize2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useWorkspaceStore, editorTabId } from "@/stores/workspace-store";
+import { useWorkspaceStore, useLeafCount, editorTabId } from "@/stores/workspace-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTerminalStore } from "@/stores/terminal-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
@@ -111,6 +113,14 @@ function TerminalTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					if (!isClosing) {
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -352,6 +362,12 @@ function BrowserTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					onClose();
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -434,8 +450,16 @@ export function WorkspaceTabBar({
 	onCloseEditorTab,
 	defaultShell,
 }: WorkspaceTabBarProps): React.JSX.Element {
-	const setActiveTab = useWorkspaceStore((state) => state.setActiveTab);
-	const setActivePane = useWorkspaceStore((state) => state.setActivePane);
+	const { setActiveTab, setActivePane, fullscreenPaneId, togglePaneFullscreen } =
+		useWorkspaceStore(
+			useShallow((state) => ({
+				setActiveTab: state.setActiveTab,
+				setActivePane: state.setActivePane,
+				fullscreenPaneId: state.fullscreenPaneId,
+				togglePaneFullscreen: state.togglePaneFullscreen,
+			}))
+		);
+	const leafCount = useLeafCount();
 	const {
 		startTabDrag,
 		dragPayload,
@@ -662,6 +686,7 @@ export function WorkspaceTabBar({
 	});
 
 	const terminalStoreTerminals = useTerminalStore((state) => state.terminals);
+	const isFullscreenPane = fullscreenPaneId === paneId;
 
 	// Check if this tab is being dragged
 	const isTabDragging = (tabId: string): boolean =>
@@ -799,6 +824,16 @@ export function WorkspaceTabBar({
 			</div>
 
 			<div className="ml-auto flex items-center gap-1 px-2 shrink-0 h-full border-l border-border/60">
+				{leafCount > 1 && (
+					<button
+						onClick={() => togglePaneFullscreen(paneId)}
+						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+						title={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
+						aria-label={isFullscreenPane ? "Restore pane layout" : "Focus pane"}
+					>
+						{isFullscreenPane ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+					</button>
+				)}
 				{onAddTerminal && (
 					<div ref={terminalMenuRef} className="relative flex items-center h-full">
 						<button

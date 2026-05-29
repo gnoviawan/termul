@@ -11,13 +11,15 @@ export interface UseXtermOptions {
   fontSize?: number
   fontFamily?: string
   scrollback?: number
+  /** Renderer preference: "auto" | "webgl" | "dom". Defaults to "webgl". */
+  renderer?: "auto" | "webgl" | "dom"
 }
 
 export interface UseXtermReturn {
   terminalRef: React.RefObject<Terminal | null>
   containerRef: React.RefObject<HTMLDivElement | null>
   isReady: boolean
-  write: (data: string) => void
+  write: (data: string | Uint8Array) => void
   writeln: (data: string) => void
   clear: () => void
   focus: () => void
@@ -34,7 +36,8 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
     onResize,
     fontSize = 14,
     fontFamily = 'Menlo, Monaco, "Courier New", monospace',
-    scrollback = 10000
+    scrollback = 10000,
+    renderer = "webgl"
   } = options
 
   const terminalRef = useRef<Terminal | null>(null)
@@ -42,7 +45,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isReadyRef = useRef(false)
 
-  const write = useCallback((data: string): void => {
+  const write = useCallback((data: string | Uint8Array): void => {
     terminalRef.current?.write(data)
   }, [])
 
@@ -109,14 +112,16 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
 
     terminal.open(containerRef.current)
 
-    try {
-      const webglAddon = new WebglAddon()
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose()
-      })
-      terminal.loadAddon(webglAddon)
-    } catch {
-      console.warn('WebGL addon failed to load, falling back to DOM renderer')
+    if (renderer !== "dom") {
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+        })
+        terminal.loadAddon(webglAddon)
+      } catch {
+        console.warn('WebGL addon failed to load, falling back to DOM renderer')
+      }
     }
 
     fitAddon.fit()
