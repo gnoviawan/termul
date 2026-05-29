@@ -1,5 +1,33 @@
 (function() {
-  if (document.getElementById('__termul_annotation_layer')) return;
+  // Reconcile instead of bailing: if a previous overlay layer is still present
+  // (e.g. left behind by an SPA navigation where the DOM was not wiped), tear it
+  // down first so this injection always installs fresh capture-phase handlers for
+  // the current `window.__termul_annotation_mode`. Silently returning here would
+  // leave stale (or, after a cancelled removal, absent) handlers bound.
+  //
+  // The previous overlay's cleanup `delete`s the mode/tab-id globals that the Rust
+  // bootstrap just set before this script ran, so snapshot and restore them around
+  // the teardown to preserve the requested mode/tab for this fresh injection.
+  var __termul_existing_layer = document.getElementById('__termul_annotation_layer');
+  if (__termul_existing_layer) {
+    var __termul_pending_mode = window.__termul_annotation_mode;
+    var __termul_pending_tab_id = window.__termul_annotation_tab_id;
+    if (typeof window.__termul_remove_annotation_overlay === 'function') {
+      try {
+        window.__termul_remove_annotation_overlay();
+      } catch (e) {}
+    }
+    // Sweep any layer node still present — covers a missing cleanup fn, a throw
+    // mid-teardown, or a partial cleanup that left the node behind. Guarantees the
+    // fresh overlay below never collides with a stale duplicate-ID node.
+    var __termul_stale = document.getElementById('__termul_annotation_layer');
+    while (__termul_stale) {
+      __termul_stale.remove();
+      __termul_stale = document.getElementById('__termul_annotation_layer');
+    }
+    window.__termul_annotation_mode = __termul_pending_mode;
+    window.__termul_annotation_tab_id = __termul_pending_tab_id;
+  }
 
   var OVERLAY_ID = '__termul_annotation_layer';
   var RECT_ID = '__termul_annotation_rect';
