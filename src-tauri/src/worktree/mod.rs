@@ -489,18 +489,20 @@ impl WorktreeManager {
 
     /// Remove a worktree.
     /// Uses `git worktree remove <path>` (with --force if requested).
+    /// Git runs with the repository as its working directory so the worktree
+    /// metadata can be located; otherwise git reports "not a git repository".
     /// After removal, runs `git worktree prune` to clean stale metadata.
-    pub fn remove(worktree_path: &str, force: bool) -> Result<(), WorktreeError> {
+    pub fn remove(project_path: &str, worktree_path: &str, force: bool) -> Result<(), WorktreeError> {
         let mut args = vec!["worktree", "remove"];
         if force {
             args.push("--force");
         }
         args.push(worktree_path);
 
-        run_git(&args, None)?;
+        run_git(&args, Some(project_path))?;
 
         // Prune stale metadata
-        let _ = run_git(&["worktree", "prune"], None);
+        let _ = run_git(&["worktree", "prune"], Some(project_path));
 
         Ok(())
     }
@@ -657,7 +659,7 @@ impl WorktreeManager {
                 continue;
             }
 
-            match Self::remove(&path, true) {
+            match Self::remove(project_path, &path, true) {
                 Ok(()) => {
                     results.push(RemoveResult {
                         worktree_path: path,

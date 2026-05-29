@@ -130,7 +130,7 @@ export function RemoveWorktreeDialog({
 		try {
 			// Use --force when there are uncommitted changes so git doesn't block removal
 			const force = hasUncommittedChanges
-			const result = await worktreeApi.remove(worktree.path, force)
+			const result = await worktreeApi.remove(projectPath, worktree.path, force)
 			if (result.success) {
 				removeWorktree(projectId, worktree.id)
 				toast({
@@ -152,7 +152,7 @@ export function RemoveWorktreeDialog({
 			setIsRemoving(false)
 			setWorktreeOperationLock(false)
 		}
-	}, [worktree, projectId, removeWorktree, setWorktreeOperationLock, onClose, hasUncommittedChanges])
+	}, [worktree, projectId, projectPath, removeWorktree, setWorktreeOperationLock, onClose, hasUncommittedChanges])
 
 	if (!worktree) return null
 

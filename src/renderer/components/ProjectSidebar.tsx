@@ -340,9 +340,15 @@ export function ProjectSidebar({
 		async (projectId: string, worktree: Worktree): Promise<void> => {
 			if (!isWorktreeTermulManaged(worktree)) return; // Only remove Termul-managed worktrees
 
+			const projectPath = useProjectStore.getState().projects.find((p) => p.id === projectId)?.path;
+			if (!projectPath) {
+				toast({ title: "Failed to remove worktree", description: "Project path not found" });
+				return;
+			}
+
 			setWorktreeOperationLock(true);
 			try {
-				const result = await worktreeApi.remove(worktree.path, false);
+				const result = await worktreeApi.remove(projectPath, worktree.path, false);
 				if (result.success) {
 					useProjectStore.getState().removeWorktree(projectId, worktree.id);
 					toast({ title: "Worktree removed", description: `"${worktree.name}" has been removed.` });
