@@ -47,11 +47,14 @@ The `deploy` script invokes `wrangler pages deploy dist` and uploads the build o
 **First-time setup:**
 
 1. Run `bunx wrangler login` to authenticate with your Cloudflare account.
-2. Create a Pages project (optional — `wrangler pages deploy` auto-creates it if missing):
+2. Create the Pages project (already done — `termul-landing`):
    ```bash
    bunx wrangler pages project create termul-landing --production-branch main
    ```
-3. Set a custom domain in the Cloudflare Pages dashboard (e.g., `termul.dev`).
+3. Connect the custom domain `termul.dev`:
+   - Go to [Cloudflare Pages → termul-landing → Custom domains](https://dash.cloudflare.com/?to=/:account/pages/view/termul-landing/custom-domains)
+   - Click **Set up a custom domain** and enter `termul.dev`
+   - Cloudflare auto-provisions SSL and routes traffic (DNS must be on Cloudflare)
 
 **SPA routing:** The `public/_redirects` file rewrites all paths to `/index.html` with a 200 status, replacing the nginx `try_files` rule used in the previous Docker setup.
 
