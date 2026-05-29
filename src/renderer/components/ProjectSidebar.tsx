@@ -42,10 +42,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 import { useProjectStore, useProjectActions } from "@/stores/project-store";
-import { useWorkspaceStore } from "@/stores/workspace-store";
 import { toast } from "@/hooks/use-toast";
-import { spawnTerminalInPane } from "@/lib/terminal-spawn";
-import { useAppSettingsStore } from "@/stores/app-settings-store";
+import { activateAndOpenTerminal } from "@/lib/terminal-spawn";
 import type { WorktreeHealthStatus } from "@/types/worktree-status";
 import { getWorktreeStatusFromCache } from "@/hooks/use-worktree-status";
 import { useWorktreeStatus } from "@/hooks/use-worktree-status";
@@ -278,23 +276,16 @@ export function ProjectSidebar({
 	// Shared by the row hover terminal button and the "Open Terminal Here" context menu.
 	const handleOpenTerminalInWorktree = useCallback(
 		async (projectId: string, worktreeId: string | null, worktreePath: string, worktreeName: string): Promise<void> => {
-			setActiveWorktree(projectId, worktreeId);
-			const paneId = useWorkspaceStore.getState().activePaneId;
-			if (!paneId) {
-				toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
-				return;
-			}
-			const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject;
-			const result = await spawnTerminalInPane(paneId, projectId, worktreePath, {
-				maxTerminalsPerProject,
-			});
-			if (result.success) {
+			const outcome = await activateAndOpenTerminal(projectId, worktreeId, worktreePath);
+			if (outcome.status === "opened") {
 				toast({ title: "Terminal opened", description: `Terminal opened in "${worktreeName}"` });
+			} else if (outcome.status === "no-pane") {
+				toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
 			} else {
-				toast({ title: "Failed to open terminal", description: result.error || "Could not create a terminal in this worktree." });
+				toast({ title: "Failed to open terminal", description: outcome.error || "Could not create a terminal in this worktree." });
 			}
 		},
-		[setActiveWorktree],
+		[],
 	);
 
 	const handleWorktreeContextMenu = useCallback(

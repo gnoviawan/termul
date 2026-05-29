@@ -4,9 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
 
-const { mockGetAvailableShells, mockSpawnTerminalInPane, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
+const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
   mockSpawnTerminalInPane: vi.fn(),
+  mockActivateAndOpenTerminal: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
   mockUseProjectsWithErrors: vi.fn()
 }))
@@ -36,7 +37,8 @@ vi.mock('@/stores/terminal-store', async () => {
 })
 
 vi.mock('@/lib/terminal-spawn', () => ({
-  spawnTerminalInPane: mockSpawnTerminalInPane
+  spawnTerminalInPane: mockSpawnTerminalInPane,
+  activateAndOpenTerminal: mockActivateAndOpenTerminal
 }))
 
 vi.mock('@/lib/utils', async () => {
@@ -49,6 +51,8 @@ beforeEach(() => {
   mockGetAvailableShells.mockReset()
   mockSpawnTerminalInPane.mockReset()
   mockSpawnTerminalInPane.mockResolvedValue({ success: true, data: { id: 'term-1' } })
+  mockActivateAndOpenTerminal.mockReset()
+  mockActivateAndOpenTerminal.mockResolvedValue({ status: 'opened', terminalId: 'term-1' })
   mockGetAvailableShells.mockResolvedValue({
     success: true,
     data: {
@@ -544,7 +548,7 @@ describe('ProjectSidebar Worktree Row', () => {
     fireEvent.click(screen.getByLabelText('Open terminal in try-new-hero'))
 
     await waitFor(() => {
-      expect(mockSpawnTerminalInPane).toHaveBeenCalled()
+      expect(mockActivateAndOpenTerminal).toHaveBeenCalled()
     })
     // The terminal-button click must not bubble to the project row's select handler
     expect(onSelectProject).not.toHaveBeenCalled()
@@ -557,7 +561,7 @@ describe('ProjectSidebar Worktree Row', () => {
     // Enter on the nested terminal button must not bubble to the row's onKeyDown select
     fireEvent.keyDown(termButton, { key: 'Enter' })
 
-    // The shared select handler is not invoked by the key event (spawn happens on click)
-    expect(mockSpawnTerminalInPane).not.toHaveBeenCalled()
+    // The shared open handler is not invoked by the key event (spawn happens on click)
+    expect(mockActivateAndOpenTerminal).not.toHaveBeenCalled()
   })
 })

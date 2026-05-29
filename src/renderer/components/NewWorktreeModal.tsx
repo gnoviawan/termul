@@ -5,9 +5,7 @@ import type { BranchInfo } from '@shared/types/ipc.types'
 import type { Worktree } from '@/types/project'
 import { worktreeApi } from '@/lib/api'
 import { useProjectStore, useProjectActions } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
-import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
@@ -20,7 +18,7 @@ interface NewWorktreeModalProps {
 export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModalProps) {
 	const project = useProjectStore((state) => state.projects.find((p) => p.id === projectId))
 	const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked)
-	const { addWorktree, setActiveWorktree, setWorktreeOperationLock } = useProjectActions()
+	const { addWorktree, setWorktreeOperationLock } = useProjectActions()
 
 	// Form state
 	const [branchType, setBranchType] = useState<'existing' | 'new'>('new')
@@ -266,26 +264,17 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
 				// Land the user inside the new worktree: activate it and open a terminal there.
 				// Best-effort — a spawn failure must not block the (already successful) creation.
-				setActiveWorktree(projectId, newWorktree.id)
-				try {
-					const paneId = useWorkspaceStore.getState().activePaneId
-					if (paneId) {
-						const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
-						const spawnResult = await spawnTerminalInPane(paneId, projectId, result.data.path, { maxTerminalsPerProject })
-						if (!spawnResult.success) {
-							toast({
-								title: 'Worktree ready — terminal not opened',
-								description: spawnResult.error || 'Could not open a terminal in the new worktree.',
-							})
-						}
-					} else {
-						toast({
-							title: 'Worktree ready — terminal not opened',
-							description: 'No active pane to open a terminal in. Switch to a workspace pane first.',
-						})
-					}
-				} catch {
-					// Terminal spawn is non-blocking; the worktree is already created and active.
+				const outcome = await activateAndOpenTerminal(projectId, newWorktree.id, result.data.path)
+				if (outcome.status === 'no-pane') {
+					toast({
+						title: 'Worktree ready — terminal not opened',
+						description: 'No active pane to open a terminal in. Switch to a workspace pane first.',
+					})
+				} else if (outcome.status === 'spawn-failed') {
+					toast({
+						title: 'Worktree ready — terminal not opened',
+						description: outcome.error || 'Could not open a terminal in the new worktree.',
+					})
 				}
 
 				onClose()
@@ -319,7 +308,6 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 		projectPath,
 		projectId,
 		addWorktree,
-		setActiveWorktree,
 		setWorktreeOperationLock,
 		onClose,
 		enabledSymlinkDirs,

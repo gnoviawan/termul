@@ -76,17 +76,19 @@ export default function ProjectSettings() {
   // Sync state when activeProject changes
   useEffect(() => {
     if (activeProject) {
-      setProjectName(activeProject.name)
-      setSelectedColor(activeProject.color)
-      setRootPath(activeProject.path || '')
-      setEnvVars(activeProject.envVars || [])
+      // setShell is intentionally outside the per-project guard: availableShells
+      // resolves asynchronously after mount, and the resolved default must be
+      // applied when it arrives.
       setShell(activeProject.defaultShell || availableShells?.default?.name || fallbackShell)
-      // Only (re)initialize symlinkDirs the first time we see a given project.
-      // The effect also re-runs when availableShells resolves; without this guard
-      // that late run would reset symlinkDirs to the (empty) stored value and wipe
-      // the D5 .gitignore auto-fill held in local state.
+      // Everything else initializes once per project. The effect also re-runs when
+      // availableShells resolves; without this guard that late run would wipe user
+      // edits (and the D5 .gitignore auto-fill) made before shells loaded.
       if (symlinkInitProjectRef.current !== activeProject.id) {
         symlinkInitProjectRef.current = activeProject.id
+        setProjectName(activeProject.name)
+        setSelectedColor(activeProject.color)
+        setRootPath(activeProject.path || '')
+        setEnvVars(activeProject.envVars || [])
         setSymlinkDirs(activeProject.symlinkDirs ?? [])
         setHasChanges(false)
       }
@@ -106,15 +108,18 @@ export default function ProjectSettings() {
     let cancelled = false
     const projId = proj.id
     const projPath = proj.path
-    autoFilledSymlinkRef.current = projId
     void (async () => {
       try {
         const result = await worktreeApi.parseGitignore(projPath)
-        // Ignore the result if the effect was cleaned up or the selected project changed.
-        if (cancelled || activeProject?.id !== projId) return
+        // Bail if the effect was cleaned up (project switched / unmounted). Cleanup
+        // sets `cancelled`, so this is sufficient on its own.
+        if (cancelled) return
         if (result.success && result.data) {
           const dirs = result.data.filter((d) => d.exists).map((d) => d.dirName)
           if (dirs.length > 0) {
+            // Mark done only after a successful fill so a cancelled StrictMode
+            // double-invoke doesn't suppress the real run.
+            autoFilledSymlinkRef.current = projId
             setSymlinkDirs(dirs)
             setHasChanges(true)
           }
@@ -128,7 +133,7 @@ export default function ProjectSettings() {
     }
     // Keyed on project identity only: this must run once per project selection and
     // not re-fire when other activeProject fields change (which would re-parse and
-    // fight user edits). The in-closure activeProject read is a freshness guard.
+    // fight user edits).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject?.id, activeProject?.path, activeProject?.isGitRepo])
 
