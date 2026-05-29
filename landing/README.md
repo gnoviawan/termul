@@ -1,6 +1,6 @@
 # Termul Landing Page
 
-A standalone Vite + React marketing page for Termul Manager.
+A standalone Vite + React marketing page for Termul Manager, hosted on Cloudflare Pages.
 
 ## Prerequisites
 
@@ -32,6 +32,31 @@ Static SEO files ship from `public/`:
 - `robots.txt`
 - `sitemap.xml`
 - `og-image.png`
+
+## Deploy to Cloudflare Pages
+
+Deploy the static build to Cloudflare Pages via the `wrangler` CLI:
+
+```bash
+bun run build
+bun run deploy
+```
+
+The `deploy` script invokes `wrangler pages deploy dist` and uploads the build output to the `termul-landing` project.
+
+**First-time setup:**
+
+1. Run `bunx wrangler login` to authenticate with your Cloudflare account.
+2. Create the Pages project (already done — `termul-landing`):
+   ```bash
+   bunx wrangler pages project create termul-landing --production-branch main
+   ```
+3. Connect the custom domain `termul.dev`:
+   - Go to [Cloudflare Pages → termul-landing → Custom domains](https://dash.cloudflare.com/?to=/:account/pages/view/termul-landing/custom-domains)
+   - Click **Set up a custom domain** and enter `termul.dev`
+   - Cloudflare auto-provisions SSL and routes traffic (DNS must be on Cloudflare)
+
+**SPA routing:** The `public/_redirects` file rewrites all paths to `/index.html` with a 200 status, replacing the nginx `try_files` rule used in the previous Docker setup.
 
 ## Verify SEO Output
 
