@@ -1,47 +1,51 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { sendDesktopNotification } from '@/lib/tauri-notification-api'
-import { useTerminalStore } from '@/stores/terminal-store'
-import { useProjectStore } from '@/stores/project-store'
+import { renderHook } from '@testing-library/react'
+
+const { mockOnExit } = vi.hoisted(() => ({
+  mockOnExit: vi.fn()
+}))
+
+vi.mock('@/lib/api', () => ({
+  terminalApi: {
+    onExit: mockOnExit
+  }
+}))
 
 vi.mock('@/lib/tauri-notification-api', () => ({
   sendDesktopNotification: vi.fn()
 }))
 
-/**
- * Test the core notification dispatch logic that the hook wires up.
- * Rather than mounting React, we test the callback function directly
- * since the hook is a thin wrapper around terminalApi.onExit.
- */
-function simulateExitCallback(ptyId: string, exitCode: number): void {
-  const terminalState = useTerminalStore.getState()
-  const terminal = terminalState.findTerminalByPtyId(ptyId)
-  if (!terminal) return
+import { useTerminalExitNotification } from './use-terminal-exit-notification'
+import { sendDesktopNotification } from '@/lib/tauri-notification-api'
+import { useTerminalStore } from '@/stores/terminal-store'
+import { useProjectStore } from '@/stores/project-store'
 
-  const windowFocused =
-    typeof document !== 'undefined' && typeof document.hasFocus === 'function'
-      ? document.hasFocus()
-      : !terminal.isAppHidden
-  const isViewingThisTerminal =
-    terminalState.activeTerminalId === terminal.id &&
-    windowFocused &&
-    !terminal.isAppHidden
-  if (!isViewingThisTerminal) {
-    terminalState.setTerminalNeedsAttention(terminal.id, true)
+/** Matches MAX_NOTIFICATION_TEXT_LENGTH in use-terminal-exit-notification.ts */
+const MAX_NOTIFICATION_TEXT_LENGTH = 64
+
+type ExitCallback = (ptyId: string, exitCode: number) => void
+
+/**
+ * Render the real hook so its `terminalApi.onExit` subscription/effect lifecycle is
+ * exercised, and return the actual exit callback the hook registered. Emitting through
+ * this callback drives the production code path (flag + notification side-effects)
+ * rather than re-implementing it.
+ */
+function renderExitHook(): { emitExit: ExitCallback; unmount: () => void } {
+  const unsubscribe = vi.fn()
+  let captured: ExitCallback | undefined
+  mockOnExit.mockImplementation((cb: ExitCallback) => {
+    captured = cb
+    return unsubscribe
+  })
+
+  const { unmount } = renderHook(() => useTerminalExitNotification())
+
+  if (!captured) {
+    throw new Error('useTerminalExitNotification did not register an onExit callback')
   }
 
-  const project = useProjectStore
-    .getState()
-    .projects.find((p) => p.id === terminal.projectId)
-
-  const title = (project?.name ?? 'Termul').replace(/[\r\n]+/g, ' ').trim().slice(0, 64)
-  const terminalName = terminal.name.replace(/[\r\n]+/g, ' ').trim().slice(0, 64)
-
-  const body =
-    exitCode === 0
-      ? `${terminalName} — DONE`
-      : `${terminalName} — Failed (exit ${exitCode})`
-
-  sendDesktopNotification(title, body)
+  return { emitExit: captured, unmount: () => { unmount(); expect(unsubscribe).toHaveBeenCalled() } }
 }
 
 describe('terminal exit notification logic', () => {
@@ -69,20 +73,29 @@ describe('terminal exit notification logic', () => {
     useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
   })
 
+  it('registers an onExit subscription when mounted and unsubscribes on unmount', () => {
+    const { unmount } = renderExitHook()
+    expect(mockOnExit).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
   it('sends notification with project name and terminal name on exit code 0', () => {
-    simulateExitCallback('pty-1', 0)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', 0)
 
     expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Build Server — DONE')
   })
 
   it('sends Failed message for non-zero exit code', () => {
-    simulateExitCallback('pty-1', 1)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', 1)
 
     expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Build Server — Failed (exit 1)')
   })
 
   it('sends Failed message for exit code -1 (null exit code coerced)', () => {
-    simulateExitCallback('pty-1', -1)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', -1)
 
     expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Build Server — Failed (exit -1)')
   })
@@ -90,18 +103,20 @@ describe('terminal exit notification logic', () => {
   it('falls back to Termul when project not found', () => {
     useProjectStore.setState({ projects: [], activeProjectId: '' })
 
-    simulateExitCallback('pty-1', 0)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', 0)
 
     expect(sendDesktopNotification).toHaveBeenCalledWith('Termul', 'Build Server — DONE')
   })
 
   it('does not send notification for unknown ptyId', () => {
-    simulateExitCallback('unknown-pty', 0)
+    const { emitExit } = renderExitHook()
+    emitExit('unknown-pty', 0)
 
     expect(sendDesktopNotification).not.toHaveBeenCalled()
   })
 
-  it('truncates long names', () => {
+  it('truncates long names to exactly MAX length with an ellipsis as the final char', () => {
     const longName = 'A'.repeat(100)
     useTerminalStore.setState({
       terminals: [
@@ -111,10 +126,14 @@ describe('terminal exit notification logic', () => {
       ptyIdIndex: new Map([['pty-1', 'term-1']])
     })
 
-    simulateExitCallback('pty-1', 0)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', 0)
 
-    const body = vi.mocked(sendDesktopNotification).mock.calls[0][1]
-    expect(body.length).toBeLessThan(100)
+    // Production contract (sanitizeNotificationText): slice(0, MAX-1) + '…'.
+    // The truncated terminal name is then interpolated into the body.
+    const truncatedName = 'A'.repeat(MAX_NOTIFICATION_TEXT_LENGTH - 1) + '…'
+    expect(truncatedName).toHaveLength(MAX_NOTIFICATION_TEXT_LENGTH)
+    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', `${truncatedName} — DONE`)
   })
 
   it('sanitizes newlines in names', () => {
@@ -126,11 +145,10 @@ describe('terminal exit notification logic', () => {
       ptyIdIndex: new Map([['pty-1', 'term-1']])
     })
 
-    simulateExitCallback('pty-1', 0)
+    const { emitExit } = renderExitHook()
+    emitExit('pty-1', 0)
 
-    const body = vi.mocked(sendDesktopNotification).mock.calls[0][1]
-    expect(body).not.toContain('\n')
-    expect(body).toContain('Build Server')
+    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Build Server — DONE')
   })
 
   describe('needsAttention flag', () => {
@@ -144,7 +162,8 @@ describe('terminal exit notification logic', () => {
         ptyIdIndex: new Map([['pty-1', 'term-1'], ['pty-2', 'term-2']])
       })
 
-      simulateExitCallback('pty-2', 0)
+      const { emitExit } = renderExitHook()
+      emitExit('pty-2', 0)
 
       const term2 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-2')
       expect(term2?.needsAttention).toBe(true)
@@ -160,7 +179,8 @@ describe('terminal exit notification logic', () => {
         ptyIdIndex: new Map([['pty-1', 'term-1']])
       })
 
-      simulateExitCallback('pty-1', 0)
+      const { emitExit } = renderExitHook()
+      emitExit('pty-1', 0)
 
       const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
       expect(term1?.needsAttention).toBeFalsy()
@@ -176,7 +196,8 @@ describe('terminal exit notification logic', () => {
         ptyIdIndex: new Map([['pty-1', 'term-1']])
       })
 
-      simulateExitCallback('pty-1', 1)
+      const { emitExit } = renderExitHook()
+      emitExit('pty-1', 1)
 
       const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
       expect(term1?.needsAttention).toBe(true)
@@ -192,7 +213,8 @@ describe('terminal exit notification logic', () => {
         ptyIdIndex: new Map([['pty-1', 'term-1']])
       })
 
-      simulateExitCallback('pty-1', 0)
+      const { emitExit } = renderExitHook()
+      emitExit('pty-1', 0)
 
       const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
       expect(term1?.needsAttention).toBe(true)
@@ -208,7 +230,8 @@ describe('terminal exit notification logic', () => {
         ptyIdIndex: new Map([['pty-1', 'term-1']])
       })
 
-      simulateExitCallback('unknown-pty', 0)
+      const { emitExit } = renderExitHook()
+      emitExit('unknown-pty', 0)
 
       const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
       expect(term1?.needsAttention).toBeFalsy()
