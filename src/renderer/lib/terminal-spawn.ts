@@ -8,6 +8,7 @@
 
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -122,4 +123,40 @@ export async function spawnTerminalInPane(
 			error: err instanceof Error ? err.message : String(err),
 		}
 	}
+}
+
+/** Outcome of {@link activateAndOpenTerminal}, so callers can phrase their own toast. */
+export type ActivateAndOpenTerminalOutcome =
+	| { status: 'opened'; terminalId?: string }
+	| { status: 'no-pane' }
+	| { status: 'spawn-failed'; error?: string }
+
+/**
+ * Activate a worktree (or the project root when `worktreeId` is null) and open a
+ * terminal in `worktreePath`, reading `activePaneId` and the per-project terminal
+ * limit from the stores. Centralizes the mechanics shared by the sidebar hover
+ * button, the context menu, and the create-worktree flow. Callers own the toast
+ * copy via the returned outcome.
+ */
+export async function activateAndOpenTerminal(
+	projectId: string,
+	worktreeId: string | null,
+	worktreePath: string,
+): Promise<ActivateAndOpenTerminalOutcome> {
+	useProjectStore.getState().setActiveWorktree(projectId, worktreeId)
+
+	const paneId = useWorkspaceStore.getState().activePaneId
+	if (!paneId) {
+		return { status: 'no-pane' }
+	}
+
+	const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
+	const result = await spawnTerminalInPane(paneId, projectId, worktreePath, {
+		maxTerminalsPerProject,
+	})
+
+	if (result.success) {
+		return { status: 'opened', terminalId: result.terminalId }
+	}
+	return { status: 'spawn-failed', error: result.error }
 }

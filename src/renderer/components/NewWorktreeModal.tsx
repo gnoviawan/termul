@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
-import { X, GitBranch, Search, AlertTriangle, Loader2, Link2 } from 'lucide-react'
+import { X, GitBranch, Search, AlertTriangle, Loader2, Link2, Terminal } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { BranchInfo } from '@shared/types/ipc.types'
 import type { Worktree } from '@/types/project'
 import { worktreeApi } from '@/lib/api'
 import { useProjectStore, useProjectActions } from '@/stores/project-store'
+import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
@@ -40,6 +41,9 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 	const [enabledSymlinkDirs, setEnabledSymlinkDirs] = useState<Set<string>>(new Set())
 	const [showSymlinkSection, setShowSymlinkSection] = useState(false)
 
+	// Advanced (git plumbing) disclosure — collapsed by default for non-technical users
+	const [showAdvanced, setShowAdvanced] = useState(false)
+
 	const projectPath = project?.path ?? ''
 	const isGitRepo = project?.isGitRepo ?? false
 
@@ -51,8 +55,10 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			.replace(/^-|-$/g, '')
 	}
 
-	// Auto-fill worktree name from branch name
+	// Auto-fill worktree name from branch ONLY when the user hasn't named it yet.
+	// Name is the primary field now; never clobber a user-entered name.
 	useEffect(() => {
+		if (worktreeName.trim()) return
 		if (branchType === 'new' && newBranchName) {
 			setWorktreeName(sanitizeBranchName(newBranchName))
 		} else if (branchType === 'existing' && selectedBranch) {
@@ -60,7 +66,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			const name = selectedBranch.split('/').pop() ?? selectedBranch
 			setWorktreeName(name)
 		}
-	}, [branchType, newBranchName, selectedBranch])
+	}, [branchType, newBranchName, selectedBranch, worktreeName])
 
 	// Reset form when modal opens
 	useEffect(() => {
@@ -75,6 +81,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 			setValidationError(null)
 			setIsCreating(false)
 			setShowSymlinkSection(false)
+			setShowAdvanced(false)
 
 			// Initialize symlink dirs from project settings
 			const projectSymlinkDirs = project?.symlinkDirs ?? []
@@ -128,8 +135,12 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 		if (!isGitRepo) return 'Project is not a git repository'
 		if (isWorktreeOperationLocked) return 'Another worktree operation is in progress'
 
+		// Simple path: when creating a new branch and the Advanced branch field is empty,
+		// derive the branch from the worktree name.
+		const effectiveNewBranch = newBranchName.trim() || worktreeName.trim()
+
 		// Check if branch already has a worktree
-		const branch = branchType === 'existing' ? selectedBranch : sanitizeBranchName(newBranchName)
+		const branch = branchType === 'existing' ? selectedBranch : sanitizeBranchName(effectiveNewBranch)
 		const existingWorktree = project?.worktrees?.find(
 			(w: Worktree) => w.branch === branch || w.name === worktreeName,
 		)
@@ -138,14 +149,14 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 		}
 
 		if (branchType === 'new') {
-			if (!newBranchName.trim()) return 'Branch name is required'
-			// Also validate that the sanitized branch name is non-empty
-			if (!sanitizeBranchName(newBranchName).trim()) return 'Branch name is required'
+			if (!effectiveNewBranch) return 'Name is required'
+			// A name was entered but sanitized to nothing (e.g. "---") — it's invalid, not missing.
+			if (!sanitizeBranchName(effectiveNewBranch).trim()) return 'Name contains no usable characters'
 		} else {
 			if (!selectedBranch) return 'Select a branch'
 		}
 
-		if (!worktreeName.trim()) return 'Worktree name is required'
+		if (!worktreeName.trim()) return 'Name is required'
 
 		// Check for path length (Windows MAX_PATH = 260)
 		const targetPath = `${projectPath}/.termul/worktrees/${worktreeName}/`
@@ -186,7 +197,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 		try {
 			const branch = branchType === 'existing'
 				? selectedBranch
-				: sanitizeBranchName(newBranchName)
+				: sanitizeBranchName(newBranchName.trim() || worktreeName.trim())
 
 			const result = await worktreeApi.create({
 				projectPath,
@@ -248,6 +259,21 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 					toast({
 						title: 'Worktree created',
 						description: `"${result.data.name}" created successfully on branch "${result.data.branch}".`,
+					})
+				}
+
+				// Land the user inside the new worktree: activate it and open a terminal there.
+				// Best-effort — a spawn failure must not block the (already successful) creation.
+				const outcome = await activateAndOpenTerminal(projectId, newWorktree.id, result.data.path)
+				if (outcome.status === 'no-pane') {
+					toast({
+						title: 'Worktree ready — terminal not opened',
+						description: 'No active pane to open a terminal in. Switch to a workspace pane first.',
+					})
+				} else if (outcome.status === 'spawn-failed') {
+					toast({
+						title: 'Worktree ready — terminal not opened',
+						description: outcome.error || 'Could not open a terminal in the new worktree.',
 					})
 				}
 
@@ -355,6 +381,38 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 								/>
 							</div>
 
+							{/* Worktree name — primary, only required field for the simple path */}
+							<div>
+								<label className="block text-xs font-medium text-muted-foreground mb-1">
+									Name
+								</label>
+								<input
+									type="text"
+									value={worktreeName}
+									onChange={(e) => setWorktreeName(e.target.value)}
+									placeholder="e.g. try-new-hero"
+									className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+									autoFocus
+								/>
+								<p className="text-[10px] text-muted-foreground mt-0.5">
+									A separate place to work. Your main project stays untouched.
+								</p>
+							</div>
+
+							{/* Advanced (git plumbing) — collapsed by default for non-technical users */}
+							<button
+								type="button"
+								onClick={() => setShowAdvanced(!showAdvanced)}
+								className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+								aria-expanded={showAdvanced}
+							>
+								<GitBranch size={12} aria-hidden="true" />
+								<span>Advanced (branch options)</span>
+								<span className="text-[10px]" aria-hidden="true">{showAdvanced ? '▼' : '▶'}</span>
+							</button>
+
+							{showAdvanced && (
+							<div className="space-y-4">
 							{/* Branch type toggle */}
 							<div>
 								<label className="block text-xs font-medium text-muted-foreground mb-1">
@@ -455,26 +513,25 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 								</div>
 							)}
 
-							{/* New branch name */}
+							{/* New branch name + start ref */}
 							{branchType === 'new' && (
 								<>
 									<div>
 										<label className="block text-xs font-medium text-muted-foreground mb-1">
-											Branch Name
+											Branch Name <span className="text-muted-foreground/60">(optional)</span>
 										</label>
 										<input
 											type="text"
 											value={newBranchName}
 											onChange={(e) => setNewBranchName(e.target.value)}
-											placeholder="feature/my-feature"
+											placeholder={worktreeName ? sanitizeBranchName(worktreeName) : 'feature/my-feature'}
 											className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-											autoFocus
 										/>
-										{newBranchName && sanitizeBranchName(newBranchName) !== newBranchName && (
-											<p className="text-[10px] text-muted-foreground mt-0.5">
-												Will be sanitized to: {sanitizeBranchName(newBranchName)}
-											</p>
-										)}
+										<p className="text-[10px] text-muted-foreground mt-0.5">
+											{newBranchName && sanitizeBranchName(newBranchName) !== newBranchName
+												? `Will be sanitized to: ${sanitizeBranchName(newBranchName)}`
+												: 'Defaults to the name above.'}
+										</p>
 									</div>
 									<div>
 										<label className="block text-xs font-medium text-muted-foreground mb-1">
@@ -493,23 +550,9 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 									</div>
 								</>
 							)}
-
-							{/* Worktree name */}
-							<div>
-								<label className="block text-xs font-medium text-muted-foreground mb-1">
-									Worktree Name
-								</label>
-								<input
-									type="text"
-									value={worktreeName}
-									onChange={(e) => setWorktreeName(e.target.value)}
-									placeholder="my-worktree"
-									className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-								/>
-								<p className="text-[10px] text-muted-foreground mt-0.5">
-									Auto-filled from branch name
-								</p>
 							</div>
+							)}
+
 
 							{/* Path preview */}
 							<div>
@@ -596,7 +639,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 								className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
 							>
 								{isCreating && <Loader2 size={12} className="animate-spin" />}
-								{isCreating ? 'Creating...' : 'Create Worktree'}
+								{!isCreating && <Terminal size={12} />}
+								{isCreating ? 'Creating...' : 'Create & open'}
 							</button>
 						</div>
 					</motion.div>
