@@ -1417,54 +1417,58 @@ function ConnectedTerminalComponent({
 		}
 	}, [isVisible, forceResizeFit]);
 
-	// Shared terminal recovery logic - re-fit and check WebGL health
+	// Shared terminal recovery logic - re-fit and force a GPU layer re-composite.
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Cancel any pending auto-recovery timeout to avoid double-creation race
+		// Cancel any pending WebGL auto-recovery timeout to avoid double-creation
+		// race with the genuine onContextLoss path.
 		if (webglRecoveryTimeoutRef.current) {
 			clearTimeout(webglRecoveryTimeoutRef.current);
 			webglRecoveryTimeoutRef.current = null;
 		}
 
-		// On Windows, minimizing a Tauri window can silently corrupt the WebGL
-		// rendering surface without firing onContextLoss. The addon's GPU context
-		// becomes broken but xterm still routes all rendering through it, leaving
-		// the terminal blank. Tab-switching fixes this because the cached-reattach
-		// path recreates a fresh addon.
+		// Root cause (verified via live forensics + upstream xterm.js #5357 /
+		// VS Code #251800 / Electron #6320 / Tauri #9246):
 		//
-		// Recovery strategy (eliminates visible blank flash):
-		//   1. Dispose the broken WebGL addon. Xterm reverts to its built-in DOM
-		//      renderer (the .xterm-rows divs are always maintained internally).
-		//   2. Synchronously re-fit + refresh via DOM renderer — user sees
-		//      terminal content immediately with zero blank gap.
-		//   3. Recreate the WebGL addon on the next animation frame. Once painted,
-		//      it seamlessly takes over from the DOM renderer (~16ms later).
-		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
-			disposeWebglAddon();
-			webglContextLostRef.current = false;
-		}
+		// After minimize→restore on Windows, the WebGL *context is healthy*
+		// (gl.isContextLost() === false) but the browser/WebView2 compositor does
+		// NOT re-present the WebGL canvas layer. WebView2 child windows don't get
+		// paint messages on minimize/restore, and with preserveDrawingBuffer:false
+		// the layer shows stale/blank content until a re-composite is forced.
+		//
+		// xterm.js renders only to canvas layers in 6.x (there is NO .xterm-rows
+		// DOM fallback), so disposing/recreating the WebGL addon does NOT help and
+		// just adds a blank gap. fitAddon.fit()/terminal.refresh() update canvas
+		// CONTENT at the GL level but do not force the layer to re-composite.
+		//
+		// The fix is the same mechanism that makes tab-switching work: toggle the
+		// terminal element's CSS visibility, which forces the compositor to
+		// re-present the layer. Combined with a forced fit + refresh so xterm
+		// redraws the buffer into the freshly composited layer.
+		const termEl = terminalRef.current.element as HTMLElement | undefined;
 
-		// Re-fit and sync PTY dimensions via the v2 hook's forced path.
+		// Re-fit and sync PTY dimensions (handles any container size change while
+		// hidden) and force xterm to redraw the visible buffer.
 		forceResizeFit();
+		terminalRef.current.refresh(0, terminalRef.current.rows - 1);
 
-		// Force an immediate repaint through the currently-active renderer.
-		// After disposing WebGL above, this is the DOM renderer which paints
-		// synchronously — the user sees content with no blank gap.
-		if (terminalRef.current) {
-			terminalRef.current.refresh(0, terminalRef.current.rows - 1);
-		}
-
-		// Defer WebGL recreation to the next animation frame. The DOM rows are
-		// visible during the ~16ms gap, then WebGL seamlessly takes over.
-		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+		// Force the GPU compositor to re-present the canvas layer. Flipping
+		// visibility off then back on across an animation frame triggers a
+		// re-composite without the layout cost of a real resize. This is the
+		// programmatic equivalent of the tab-switch visibility toggle.
+		if (termEl) {
+			termEl.style.visibility = "hidden";
 			requestAnimationFrame(() => {
-				if (loadWebglAddonRef.current && terminalRef.current) {
-					loadWebglAddonRef.current(terminalRef.current, true);
+				termEl.style.visibility = "";
+				// Redraw once more after the layer is re-presented so the buffer
+				// is guaranteed to paint into the now-composited surface.
+				if (terminalRef.current) {
+					terminalRef.current.refresh(0, terminalRef.current.rows - 1);
 				}
 			});
 		}
-	}, [forceResizeFit, disposeWebglAddon]);
+	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {

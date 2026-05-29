@@ -70,7 +70,9 @@ const mockTerminalInstance = {
           index === 0 ? 'missing.ts src/renderer/App.tsx' : ''
       }))
     }
-  }
+  },
+  // Real DOM element so recovery's CSS visibility re-composite can be tested.
+  element: (typeof document !== 'undefined' ? document.createElement('div') : undefined) as HTMLDivElement | undefined
 }
 
 let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
@@ -127,6 +129,8 @@ vi.mock('@xterm/xterm', () => ({
     rows = mockTerminalInstance.rows
     options = mockTerminalInstance.options
     buffer = mockTerminalInstance.buffer
+    // Real DOM element so recovery's CSS visibility re-composite can be tested.
+    element = mockTerminalInstance.element
   }
 }))
 
@@ -2102,7 +2106,7 @@ describe('ConnectedTerminal', () => {
       addEventListenerSpy.mockRestore()
     })
 
-    it('should trigger fit and resize immediately on window focus (no debounce)', async () => {
+    it('should re-composite the canvas layer immediately on window focus (no debounce)', async () => {
       vi.useFakeTimers()
 
       render(<ConnectedTerminal />)
@@ -2117,8 +2121,10 @@ describe('ConnectedTerminal', () => {
 
       // Clear mocks before dispatching focus event
       mockFitAddonInstance.fit.mockClear()
+      mockTerminalInstance.refresh.mockClear()
       vi.mocked(terminalApi).resize.mockClear()
-      const webglInstanceBeforeFocus = lastCreatedWebglInstance
+      const webglCountBeforeFocus = webglAddonCreateCount
+      const termEl = mockTerminalInstance.element as HTMLDivElement
 
       // Dispatch window focus event — recovery fires IMMEDIATELY (no debounce).
       // The window is already visible when focus fires, so waiting serves no purpose.
@@ -2131,15 +2137,19 @@ describe('ConnectedTerminal', () => {
         expect.any(Number),
         expect.any(Number)
       )
-      // WebGL addon should be disposed to break the corrupted GPU surface
-      expect(webglInstanceBeforeFocus?.dispose).toHaveBeenCalled()
-      // Buffer should be repainted through DOM renderer immediately
+      // Buffer should be repainted to redraw into the re-composited layer
       expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
+      // The canvas layer must be hidden synchronously to force a GPU re-composite
+      expect(termEl.style.visibility).toBe('hidden')
+      // WebGL addon is NOT disposed/recreated — the context is healthy, only the
+      // compositor needs a nudge. Recreating would add a needless blank gap.
+      expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
 
-      // WebGL recreation is deferred to next animation frame — advance past it
+      // After the next animation frame, visibility is restored (re-composite done)
       await vi.advanceTimersByTimeAsync(20)
-      // A new WebGL addon instance should have been created on the next RAF
-      expect(webglAddonCreateCount).toBeGreaterThanOrEqual(2)
+      expect(termEl.style.visibility).toBe('')
+      // Still no new WebGL addon created
+      expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
 
       vi.useRealTimers()
     })
