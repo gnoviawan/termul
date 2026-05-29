@@ -1417,7 +1417,8 @@ function ConnectedTerminalComponent({
 		}
 	}, [isVisible, forceResizeFit]);
 
-	// Shared terminal recovery logic - re-fit and force a GPU layer re-composite.
+	// Shared terminal recovery logic - re-fit once layout is stable, then nudge
+	// the compositor to re-present the canvas layer.
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
@@ -1428,46 +1429,62 @@ function ConnectedTerminalComponent({
 			webglRecoveryTimeoutRef.current = null;
 		}
 
-		// Root cause (verified via live forensics + upstream xterm.js #5357 /
-		// VS Code #251800 / Electron #6320 / Tauri #9246):
+		// Root cause (verified via live forensics + xterm.js #4841 / #5357):
 		//
-		// After minimize→restore on Windows, the WebGL *context is healthy*
-		// (gl.isContextLost() === false) but the browser/WebView2 compositor does
-		// NOT re-present the WebGL canvas layer. WebView2 child windows don't get
-		// paint messages on minimize/restore, and with preserveDrawingBuffer:false
-		// the layer shows stale/blank content until a re-composite is forced.
+		// After minimize→restore on Windows the webview reflows over several
+		// frames. If fit() runs while the container height is still collapsed,
+		// the terminal grid shrinks to 1-2 rows (PTY redraws tiny → "1-2 lines"
+		// of text) until a later resize corrects it. The fit pipeline now guards
+		// against collapsed dimensions (use-terminal-resize-v2), so an early fit
+		// is a safe no-op rather than a destructive shrink.
 		//
-		// xterm.js renders only to canvas layers in 6.x (there is NO .xterm-rows
-		// DOM fallback), so disposing/recreating the WebGL addon does NOT help and
-		// just adds a blank gap. fitAddon.fit()/terminal.refresh() update canvas
-		// CONTENT at the GL level but do not force the layer to re-composite.
+		// Additionally, the WebView2 compositor may not re-present the WebGL
+		// canvas layer after restore (xterm 6.x has no DOM-row fallback; the
+		// context itself stays healthy). A CSS visibility flip forces a
+		// re-composite — the same mechanism that makes tab-switching work.
 		//
-		// The fix is the same mechanism that makes tab-switching work: toggle the
-		// terminal element's CSS visibility, which forces the compositor to
-		// re-present the layer. Combined with a forced fit + refresh so xterm
-		// redraws the buffer into the freshly composited layer.
+		// Strategy: wait for the container to report a usable size (poll across a
+		// few RAFs), then forceResizeFit + refresh, then flip visibility to
+		// guarantee the layer re-composites.
 		const termEl = terminalRef.current.element as HTMLElement | undefined;
+		const container = containerRef.current;
 
-		// Re-fit and sync PTY dimensions (handles any container size change while
-		// hidden) and force xterm to redraw the visible buffer.
-		forceResizeFit();
-		terminalRef.current.refresh(0, terminalRef.current.rows - 1);
+		const MIN_USABLE = 40;
+		const MAX_LAYOUT_WAIT_FRAMES = 30; // ~0.5s at 60fps
 
-		// Force the GPU compositor to re-present the canvas layer. Flipping
-		// visibility off then back on across an animation frame triggers a
-		// re-composite without the layout cost of a real resize. This is the
-		// programmatic equivalent of the tab-switch visibility toggle.
-		if (termEl) {
-			termEl.style.visibility = "hidden";
-			requestAnimationFrame(() => {
-				termEl.style.visibility = "";
-				// Redraw once more after the layer is re-presented so the buffer
-				// is guaranteed to paint into the now-composited surface.
-				if (terminalRef.current) {
-					terminalRef.current.refresh(0, terminalRef.current.rows - 1);
-				}
-			});
-		}
+		const runRecovery = (): void => {
+			const terminal = terminalRef.current;
+			if (!terminal) return;
+			// Re-fit (guarded against collapsed dims) + redraw the buffer.
+			forceResizeFit();
+			terminal.refresh(0, terminal.rows - 1);
+
+			// Nudge the compositor to re-present the canvas layer.
+			if (termEl) {
+				termEl.style.visibility = "hidden";
+				requestAnimationFrame(() => {
+					termEl.style.visibility = "";
+					const t = terminalRef.current;
+					if (t) t.refresh(0, t.rows - 1);
+				});
+			}
+		};
+
+		// Wait until the container has reflowed to a usable size before fitting,
+		// so we never collapse the grid. Bail out after MAX_LAYOUT_WAIT_FRAMES.
+		let frames = 0;
+		const waitForStableLayout = (): void => {
+			const rect = container?.getBoundingClientRect();
+			const ready =
+				!!rect && rect.width >= MIN_USABLE && rect.height >= MIN_USABLE;
+			if (ready || frames >= MAX_LAYOUT_WAIT_FRAMES) {
+				runRecovery();
+				return;
+			}
+			frames += 1;
+			requestAnimationFrame(waitForStableLayout);
+		};
+		waitForStableLayout();
 	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)

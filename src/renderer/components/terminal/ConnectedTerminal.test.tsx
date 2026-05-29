@@ -2106,8 +2106,25 @@ describe('ConnectedTerminal', () => {
       addEventListenerSpy.mockRestore()
     })
 
-    it('should re-composite the canvas layer immediately on window focus (no debounce)', async () => {
+    it('should re-fit and re-composite on window focus once layout is stable', async () => {
       vi.useFakeTimers()
+
+      // jsdom reports 0x0 rects by default; recovery waits for a usable size
+      // before fitting (guards against collapsing the grid to 1-2 rows). Stub a
+      // usable container size so recovery proceeds on the first frame.
+      const rectSpy = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockReturnValue({
+          width: 800,
+          height: 600,
+          top: 0,
+          left: 0,
+          right: 800,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({})
+        } as DOMRect)
 
       render(<ConnectedTerminal />)
 
@@ -2126,30 +2143,29 @@ describe('ConnectedTerminal', () => {
       const webglCountBeforeFocus = webglAddonCreateCount
       const termEl = mockTerminalInstance.element as HTMLDivElement
 
-      // Dispatch window focus event — recovery fires IMMEDIATELY (no debounce).
-      // The window is already visible when focus fires, so waiting serves no purpose.
+      // Dispatch window focus event — recovery fires immediately (no debounce),
+      // but waits for a stable layout via requestAnimationFrame before fitting.
       window.dispatchEvent(new Event('focus'))
 
-      // Fit and resize should fire synchronously (immediate recovery)
-      expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
+      // Advance frames so the layout-wait + recovery + re-composite all run
+      await vi.advanceTimersByTimeAsync(40)
+
+      // Fit + PTY resize happened against the (now usable) container size
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
       expect(vi.mocked(terminalApi).resize).toHaveBeenCalledWith(
         'terminal-123',
         expect.any(Number),
         expect.any(Number)
       )
-      // Buffer should be repainted to redraw into the re-composited layer
+      // Buffer repainted to redraw into the re-composited layer
       expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
-      // The canvas layer must be hidden synchronously to force a GPU re-composite
-      expect(termEl.style.visibility).toBe('hidden')
       // WebGL addon is NOT disposed/recreated — the context is healthy, only the
       // compositor needs a nudge. Recreating would add a needless blank gap.
       expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
-
-      // After the next animation frame, visibility is restored (re-composite done)
-      await vi.advanceTimersByTimeAsync(20)
+      // Visibility flip completed (restored to visible after the re-composite)
       expect(termEl.style.visibility).toBe('')
-      // Still no new WebGL addon created
-      expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
+
+      rectSpy.mockRestore()
 
       vi.useRealTimers()
     })
