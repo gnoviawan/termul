@@ -1,6 +1,31 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+
+/// Windows flag to suppress the transient console window that would otherwise
+/// flash for every short-lived helper process (git.exe, where.exe, cmd.exe).
+/// Without this, GUI/release builds pop a console window on each invocation
+/// — highly visible when worktree status polling runs `git status` every 2s.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Build a helper command that does not spawn a visible console window.
+/// On Windows this applies the `CREATE_NO_WINDOW` creation flag; on other
+/// platforms it is a plain `Command::new`.
+fn quiet_command(program: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new(program);
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(program)
+    }
+}
 
 /// Directories that should never be symlinked into worktrees.
 const SYMLINK_EXCLUSION_LIST: &[&str] = &[
@@ -237,7 +262,7 @@ fn parse_git_stderr(stderr: &str) -> WorktreeError {
 fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String), WorktreeError> {
     let git = which_git()?;
 
-    let mut cmd = Command::new(&git);
+    let mut cmd = quiet_command(&git);
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -285,7 +310,7 @@ fn which_git() -> Result<String, WorktreeError> {
         "which"
     };
 
-    let output = Command::new(cmd)
+    let output = quiet_command(cmd)
         .arg("git")
         .output()
         .map_err(|_| WorktreeError::GitNotFound)?;
@@ -1132,7 +1157,7 @@ fn create_dir_symlink(source: &Path, target: &Path) -> Result<(), String> {
         // Fallback: create a directory junction using `mklink /J`
         let source_str = source.to_string_lossy().to_string();
         let target_str = target.to_string_lossy().to_string();
-        let output = Command::new("cmd")
+        let output = quiet_command("cmd")
             .args([
                 "/C",
                 "mklink",
