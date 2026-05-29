@@ -58,6 +58,7 @@ export interface TerminalState {
   setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  setTerminalNeedsAttention: (id: string, value: boolean) => void
   setAppHidden: (isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
@@ -408,6 +409,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         }
       })
     }))
+  },
+
+  setTerminalNeedsAttention: (id: string, value: boolean): void => {
+    set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      // No-op when the flag is already at the requested value to avoid needless re-renders.
+      if (!target || (target.needsAttention ?? false) === value) {
+        return state
+      }
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === id ? { ...t, needsAttention: value } : t
+        )
+      }
+    })
   },
 
   setAppHidden: (isHidden: boolean): void => {

@@ -21,8 +21,10 @@ function sanitizeNotificationText(text: string, maxLength: number = MAX_NOTIFICA
 }
 
 /**
- * Hook that listens for terminal-exit events and sends a desktop notification
- * with the project title and terminal title when a terminal process finishes.
+ * Hook that listens for terminal-exit events and (1) sends a desktop notification
+ * with the project title and terminal title when a terminal process finishes, and
+ * (2) flags the terminal with `needsAttention` so the workspace can render an in-app
+ * highlight border on the finished terminal (cross-OS, no notification-click needed).
  *
  * Notification format:
  *   Title: <project name>  (or "Termul" if project unknown)
@@ -32,8 +34,27 @@ function sanitizeNotificationText(text: string, maxLength: number = MAX_NOTIFICA
 export function useTerminalExitNotification(): void {
   useEffect(() => {
     const cleanup = terminalApi.onExit((ptyId: string, exitCode: number) => {
-      const terminal = useTerminalStore.getState().findTerminalByPtyId(ptyId)
+      const terminalState = useTerminalStore.getState()
+      const terminal = terminalState.findTerminalByPtyId(ptyId)
       if (!terminal) return
+
+      // Flag the terminal for the in-app highlight border when its process finishes
+      // while the user is not already looking at it. "Viewing" requires BOTH that this
+      // is the active terminal AND the window is currently focused. document.hasFocus()
+      // is synchronous and accurate at the exit instant, avoiding the async isAppHidden
+      // update race; isAppHidden is kept as a fallback for environments where focus is
+      // unreliable (e.g. some tests/headless).
+      const windowFocused =
+        typeof document !== 'undefined' && typeof document.hasFocus === 'function'
+          ? document.hasFocus()
+          : !terminal.isAppHidden
+      const isViewingThisTerminal =
+        terminalState.activeTerminalId === terminal.id &&
+        windowFocused &&
+        !terminal.isAppHidden
+      if (!isViewingThisTerminal) {
+        terminalState.setTerminalNeedsAttention(terminal.id, true)
+      }
 
       const project = useProjectStore
         .getState()

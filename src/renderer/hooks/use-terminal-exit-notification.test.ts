@@ -13,8 +13,21 @@ vi.mock('@/lib/tauri-notification-api', () => ({
  * since the hook is a thin wrapper around terminalApi.onExit.
  */
 function simulateExitCallback(ptyId: string, exitCode: number): void {
-  const terminal = useTerminalStore.getState().findTerminalByPtyId(ptyId)
+  const terminalState = useTerminalStore.getState()
+  const terminal = terminalState.findTerminalByPtyId(ptyId)
   if (!terminal) return
+
+  const windowFocused =
+    typeof document !== 'undefined' && typeof document.hasFocus === 'function'
+      ? document.hasFocus()
+      : !terminal.isAppHidden
+  const isViewingThisTerminal =
+    terminalState.activeTerminalId === terminal.id &&
+    windowFocused &&
+    !terminal.isAppHidden
+  if (!isViewingThisTerminal) {
+    terminalState.setTerminalNeedsAttention(terminal.id, true)
+  }
 
   const project = useProjectStore
     .getState()
@@ -118,5 +131,87 @@ describe('terminal exit notification logic', () => {
     const body = vi.mocked(sendDesktopNotification).mock.calls[0][1]
     expect(body).not.toContain('\n')
     expect(body).toContain('Build Server')
+  })
+
+  describe('needsAttention flag', () => {
+    it('flags a background terminal (not the active terminal) on exit', () => {
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash' },
+          { id: 'term-2', name: 'Dev Server', projectId: 'proj-1', shell: 'bash' }
+        ],
+        activeTerminalId: 'term-1',
+        ptyIdIndex: new Map([['pty-1', 'term-1'], ['pty-2', 'term-2']])
+      })
+
+      simulateExitCallback('pty-2', 0)
+
+      const term2 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-2')
+      expect(term2?.needsAttention).toBe(true)
+    })
+
+    it('does NOT flag the active terminal when the app is visible', () => {
+      const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash', isAppHidden: false }
+        ],
+        activeTerminalId: 'term-1',
+        ptyIdIndex: new Map([['pty-1', 'term-1']])
+      })
+
+      simulateExitCallback('pty-1', 0)
+
+      const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
+      expect(term1?.needsAttention).toBeFalsy()
+      hasFocusSpy.mockRestore()
+    })
+
+    it('flags the active terminal when the app is hidden', () => {
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash', isAppHidden: true }
+        ],
+        activeTerminalId: 'term-1',
+        ptyIdIndex: new Map([['pty-1', 'term-1']])
+      })
+
+      simulateExitCallback('pty-1', 1)
+
+      const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
+      expect(term1?.needsAttention).toBe(true)
+    })
+
+    it('flags the active terminal when the window is not focused (hasFocus=false)', () => {
+      const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash', isAppHidden: false }
+        ],
+        activeTerminalId: 'term-1',
+        ptyIdIndex: new Map([['pty-1', 'term-1']])
+      })
+
+      simulateExitCallback('pty-1', 0)
+
+      const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
+      expect(term1?.needsAttention).toBe(true)
+      hasFocusSpy.mockRestore()
+    })
+
+    it('does not flag anything for an unknown ptyId', () => {
+      useTerminalStore.setState({
+        terminals: [
+          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash' }
+        ],
+        activeTerminalId: 'term-1',
+        ptyIdIndex: new Map([['pty-1', 'term-1']])
+      })
+
+      simulateExitCallback('unknown-pty', 0)
+
+      const term1 = useTerminalStore.getState().terminals.find((t) => t.id === 'term-1')
+      expect(term1?.needsAttention).toBeFalsy()
+    })
   })
 })
