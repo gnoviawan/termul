@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
     "preview": "vite preview",
+    "lint": "eslint .",
+    "deploy": "wrangler pages deploy dist",
     "verify:prerender": "bun -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "vite-plugin-react-ssg": "^0.2.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250514.0",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^24.12.3",
@@ -43,6 +45,7 @@
     "tailwindcss": "^4.3.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "wrangler": "^4.25.0"
   }
 }
