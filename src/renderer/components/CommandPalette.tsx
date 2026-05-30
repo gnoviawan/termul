@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
-  Clock,
   Globe,
   History,
   Keyboard,
   Layers,
   Monitor,
+  Pin,
   Save,
   Settings,
   SlidersHorizontal,
@@ -25,6 +25,7 @@ import type { Project, ProjectColor } from '@/types/project'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
+import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 
 type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory'
 
@@ -56,9 +57,9 @@ const COMMAND_CATEGORY_LABELS: Record<CommandCategory, string> = {
 }
 
 const COMMAND_CATEGORY_ORDER: CommandCategory[] = [
+  'projects',
   'workspace',
   'navigation',
-  'projects',
   'tools'
 ]
 
@@ -106,6 +107,8 @@ export function CommandPalette({
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
   const saveRecentCommand = useSaveRecentCommand()
+  const pinnedCommandIds = usePinnedCommandIds()
+  const togglePinnedCommand = useTogglePinnedCommand()
 
   const commands: CommandDef[] = useMemo(
     () => [
@@ -186,7 +189,7 @@ export function CommandPalette({
             className={getColorClasses(project.color).text}
           />
         ),
-        label: `Switch to Project: ${project.name}`,
+        label: project.name,
         description: project.path ?? 'Switch active workspace project',
         keywords: ['project', 'switch', project.name, project.path].filter(
           (keyword): keyword is string => Boolean(keyword)
@@ -251,7 +254,17 @@ export function CommandPalette({
     ]
   )
 
-  const { recentCommands, commandsByCategory } = useMemo(() => {
+  const { pinnedCommands, recentCommands, commandsByCategory } = useMemo(() => {
+    const commandById = new Map(commands.map((cmd) => [cmd.id, cmd]))
+
+    const pinned: CommandDef[] = []
+    for (const id of pinnedCommandIds) {
+      const cmd = commandById.get(id)
+      if (cmd) {
+        pinned.push(cmd)
+      }
+    }
+
     const recent: CommandDef[] = []
     const recentIds = new Set(recentCommandIds)
 
@@ -270,8 +283,14 @@ export function CommandPalette({
       commands: commands.filter((cmd) => cmd.category === category)
     })).filter((group) => group.commands.length > 0)
 
-    return { recentCommands: recent, commandsByCategory: grouped }
-  }, [commands, recentCommandIds])
+    return {
+      pinnedCommands: pinned,
+      recentCommands: recent,
+      commandsByCategory: grouped
+    }
+  }, [commands, pinnedCommandIds, recentCommandIds])
+
+  const pinnedIdSet = useMemo(() => new Set(pinnedCommandIds), [pinnedCommandIds])
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -301,6 +320,17 @@ export function CommandPalette({
     [saveRecentCommand, onClose]
   )
 
+  const togglePin = useCallback(
+    async (commandId: string) => {
+      try {
+        await togglePinnedCommand(commandId)
+      } catch (error) {
+        console.warn('Failed to toggle pinned command', error)
+      }
+    },
+    [togglePinnedCommand]
+  )
+
   // Handle Escape key - use capture phase to intercept before cmdk handles it
   useEffect(() => {
     if (!isOpen) return
@@ -317,38 +347,73 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
   }, [isOpen, onClose])
 
-  const renderCommandItem = (cmd: CommandDef): React.JSX.Element => (
-    <CommandItem
-      key={cmd.id}
-      value={getSearchableValue(cmd)}
-      onSelect={() => executeCommand(cmd)}
-      className="group flex items-center justify-between gap-3 px-2.5 py-2 cursor-pointer rounded-md"
-    >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span
-          className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary/70 text-muted-foreground group-data-[selected=true]:text-foreground',
-            cmd.projectColor && getColorClasses(cmd.projectColor).bg
+  const renderCommandItem = (
+    cmd: CommandDef,
+    keyPrefix?: string
+  ): React.JSX.Element => {
+    const isPinned = pinnedIdSet.has(cmd.id)
+    return (
+      <CommandItem
+        key={keyPrefix ? `${keyPrefix}:${cmd.id}` : cmd.id}
+        value={keyPrefix ? `${keyPrefix}:${getSearchableValue(cmd)}` : getSearchableValue(cmd)}
+        onSelect={() => executeCommand(cmd)}
+        className="group flex items-center justify-between gap-3 px-2.5 py-1.5 cursor-pointer rounded-md data-[selected='true']:bg-background data-[selected=true]:text-foreground"
+      >
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            className={cn(
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70 text-muted-foreground group-data-[selected=true]:text-foreground',
+              cmd.projectColor && getColorClasses(cmd.projectColor).bg
+            )}
+          >
+            {cmd.icon}
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium leading-5">{cmd.label}</span>
+            {cmd.description && (
+              <span className="truncate text-xs leading-4 text-muted-foreground">
+                {cmd.description}
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {cmd.shortcut && (
+            <CommandShortcut className="rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-[10px] tracking-normal text-muted-foreground">
+              {cmd.shortcut}
+            </CommandShortcut>
           )}
-        >
-          {cmd.icon}
-        </span>
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate text-sm font-medium leading-5">{cmd.label}</span>
-          {cmd.description && (
-            <span className="truncate text-xs leading-4 text-muted-foreground">
-              {cmd.description}
-            </span>
-          )}
-        </span>
-      </div>
-      {cmd.shortcut && (
-        <CommandShortcut className="shrink-0 rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-[10px] tracking-normal text-muted-foreground">
-          {cmd.shortcut}
-        </CommandShortcut>
-      )}
-    </CommandItem>
-  )
+          <button
+            type="button"
+            aria-label={isPinned ? `Unpin ${cmd.label}` : `Pin ${cmd.label}`}
+            aria-pressed={isPinned}
+            title={isPinned ? 'Unpin' : 'Pin'}
+            onMouseDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              void togglePin(cmd.id)
+            }}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary hover:text-foreground group-data-[selected=true]:text-foreground',
+              isPinned
+                ? 'text-foreground opacity-100'
+                : 'opacity-0 group-data-[selected=true]:opacity-100 group-hover:opacity-100'
+            )}
+          >
+            <Pin
+              aria-hidden="true"
+              size={13}
+              className={cn(isPinned && 'fill-current')}
+            />
+          </button>
+        </div>
+      </CommandItem>
+    )
+  }
 
   return (
     <AnimatePresence>
@@ -382,9 +447,15 @@ export function CommandPalette({
               <CommandList className="max-h-[52vh] px-1 py-1">
                 <CommandEmpty>No commands found.</CommandEmpty>
 
+                {pinnedCommands.length > 0 && query === '' && (
+                  <CommandGroup heading="Pinned">
+                    {pinnedCommands.map((cmd) => renderCommandItem(cmd, 'pinned'))}
+                  </CommandGroup>
+                )}
+
                 {recentCommands.length > 0 && query === '' && (
                   <CommandGroup heading="Recent">
-                    {recentCommands.map(renderCommandItem)}
+                    {recentCommands.map((cmd) => renderCommandItem(cmd, 'recent'))}
                   </CommandGroup>
                 )}
 
@@ -393,16 +464,12 @@ export function CommandPalette({
                     key={category}
                     heading={COMMAND_CATEGORY_LABELS[category]}
                   >
-                    {categoryCommands.map(renderCommandItem)}
+                    {categoryCommands.map((cmd) => renderCommandItem(cmd))}
                   </CommandGroup>
                 ))}
               </CommandList>
 
-              <div className="flex items-center justify-between gap-3 border-t border-border bg-background px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <Clock aria-hidden="true" size={12} />
-                  Recent commands saved
-                </span>
+              <div className="flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 <span className="flex items-center gap-3">
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
