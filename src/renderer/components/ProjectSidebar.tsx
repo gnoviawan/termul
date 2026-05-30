@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent, useMemo } from "react";
-import type { ChangeEvent, MouseEvent } from "react";
 import { Reorder, AnimatePresence, motion } from "framer-motion";
 import {
 	Plus,
