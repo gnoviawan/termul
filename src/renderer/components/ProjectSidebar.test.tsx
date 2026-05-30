@@ -600,3 +600,163 @@ describe('ProjectSidebar Worktree Row', () => {
     expect(mockActivateAndOpenTerminal).not.toHaveBeenCalled()
   })
 })
+
+describe('ProjectSidebar Project Search', () => {
+  // 8 projects crosses the PROJECT_SEARCH_THRESHOLD so the search UI renders.
+  const manyProjects: Project[] = Array.from({ length: 8 }, (_, i) => ({
+    id: String(i + 1),
+    name: `Project ${i + 1}`,
+    color: 'blue' as const,
+    gitBranch: i === 7 ? 'feature/special' : 'main'
+  }))
+
+  const fewProjects: Project[] = [
+    { id: '1', name: 'Alpha', color: 'blue', gitBranch: 'main' },
+    { id: '2', name: 'Beta', color: 'green', gitBranch: 'main' }
+  ]
+
+  it('hides the search box when the project count is below the threshold', () => {
+    renderWithRouter({ projects: fewProjects, activeProjectId: '1' })
+    expect(screen.queryByTestId('project-search-input')).not.toBeInTheDocument()
+  })
+
+  it('shows the search box once the project count reaches the threshold', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+    expect(screen.getByTestId('project-search-input')).toBeInTheDocument()
+  })
+
+  it('filters the visible projects by name', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'Project 8' }
+    })
+
+    expect(screen.getByText('Project 8')).toBeInTheDocument()
+    expect(screen.queryByText('Project 1')).not.toBeInTheDocument()
+    expect(screen.queryByText('Project 2')).not.toBeInTheDocument()
+  })
+
+  it('matches on git branch as well as name', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'feature/special' }
+    })
+
+    expect(screen.getByText('Project 8')).toBeInTheDocument()
+    expect(screen.queryByText('Project 1')).not.toBeInTheDocument()
+  })
+
+  it('shows an empty state when nothing matches', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'no-such-project' }
+    })
+
+    expect(screen.getByTestId('project-search-empty')).toBeInTheDocument()
+    expect(screen.getByText('No projects found')).toBeInTheDocument()
+  })
+
+  it('clears the query when the clear button is clicked', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    const input = screen.getByTestId('project-search-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Project 8' } })
+    expect(screen.queryByText('Project 1')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('project-search-clear'))
+
+    expect(input.value).toBe('')
+    expect(screen.getByText('Project 1')).toBeInTheDocument()
+  })
+
+  it('clears the query when Escape is pressed in the search box', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    const input = screen.getByTestId('project-search-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Project 8' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(input.value).toBe('')
+    expect(screen.getByText('Project 1')).toBeInTheDocument()
+  })
+
+  it('keeps the Ctrl+1 shortcut badge tied to the unfiltered position while searching', () => {
+    renderWithRouter({ projects: manyProjects, activeProjectId: '1' })
+
+    // Project 1 is index 0 -> Ctrl+1. Search for it; the badge must stay Ctrl+1.
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'Project 1' }
+    })
+
+    expect(screen.getByText('Project 1')).toBeInTheDocument()
+    expect(screen.getByText('Ctrl+1')).toBeInTheDocument()
+  })
+
+  it('clears a lingering query when the search box drops below the threshold', () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} projects={manyProjects} activeProjectId="1" />
+      </MemoryRouter>
+    )
+
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'Project 8' }
+    })
+    expect(screen.queryByText('Project 1')).not.toBeInTheDocument()
+
+    // Drop below the threshold so the search box unmounts.
+    rerender(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} projects={fewProjects} activeProjectId="1" />
+      </MemoryRouter>
+    )
+
+    // No stuck filter: the search box is gone and the remaining projects are visible.
+    expect(screen.queryByTestId('project-search-input')).not.toBeInTheDocument()
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+    expect(screen.getByText('Beta')).toBeInTheDocument()
+  })
+
+  it('clears the search when the active project is not in the filtered results', () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} projects={manyProjects} activeProjectId="1" />
+      </MemoryRouter>
+    )
+
+    // Filter to a single project that is NOT the active one.
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'Project 8' }
+    })
+    expect(screen.queryByText('Project 2')).not.toBeInTheDocument()
+
+    // Active project switches to one hidden by the query (e.g. Ctrl+2 or a new project).
+    rerender(
+      <MemoryRouter>
+        <ProjectSidebar {...defaultProps} projects={manyProjects} activeProjectId="2" />
+      </MemoryRouter>
+    )
+
+    // Search self-clears so the now-active project is visible again.
+    expect((screen.getByTestId('project-search-input') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('Project 2')).toBeInTheDocument()
+  })
+
+  it('disables the archived toggle while searching', () => {
+    const withArchived: Project[] = [
+      ...manyProjects,
+      { id: '99', name: 'Old Project', color: 'gray', gitBranch: 'main', isArchived: true }
+    ]
+    renderWithRouter({ projects: withArchived, activeProjectId: '1' })
+
+    fireEvent.change(screen.getByTestId('project-search-input'), {
+      target: { value: 'Project' }
+    })
+
+    const toggle = screen.getByLabelText(/Archived projects/)
+    expect(toggle).toBeDisabled()
+  })
+})

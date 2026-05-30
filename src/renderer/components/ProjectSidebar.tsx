@@ -11,6 +11,7 @@ import {
 	RotateCcw,
 	ChevronDown,
 	ChevronRight,
+	Search,
 	Loader2,
 	AlertTriangle,
 	Settings,
@@ -50,6 +51,7 @@ import { useWorktreeStatus } from "@/hooks/use-worktree-status";
 import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
 import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
 import { filterWorktrees } from "@/lib/worktree-filter";
+import { filterProjects, shouldShowProjectSearch } from "@/lib/project-filter";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -137,6 +139,10 @@ export function ProjectSidebar({
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
+
+	// Project search/filter query
+	const [searchQuery, setSearchQuery] = useState("");
+	const searchInputRef = useRef<HTMLInputElement>(null);
 
 	// Expanded worktree projects — active project auto-expands
 	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
@@ -677,9 +683,59 @@ export function ProjectSidebar({
 		(p) => p.id === colorPicker.projectId,
 	);
 
-	// Filter active and archived projects
-	const activeProjects = projects.filter((p) => !p.isArchived);
-	const archivedProjects = projects.filter((p) => p.isArchived);
+	// Split active and archived projects
+	const activeProjects = useMemo(() => projects.filter((p) => !p.isArchived), [projects]);
+	const archivedProjects = useMemo(() => projects.filter((p) => p.isArchived), [projects]);
+
+	// The search box only renders once the list is long enough to be worth filtering.
+	const showSearch = shouldShowProjectSearch(projects.length);
+
+	// Apply the search query to each group. Filtering is gated on `showSearch` so a
+	// lingering query can never keep the list filtered after the search box unmounts
+	// (e.g. project count drops below the threshold). The unfiltered `activeProjects`
+	// is kept for shortcut-index math below.
+	const trimmedQuery = showSearch ? searchQuery.trim() : "";
+	const isSearching = trimmedQuery.length > 0;
+	const filteredActiveProjects = useMemo(
+		() => filterProjects(activeProjects, { searchQuery: trimmedQuery }),
+		[activeProjects, trimmedQuery],
+	);
+	const filteredArchivedProjects = useMemo(
+		() => filterProjects(archivedProjects, { searchQuery: trimmedQuery }),
+		[archivedProjects, trimmedQuery],
+	);
+
+	// Map each active project id to its position in the UNFILTERED active list.
+	// The badge reflects this position (not the filtered render index) so the
+	// number a user sees doesn't shift around as they type a search query.
+	const activeIndexById = useMemo(() => {
+		const map = new Map<string, number>();
+		activeProjects.forEach((p, i) => map.set(p.id, i));
+		return map;
+	}, [activeProjects]);
+
+	// Reset a lingering query if the search box is no longer shown.
+	useEffect(() => {
+		if (!showSearch && searchQuery) setSearchQuery("");
+	}, [showSearch, searchQuery]);
+
+	// When the active project CHANGES to one that the current query hides (e.g. a
+	// project was just created, or a Ctrl+1..9 shortcut selected a hidden project),
+	// clear the search so the now-active project becomes visible instead of silently
+	// vanishing. Keyed on a change of `activeProjectId` only — searching for OTHER
+	// projects while the active one stays put must NOT wipe the query.
+	const prevActiveProjectId = useRef(activeProjectId);
+	useEffect(() => {
+		const changed = prevActiveProjectId.current !== activeProjectId;
+		prevActiveProjectId.current = activeProjectId;
+		if (!changed || !isSearching || !activeProjectId) return;
+		const visible =
+			filteredActiveProjects.some((p) => p.id === activeProjectId) ||
+			filteredArchivedProjects.some((p) => p.id === activeProjectId);
+		if (!visible) setSearchQuery("");
+	}, [activeProjectId, isSearching, filteredActiveProjects, filteredArchivedProjects]);
+	const hasNoSearchResults =
+		isSearching && filteredActiveProjects.length === 0 && filteredArchivedProjects.length === 0;
 
 	// Determine which menu items to show based on project archived status
 	const getMenuItems = useCallback(
@@ -714,32 +770,96 @@ export function ProjectSidebar({
 				</button>
 			</div>
 
+			{/* Project search — appears once the list is long enough to be worth filtering */}
+			{showSearch && (
+				<div className="px-2 py-1.5 border-b border-sidebar-border">
+					<div className="relative">
+						<Search
+							size={12}
+							className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+							aria-hidden="true"
+						/>
+						<input
+							ref={searchInputRef}
+							type="search"
+							placeholder="Search projects..."
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Escape" && searchQuery) {
+									e.preventDefault();
+									e.stopPropagation();
+									setSearchQuery("");
+								}
+							}}
+							className="w-full text-xs bg-sidebar-accent border border-border rounded pl-7 pr-7 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary [&::-webkit-search-cancel-button]:hidden"
+							aria-label="Search projects"
+							data-testid="project-search-input"
+						/>
+						{searchQuery && (
+							<button
+								onClick={() => {
+									setSearchQuery("");
+									// Clearing unmounts this button; return focus to the input.
+									searchInputRef.current?.focus();
+								}}
+								className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 inline-flex items-center justify-center rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+								title="Clear search"
+								aria-label="Clear project search"
+								data-testid="project-search-clear"
+							>
+								<X size={12} />
+							</button>
+						)}
+					</div>
+				</div>
+			)}
+
 			{/* Project List */}
 			<div className="flex-1 overflow-y-auto py-1">
-				{activeProjects.length === 0 && archivedProjects.length === 0 ? (
+				{projects.length === 0 ? (
 					<div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
 						<p className="text-sm text-muted-foreground">No projects yet</p>
 						<p className="text-xs text-muted-foreground mt-1">
 							Create your first project to get started
 						</p>
 					</div>
+				) : hasNoSearchResults ? (
+					<div
+						className="flex flex-col items-center justify-center p-6 text-center opacity-60"
+						data-testid="project-search-empty"
+						role="status"
+						aria-live="polite"
+					>
+						<p className="text-sm text-muted-foreground">No projects found</p>
+						<p className="text-xs text-muted-foreground mt-1 break-words">
+							Nothing matches “{trimmedQuery}”
+						</p>
+					</div>
 				) : (
 					<>
 						<Reorder.Group
 							axis="y"
-							values={activeProjects}
-							onReorder={(reordered) =>
-								onReorderProjects(reordered.map((p) => p.id))
-							}
+							values={filteredActiveProjects}
+							onReorder={(reordered) => {
+								// Reordering a filtered subset would drop the hidden projects,
+								// so only persist a new order when the full list is visible.
+								if (isSearching) return;
+								onReorderProjects(reordered.map((p) => p.id));
+							}}
 							className="flex flex-col"
 							data-testid="active-projects-container"
 						>
-							{activeProjects.map((project, index) => {
+							{filteredActiveProjects.map((project) => {
 								const hasActivity = projectActivityIds.includes(project.id);
+								// Shortcut badge reflects the project's position in the UNFILTERED
+								// active list to stay in sync with the global Ctrl+1..9 handler.
+								const shortcutIndex = activeIndexById.get(project.id) ?? -1;
 								return (
 									<Reorder.Item
 										key={project.id}
 										value={project}
+										drag={isSearching ? false : undefined}
 										className="list-none"
 										whileDrag={{
 											scale: 1.02,
@@ -753,7 +873,7 @@ export function ProjectSidebar({
 											onToggleExpand={() => toggleProjectExpanded(project.id)}
 											isEditing={editingId === project.id}
 											editName={editName}
-											shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
+											shortcut={shortcutIndex >= 0 && shortcutIndex < 9 ? `Ctrl+${shortcutIndex + 1}` : undefined}
 											hasActivity={hasActivity}
 											hasError={projectErrorIds.has(project.id)}
 											onClick={() => {
@@ -782,23 +902,24 @@ export function ProjectSidebar({
 						</Reorder.Group>
 
 						{/* Archived Projects Section */}
-						{archivedProjects.length > 0 && (
+						{filteredArchivedProjects.length > 0 && (
 							<div className="mt-2">
 								<button
 									onClick={() => setShowArchived(!showArchived)}
-									className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-									aria-expanded={showArchived}
-									aria-label={`Archived projects (${archivedProjects.length})`}
+									disabled={isSearching}
+									className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
+									aria-expanded={showArchived || isSearching}
+									aria-label={`Archived projects (${filteredArchivedProjects.length})`}
 								>
-									{showArchived ? (
+									{showArchived || isSearching ? (
 										<ChevronDown size={14} className="mr-2" />
 									) : (
 										<ChevronRight size={14} className="mr-2" />
 									)}
-									Archived ({archivedProjects.length})
+									Archived ({filteredArchivedProjects.length})
 								</button>
-								{showArchived &&
-									archivedProjects.map((project) => {
+								{(showArchived || isSearching) &&
+									filteredArchivedProjects.map((project) => {
 										const hasActivity = projectActivityIds.includes(project.id);
 										return (
 											<ArchivedProjectItem
