@@ -35,6 +35,38 @@ fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Resu
     Ok(())
 }
 
+/// Validate and canonicalize a project path to prevent path traversal attacks.
+/// Returns the canonicalized path or an error if the path is invalid or inaccessible.
+fn validate_project_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+    
+    // Canonicalize to resolve symlinks and relative paths
+    let canonical = path_buf.canonicalize().map_err(|e| {
+        log::warn!(
+            "[Security] Path validation failed for '{}': {}",
+            path,
+            e
+        );
+        format!("Invalid or inaccessible path: {}", e)
+    })?;
+    
+    log::debug!("[Security] Path validated: {} -> {:?}", path, canonical);
+    Ok(canonical)
+}
+
+/// Macro to validate a path and convert it to a String, returning early with an IpcResult error if validation fails.
+macro_rules! validate_and_stringify {
+    ($path:expr) => {
+        match validate_project_path($path) {
+            Ok(validated) => match validated.to_str() {
+                Some(s) => s.to_string(),
+                None => return Ok(IpcResult::error("Path contains invalid UTF-8", "INVALID_PATH_ENCODING")),
+            },
+            Err(e) => return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED")),
+        }
+    };
+}
+
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -248,7 +280,8 @@ pub async fn terminal_set_visibility(
 pub async fn worktree_list(
     project_path: String,
 ) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
-    match WorktreeManager::list(&project_path) {
+    let validated_path = validate_project_path(&project_path)?;
+    match WorktreeManager::list(validated_path.to_str().unwrap()) {
         Ok(entries) => {
             let infos: Vec<WorktreeInfo> = entries
                 .into_iter()
@@ -275,8 +308,9 @@ pub async fn worktree_create(
     start_ref: Option<String>,
     target_path: Option<String>,
 ) -> Result<IpcResult<WorktreeInfo>, String> {
+    let validated_path = validate_project_path(&project_path)?;
     match WorktreeManager::create(
-        &project_path,
+        validated_path.to_str().unwrap(),
         &name,
         &branch,
         is_new_branch,
@@ -300,7 +334,13 @@ pub async fn worktree_remove(
     worktree_path: String,
     force: bool,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::remove(&project_path, &worktree_path, force) {
+    let validated_project = validate_project_path(&project_path)?;
+    let validated_worktree = validate_project_path(&worktree_path)?;
+    match WorktreeManager::remove(
+        validated_project.to_str().unwrap(),
+        validated_worktree.to_str().unwrap(),
+        force,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -311,7 +351,8 @@ pub async fn worktree_remove(
 pub async fn worktree_branches(
     project_path: String,
 ) -> Result<IpcResult<Vec<BranchInfo>>, String> {
-    match WorktreeManager::branches(&project_path) {
+    let validated_path = validate_project_path(&project_path)?;
+    match WorktreeManager::branches(validated_path.to_str().unwrap()) {
         Ok(entries) => {
             let infos: Vec<BranchInfo> = entries
                 .into_iter()
@@ -333,7 +374,8 @@ pub async fn worktree_branches(
 pub async fn worktree_check_dirty(
     worktree_path: String,
 ) -> Result<IpcResult<DirtyStatus>, String> {
-    match WorktreeManager::check_dirty(&worktree_path) {
+    let validated_path = validate_project_path(&worktree_path)?;
+    match WorktreeManager::check_dirty(validated_path.to_str().unwrap()) {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -346,7 +388,8 @@ pub async fn worktree_remove_all_managed(
     project_path: String,
     worktrees_json: String,
 ) -> Result<IpcResult<Vec<RemoveResult>>, String> {
-    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+    let validated_path = validate_project_path(&project_path)?;
+    match WorktreeManager::remove_all_managed(validated_path.to_str().unwrap(), &worktrees_json) {
         Ok(results) => Ok(IpcResult::success(results)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -358,7 +401,8 @@ pub async fn worktree_remove_all_managed(
 pub async fn worktree_parse_gitignore(
     project_path: String,
 ) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
-    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+    let validated_path = validate_project_path(&project_path)?;
+    match WorktreeManager::parse_gitignore_dirs(validated_path.to_str().unwrap()) {
         Ok(dirs) => {
             let infos: Vec<GitignoreDirInfo> = dirs
                 .into_iter()
@@ -381,6 +425,8 @@ pub async fn worktree_create_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_project_path(&project_path)?;
+    let validated_worktree = validate_project_path(&worktree_path)?;
     let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -390,7 +436,11 @@ pub async fn worktree_create_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let results = WorktreeManager::create_symlinks(
+        validated_project.to_str().unwrap(),
+        validated_worktree.to_str().unwrap(),
+        &dirs,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -411,6 +461,8 @@ pub async fn worktree_ensure_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_project_path(&project_path)?;
+    let validated_worktree = validate_project_path(&worktree_path)?;
     let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -420,7 +472,11 @@ pub async fn worktree_ensure_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let results = WorktreeManager::ensure_symlinks(
+        validated_project.to_str().unwrap(),
+        validated_worktree.to_str().unwrap(),
+        &dirs2,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -439,7 +495,12 @@ pub async fn worktree_archive(
     project_path: String,
     worktree_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::archive(&project_path, &worktree_path) {
+    let validated_project = validate_project_path(&project_path)?;
+    let validated_worktree = validate_project_path(&worktree_path)?;
+    match WorktreeManager::archive(
+        validated_project.to_str().unwrap(),
+        validated_worktree.to_str().unwrap(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -451,7 +512,12 @@ pub async fn worktree_restore(
     project_path: String,
     archive_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::restore(&project_path, &archive_path) {
+    let validated_project = validate_project_path(&project_path)?;
+    let validated_archive = validate_project_path(&archive_path)?;
+    match WorktreeManager::restore(
+        validated_project.to_str().unwrap(),
+        validated_archive.to_str().unwrap(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -463,7 +529,8 @@ pub async fn worktree_merge_preview(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<MergePreviewInfo>, String> {
-    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+    let validated_path = validate_project_path(&worktree_path)?;
+    match WorktreeManager::merge_preview(validated_path.to_str().unwrap(), &target_branch) {
         Ok(preview) => {
             let info = MergePreviewInfo {
                 direction: preview.direction,
@@ -491,7 +558,8 @@ pub async fn worktree_merge_execute(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<String>, String> {
-    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+    let validated_path = validate_project_path(&worktree_path)?;
+    match WorktreeManager::merge_execute(validated_path.to_str().unwrap(), &target_branch) {
         Ok(result) => Ok(IpcResult::success(result)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
