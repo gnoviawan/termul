@@ -31,6 +31,7 @@ import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-persistence'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
+import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { isWindows } from '@/lib/platform'
@@ -90,6 +91,7 @@ function AppEffects(): null {
   useProjectsLoader()
   useProjectsAutoSave()
   useMenuUpdaterListener()
+  useAcpListeners()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()

@@ -295,6 +295,10 @@ function reconcileTerminalTabs(
           return [tab]
         }
 
+        if (tab.type === 'agent-chat') {
+          return [tab]
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }

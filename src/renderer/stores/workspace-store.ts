@@ -13,6 +13,7 @@ export type WorkspaceTab =
   | { type: 'editor'; id: string; filePath: string }
   | { type: 'browser'; id: string; browserTabId: string }
   | { type: 'git'; id: string; cwd: string }
+  | { type: 'agent-chat'; id: string; sessionId: string }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
 // This prevents duplicate tab creation during rapid state changes
@@ -173,6 +174,7 @@ export interface WorkspaceState {
   ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive?: boolean) => void
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
+  addAgentChatTab: (sessionId: string, targetPaneId?: string) => void
   removeTab: (tabId: string) => void
   getNextTabId: (direction: 1 | -1) => string | null
 }
@@ -187,6 +189,10 @@ function terminalTabId(terminalId: string): string {
 
 function editorTabId(filePath: string): string {
   return 'edit-' + filePath
+}
+
+function agentChatTabId(sessionId: string): string {
+  return 'chat-' + sessionId
 }
 
 function resolveFullscreenPaneId(root: PaneNode, fullscreenPaneId: string | null): string | null {
@@ -774,6 +780,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
+    addAgentChatTab: (sessionId: string, targetPaneId?: string): void => {
+      const id = agentChatTabId(sessionId)
+      const { root, activePaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      // Check if already exists in any pane — activate it
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        const { fullscreenPaneId } = get()
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
+      get().addTabToPane(paneId, tab)
+    },
+
     removeTab: (tabId: string): void => {
       const { root } = get()
       const pane = findPaneContainingTab(root, tabId)
@@ -1090,6 +1116,7 @@ export function useWorkspaceActions(): Pick<
   | 'addTerminalTab'
   | 'addEditorTab'
   | 'addBrowserTab'
+  | 'addAgentChatTab'
   | 'removeTab'
   | 'setActiveTab'
   | 'reorderTabsInPane'
@@ -1113,6 +1140,7 @@ export function useWorkspaceActions(): Pick<
       addTerminalTab: state.addTerminalTab,
       addEditorTab: state.addEditorTab,
       addBrowserTab: state.addBrowserTab,
+      addAgentChatTab: state.addAgentChatTab,
       removeTab: state.removeTab,
       setActiveTab: state.setActiveTab,
       reorderTabsInPane: state.reorderTabsInPane,
