@@ -218,6 +218,10 @@ vi.mock('@/components/TitleBar', () => ({
   TitleBar: () => <div data-testid="title-bar" />
 }))
 
+vi.mock('@/components/ActivityRail', () => ({
+  ActivityRail: () => <div data-testid="activity-rail" />
+}))
+
 vi.mock('@/components/NewProjectModal', () => ({
   NewProjectModal: () => null
 }))

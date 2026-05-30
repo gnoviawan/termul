@@ -95,6 +95,7 @@ import { useSSHConnection } from "@/hooks/use-ssh-connection";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
+import { ActivityRail } from "@/components/ActivityRail";
 import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
@@ -1199,12 +1200,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		return (
 			<div className="h-screen flex flex-col overflow-hidden bg-background">
 				<ResizeEdges />
-				<TitleBar
-					isShortcutsOpen={isShortcutMenuOpen}
-					onShortcutsOpenChange={setIsShortcutMenuOpen}
-				/>
-				<div className="flex-1 flex items-center justify-center">
-					<div className="text-muted-foreground text-sm">Loading...</div>
+				<div className="flex-1 flex overflow-hidden min-h-0 h-full">
+					<ActivityRail
+						isShortcutsOpen={isShortcutMenuOpen}
+						onShortcutsOpenChange={setIsShortcutMenuOpen}
+						onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+						canOpenGitChanges={false}
+					/>
+					<div className="flex-1 flex flex-col min-w-0">
+						{/* macOS: draggable band clearing native traffic lights over the content column */}
+						{isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
+						<TitleBar />
+						<div className="flex-1 flex items-center justify-center">
+							<div className="text-muted-foreground text-sm">Loading...</div>
+						</div>
+					</div>
 				</div>
 			</div>
 		);
@@ -1213,12 +1223,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	return (
 		<div className="h-screen flex flex-col overflow-hidden bg-background">
 			<ResizeEdges />
-			<TitleBar
-				isShortcutsOpen={isShortcutMenuOpen}
-				onShortcutsOpenChange={setIsShortcutMenuOpen}
-			/>
+			<div className="flex-1 flex overflow-hidden min-h-0 h-full">
+				<ActivityRail
+					isShortcutsOpen={isShortcutMenuOpen}
+					onShortcutsOpenChange={setIsShortcutMenuOpen}
+					onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+					onOpenGitChanges={() => handleAddGitTab()}
+					canOpenGitChanges={Boolean(activeProject?.path)}
+				/>
+				<div className="flex-1 flex flex-col min-w-0">
+					{/* macOS: draggable band clearing native traffic lights over the content column */}
+					{isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
+					<TitleBar />
 
-			<div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
+					<div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
 				{/* Sidebar */}
 				{isSidebarVisible && (
 					<div className="mr-2">
@@ -1291,7 +1309,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 												node={fullscreenPane ?? paneRoot}
 												onAddTerminal={handleAddTerminal}
 												onAddBrowserTab={handleNewBrowserTab}
-												onAddGitTab={handleAddGitTab}
 												onCloseTerminal={handleCloseTerminal}
 												onRenameTerminal={renameTerminal}
 												onCloseEditorTab={handleCloseEditorTab}
@@ -1351,6 +1368,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						) : null}
 					</div>
 				</PaneDndProvider>
+			</div>
+				</div>
 			</div>
 
 			{/* Modals */}
