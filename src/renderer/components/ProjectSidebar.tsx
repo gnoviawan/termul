@@ -1692,6 +1692,9 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 	const startY = useRef(0);
 	const startHeight = useRef(0);
 	const latestHeight = useRef(height);
+	// Tracks the document listeners for the in-flight resize so they can be torn
+	// down if the component unmounts mid-drag (e.g. SSH panel toggled off).
+	const activeDragCleanup = useRef<(() => void) | null>(null);
 
 	useEffect(() => {
 		latestHeight.current = height;
@@ -1719,6 +1722,7 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 			document.body.style.userSelect = "";
 			document.removeEventListener("mousemove", handleMouseMove);
 			document.removeEventListener("mouseup", handleMouseUp);
+			activeDragCleanup.current = null;
 			// Persist
 			try {
 				localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
@@ -1729,6 +1733,11 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 
 		document.addEventListener("mousemove", handleMouseMove);
 		document.addEventListener("mouseup", handleMouseUp);
+		// Expose a teardown for unmount-during-drag cleanup.
+		activeDragCleanup.current = () => {
+			document.removeEventListener("mousemove", handleMouseMove);
+			document.removeEventListener("mouseup", handleMouseUp);
+		};
 	}, [height]);
 
 	// Persist on height change (debounced via ref)
@@ -1739,6 +1748,24 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 			// Ignore storage errors in restricted environments.
 		}
 	}, [height]);
+
+	// Clean up an in-flight resize if the component unmounts mid-drag: remove the
+	// document listeners, reset the body styles, and persist the latest height.
+	useEffect(() => {
+		return () => {
+			if (!activeDragCleanup.current) return;
+			activeDragCleanup.current();
+			activeDragCleanup.current = null;
+			isDragging.current = false;
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+			try {
+				localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
+			} catch {
+				// Ignore storage errors in restricted environments.
+			}
+		};
+	}, []);
 
 	if (!isVisible) return null;
 

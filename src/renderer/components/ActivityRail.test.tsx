@@ -169,4 +169,16 @@ describe('ActivityRail', () => {
       expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sshPanelVisible', false)
     })
   })
+
+  it('shows error toast when SSH panel persistence update fails', async () => {
+    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
+
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide SSH panel' }))
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith('persist failed')
+    })
+  })
 })

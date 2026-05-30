@@ -56,7 +56,11 @@ export function TitleBar(): React.JSX.Element | null {
         <button
           onClick={(e) => {
             e.stopPropagation()
-            void windowApi.toggleMaximize()
+            void windowApi.toggleMaximize().then((result) => {
+              if (!result.success) {
+                console.error(`Failed to toggle maximize: ${result.error ?? 'unknown error'}`)
+              }
+            })
           }}
           className={windowControlClass}
           title={isMaximized ? 'Restore' : 'Maximize'}
