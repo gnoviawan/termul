@@ -67,9 +67,13 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
     )
   }
   if (item.type === 'terminal') {
+    // The ACP `terminal` content variant only references a terminal by id; its
+    // live output is fetched separately via `terminal/output` (not embedded in
+    // the tool call), so we surface the reference rather than inline output.
+    const terminalId = (item as { terminalId?: string }).terminalId
     return (
       <div key={key} className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground">
-        [terminal output]
+        {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
       </div>
     )
   }

@@ -62,6 +62,13 @@ describe('diffLines / diffLineCounts', () => {
   it('counts both sides', () => {
     expect(diffLineCounts({ oldText: 'a\nb\nc', newText: 'a' })).toEqual({ added: 1, removed: 3 })
   })
+  it('ignores the trailing empty segment for newline-terminated text', () => {
+    expect(diffLines({ oldText: 'a\n', newText: 'b\n' })).toEqual([
+      { type: 'removed', text: 'a' },
+      { type: 'added', text: 'b' }
+    ])
+    expect(diffLineCounts({ oldText: 'a\n', newText: 'b\n' })).toEqual({ added: 1, removed: 1 })
+  })
 })
 
 describe('permission option helpers', () => {

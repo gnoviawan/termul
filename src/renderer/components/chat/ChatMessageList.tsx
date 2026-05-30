@@ -30,7 +30,7 @@ export function ChatMessageList({ messages, children }: ChatMessageListProps): R
     el.scrollTop = el.scrollHeight
   }, [messages, children])
 
-  const isEmpty = messages.length === 0 && Children.count(children) === 0
+  const isEmpty = messages.length === 0 && Children.toArray(children).length === 0
   if (isEmpty) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

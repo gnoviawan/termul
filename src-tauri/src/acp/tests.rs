@@ -52,5 +52,7 @@ mod config_serialization {
         let config: AgentConfig = serde_json::from_str(json).unwrap();
         assert!(config.args.is_empty());
         assert!(config.env.is_empty());
+        // Default-deny: terminal access is off unless explicitly opted in (M6).
+        assert!(!config.allow_terminal);
     }
 }

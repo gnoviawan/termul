@@ -204,6 +204,7 @@ export function AgentConfigDialog({
                   variant="ghost"
                   size="icon"
                   className="h-9 w-9 shrink-0"
+                  aria-label={`Remove argument ${i + 1}`}
                   onClick={() => setArgs(args.filter((_, j) => j !== i))}
                 >
                   <Trash2 size={13} />
@@ -246,6 +247,7 @@ export function AgentConfigDialog({
                   variant="ghost"
                   size="icon"
                   className="h-9 w-9 shrink-0"
+                  aria-label={`Remove environment variable ${i + 1}`}
                   onClick={() => setEnvRows(envRows.filter((_, j) => j !== i))}
                 >
                   <Trash2 size={13} />

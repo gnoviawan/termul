@@ -482,7 +482,13 @@ describe('acp-store', () => {
     ;(invoke as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce('agent-test')
       .mockResolvedValueOnce(undefined)
-    await useAcpStore.getState().testConnection({ name: 'X', command: 'x', args: [], env: {} })
+    // Pre-seed capabilities so the capability wait resolves immediately
+    // (the acp:agent_spawned listener isn't wired in the test).
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-test': { id: 'agent-test', capabilities: { loadSession: true } } }
+    }))
+    const caps = await useAcpStore.getState().testConnection({ name: 'X', command: 'x', args: [], env: {} })
+    expect(caps).toEqual({ loadSession: true })
     expect(invoke).toHaveBeenNthCalledWith(1, 'acp_spawn_agent', {
       config: { name: 'X', command: 'x', args: [], env: {} }
     })

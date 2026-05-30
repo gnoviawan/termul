@@ -741,6 +741,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				} else if (activeTab?.type === "browser") {
 					useBrowserSessionStore.getState().removeTab(activeTab.browserTabId);
 					useWorkspaceStore.getState().removeTab(activeTab.id);
+				} else if (activeTab?.type === "agent-chat") {
+					useWorkspaceStore.getState().removeTab(activeTab.id);
 				}
 				return;
 			}
@@ -927,7 +929,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	]);
 
 	useEffect(() => {
-		if (isNewProjectModalOpen) {
+		// Hide the active browser webview while a modal/dialog is open, since native
+		// child webviews paint above the DOM and would otherwise obscure it. Covers
+		// the New Project modal and the ACP New Chat / Agent Config dialogs.
+		const modalOpen = isNewProjectModalOpen || isNewChatOpen || isAgentConfigOpen;
+		if (modalOpen) {
 			if (activeTab?.type === "browser") {
 				hiddenBrowserTabForModalRef.current = activeTab.browserTabId;
 				browserTabHide(activeTab.browserTabId).catch(console.error);
@@ -940,7 +946,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			browserTabShow(hiddenBrowserTabId).catch(console.error);
 			hiddenBrowserTabForModalRef.current = null;
 		}
-	}, [isNewProjectModalOpen, activeTab]);
+	}, [isNewProjectModalOpen, isNewChatOpen, isAgentConfigOpen, activeTab]);
 
 	// Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
 	useEffect(() => {

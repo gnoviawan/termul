@@ -399,8 +399,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
 
   loadAgentConfigs: async () => {
-    const configs = await loadAgentConfigsFromDisk()
-    set({ agentConfigs: configs })
+    try {
+      const configs = await loadAgentConfigsFromDisk()
+      set({ agentConfigs: configs })
+    } catch (err) {
+      // A real storage/backend error is surfaced by the persistence layer; at the
+      // store level we log and leave the list empty rather than crashing app
+      // mount. (A missing key already returns [] without throwing.)
+      console.error('[acp] failed to load agent configs', err)
+    }
   },
 
   saveAgentConfig: async (config) => {
@@ -433,8 +440,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     let agentId: AgentId | null = null
     try {
       agentId = await acpApi.spawnAgent(config)
-      // capabilities arrive via acp:agent_spawned; read them from the store if present
-      const caps = get().agents[agentId]?.capabilities ?? null
+      // Capabilities arrive asynchronously via the `acp:agent_spawned` event
+      // (reduced into the store). Wait briefly for them to appear rather than
+      // reading the store synchronously (which would usually race and return
+      // null). A successful spawn resolving already implies `initialize`
+      // succeeded, so a short timeout returning null caps is still a pass.
+      const id = agentId
+      const caps = await new Promise<AgentCapabilities | null>((resolve) => {
+        const existing = get().agents[id]?.capabilities ?? null
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        const timeout = setTimeout(() => {
+          unsubscribe()
+          resolve(get().agents[id]?.capabilities ?? null)
+        }, 3000)
+        const unsubscribe = useAcpStore.subscribe((state) => {
+          const c = state.agents[id]?.capabilities
+          if (c) {
+            clearTimeout(timeout)
+            unsubscribe()
+            resolve(c)
+          }
+        })
+      })
       return caps
     } finally {
       // Always clean up the test process.
@@ -850,13 +880,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return { agentStatus }
     }),
 
-  _onAgentDisconnected: (e) =>
+  _onAgentDisconnected: (e) => {
+    const affected: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
           sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
+          affected.push(id)
         }
       }
       return {
@@ -864,7 +896,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
       }
-    }),
+    })
+    // Persist the closed status for each session the disconnect affected, so the
+    // history index reflects it across restarts (mirrors _onSessionClosed).
+    for (const id of affected) {
+      persistSession(get(), id, (entries) => set({ sessionIndex: entries }))
+    }
+  },
 
   _onSessionClosed: (e) => {
     set((s) => {

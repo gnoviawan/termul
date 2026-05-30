@@ -83,6 +83,14 @@ async fn scope_to_workspace(
     // Walk up to the longest existing ancestor and canonicalize it (resolving
     // any symlinks). The (possibly not-yet-existing) suffix cannot escape
     // because we already rejected `..` components.
+    //
+    // NOTE: a residual TOCTOU window exists between this check and the caller's
+    // I/O (a concurrent symlink swap could redirect the resolved path). Fully
+    // closing it requires descriptor-relative `openat`/cap-std I/O, which is a
+    // larger change deferred intentionally: this is a local desktop trust
+    // boundary already gated by the per-agent `terminal`/fs capability and the
+    // `..`-reject + canonicalize+starts_with checks here, so the marginal risk
+    // does not justify a cap-std migration in this pass.
     let mut ancestor = requested;
     loop {
         match tokio::fs::canonicalize(ancestor).await {

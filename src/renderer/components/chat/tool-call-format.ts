@@ -74,17 +74,21 @@ export interface DiffLine {
   text: string
 }
 
+/** Split text into lines, dropping the spurious trailing empty segment that
+ * `split('\n')` produces when the text ends with a newline, and trimming a
+ * trailing CR so CRLF content renders cleanly. */
+function splitLines(text: string): string[] {
+  if (text.length === 0) return []
+  const parts = text.split('\n')
+  if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop()
+  return parts.map((l) => l.replace(/\r$/, ''))
+}
+
 /** Split a diff into removed (old) then added (new) lines for stacked rendering. */
 export function diffLines(diff: Pick<DiffContent, 'oldText' | 'newText'>): DiffLine[] {
   const lines: DiffLine[] = []
-  const oldText = diff.oldText ?? ''
-  if (oldText.length > 0) {
-    for (const l of oldText.split('\n')) lines.push({ type: 'removed', text: l.replace(/\r$/, '') })
-  }
-  const newText = diff.newText ?? ''
-  if (newText.length > 0) {
-    for (const l of newText.split('\n')) lines.push({ type: 'added', text: l.replace(/\r$/, '') })
-  }
+  for (const l of splitLines(diff.oldText ?? '')) lines.push({ type: 'removed', text: l })
+  for (const l of splitLines(diff.newText ?? '')) lines.push({ type: 'added', text: l })
   return lines
 }
 
@@ -92,9 +96,10 @@ export function diffLineCounts(diff: Pick<DiffContent, 'oldText' | 'newText'>): 
   added: number
   removed: number
 } {
-  const removed = (diff.oldText ?? '').length > 0 ? (diff.oldText ?? '').split('\n').length : 0
-  const added = (diff.newText ?? '').length > 0 ? (diff.newText ?? '').split('\n').length : 0
-  return { added, removed }
+  return {
+    removed: splitLines(diff.oldText ?? '').length,
+    added: splitLines(diff.newText ?? '').length
+  }
 }
 
 /** True if an option kind rejects (declines) the operation. */

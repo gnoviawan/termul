@@ -53,7 +53,18 @@ interface PersistedGitTabRef {
   cwd: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef
+interface PersistedAgentChatTabRef {
+  type: 'agent-chat'
+  id: string
+  sessionId: string
+}
+
+type PersistedTabRef =
+  | PersistedEditorTabRef
+  | PersistedTerminalTabRef
+  | PersistedBrowserTabRef
+  | PersistedGitTabRef
+  | PersistedAgentChatTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -129,6 +140,13 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
 
       if (tab.type === 'git') {
         return [{ type: 'git', id: tab.id, cwd: tab.cwd }]
+      }
+
+      if (tab.type === 'agent-chat') {
+        // The session itself is persisted separately (P5 history); we persist
+        // the tab so the pane reappears on restart. The chat shows its closed/
+        // empty state until reopened from history.
+        return [{ type: 'agent-chat', id: tab.id, sessionId: tab.sessionId }]
       }
 
       return []
@@ -378,6 +396,16 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
               type: 'git',
               id: tab.id,
               cwd: tab.cwd
+            }
+          ]
+        }
+
+        if (tab.type === 'agent-chat') {
+          return [
+            {
+              type: 'agent-chat',
+              id: tab.id,
+              sessionId: tab.sessionId
             }
           ]
         }

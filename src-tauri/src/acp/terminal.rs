@@ -108,7 +108,11 @@ impl TerminalRegistry {
             }
         }
 
-        let mut cmd = Command::new(command);
+        // Resolve the executable on Windows so bare names like "npm"/"npx"
+        // map to their .cmd/.bat wrappers (no-op on Unix, where the OS resolves
+        // bare names on PATH natively). Mirrors the agent-spawn path.
+        let resolved = crate::trackers::git_tracker::resolve_executable(command);
+        let mut cmd = Command::new(resolved);
         cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -235,6 +239,13 @@ impl TerminalRegistry {
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
         if let Some(child) = term.child.as_mut() {
             let _ = child.start_kill();
+            // Reap if it has already exited so we don't leave a zombie; the
+            // handle stays in the map (we keep the buffer/status queryable),
+            // and `release` will spawn a waiter if it's still running then.
+            if let Ok(Some(status)) = child.try_wait() {
+                term.exit = Some(to_exit_status(status));
+                term.child = None;
+            }
         }
         Ok(())
     }
@@ -245,8 +256,8 @@ impl TerminalRegistry {
             .terminals
             .remove(id.0.as_ref())
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
-        if let Some(mut child) = term.child.take() {
-            let _ = child.start_kill();
+        if let Some(child) = term.child.take() {
+            reap(child);
         }
         Ok(())
     }
@@ -254,11 +265,21 @@ impl TerminalRegistry {
     /// Kill every terminal (driver-thread teardown). Best-effort.
     pub fn release_all(&mut self) {
         for (_, mut term) in self.terminals.drain() {
-            if let Some(mut child) = term.child.take() {
-                let _ = child.start_kill();
+            if let Some(child) = term.child.take() {
+                reap(child);
             }
         }
     }
+}
+
+/// Kill and reap a child without blocking: start termination, then await its
+/// exit on a background task so the OS process entry is collected (no zombie)
+/// even though we've taken ownership out of the registry.
+fn reap(mut child: tokio::process::Child) {
+    let _ = child.start_kill();
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
 }
 
 /// Convert a process exit status into the ACP `TerminalExitStatus`.

@@ -41,7 +41,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element | null
             />
             <span
               className={cn(
-                'truncate',
+                'min-w-0 flex-1 truncate',
                 entry.status === 'completed' ? 'text-muted-foreground line-through' : 'text-foreground'
               )}
             >

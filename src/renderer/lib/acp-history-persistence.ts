@@ -84,7 +84,10 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
 }
 
 export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<void> {
-  await persistenceApi.write(SESSION_INDEX_KEY, entries)
+  const res = await persistenceApi.write(SESSION_INDEX_KEY, entries)
+  if (!res.success) {
+    throw new Error(res.error ?? 'Failed to persist session index')
+  }
 }
 
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
@@ -95,9 +98,15 @@ export async function loadSessionPayload(id: string): Promise<SessionPayload | n
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
   // Debounced: coalesces streaming updates so disk isn't thrashed.
-  await persistenceApi.writeDebounced(sessionPayloadKey(id), payload)
+  const res = await persistenceApi.writeDebounced(sessionPayloadKey(id), payload)
+  if (!res.success) {
+    throw new Error(res.error ?? 'Failed to persist session payload')
+  }
 }
 
 export async function deleteSessionPayload(id: string): Promise<void> {
-  await persistenceApi.delete(sessionPayloadKey(id))
+  const res = await persistenceApi.delete(sessionPayloadKey(id))
+  if (!res.success) {
+    throw new Error(res.error ?? 'Failed to delete session payload')
+  }
 }

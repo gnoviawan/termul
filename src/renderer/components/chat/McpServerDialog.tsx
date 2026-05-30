@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -72,6 +72,33 @@ export function McpServerDialog({
   )
   const [env, setEnv] = useState<KvRow[]>(existingKv(existing, 'env'))
   const [headers, setHeaders] = useState<KvRow[]>(existingKv(existing, 'headers'))
+
+  // Reset the form whenever the dialog opens or switches records, so a reopen
+  // (or editing a different server) reflects the current `existing` value
+  // instead of retaining stale state from a previous session.
+  useEffect(() => {
+    if (!open) return
+    setTransport((existing?.type as McpTransport) ?? 'stdio')
+    setName(existing?.name ?? '')
+    setCommand(
+      existing && (existing.type ?? 'stdio') === 'stdio'
+        ? (existing as { command: string }).command
+        : ''
+    )
+    setArgs(
+      existing && (existing.type ?? 'stdio') === 'stdio'
+        ? ((existing as { args?: string[] }).args ?? [])
+        : []
+    )
+    setUrl(
+      existing && existing.type !== undefined && existing.type !== 'stdio'
+        ? (existing as { url: string }).url
+        : ''
+    )
+    setEnv(existingKv(existing, 'env'))
+    setHeaders(existingKv(existing, 'headers'))
+    // `existing` identity changing (or open toggling) re-seeds the form.
+  }, [open, existing])
 
   const validation = useMemo(
     () =>
@@ -229,6 +256,7 @@ export function McpServerDialog({
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9 shrink-0"
+                      aria-label={`Remove argument ${i + 1}`}
                       onClick={() => setArgs(args.filter((_, j) => j !== i))}
                     >
                       <Trash2 size={13} />

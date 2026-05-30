@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useMemo, useState, useEffect } from 'react'
+import { forwardRef, useImperativeHandle, useMemo, useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { Check, TerminalSquare, SlidersHorizontal } from 'lucide-react'
 import type { SlashSection, SlashItem } from './slash-menu-model'
@@ -40,11 +40,19 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
   ({ sections, onSelect }, ref) => {
     const flat = useMemo(() => flatten(sections), [sections])
     const [highlight, setHighlight] = useState(0)
+    const listRef = useRef<HTMLDivElement>(null)
 
     // Clamp the highlight whenever the item set changes (filtering, updates).
     useEffect(() => {
       setHighlight((h) => (flat.length === 0 ? 0 : Math.min(h, flat.length - 1)))
     }, [flat.length])
+
+    // Keep the highlighted row visible so keyboard nav / Enter never targets an
+    // off-screen item.
+    useEffect(() => {
+      const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)
+      el?.scrollIntoView({ block: 'nearest' })
+    }, [highlight, flat])
 
     useImperativeHandle(
       ref,
@@ -74,7 +82,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
 
     let flatIndex = -1
     return (
-      <div className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md">
+      <div ref={listRef} className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md">
         {sections.map((section) => (
           <div key={section.id}>
             <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
@@ -92,6 +100,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
                 <button
                   key={itemKey(item)}
                   type="button"
+                  data-idx={idx}
                   // Use mousedown so the textarea doesn't blur before we handle it.
                   onMouseDown={(e) => {
                     e.preventDefault()

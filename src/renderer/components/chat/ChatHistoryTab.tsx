@@ -24,18 +24,21 @@ export function ChatHistoryTab(): React.JSX.Element {
   }, [sessionIndex, query])
 
   const handleOpen = useCallback(
-    (id: string) => {
-      addAgentChatTab(id)
-      void openHistorySession(id).catch((err) => {
+    async (id: string) => {
+      // Open the session first; only add the tab if it succeeds, so a failed
+      // load doesn't leave a dead tab behind.
+      try {
+        await openHistorySession(id)
+        addAgentChatTab(id)
+      } catch (err) {
         toast.error(`Failed to open chat: ${String(err)}`)
-      })
+      }
     },
     [addAgentChatTab, openHistorySession]
   )
 
   const handleDelete = useCallback(
-    (id: string, e: React.MouseEvent) => {
-      e.stopPropagation()
+    (id: string) => {
       void deleteHistorySession(id).catch((err) => {
         toast.error(`Failed to delete chat: ${String(err)}`)
       })
@@ -74,28 +77,32 @@ export function ChatHistoryTab(): React.JSX.Element {
                 {group}
               </div>
               {entries.map((entry) => (
-                <button
+                <div
                   key={entry.id}
-                  type="button"
-                  onClick={() => handleOpen(entry.id)}
                   className={cn(
-                    'group flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-sidebar-accent',
+                    'group flex w-full items-center gap-2 pr-2 hover:bg-sidebar-accent',
                     entry.status === 'closed' && 'opacity-70'
                   )}
                 >
-                  <MessageSquare size={12} className="shrink-0 text-muted-foreground" />
-                  <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-                  <span className="text-[10px] text-muted-foreground">{entry.messageCount}</span>
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(e) => handleDelete(entry.id, e)}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50"
+                  <button
+                    type="button"
+                    onClick={() => void handleOpen(entry.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
+                  >
+                    <MessageSquare size={12} className="shrink-0 text-muted-foreground" />
+                    <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
+                    <span className="text-[10px] text-muted-foreground">{entry.messageCount}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Delete chat"
                     title="Delete chat"
+                    onClick={() => handleDelete(entry.id)}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50"
                   >
                     <Trash2 size={11} />
-                  </span>
-                </button>
+                  </button>
+                </div>
               ))}
             </div>
           ))

@@ -44,12 +44,31 @@ export function looksLikeSecretValue(value: string): boolean {
 /** Load persisted agent configs (empty list when none stored). */
 export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
   const res = await persistenceApi.read<StoredAgentConfig[]>(ACP_AGENTS_KEY)
-  if (res.success && Array.isArray(res.data)) return res.data
-  return []
+  if (res.success) {
+    return Array.isArray(res.data) ? res.data : []
+  }
+  // A missing key is the normal empty state; any other failure is a real
+  // storage/backend error and must not be silently collapsed to [].
+  if (res.code === 'KEY_NOT_FOUND') return []
+  throw new Error(res.error ?? 'Failed to load agent configs')
 }
 
 /** Persist the full agent-config list. */
 export async function saveAgentConfigs(list: StoredAgentConfig[]): Promise<void> {
+  // Defense-in-depth: secrets are sanitized at the dialog layer (raw values go
+  // to OS secure storage, only `$PLACEHOLDER` is kept), but enforce the
+  // "no raw secrets on disk" invariant here too so no future caller can bypass
+  // it. Reject any env value that still looks like a raw secret literal.
+  for (const cfg of list) {
+    for (const [key, value] of Object.entries(cfg.env)) {
+      if (looksLikeSecretValue(value)) {
+        throw new Error(
+          `refusing to persist a raw secret for env "${key}" on agent "${cfg.name}"; ` +
+            `store it in secure storage and reference it as $${key}`
+        )
+      }
+    }
+  }
   const res = await persistenceApi.write(ACP_AGENTS_KEY, list)
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist agent configs')

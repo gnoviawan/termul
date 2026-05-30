@@ -643,6 +643,19 @@ fn run_agent(
     // never for an intentional kill (L4): a kill we initiated is silent, so the
     // renderer doesn't see a "disconnected" it didn't cause.
     let intentional_kill = killed.load(Ordering::Acquire);
+
+    // If the agent never finished initializing, the connection error IS the
+    // start-failure reason (e.g. the subprocess could not be spawned). Record it
+    // BEFORE the lifecycle gate below so the awaiting `spawn` caller can surface
+    // the real error instead of the generic "did not initialize" message. This
+    // must run regardless of `was_spawned`/`intentional_kill` (those gate only
+    // the renderer-facing lifecycle events).
+    if !was_spawned {
+        if let Err(message) = &result {
+            *start_error.lock() = Some(message.clone());
+        }
+    }
+
     if was_spawned && !intentional_kill {
         for session in active_sessions {
             events::emit(
@@ -656,13 +669,6 @@ fn run_agent(
         }
 
         if let Err(message) = result {
-            // If the agent never finished initializing, this error IS the
-            // start-failure reason (e.g. the subprocess could not be spawned).
-            // Record it so the awaiting `spawn` caller can surface it instead
-            // of the generic "did not initialize" message.
-            if !was_spawned {
-                *start_error.lock() = Some(message.clone());
-            }
             events::emit(
                 &app,
                 events::EVENT_AGENT_ERROR,

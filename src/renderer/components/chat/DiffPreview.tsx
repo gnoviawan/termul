@@ -14,7 +14,7 @@ interface DiffPreviewProps {
 export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
   const lines = diffLines(diff)
   const { added, removed } = diffLineCounts(diff)
-  const isNewFile = !(diff.oldText && diff.oldText.length > 0)
+  const isNewFile = diff.oldText == null
 
   return (
     <div className="rounded border border-border/50 bg-background/50 text-xs">
@@ -29,7 +29,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
           <span className="text-red-400">−{removed}</span>
         </span>
       </div>
-      <pre className="max-h-48 overflow-auto p-2 font-mono text-[11px] leading-snug">
+      <div className="max-h-48 overflow-auto p-2 font-mono text-[11px] leading-snug">
         {lines.map((line, i) => (
           <div
             key={i}
@@ -42,7 +42,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
             {line.text}
           </div>
         ))}
-      </pre>
+      </div>
     </div>
   )
 }

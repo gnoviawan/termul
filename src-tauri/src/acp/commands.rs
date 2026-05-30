@@ -105,8 +105,9 @@ pub async fn acp_send_prompt(
 ) -> Result<StopReason, String> {
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
-        (Some(_), _) => return Err("prompt content must not be empty".to_string()),
-        (None, Some(text)) => vec![ContentBlock::Text(TextContent::new(text))],
+        // Empty `content` falls back to `text` when provided.
+        (_, Some(text)) => vec![ContentBlock::Text(TextContent::new(text))],
+        (Some(_), None) => return Err("prompt content must not be empty".to_string()),
         (None, None) => return Err("send_prompt requires either content or text".to_string()),
     };
     manager.send_prompt(&agent_id, session_id, blocks).await

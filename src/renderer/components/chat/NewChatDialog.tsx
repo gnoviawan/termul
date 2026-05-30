@@ -65,6 +65,8 @@ export function NewChatDialog({
     if (open) {
       setConfigId((prev) => prev || (agentConfigs[0]?.id ?? ''))
       setCwd((prev) => prev || defaultCwd)
+      // Reset MCP selection so a previous chat's choices don't carry over.
+      setSelectedMcp([])
     }
   }, [open, agentConfigs, defaultCwd])
 
