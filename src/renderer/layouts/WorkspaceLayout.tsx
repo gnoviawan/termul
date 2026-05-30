@@ -4,6 +4,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
 import { ProjectSidebar } from "@/components/ProjectSidebar";
+import { SSHWorkspace } from "@/components/ssh/SSHWorkspace";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
 import { PaneDndProvider } from "@/hooks/use-pane-dnd";
 import { StatusBar } from "@/components/StatusBar";
@@ -37,6 +38,7 @@ import {
 	useFileExplorerVisible,
 } from "@/stores/file-explorer-store";
 import { useSidebarVisible } from "@/stores/sidebar-store";
+import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile } from "@/stores/ssh-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCommandHistoryStore } from "@/stores/command-history-store";
 import {
@@ -67,6 +69,7 @@ import {
 	keyboardApi,
 	terminalApi,
 	persistenceApi,
+	sshApi,
 } from "@/lib/api";
 import {
 	useKeyboardShortcutsStore,
@@ -87,6 +90,7 @@ import {
 import { useFileWatcher } from "@/hooks/use-file-watcher";
 import { useWorktreeShortcuts } from "@/hooks/use-worktree-shortcuts";
 import { useEditorPersistence } from "@/hooks/use-editor-persistence";
+import { useSSHConnection } from "@/hooks/use-ssh-connection";
 import { DEFAULT_APP_SETTINGS } from "@/types/settings";
 import { toast } from "sonner";
 import { TitleBar } from "@/components/TitleBar";
@@ -95,6 +99,9 @@ import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
 import { spawnTerminalInPane } from "@/lib/terminal-spawn";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
+import type { SFTPEntry } from "@shared/types/ssh.types";
+import { SSHFileExplorer } from "@/components/ssh/SSHFileExplorer";
+import { cn } from "@/lib/utils";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -163,6 +170,93 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	// File explorer & editor state
 	const isExplorerVisible = useFileExplorerVisible();
 	const isSidebarVisible = useSidebarVisible();
+
+	// SSH state
+	const sshProfiles = useSSHProfiles();
+	const { loadProfiles: loadSSHProfiles, selectProfile: selectSSHProfile } = useSSHActions();
+	const activeSSHProfileId = useActiveSSHProfileId();
+	const activeSSHProfile = useActiveSSHProfile();
+	const [sshPasswordPrompt, setSSHPasswordPrompt] = useState<{
+		profileId: string;
+		profileName: string;
+	} | null>(null);
+	const [sshPasswordInput, setSSHPasswordInput] = useState('');
+	const [sshPromptPasswords, setSSHPromptPasswords] = useState<Record<string, string>>({});
+
+	const sshProfileWithPassword = activeSSHProfile ? {
+		...activeSSHProfile,
+		password: sshPromptPasswords[activeSSHProfile.id] ?? activeSSHProfile.password,
+	} : null;
+
+	const sshConn = useSSHConnection(sshProfileWithPassword);
+
+	const handleSSHMkdir = useCallback(async () => {
+		if (!sshConn.connectionId) return;
+		const name = prompt('New folder name:');
+		if (!name) return;
+		const newPath = sshConn.currentPath.endsWith('/') ? `${sshConn.currentPath}${name}` : `${sshConn.currentPath}/${name}`;
+		try {
+			const r = await sshApi.sftpMkdir(sshConn.connectionId, newPath);
+			if (r.success) { toast.success(`Created: ${name}`); sshConn.loadDirectory(sshConn.currentPath); }
+			else toast.error(`Failed: ${r.error}`);
+		} catch (error) {
+			toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
+
+	const handleSSHCreateFile = useCallback(async () => {
+		if (!sshConn.connectionId) return;
+		const name = prompt('New file name:');
+		if (!name) return;
+		const newPath = sshConn.currentPath.endsWith('/') ? `${sshConn.currentPath}${name}` : `${sshConn.currentPath}/${name}`;
+		try {
+			const r = await sshApi.sftpCreateFile(sshConn.connectionId, newPath);
+			if (r.success) { toast.success(`Created: ${name}`); sshConn.loadDirectory(sshConn.currentPath); }
+			else toast.error(`Failed: ${r.error}`);
+		} catch (error) {
+			toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
+
+	const handleSSHDelete = useCallback(async (entry: SFTPEntry) => {
+		if (!sshConn.connectionId) return;
+		if (!confirm(`Delete ${entry.entryType} "${entry.name}"?`)) return;
+		try {
+			const r = await sshApi.sftpDelete(sshConn.connectionId, entry.path);
+			if (r.success) { toast.success(`Deleted: ${entry.name}`); sshConn.loadDirectory(sshConn.currentPath); }
+			else toast.error(`Delete failed: ${r.error}`);
+		} catch (error) {
+			toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
+
+	const handleSSHRename = useCallback(async (entry: SFTPEntry) => {
+		if (!sshConn.connectionId) return;
+		const newName = prompt(`Rename "${entry.name}" to:`, entry.name);
+		if (!newName || newName === entry.name) return;
+		const pp = entry.path.substring(0, entry.path.lastIndexOf('/'));
+		try {
+			const r = await sshApi.sftpRename(sshConn.connectionId, entry.path, `${pp}/${newName}`);
+			if (r.success) { toast.success(`Renamed: ${entry.name} → ${newName}`); sshConn.loadDirectory(sshConn.currentPath); }
+			else toast.error(`Rename failed: ${r.error}`);
+		} catch (error) {
+			toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
+
+	// Load SSH profiles on mount
+	useEffect(() => {
+		loadSSHProfiles();
+	}, [loadSSHProfiles]);
+
+	const handleSelectSSHProfile = useCallback((profileId: string) => {
+		selectSSHProfile(profileId);
+	}, [selectSSHProfile]);
+
+	const handleSelectProject = useCallback((id: string) => {
+		selectProject(id);
+		selectSSHProfile(null); // Deselect SSH when switching to project
+	}, [selectProject, selectSSHProfile]);
 	const activeTab = useActiveTab();
 	const paneRoot = usePaneRoot();
 	const fullscreenPaneId = useFullscreenPaneId();
@@ -458,6 +552,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		setIsCommandPaletteOpen(false);
 		setIsShortcutMenuOpen(true);
 	}, []);
+
+	// SSH - just select profile (SSH workspace handles its own connect/terminal)
+	const handleSSHConnect = useCallback((profileId: string) => {
+		const profile = sshProfiles.find((p) => p.id === profileId);
+		if (!profile) return;
+
+		if (profile.authMethod === 'password' && !profile.hasStoredPassword) {
+			// No password in OS keychain — show password prompt
+			setSSHPasswordPrompt({ profileId, profileName: profile.name });
+			setSSHPasswordInput('');
+		} else {
+			// Select profile → SSH workspace handles connect
+			selectSSHProfile(profileId);
+		}
+	}, [sshProfiles, selectSSHProfile]);
+
+	const handleSSHPasswordSubmit = useCallback(() => {
+		if (!sshPasswordPrompt) return;
+		const password = sshPasswordInput;
+		setSSHPromptPasswords((prev) => ({
+			...prev,
+			[sshPasswordPrompt.profileId]: password,
+		}));
+		setSSHPasswordPrompt(null);
+		setSSHPasswordInput('');
+		selectSSHProfile(sshPasswordPrompt.profileId);
+	}, [sshPasswordPrompt, sshPasswordInput, selectSSHProfile]);
 
 	const getShortcutLabel = useCallback((id: string): string | undefined => {
 		const shortcut = shortcuts[id];
@@ -1101,13 +1222,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						<ProjectSidebar
 							projects={projects}
 							activeProjectId={activeProjectId}
-							onSelectProject={selectProject}
+							onSelectProject={handleSelectProject}
 							onNewProject={() => setIsNewProjectModalOpen(true)}
 							onUpdateProject={updateProject}
 							onDeleteProject={deleteProject}
 							onArchiveProject={archiveProject}
 							onRestoreProject={restoreProject}
 							onReorderProjects={reorderProjects}
+							onSSHConnect={handleSSHConnect}
+							onSelectSSHProfile={handleSelectSSHProfile}
+							activeSSHProfileId={activeSSHProfileId}
 						/>
 					</div>
 				)}
@@ -1117,7 +1241,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					<div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
 						{/* Main Content Area */}
 						<main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
-							{projects.length === 0 ? (
+							{activeSSHProfile ? (
+								/* SSH Workspace */
+								<SSHWorkspace
+									profile={sshProfileWithPassword!}
+									conn={sshConn}
+								/>
+							) : projects.length === 0 ? (
 								/* No Projects Empty State */
 								<div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
 									<motion.div
@@ -1183,11 +1313,39 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						</main>
 
 						{/* File Explorer - separate floating panel */}
-						{isExplorerVisible && activeProject?.path && (
-							<div className="flex-shrink-0 ml-2">
-								<FileExplorer />
+						{(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
+							<div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
+								{isExplorerVisible && activeProject?.path && (
+									<div className={activeSSHProfile ? "flex-1 min-h-0" : "h-full"}>
+										<FileExplorer side="right" />
+									</div>
+								)}
+								{activeSSHProfile && (
+									<div className={cn("flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border", !(isExplorerVisible && activeProject?.path) && "w-64")}>
+										<SSHFileExplorer
+											connectionId={sshConn.connectionId ?? ''}
+											isConnected={sshConn.isConnected}
+											sftpReady={sshConn.sftpReady}
+											entries={sshConn.entries}
+											currentPath={sshConn.currentPath}
+											expandedDirs={sshConn.expandedDirs}
+											childEntries={sshConn.childEntries}
+											loadingDirs={sshConn.loadingDirs}
+											isLoadingRoot={sshConn.isLoadingRoot}
+											profileName={activeSSHProfile.name}
+											onConnect={sshConn.handleConnect}
+											onBrowseFiles={sshConn.handleBrowseFiles}
+											onToggleDir={sshConn.toggleDirectory}
+											onLoadDir={sshConn.loadDirectory}
+											onMkdir={handleSSHMkdir}
+											onCreateFile={handleSSHCreateFile}
+											onDelete={handleSSHDelete}
+											onRename={handleSSHRename}
+										/>
+									</div>
+								)}
 							</div>
-						)}
+						) : null}
 					</div>
 				</PaneDndProvider>
 			</div>
@@ -1211,6 +1369,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onOpenAppPreferences={handleOpenAppPreferences}
 				onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
 				onOpenShortcutMenu={handleOpenShortcutMenu}
+				onSSHConnect={handleSSHConnect}
+				sshProfiles={sshProfiles.map((p) => ({ id: p.id, name: p.name, host: p.host, username: p.username }))}
 				getShortcutLabel={getShortcutLabel}
 				getProjectShortcutLabel={getProjectShortcutLabel}
 			/>
@@ -1229,6 +1389,44 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				onSelectCommand={handleInsertCommand}
 				onClearHistory={handleClearCommandHistory}
 			/>
+
+			{/* SSH Password Prompt */}
+			{sshPasswordPrompt && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+					<div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
+						<h3 className="text-sm font-semibold mb-1">SSH Password</h3>
+						<p className="text-xs text-muted-foreground mb-3">
+							Enter password for <span className="font-medium">{sshPasswordPrompt.profileName}</span>
+						</p>
+						<input
+							type="password"
+							value={sshPasswordInput}
+							onChange={(e) => setSSHPasswordInput(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === 'Enter') handleSSHPasswordSubmit();
+								if (e.key === 'Escape') { setSSHPasswordPrompt(null); setSSHPasswordInput(''); }
+							}}
+							placeholder="Password"
+							autoFocus
+							className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+						/>
+						<div className="flex justify-end gap-2 mt-3">
+							<button
+								onClick={() => { setSSHPasswordPrompt(null); setSSHPasswordInput(''); }}
+								className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleSSHPasswordSubmit}
+								className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+							>
+								Connect
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* Close Terminal Confirmation */}
 			<ConfirmDialog

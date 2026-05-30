@@ -22,7 +22,7 @@ jobs:
       normalized_version: ${{ steps.version.outputs.normalized_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -149,11 +149,6 @@ jobs:
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
 
-          - platform: macos-x64
-            runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
-
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'
@@ -162,7 +157,7 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
