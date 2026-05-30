@@ -81,9 +81,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   }, [filteredStatuses]);
 
   const handleFileClick = (path: string, staged: boolean) => {
+    // Only update selection; the effect below is the single source of truth for
+    // fetching the diff, which avoids a duplicate request on click.
     setSelectedFile(path);
     setSelectedStaged(staged);
-    fetchDiff(cwd, path, staged);
   };
 
   const handleStage = async () => {
@@ -114,6 +115,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
   const handleDiscard = () => {
     if (!selectedFile) return;
+    // Discard only reverts unstaged (working-tree) changes via `git checkout`.
+    // Staged content is not affected, so block the action on staged rows.
+    if (selectedStaged) return;
     // Use the app's ConfirmDialog rather than window.confirm, which is
     // unreliable inside the Tauri webview and bypasses the app's styling.
     setConfirmDiscardOpen(true);
@@ -230,8 +234,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   size="sm"
                   className="h-8 text-xs gap-2"
                   onClick={handleDiscard}
-                  disabled={isMutating}
-                  title="Discard changes to this file"
+                  disabled={isMutating || selectedStaged}
+                  title={
+                    selectedStaged
+                      ? "Unstage first to discard — Discard only reverts unstaged (working-tree) changes"
+                      : "Discard unstaged changes to this file"
+                  }
                 >
                   <RotateCcw size={14} />
                   Discard

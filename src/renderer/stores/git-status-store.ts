@@ -57,13 +57,20 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
 
   fetchDiff: async (cwd, path, staged) => {
     const key = diffKey(cwd, path, staged);
+    // Capture the request token before awaiting so a mutation that invalidates
+    // this key while the fetch is in flight causes the late response to be
+    // discarded instead of overwriting the cache with a stale diff.
+    const token = diffRequestVersions[key] ?? 0;
+    const isCurrent = () => (diffRequestVersions[key] ?? 0) === token;
     try {
       const diff = await gitApi.getDiff(cwd, path, staged);
+      if (!isCurrent()) return;
       set((state) => ({
         diffs: { ...state.diffs, [key]: diff }
       }));
     } catch (error) {
       console.error("Failed to fetch diff:", error);
+      if (!isCurrent()) return;
       // Write an empty sentinel so the panel stops retrying on every render and
       // shows the "no diff available" state instead of an infinite spinner.
       set((state) => ({
@@ -92,17 +99,31 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   },
 }));
 
+/** Monotonic request token per diff key. Bumped whenever a key is invalidated
+ * so an in-flight `fetchDiff` can detect it has been superseded. Kept outside
+ * React state because it is control metadata, not render data. */
+const diffRequestVersions: Record<string, number> = {};
+
+function bumpDiffVersion(key: string) {
+  diffRequestVersions[key] = (diffRequestVersions[key] ?? 0) + 1;
+}
+
 /** Drop cached staged and unstaged diffs for a file after it mutates so the
- * panel refetches the now-current diff instead of showing a stale one. */
+ * panel refetches the now-current diff instead of showing a stale one. Also
+ * bumps each key's request token to discard any in-flight fetch. */
 function invalidateFileDiffs(
   set: (fn: (state: GitStatusState) => Partial<GitStatusState>) => void,
   cwd: string,
   path: string,
 ) {
+  const stagedKey = diffKey(cwd, path, true);
+  const unstagedKey = diffKey(cwd, path, false);
+  bumpDiffVersion(stagedKey);
+  bumpDiffVersion(unstagedKey);
   set((state) => {
     const diffs = { ...state.diffs };
-    delete diffs[diffKey(cwd, path, true)];
-    delete diffs[diffKey(cwd, path, false)];
+    delete diffs[stagedKey];
+    delete diffs[unstagedKey];
     return { diffs };
   });
 }

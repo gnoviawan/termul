@@ -723,7 +723,7 @@ const NULL_DEVICE: &str = "/dev/null";
 ///   additions via `--no-index`.
 /// - Staged rows compare the index against HEAD (`--cached`).
 /// - Unstaged rows compare the working tree against the index.
-fn build_diff_args<'a>(path: &'a str, is_untracked: bool, staged: bool) -> Vec<&'a str> {
+fn build_diff_args(path: &str, is_untracked: bool, staged: bool) -> Vec<&str> {
     if is_untracked {
         vec!["diff", "--no-index", "--", NULL_DEVICE, path]
     } else if staged {
