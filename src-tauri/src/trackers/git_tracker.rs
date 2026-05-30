@@ -1236,7 +1236,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[test]
     fn resolve_executable_returns_unresolved_name_unchanged() {
         // A bare name that does not exist on PATH should come back unchanged so
         // the spawn still produces a meaningful "not found" error rather than
