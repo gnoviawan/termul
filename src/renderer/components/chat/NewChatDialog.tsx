@@ -24,6 +24,7 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useProjectStore } from '@/stores/project-store'
 import { buildMcpServers } from '@/lib/acp-mcp-persistence'
 import { McpServerDialog } from './McpServerDialog'
+import { templateIcon } from './agent-templates'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 
 interface NewChatDialogProps {
@@ -146,11 +147,17 @@ export function NewChatDialog({
                   <SelectValue placeholder="Select an agent" />
                 </SelectTrigger>
                 <SelectContent>
-                  {agentConfigs.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
+                  {agentConfigs.map((c) => {
+                    const Icon = templateIcon(c.templateId)
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          {Icon && <Icon width={13} height={13} />}
+                          {c.name}
+                        </span>
+                      </SelectItem>
+                    )
+                  })}
                 </SelectContent>
               </Select>
               {configId && (

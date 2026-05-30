@@ -53,15 +53,18 @@ export function AgentConfigDialog({
   const [args, setArgs] = useState<string[]>(existing?.args ?? [])
   const [envRows, setEnvRows] = useState<EnvRow[]>(toEnvRows(existing?.env ?? {}))
   const [allowTerminal, setAllowTerminal] = useState<boolean>(existing?.allowTerminal ?? false)
+  const [templateId, setTemplateId] = useState<string | undefined>(existing?.templateId)
   const [test, setTest] = useState<TestState>({ status: 'idle' })
 
-  const applyTemplate = useCallback((templateId: string) => {
-    const t = templateById(templateId)
+  const applyTemplate = useCallback((id: string) => {
+    const t = templateById(id)
     if (!t) return
+    setTemplateId(id === 'custom' ? undefined : id)
     setName(t.config.name)
     setCommand(t.config.command)
     setArgs(t.config.args)
     setEnvRows(toEnvRows(t.config.env))
+    setAllowTerminal(t.config.allowTerminal ?? false)
     setTest({ status: 'idle' })
   }, [])
 
@@ -111,14 +114,14 @@ export function AgentConfigDialog({
     try {
       const config = buildConfig()
       const sanitized = await sanitizeEnvForPersistence(config, id)
-      const stored: StoredAgentConfig = { id, ...sanitized }
+      const stored: StoredAgentConfig = { id, templateId, ...sanitized }
       await saveAgentConfig(stored)
       toast.success(existing ? 'Agent updated' : 'Agent added')
       onOpenChange(false)
     } catch (err) {
       toast.error(`Failed to save agent: ${String(err)}`)
     }
-  }, [validation.valid, existing, buildConfig, sanitizeEnvForPersistence, saveAgentConfig, onOpenChange])
+  }, [validation.valid, existing, templateId, buildConfig, sanitizeEnvForPersistence, saveAgentConfig, onOpenChange])
 
   const handleTest = useCallback(async () => {
     if (!validation.valid) return
@@ -156,9 +159,10 @@ export function AgentConfigDialog({
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-7 text-[11px]"
+                    className="h-7 gap-1.5 text-[11px]"
                     onClick={() => applyTemplate(t.id)}
                   >
+                    {t.icon && <t.icon width={12} height={12} />}
                     {t.label}
                   </Button>
                 ))}

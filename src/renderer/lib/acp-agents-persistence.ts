@@ -14,6 +14,8 @@ export const ACP_AGENTS_KEY = 'acp/agents'
 /** A persisted agent config carries a stable local id. */
 export interface StoredAgentConfig extends AgentConfig {
   id: string
+  /** The template id this agent was created from (used to resolve an icon). */
+  templateId?: string
 }
 
 export interface AgentConfigValidation {
