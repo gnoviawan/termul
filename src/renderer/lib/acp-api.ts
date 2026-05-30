@@ -200,6 +200,8 @@ export interface AgentConfig {
   command: string
   args: string[]
   env: Record<string, string>
+  /** Whether this agent may use the ACP terminal capability (default false). */
+  allowTerminal?: boolean
 }
 
 export interface NewSessionOutcome {

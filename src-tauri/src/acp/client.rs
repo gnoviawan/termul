@@ -25,17 +25,17 @@ use crate::acp::events::{
 
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
-/// Per the frozen boundary we advertise `fs.readTextFile`, `fs.writeTextFile`,
-/// and `terminal`. The terminal methods are stubbed to `method_not_found` for
-/// P0 (the full PtyManager bridge is deferred to P6), so advertising `terminal`
-/// here is an intentional, documented limitation.
+/// We always advertise `fs.readTextFile` and `fs.writeTextFile`. The `terminal`
+/// capability is advertised ONLY when the agent's config opted in
+/// (`allow_terminal`). Terminal access is arbitrary command execution, so it is
+/// off by default (M6) and enabled per trusted agent.
 #[must_use]
-pub fn client_capabilities() -> ClientCapabilities {
+pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
     ClientCapabilities::new()
         .fs(FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
-        .terminal(true)
+        .terminal(allow_terminal)
 }
 
 /// Resolve an agent-supplied absolute path against a session's workspace root,
@@ -278,11 +278,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_capabilities_advertise_fs_and_terminal() {
-        let caps = client_capabilities();
+    fn client_capabilities_advertise_fs_and_gate_terminal() {
+        let caps = client_capabilities(true);
         assert!(caps.fs.read_text_file);
         assert!(caps.fs.write_text_file);
         assert!(caps.terminal);
+        // Default-deny: terminal is omitted unless the agent opted in.
+        let denied = client_capabilities(false);
+        assert!(denied.fs.read_text_file);
+        assert!(!denied.terminal);
     }
 
     #[tokio::test]

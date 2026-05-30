@@ -679,6 +679,21 @@ async fn drive_connection(
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
+    // Terminal capability (P6b): a per-agent registry of ACP command-runner
+    // terminals. Handlers are always registered, but they only do work when the
+    // agent opted in (`allow_terminal`); the real gate is the capability
+    // advertisement (default false), so a compliant agent never calls these
+    // unless allowed. The registry is torn down with the driver thread.
+    let allow_terminal = config.allow_terminal;
+    let terminals = Arc::new(Mutex::new(crate::acp::terminal::TerminalRegistry::new()));
+    let term_create = terminals.clone();
+    let term_create_state = driver_state.clone();
+    let term_output = terminals.clone();
+    let term_wait = terminals.clone();
+    let term_kill = terminals.clone();
+    let term_release = terminals.clone();
+    let loop_terminals = terminals.clone();
+
     // Clones moved into the command loop (`main_fn`).
     let loop_app = app.clone();
     let loop_agent_id = agent_id.clone();
@@ -760,8 +775,133 @@ async fn drive_connection(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::CreateTerminalRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::CreateTerminalResponse;
+                if !allow_terminal {
+                    let denied: Result<CreateTerminalResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
+                // Default the cwd to the session's workspace root when the agent
+                // doesn't specify one.
+                let session_root = term_create_state
+                    .lock()
+                    .session_root(request.session_id.0.as_ref());
+                let cwd = request
+                    .cwd
+                    .clone()
+                    .or(session_root);
+                let env: Vec<(String, String)> = request
+                    .env
+                    .iter()
+                    .map(|e| (e.name.clone(), e.value.clone()))
+                    .collect();
+                let result = term_create
+                    .lock()
+                    .create(
+                        &request.command,
+                        &request.args,
+                        &env,
+                        cwd.as_deref(),
+                        request.output_byte_limit,
+                    )
+                    .map(CreateTerminalResponse::new)
+                    .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
+                let _ = responder.respond_with_result(result);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::TerminalOutputRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::TerminalOutputResponse;
+                let result = term_output
+                    .lock()
+                    .output(&request.terminal_id)
+                    .map(|(output, truncated, exit)| {
+                        TerminalOutputResponse::new(output, truncated).exit_status(exit)
+                    })
+                    .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
+                let _ = responder.respond_with_result(result);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::WaitForTerminalExitRequest,
+                        responder,
+                        cx| {
+                use agent_client_protocol::schema::WaitForTerminalExitResponse;
+                let registry = term_wait.clone();
+                // Await off the dispatch path so other terminal ops stay
+                // responsive. The child handle is taken out from under the lock
+                // first, so the registry mutex is NOT held across the await.
+                cx.spawn(async move {
+                    let taken = registry.lock().take_child_for_wait(&request.terminal_id);
+                    let result = match taken {
+                        Err(e) => Err(agent_client_protocol::Error::internal_error().data(e)),
+                        Ok(None) => {
+                            // Already exited: return the cached status.
+                            match registry.lock().cached_exit(&request.terminal_id) {
+                                Some(status) => Ok(WaitForTerminalExitResponse::new(status)),
+                                None => Err(agent_client_protocol::Error::internal_error()
+                                    .data("terminal has no exit status")),
+                            }
+                        }
+                        Ok(Some(mut child)) => match child.wait().await {
+                            Ok(status) => {
+                                let exit = crate::acp::terminal::to_exit_status(status);
+                                registry.lock().record_exit(&request.terminal_id, exit.clone());
+                                Ok(WaitForTerminalExitResponse::new(exit))
+                            }
+                            Err(e) => Err(agent_client_protocol::Error::internal_error()
+                                .data(format!("failed to wait for terminal: {e}"))),
+                        },
+                    };
+                    let _ = responder.respond_with_result(result);
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::KillTerminalRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::KillTerminalResponse;
+                let result = term_kill
+                    .lock()
+                    .kill(&request.terminal_id)
+                    .map(|()| KillTerminalResponse::new())
+                    .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
+                let _ = responder.respond_with_result(result);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::ReleaseTerminalRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::ReleaseTerminalResponse;
+                let result = term_release
+                    .lock()
+                    .release(&request.terminal_id)
+                    .map(|()| ReleaseTerminalResponse::new())
+                    .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
+                let _ = responder.respond_with_result(result);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(agent, async move |cx: ConnectionTo<Agent>| {
-            run_command_loop(
+            let loop_result = run_command_loop(
                 cx,
                 command_rx,
                 init_tx,
@@ -769,8 +909,13 @@ async fn drive_connection(
                 loop_agent_id,
                 loop_state,
                 loop_spawned,
+                allow_terminal,
             )
-            .await
+            .await;
+            // Driver thread is winding down — kill any live terminal children so
+            // they don't outlive the agent.
+            loop_terminals.lock().release_all();
+            loop_result
         })
         .await;
 
@@ -779,6 +924,7 @@ async fn drive_connection(
 
 /// The agent driver's main loop: complete `initialize`, then service commands
 /// until shutdown. Runs concurrently with the connection's dispatch actors.
+#[allow(clippy::too_many_arguments)]
 async fn run_command_loop(
     cx: ConnectionTo<Agent>,
     mut command_rx: mpsc::UnboundedReceiver<AcpCommand>,
@@ -787,13 +933,14 @@ async fn run_command_loop(
     agent_id: AgentId,
     driver_state: Arc<Mutex<DriverState>>,
     spawned: Arc<AtomicBool>,
+    allow_terminal: bool,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
     // and return; returning ends `main_fn`, which tears the connection down and
     // kills the child via the SDK's `ChildGuard`.
     let init_request = InitializeRequest::new(ProtocolVersion::V1)
-        .client_capabilities(client::client_capabilities());
+        .client_capabilities(client::client_capabilities(allow_terminal));
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
     match init_outcome {

@@ -470,7 +470,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         name: config.name,
         command: config.command,
         args: config.args,
-        env: config.env
+        env: config.env,
+        allowTerminal: config.allowTerminal
       })
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
     }

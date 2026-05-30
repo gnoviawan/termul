@@ -84,6 +84,12 @@ pub struct AgentConfig {
     /// Extra environment variables to set for the agent process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Whether this agent may use the `terminal` client capability (arbitrary
+    /// command execution). Defaults to false (M6): terminal access is opt-in
+    /// per trusted agent. Existing persisted configs without this field load as
+    /// `false`.
+    #[serde(default)]
+    pub allow_terminal: bool,
 }
 
 impl AgentConfig {
@@ -135,6 +141,7 @@ mod tests {
             command: "/usr/bin/agent".to_string(),
             args: vec!["--acp".to_string()],
             env,
+            allow_terminal: false,
         };
 
         match config.to_mcp_server() {

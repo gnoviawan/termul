@@ -52,6 +52,7 @@ export function AgentConfigDialog({
   const [command, setCommand] = useState(existing?.command ?? '')
   const [args, setArgs] = useState<string[]>(existing?.args ?? [])
   const [envRows, setEnvRows] = useState<EnvRow[]>(toEnvRows(existing?.env ?? {}))
+  const [allowTerminal, setAllowTerminal] = useState<boolean>(existing?.allowTerminal ?? false)
   const [test, setTest] = useState<TestState>({ status: 'idle' })
 
   const applyTemplate = useCallback((templateId: string) => {
@@ -69,8 +70,14 @@ export function AgentConfigDialog({
     for (const row of envRows) {
       if (row.key.trim().length > 0) env[row.key.trim()] = row.value
     }
-    return { name: name.trim(), command: command.trim(), args: args.filter((a) => a.length > 0), env }
-  }, [name, command, args, envRows])
+    return {
+      name: name.trim(),
+      command: command.trim(),
+      args: args.filter((a) => a.length > 0),
+      env,
+      allowTerminal
+    }
+  }, [name, command, args, envRows, allowTerminal])
 
   const validation = useMemo(() => validateAgentConfig({ name, command }), [name, command])
 
@@ -254,6 +261,22 @@ export function AgentConfigDialog({
               Secret-looking values are saved to OS secure storage; only a $PLACEHOLDER is persisted.
             </p>
           </div>
+
+          <label className="flex items-start gap-2 rounded-md border border-border/60 p-2">
+            <input
+              type="checkbox"
+              checked={allowTerminal}
+              onChange={(e) => setAllowTerminal(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="flex flex-col">
+              <span className="text-xs font-medium">Allow terminal access</span>
+              <span className="text-[10px] text-muted-foreground">
+                Lets this agent run shell commands on your machine. Off by default — enable only
+                for agents you trust.
+              </span>
+            </span>
+          </label>
 
           {test.status !== 'idle' && (
             <div className="flex items-center gap-1.5 text-xs">

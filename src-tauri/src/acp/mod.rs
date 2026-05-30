@@ -14,6 +14,7 @@ pub mod config;
 pub mod events;
 pub mod manager;
 pub mod session;
+pub mod terminal;
 
 // Re-exported for the renderer bridge (P1+) and `lib.rs` wiring. `AcpManager`
 // is used now (managed in `lib.rs`); the config/id types are part of the public
