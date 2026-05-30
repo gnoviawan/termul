@@ -113,7 +113,10 @@ impl RemoteServer {
             .route("/static/vendor/xterm.min.css", get(serve_xterm_css))
             .route("/static/vendor/xterm.min.js", get(serve_xterm_js))
             .route("/static/vendor/addon-fit.min.js", get(serve_addon_fit))
-            .route("/static/vendor/addon-web-links.min.js", get(serve_addon_web_links))
+            .route(
+                "/static/vendor/addon-web-links.min.js",
+                get(serve_addon_web_links),
+            )
             .route("/static/fonts/urbanist.css", get(serve_urbanist_css))
             .route(
                 "/static/fonts/urbanist-latin.woff2",
@@ -532,7 +535,10 @@ mod tests {
         // Guard against re-introducing CDN runtime deps for UI assets.
         let html = include_str!("static/index.html");
         assert!(!html.contains("cdn.jsdelivr.net"), "no jsDelivr CDN refs");
-        assert!(!html.contains("fonts.googleapis.com"), "no Google Fonts CSS");
+        assert!(
+            !html.contains("fonts.googleapis.com"),
+            "no Google Fonts CSS"
+        );
         assert!(!html.contains("fonts.gstatic.com"), "no gstatic font refs");
         assert!(
             html.contains("/static/vendor/xterm.min.js"),
@@ -541,6 +547,35 @@ mod tests {
         assert!(
             html.contains("/static/fonts/urbanist.css"),
             "uses local font css"
+        );
+    }
+
+    #[test]
+    fn overlay_helpers_do_not_concatenate_untrusted_data_into_innerhtml() {
+        // Regression guard for the CodeQL DOM-XSS finding: server-sent values
+        // (e.g. `msg.code`) must not flow into innerHTML via string concat. The
+        // overlay helpers must build text nodes with textContent instead.
+        let html = include_str!("static/index.html");
+        assert!(
+            !html.contains("ov-text\">' + label"),
+            "showOverlay* must not concatenate `label` into innerHTML"
+        );
+        assert!(
+            !html.contains("ov-sub\">' + sub"),
+            "showOverlayFailed must not concatenate `sub` into innerHTML"
+        );
+        assert!(
+            !html.contains("with code \" + msg.code"),
+            "raw msg.code must not be passed straight into the overlay text"
+        );
+        // The safe replacements must be present.
+        assert!(
+            html.contains("text.textContent = label"),
+            "overlay label should be set via textContent"
+        );
+        assert!(
+            html.contains("subEl.textContent = sub"),
+            "overlay sub should be set via textContent"
         );
     }
 }

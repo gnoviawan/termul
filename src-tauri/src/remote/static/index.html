@@ -579,17 +579,41 @@
         }
 
         function showOverlayConnecting(label) {
-          overlayEl.innerHTML = '<div class="ov-spin"></div><div class="ov-text">' + label + "</div>";
+          // Build via textContent (never innerHTML) so caller-supplied text can't
+          // inject markup — overlay text may derive from untrusted WS payloads.
+          overlayEl.replaceChildren();
+          const spin = document.createElement("div");
+          spin.className = "ov-spin";
+          const text = document.createElement("div");
+          text.className = "ov-text";
+          text.textContent = label;
+          overlayEl.append(spin, text);
           overlayEl.classList.add("show");
         }
         function showOverlayFailed(label, sub) {
-          overlayEl.innerHTML =
-            '<div class="ov-icon">' + ALERT_SVG + "</div><div class=\"ov-text\">" + label + "</div>" +
-            (sub ? '<div class="ov-sub">' + sub + "</div>" : "") +
-            '<button type="button" class="ov-retry">Reconnect</button>';
+          // Same rationale as showOverlayConnecting: text nodes only. ALERT_SVG is
+          // a trusted constant, so it's the one piece set via innerHTML.
+          overlayEl.replaceChildren();
+          const icon = document.createElement("div");
+          icon.className = "ov-icon";
+          icon.innerHTML = ALERT_SVG;
+          const text = document.createElement("div");
+          text.className = "ov-text";
+          text.textContent = label;
+          overlayEl.append(icon, text);
+          if (sub) {
+            const subEl = document.createElement("div");
+            subEl.className = "ov-sub";
+            subEl.textContent = sub;
+            overlayEl.append(subEl);
+          }
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "ov-retry";
+          retry.textContent = "Reconnect";
+          overlayEl.append(retry);
           overlayEl.classList.add("show");
-          const b = overlayEl.querySelector(".ov-retry");
-          if (b) b.addEventListener("click", () => { if (ptyId) reconnectAttempts = 0, openSocket(); });
+          retry.addEventListener("click", () => { if (ptyId) reconnectAttempts = 0, openSocket(); });
         }
         function hideOverlay() { overlayEl.classList.remove("show"); }
 
@@ -629,7 +653,10 @@
               const msg = JSON.parse(event.data);
               if (msg.type === "exit") {
                 setPaneStatus("failed"); manualClose = true; unblur();
-                showOverlayFailed("Terminal exited", "Process ended with code " + msg.code);
+                // Coerce code to a number for display; the overlay also renders
+                // via textContent, so untrusted values can't inject markup.
+                const code = Number(msg.code);
+                showOverlayFailed("Terminal exited", "Process ended with code " + (Number.isFinite(code) ? code : "unknown"));
               } else if (msg.type === "error") {
                 term.writeln("\r\n\x1b[31m[error: " + msg.message + "]\x1b[0m");
               }
