@@ -79,7 +79,10 @@ export interface GitStatusDetail {
 
 export interface GitApi {
 	getStatus: (cwd: string) => Promise<GitStatusDetail[]>;
-	getDiff: (cwd: string, path: string) => Promise<string>;
+	getDiff: (cwd: string, path: string, staged?: boolean) => Promise<string>;
+	stage: (cwd: string, path: string) => Promise<void>;
+	unstage: (cwd: string, path: string) => Promise<void>;
+	discard: (cwd: string, path: string) => Promise<void>;
 }
 
 // Terminal API exposed via preload

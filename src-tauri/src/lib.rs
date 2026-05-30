@@ -780,6 +780,9 @@ pub fn run() {
             // Git commands
             commands::git_get_status,
             commands::git_get_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_discard,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,

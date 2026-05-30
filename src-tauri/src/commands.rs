@@ -1686,14 +1686,35 @@ pub async fn git_get_status(
         .map_err(|e: String| e)
 }
 
-/// Get git diff for a file
+/// Get git diff for a file. `staged` selects the index-vs-HEAD diff
+/// (`git diff --cached`) instead of the worktree-vs-index diff.
 #[tauri::command]
 pub async fn git_get_diff(
     cwd: String,
     path: String,
+    staged: Option<bool>,
 ) -> Result<String, String> {
-    crate::trackers::git_tracker::git_get_diff(&cwd, &path)
+    crate::trackers::git_tracker::git_get_diff(&cwd, &path, staged.unwrap_or(false))
         .map_err(|e: String| e)
+}
+
+/// Stage a single file (`git add`).
+#[tauri::command]
+pub async fn git_stage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_stage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Unstage a single file (`git restore --staged`).
+#[tauri::command]
+pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Discard changes to a single file. Untracked files are deleted; tracked
+/// changes revert to HEAD. This is destructive and irreversible.
+#[tauri::command]
+pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
 }
 
 /// Get available shells
