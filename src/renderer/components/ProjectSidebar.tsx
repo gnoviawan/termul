@@ -151,21 +151,11 @@ export function ProjectSidebar({
 	const [searchQuery, setSearchQuery] = useState("");
 	const searchInputRef = useRef<HTMLInputElement>(null);
 
-	// Expanded worktree projects — active project auto-expands
-	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
-		const set = new Set<string>();
-		if (activeProjectId) set.add(activeProjectId);
-		return set;
-	});
-
-	// Auto-expand/contract active project
-	useEffect(() => {
-		setExpandedProjects((prev) => {
-			const next = new Set(prev);
-			next.add(activeProjectId);
-			return next;
-		});
-	}, [activeProjectId]);
+	// Expanded worktree projects — expansion is controlled solely by the chevron.
+	// Selecting a project no longer auto-expands its worktrees, keeping the list uncluttered.
+	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+		() => new Set<string>(),
+	);
 
 	// Context menu state
 	const [contextMenu, setContextMenu] = useState<ContextMenuState>({
