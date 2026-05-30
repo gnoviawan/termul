@@ -14,6 +14,17 @@ vi.mock('@/lib/acp-agents-persistence', async (orig) => {
     saveAgentConfigs: vi.fn(async () => {})
   }
 })
+vi.mock('@/lib/acp-history-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-history-persistence')>()
+  return {
+    ...actual,
+    loadSessionIndex: vi.fn(async () => []),
+    saveSessionIndex: vi.fn(async () => {}),
+    saveSessionPayload: vi.fn(async () => {}),
+    loadSessionPayload: vi.fn(async () => null),
+    deleteSessionPayload: vi.fn(async () => {})
+  }
+})
 
 import { invoke } from '@tauri-apps/api/core'
 import { useAcpStore } from './acp-store'
@@ -23,6 +34,7 @@ const FRESH = {
   agentStatus: {},
   agentConfigs: [],
   configToLiveAgent: {},
+  sessionIndex: [],
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -38,6 +50,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
       [sessionId]: {
         id: sessionId,
         agentId,
+        cwd: '/work',
         status: 'active',
         title: null,
         activeTurn,
@@ -174,6 +187,7 @@ describe('acp-store', () => {
         s1: {
           id: 's1',
           agentId: 'agent-1',
+          cwd: '/work',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -185,6 +199,7 @@ describe('acp-store', () => {
         s2: {
           id: 's2',
           agentId: 'agent-1',
+          cwd: '/work',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -372,6 +387,7 @@ describe('acp-store', () => {
         s1: {
           id: 's1',
           agentId: 'agent-1',
+          cwd: '/work',
           status: 'active',
           title: null,
           activeTurn: true,
@@ -463,5 +479,70 @@ describe('acp-store', () => {
     })
     expect(invoke).toHaveBeenNthCalledWith(2, 'acp_kill_agent', { agentId: 'agent-test' })
     expect(useAcpStore.getState().agents['agent-test']).toBeUndefined()
+  })
+
+  it('openHistorySession loads the local transcript when no agent is connected (P5)', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-x',
+        title: 'Old chat',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        { id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'hello' }], streaming: false, timestamp: 0 }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('s-old')
+    // no agent connected -> 'local' strategy: transcript is shown, no IPC call
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().messages['s-old']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-old'].status).toBe('closed')
+  })
+
+  it('openHistorySession restores the local transcript if load fails (P5)', async () => {
+    // a connected agent with loadSession -> 'load' strategy
+    seedSession('s-live', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-live',
+        agentId: 'agent-1',
+        title: 'Live',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'active'
+      },
+      messages: [
+        { id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'prior' }], streaming: false, timestamp: 0 }
+      ]
+    })
+    // acp_load_session rejects
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('load boom')
+    await expect(useAcpStore.getState().openHistorySession('s-live')).rejects.toBeDefined()
+    // transcript was restored (not left empty) and the error surfaced
+    expect(useAcpStore.getState().messages['s-live']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-live'].lastError).toMatch(/Resume failed/)
+  })
+
+  it('deleteHistorySession removes the index entry (P5)', async () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        { id: 's1', agentId: 'a', title: 'T', cwd: '', createdAt: 0, lastActivityAt: 0, messageCount: 0, status: 'closed' }
+      ]
+    })
+    await useAcpStore.getState().deleteHistorySession('s1')
+    expect(useAcpStore.getState().sessionIndex).toHaveLength(0)
   })
 })

@@ -49,6 +49,17 @@ import {
   saveAgentConfigs as saveAgentConfigsToDisk,
   type StoredAgentConfig
 } from '@/lib/acp-agents-persistence'
+import {
+  loadSessionIndex as loadSessionIndexFromDisk,
+  saveSessionIndex as saveSessionIndexToDisk,
+  saveSessionPayload,
+  loadSessionPayload,
+  deleteSessionPayload,
+  deriveTitle,
+  type SessionIndexEntry,
+  type SessionPayload
+} from '@/lib/acp-history-persistence'
+import { decideResume } from '@/lib/acp-resume-policy'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -65,6 +76,7 @@ export interface ChatMessage {
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
+  cwd: string
   status: SessionStatus
   title: string | null
   activeTurn: boolean
@@ -92,6 +104,9 @@ interface AcpState {
   /** Maps a configured agent id to its live spawned AgentId (for reuse). */
   configToLiveAgent: Record<string, AgentId>
 
+  // Persisted chat-history index (loaded on mount; payloads load lazily)
+  sessionIndex: SessionIndexEntry[]
+
   // Sessions
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
@@ -117,6 +132,11 @@ interface AcpState {
   testConnection: (config: AgentConfig) => Promise<AgentCapabilities | null>
   /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
   startChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
+
+  // Actions — chat history (P5)
+  loadSessionIndex: () => Promise<void>
+  openHistorySession: (id: string) => Promise<void>
+  deleteHistorySession: (id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -214,11 +234,53 @@ function dropPermissionsForAgent(
   return next
 }
 
+/**
+ * Mirror a session to disk (index entry + debounced payload) using the current
+ * store snapshot. Best-effort: persistence failures are logged, never thrown
+ * into the runtime path.
+ */
+function persistSession(
+  state: { sessions: Record<SessionId, AcpSession>; messages: Record<SessionId, ChatMessage[]>; sessionIndex: SessionIndexEntry[]; configToLiveAgent: Record<string, AgentId> },
+  sessionId: SessionId,
+  setIndex: (entries: SessionIndexEntry[]) => void
+): void {
+  const session = state.sessions[sessionId]
+  if (!session) return
+  const messages = state.messages[sessionId] ?? []
+  const agentConfigId = Object.keys(state.configToLiveAgent).find(
+    (cid) => state.configToLiveAgent[cid] === session.agentId
+  )
+  const entry: SessionIndexEntry = {
+    id: sessionId,
+    agentId: session.agentId,
+    agentConfigId,
+    title: session.title ?? deriveTitle(messages, session.agentId),
+    cwd: session.cwd,
+    createdAt: session.createdAt,
+    lastActivityAt: Date.now(),
+    messageCount: messages.length,
+    status: session.status
+  }
+  const nextIndex = [
+    entry,
+    ...state.sessionIndex.filter((e) => e.id !== sessionId)
+  ]
+  setIndex(nextIndex)
+  const payload: SessionPayload = { metadata: entry, messages }
+  void saveSessionIndexToDisk(nextIndex).catch((e) =>
+    console.error('[acp] failed to persist session index', e)
+  )
+  void saveSessionPayload(sessionId, payload).catch((e) =>
+    console.error('[acp] failed to persist session payload', e)
+  )
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
   agentConfigs: [],
   configToLiveAgent: {},
+  sessionIndex: [],
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -279,6 +341,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           [sessionId]: {
             id: sessionId,
             agentId,
+            cwd,
             status: existing?.status === 'closed' ? 'closed' : 'active',
             title: existing?.title ?? null,
             activeTurn: existing?.activeTurn ?? false,
@@ -292,6 +355,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         activeSessionId: s.activeSessionId ?? sessionId
       }
     })
+    // mirror to disk (index + payload)
+    const st = get()
+    persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
     return sessionId
   },
 
@@ -395,6 +461,81 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
     }
     return get().createSession(agentId, cwd, mcpServers)
+  },
+
+  loadSessionIndex: async () => {
+    const entries = await loadSessionIndexFromDisk()
+    set({ sessionIndex: entries })
+  },
+
+  openHistorySession: async (id) => {
+    const payload = await loadSessionPayload(id)
+    if (!payload) throw new Error(`no persisted history for ${id}`)
+    const meta = payload.metadata
+    const live = get().sessions[id]
+    const connected = !!live && get().agentStatus[live.agentId] === 'connected'
+    const capabilities = live ? (get().agents[live.agentId]?.capabilities ?? null) : null
+    const strategy = decideResume({ connected, capabilities })
+
+    // Always show the persisted transcript locally first (and register the session
+    // record if it isn't live), so the pane has content regardless of strategy.
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [id]: s.sessions[id] ?? {
+          id,
+          agentId: meta.agentId,
+          cwd: meta.cwd,
+          status: 'closed',
+          title: meta.title,
+          activeTurn: false,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: meta.createdAt
+        }
+      },
+      messages: { ...s.messages, [id]: payload.messages }
+    }))
+
+    if (strategy === 'load' && live) {
+      // Agent replays history via session/update; clear local copy to avoid dupes.
+      set((s) => ({ messages: { ...s.messages, [id]: [] } }))
+      try {
+        await acpApi.loadSession(live.agentId, id, meta.cwd)
+      } catch (err) {
+        // Load failed — restore the local transcript so the user still sees history.
+        set((s) => ({
+          messages: { ...s.messages, [id]: payload.messages },
+          sessions: s.sessions[id]
+            ? { ...s.sessions, [id]: { ...s.sessions[id], lastError: `Resume failed: ${String(err)}` } }
+            : s.sessions
+        }))
+        throw err
+      }
+    } else if (strategy === 'resume' && live) {
+      await acpApi.resumeSession(live.agentId, id, meta.cwd)
+    }
+    // 'local' → nothing more; the transcript is already shown.
+  },
+
+  deleteHistorySession: async (id) => {
+    const next = get().sessionIndex.filter((e) => e.id !== id)
+    set((s) => {
+      // If the chat is open in a pane, mark its live session closed so the pane
+      // reflects the deletion instead of showing stale content.
+      const sessions = { ...s.sessions }
+      if (sessions[id]) {
+        sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
+      }
+      return { sessionIndex: next, sessions }
+    })
+    try {
+      await saveSessionIndexToDisk(next)
+      await deleteSessionPayload(id)
+    } catch (e) {
+      console.error('[acp] failed to delete session history', e)
+    }
   },
 
   sendPrompt: async (sessionId, text) => {
@@ -517,6 +658,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           [e.sessionId]: {
             id: e.sessionId,
             agentId: e.agentId,
+            cwd: '',
             status: 'active',
             title: null,
             activeTurn: false,
@@ -679,7 +821,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }),
 
-  _onSessionClosed: (e) =>
+  _onSessionClosed: (e) => {
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
@@ -689,6 +831,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions: { ...s.sessions, [e.sessionId]: { ...session, status: 'closed', activeTurn: false } }
       }
     })
+    if (get().sessions[e.sessionId]) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  }
 }))
 
 // --- Event listener wiring (called once at app mount) ----------------------

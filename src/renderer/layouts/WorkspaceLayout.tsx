@@ -3,7 +3,7 @@ import type { ShellInfo } from "@shared/types/ipc.types";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FolderKanban, Terminal } from "lucide-react";
-import { ProjectSidebar } from "@/components/ProjectSidebar";
+import { SidebarTabs } from "@/components/SidebarTabs";
 import { PaneRenderer } from "@/components/workspace/PaneRenderer";
 import { PaneDndProvider } from "@/hooks/use-pane-dnd";
 import { StatusBar } from "@/components/StatusBar";
@@ -1098,7 +1098,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				{/* Sidebar */}
 				{isSidebarVisible && (
 					<div className="mr-2">
-						<ProjectSidebar
+						<SidebarTabs
 							projects={projects}
 							activeProjectId={activeProjectId}
 							onSelectProject={selectProject}

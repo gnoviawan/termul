@@ -33,6 +33,7 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpAgents } from './hooks/use-acp-agents'
+import { useAcpHistory } from './hooks/use-acp-history'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { isWindows } from '@/lib/platform'
@@ -94,6 +95,7 @@ function AppEffects(): null {
   useMenuUpdaterListener()
   useAcpListeners()
   useAcpAgents()
+  useAcpHistory()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()
