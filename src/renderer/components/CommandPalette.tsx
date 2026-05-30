@@ -339,7 +339,7 @@ export function CommandPalette({
         key={keyPrefix ? `${keyPrefix}:${cmd.id}` : cmd.id}
         value={keyPrefix ? `${keyPrefix}:${getSearchableValue(cmd)}` : getSearchableValue(cmd)}
         onSelect={() => executeCommand(cmd)}
-        className="group flex items-center justify-between gap-3 px-2.5 py-1.5 cursor-pointer rounded-md"
+        className="group flex items-center justify-between gap-3 px-2.5 py-1.5 cursor-pointer rounded-md data-[selected='true']:bg-background data-[selected=true]:text-foreground"
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <span
@@ -380,7 +380,7 @@ export function CommandPalette({
               void togglePin(cmd.id)
             }}
             className={cn(
-              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary hover:text-foreground',
+              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary hover:text-foreground group-data-[selected=true]:text-foreground',
               isPinned
                 ? 'text-foreground opacity-100'
                 : 'opacity-0 group-data-[selected=true]:opacity-100 group-hover:opacity-100'
