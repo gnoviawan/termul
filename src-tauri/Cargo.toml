@@ -37,6 +37,14 @@ anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 
+# ACP (Agent Client Protocol) — ADR-003 P0
+# NOTE: agent-client-protocol 0.12 ships its own `AcpAgent`/`Stdio` transport
+# (built on async-process), so the separate `agent-client-protocol-tokio` crate
+# is NOT used — it depends on acp 0.11, which would pull a second, incompatible
+# copy of the protocol crate into the tree. See Spec Change Log in
+# spec-adr-003-p0-rust-acp-core.md.
+agent-client-protocol = "0.12"
+
 # Regex and parsing
 regex = "1"
 lazy_static = "1.4"
