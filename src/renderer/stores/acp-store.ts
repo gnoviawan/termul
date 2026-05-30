@@ -171,6 +171,30 @@ function finalizeStreaming(
   return messages
 }
 
+/** Remove all pending permissions belonging to a session. */
+function dropPermissionsForSession(
+  pending: Record<string, PendingPermission>,
+  sessionId: SessionId
+): Record<string, PendingPermission> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].sessionId === sessionId) delete next[id]
+  }
+  return next
+}
+
+/** Remove all pending permissions belonging to an agent. */
+function dropPermissionsForAgent(
+  pending: Record<string, PendingPermission>,
+  agentId: AgentId
+): Record<string, PendingPermission> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].agentId === agentId) delete next[id]
+  }
+  return next
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -212,7 +236,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
         }
       }
-      return { agents, agentStatus, sessions }
+      return {
+        agents,
+        agentStatus,
+        sessions,
+        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
+      }
     })
   },
 
@@ -259,7 +288,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (sessions[sessionId]) {
         sessions[sessionId] = { ...sessions[sessionId], status: 'closed', activeTurn: false }
       }
-      return { sessions }
+      return {
+        sessions,
+        pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId)
+      }
     })
   },
 
@@ -340,12 +372,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   respondPermission: async (requestId, optionId) => {
     const pending = get().pendingPermissions[requestId]
     if (!pending) return
-    await acpApi.respondPermission(pending.agentId, requestId, optionId)
+    // Optimistically remove so a rapid double-click can't fire a second backend
+    // call for the same request (which would error as 'unknown request').
     set((s) => {
       const pendingPermissions = { ...s.pendingPermissions }
       delete pendingPermissions[requestId]
       return { pendingPermissions }
     })
+    try {
+      await acpApi.respondPermission(pending.agentId, requestId, optionId)
+    } catch (err) {
+      // Restore the entry so the user can retry.
+      set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
+      throw err
+    }
   },
 
   // --- Event reducers ------------------------------------------------------
@@ -489,10 +529,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const messages = finalizeStreaming(s.messages, e.sessionId)
       const session = s.sessions[e.sessionId]
-      if (!session) return { messages }
+      // A finished turn abandons any unanswered permission for this session;
+      // the backend resolves it 'cancelled', so clear the stale store entry too.
+      const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+      if (!session) return { messages, pendingPermissions }
       const note = noteForStopReason(e.stopReason)
       return {
         messages,
+        pendingPermissions,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
@@ -528,14 +572,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
         }
       }
-      return { agentStatus, sessions }
+      return {
+        agentStatus,
+        sessions,
+        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
+      }
     }),
 
   _onSessionClosed: (e) =>
     set((s) => {
       const session = s.sessions[e.sessionId]
-      if (!session) return {}
+      const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+      if (!session) return { pendingPermissions }
       return {
+        pendingPermissions,
         sessions: { ...s.sessions, [e.sessionId]: { ...session, status: 'closed', activeTurn: false } }
       }
     })

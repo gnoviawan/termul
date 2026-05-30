@@ -210,6 +210,64 @@ describe('acp-store', () => {
     })
   })
 
+  it('prompt_complete clears a pending permission for the session (C1)', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-1',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-1']).toBeUndefined()
+  })
+
+  it('session_closed and agent_disconnected drop pending permissions (W2)', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-1',
+      toolCall: { toolCallId: 'tc-1' },
+      options: []
+    })
+    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    expect(useAcpStore.getState().pendingPermissions['req-1']).toBeUndefined()
+
+    store._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-2',
+      toolCall: { toolCallId: 'tc-2' },
+      options: []
+    })
+    store._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
+  })
+
+  it('respondPermission is re-entrancy safe (W3): second call is a no-op', async () => {
+    seedSession('s1', 'agent-1')
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-1',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    const first = useAcpStore.getState().respondPermission('req-1', 'allow')
+    const second = useAcpStore.getState().respondPermission('req-1', 'allow')
+    await Promise.all([first, second])
+    // only one backend call despite two invocations
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it('sendPrompt failure clears the turn and records the error', async () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue('backend boom')

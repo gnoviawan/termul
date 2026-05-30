@@ -1,9 +1,11 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, Children } from 'react'
 import { ChatMessage } from './ChatMessage'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 
 interface ChatMessageListProps {
   messages: ChatMessageType[]
+  /** Extra content (e.g. tool-call cards) rendered after the message thread. */
+  children?: React.ReactNode
 }
 
 /**
@@ -11,7 +13,7 @@ interface ChatMessageListProps {
  * when the user is already pinned near the bottom, so reading scrollback isn't
  * interrupted by streaming chunks.
  */
-export function ChatMessageList({ messages }: ChatMessageListProps): React.JSX.Element {
+export function ChatMessageList({ messages, children }: ChatMessageListProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const pinnedToBottomRef = useRef(true)
 
@@ -26,9 +28,10 @@ export function ChatMessageList({ messages }: ChatMessageListProps): React.JSX.E
     const el = containerRef.current
     if (!el || !pinnedToBottomRef.current) return
     el.scrollTop = el.scrollHeight
-  }, [messages])
+  }, [messages, children])
 
-  if (messages.length === 0) {
+  const isEmpty = messages.length === 0 && Children.count(children) === 0
+  if (isEmpty) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
         No messages yet. Say something to get started.
@@ -40,11 +43,14 @@ export function ChatMessageList({ messages }: ChatMessageListProps): React.JSX.E
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto divide-y divide-border/40"
+      className="flex-1 overflow-y-auto"
     >
-      {messages.map((m) => (
-        <ChatMessage key={m.id} message={m} />
-      ))}
+      <div className="divide-y divide-border/40">
+        {messages.map((m) => (
+          <ChatMessage key={m.id} message={m} />
+        ))}
+      </div>
+      {children}
     </div>
   )
 }

@@ -76,24 +76,64 @@ export interface AgentCapabilities {
   [k: string]: unknown
 }
 
-/** A tool call (P3 renders these; P1 only stores them). */
+/** A tool call (P3 renders these). ACP schema, camelCase on the wire. */
+export type ToolKind =
+  | 'read'
+  | 'edit'
+  | 'delete'
+  | 'move'
+  | 'search'
+  | 'execute'
+  | 'think'
+  | 'fetch'
+  | 'switch_mode'
+  | 'other'
+  | string
+
+export type ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | string
+
+export interface DiffContent {
+  path: string
+  oldText?: string | null
+  newText: string
+}
+
+/** Tagged tool-call content item. */
+export type ToolCallContent =
+  | { type: 'content'; content: ContentBlock }
+  | { type: 'diff'; path: string; oldText?: string | null; newText: string }
+  | { type: 'terminal'; terminalId?: string }
+  | { type: string; [k: string]: unknown }
+
 export interface ToolCall {
   toolCallId: string
   title?: string
-  kind?: string
-  status?: string
+  kind?: ToolKind
+  status?: ToolCallStatus
+  content?: ToolCallContent[]
+  rawInput?: unknown
+  rawOutput?: unknown
   [k: string]: unknown
 }
 
 export interface ToolCallUpdate {
   toolCallId: string
+  title?: string
+  kind?: ToolKind
+  status?: ToolCallStatus
+  content?: ToolCallContent[]
+  rawInput?: unknown
+  rawOutput?: unknown
   [k: string]: unknown
 }
 
+export type PlanEntryPriority = 'high' | 'medium' | 'low' | string
+export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed' | string
+
 export interface PlanEntry {
   content: string
-  priority?: string
-  status?: string
+  priority?: PlanEntryPriority
+  status?: PlanEntryStatus
   [k: string]: unknown
 }
 
@@ -109,10 +149,17 @@ export interface AvailableCommand {
   [k: string]: unknown
 }
 
+export type PermissionOptionKind =
+  | 'allow_once'
+  | 'allow_always'
+  | 'reject_once'
+  | 'reject_always'
+  | string
+
 export interface PermissionOption {
   optionId: string
   name: string
-  kind?: string
+  kind?: PermissionOptionKind
   [k: string]: unknown
 }
 

@@ -3,10 +3,16 @@ import { toast } from 'sonner'
 import { AgentHeader } from './AgentHeader'
 import { ChatMessageList } from './ChatMessageList'
 import { ChatInputBar } from './ChatInputBar'
+import { PlanPanel } from './PlanPanel'
+import { ToolCallCard } from './ToolCallCard'
+import { PermissionDialog } from './PermissionDialog'
 import { useAcpStore, useAcpSession, useAcpMessages } from '@/stores/acp-store'
-import type { SessionId, AvailableCommand } from '@/lib/acp-api'
+import { useShallow } from 'zustand/shallow'
+import type { SessionId, AvailableCommand, ToolCall, PlanEntry } from '@/lib/acp-api'
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
+const EMPTY_TOOL_CALLS: ToolCall[] = []
+const EMPTY_PLAN: PlanEntry[] = []
 
 interface AgentChatPanelProps {
   sessionId: SessionId
@@ -21,6 +27,14 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const messages = useAcpMessages(sessionId)
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
+  const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
+  const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
+  // The oldest pending permission for THIS session (resolve one to reveal the next).
+  const pendingPermission = useAcpStore(
+    useShallow((s) =>
+      Object.values(s.pendingPermissions).find((p) => p.sessionId === sessionId) ?? null
+    )
+  )
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
@@ -82,7 +96,12 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
           {session.lastError}
         </div>
       )}
-      <ChatMessageList messages={messages} />
+      <PlanPanel entries={plan} />
+      <ChatMessageList messages={messages}>
+        {toolCalls.map((tc) => (
+          <ToolCallCard key={tc.toolCallId} toolCall={tc} />
+        ))}
+      </ChatMessageList>
       <ChatInputBar
         busy={session.activeTurn}
         disabled={isClosed}
@@ -94,6 +113,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         onSetConfig={handleSetConfig}
         onSetMode={handleSetMode}
       />
+      {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>
   )
 }
