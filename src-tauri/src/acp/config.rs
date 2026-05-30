@@ -105,7 +105,12 @@ impl AgentConfig {
         agent_client_protocol::schema::McpServer::Stdio(
             agent_client_protocol::schema::McpServerStdio::new(
                 self.name.clone(),
-                std::path::PathBuf::from(&self.command),
+                // Resolve the command against PATH/PATHEXT so a bare name like
+                // `gemini` finds `gemini.cmd` when spawned from the GUI (which
+                // does not get a shell's command resolution on Windows).
+                std::path::PathBuf::from(crate::trackers::git_tracker::resolve_executable(
+                    &self.command,
+                )),
             )
             .args(self.args.clone())
             .env(env),

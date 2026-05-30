@@ -168,6 +168,12 @@ impl AcpManager {
         // Set true by `kill`/`kill_all`; lets the driver teardown distinguish an
         // intentional kill (no disconnect event) from a crash (L4).
         let killed = Arc::new(AtomicBool::new(false));
+        // Carries the connection-level failure reason (e.g. the subprocess could
+        // not be spawned) back to this await path. When `connect_with` fails,
+        // `init_tx` is dropped without ever being sent, so `init_rx` resolves to
+        // `Err(_)` with no detail; the driver records the real error here so we
+        // can surface it instead of a generic "did not initialize" message.
+        let start_error = Arc::new(Mutex::new(None::<String>));
 
         let app = self.app_handle.clone();
         let thread_agent_id = agent_id.clone();
@@ -175,6 +181,7 @@ impl AcpManager {
         let thread_agents = self.agents.clone();
         let thread_reaped = reaped.clone();
         let thread_killed = killed.clone();
+        let thread_start_error = start_error.clone();
 
         let join_handle = std::thread::Builder::new()
             .name(format!("acp-agent-{agent_id}"))
@@ -188,6 +195,7 @@ impl AcpManager {
                     thread_agents,
                     thread_reaped,
                     thread_killed,
+                    thread_start_error,
                 );
             })
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
@@ -203,9 +211,17 @@ impl AcpManager {
             }
             Err(_) => {
                 // Driver thread dropped the sender without initializing (e.g.
-                // the subprocess failed to spawn). Join and report failure.
+                // the subprocess failed to spawn). Join and report failure,
+                // preferring the concrete connection error the driver recorded
+                // (e.g. "program not found") over the generic fallback.
                 join_thread_bounded(join_handle).await;
-                return Err("agent failed to start (process did not initialize)".to_string());
+                let reason = start_error.lock().take();
+                return Err(match reason {
+                    Some(detail) => format!("agent failed to start: {detail}"),
+                    None => {
+                        "agent failed to start (process did not initialize)".to_string()
+                    }
+                });
             }
         };
 
@@ -561,6 +577,7 @@ fn run_agent(
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     reaped: Arc<AtomicBool>,
     killed: Arc<AtomicBool>,
+    start_error: Arc<Mutex<Option<String>>>,
 ) {
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
@@ -579,6 +596,7 @@ fn run_agent(
         Ok(rt) => rt,
         Err(e) => {
             let _ = init_tx.send(Err(format!("failed to build runtime: {e}")));
+            *start_error.lock() = Some(format!("failed to build runtime: {e}"));
             return;
         }
     };
@@ -638,6 +656,13 @@ fn run_agent(
         }
 
         if let Err(message) = result {
+            // If the agent never finished initializing, this error IS the
+            // start-failure reason (e.g. the subprocess could not be spawned).
+            // Record it so the awaiting `spawn` caller can surface it instead
+            // of the generic "did not initialize" message.
+            if !was_spawned {
+                *start_error.lock() = Some(message.clone());
+            }
             events::emit(
                 &app,
                 events::EVENT_AGENT_ERROR,
