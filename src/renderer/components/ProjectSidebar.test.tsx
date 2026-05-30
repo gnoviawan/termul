@@ -95,6 +95,12 @@ const renderWithRouter = (props = {}) => {
   )
 }
 
+// Worktrees are collapsed by default and only expand via the chevron, so tests
+// that assert on worktree rows must open the section first.
+const expandWorktrees = () => {
+  fireEvent.click(screen.getByLabelText('Expand worktrees'))
+}
+
 describe('ProjectSidebar Context Menu', () => {
   it('should open context menu on right-click', () => {
     renderWithRouter()
@@ -554,6 +560,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('shows the worktree name but not the branch chip on the row face', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     // Name is shown
     expect(screen.getByText('try-new-hero')).toBeInTheDocument()
@@ -563,6 +570,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('keeps the branch available via the row tooltip', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     const row = screen.getByLabelText('Worktree try-new-hero on feature/try-new-hero')
     expect(row).toHaveAttribute('title', expect.stringContaining('feature/try-new-hero'))
@@ -570,6 +578,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('exposes an accessible "Open terminal" button on the worktree row', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     expect(
       screen.getByLabelText('Open terminal in try-new-hero')
@@ -579,6 +588,7 @@ describe('ProjectSidebar Worktree Row', () => {
   it('opens a terminal in the worktree when the terminal button is clicked, without triggering row select', async () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1', onSelectProject })
+    expandWorktrees()
 
     fireEvent.click(screen.getByLabelText('Open terminal in try-new-hero'))
 
@@ -591,6 +601,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('does not trigger row select when activating the terminal button via keyboard', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     const termButton = screen.getByLabelText('Open terminal in try-new-hero')
     // Enter on the nested terminal button must not bubble to the row's onKeyDown select
@@ -782,11 +793,13 @@ describe('ProjectSidebar Worktree Search', () => {
 
   it('shows a worktree search box with an icon once there are 10+ worktrees', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
     expect(screen.getByLabelText('Search worktrees')).toBeInTheDocument()
   })
 
   it('shows a clear button only after typing, and clears on click', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
 
     const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
     expect(screen.queryByLabelText('Clear worktree search')).not.toBeInTheDocument()
@@ -800,6 +813,7 @@ describe('ProjectSidebar Worktree Search', () => {
 
   it('clears the worktree query on Escape', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
 
     const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'worktree-3' } })
