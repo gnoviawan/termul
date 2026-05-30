@@ -68,11 +68,17 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
         }
 
         const { downloadUpdate } = updaterStore.getState()
-        await downloadUpdate()
-        const downloadError = updaterStore.getState().error
-        if (downloadError) {
+        try {
+          await downloadUpdate()
+          const downloadError = updaterStore.getState().error
+          if (downloadError) {
+            toast.error('Update download failed', {
+              description: downloadError
+            })
+          }
+        } catch (error) {
           toast.error('Update download failed', {
-            description: downloadError
+            description: error instanceof Error ? error.message : 'Unexpected error during download'
           })
         }
       }
@@ -106,21 +112,27 @@ export function showUpdateDownloadedToast(version: string): void {
         </div>
       ),
       onClick: async () => {
-        const hasActiveTerminals = hasActiveTerminalSessions()
-        const confirmed = await confirm(
-          hasActiveTerminals
-            ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
-            : `Termul will install version ${version} and restart now. Continue?`,
-          { title: 'Install update', kind: 'warning', okLabel: 'Install & Restart', cancelLabel: 'Not now' }
-        )
-        if (!confirmed) return
+        try {
+          const hasActiveTerminals = hasActiveTerminalSessions()
+          const confirmed = await confirm(
+            hasActiveTerminals
+              ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
+              : `Termul will install version ${version} and restart now. Continue?`,
+            { title: 'Install update', kind: 'warning', okLabel: 'Install & Restart', cancelLabel: 'Not now' }
+          )
+          if (!confirmed) return
 
-        const { installAndRestart } = updaterStore.getState()
-        await installAndRestart()
-        const installError = updaterStore.getState().error
-        if (installError) {
+          const { installAndRestart } = updaterStore.getState()
+          await installAndRestart()
+          const installError = updaterStore.getState().error
+          if (installError) {
+            toast.error('Update install failed', {
+              description: installError
+            })
+          }
+        } catch (error) {
           toast.error('Update install failed', {
-            description: installError
+            description: error instanceof Error ? error.message : 'Unexpected error during install'
           })
         }
       }

@@ -339,6 +339,31 @@ describe('tauri-updater-api', () => {
         code: 'INSTALL_FAILED'
       })
     })
+
+    it('preserves the downloaded update across a re-check of the same version', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(update.download).mockImplementation(async () => {})
+      vi.mocked(update.install).mockResolvedValue(undefined)
+      await downloadUpdate()
+
+      // A periodic re-check returns the SAME version; the already-downloaded
+      // Update handle (and its bytes) must survive so install still works.
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(relaunch).mockResolvedValue(undefined)
+      const result = await installAndRestart()
+
+      expect(update.install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(relaunch).mock.invocationCallOrder[0]
+      )
+      expect(result).toEqual({ success: true, data: undefined })
+    })
   })
 
   describe('state and helpers', () => {

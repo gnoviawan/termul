@@ -375,8 +375,13 @@ export async function downloadUpdate(
     }
   }
 
+  // Capture the handle before any await: a concurrent periodic checkForUpdates()
+  // can reassign the module-scoped pendingTauriUpdate mid-download, which would
+  // otherwise make the post-await assignments point at the wrong Update.
+  const updateHandle = pendingTauriUpdate
+
   try {
-    const updateVersion = pendingTauriUpdate.version
+    const updateVersion = updateHandle.version
 
     if (preparedUpdateVersion !== updateVersion) {
       const preparationResult = await prepareUpdateRecovery()
@@ -398,7 +403,7 @@ export async function downloadUpdate(
       })
     }
 
-    await pendingTauriUpdate.download((event) => {
+    await updateHandle.download((event) => {
       if (!onProgress) return
 
       const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
@@ -407,7 +412,7 @@ export async function downloadUpdate(
       onProgress(mapped.progress)
     })
 
-    downloadedUpdate = pendingTauriUpdate
+    downloadedUpdate = updateHandle
     downloadedVersion = updateVersion
 
     return { success: true, data: undefined }
