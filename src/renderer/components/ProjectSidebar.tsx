@@ -1749,23 +1749,36 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 		}
 	}, [height]);
 
-	// Clean up an in-flight resize if the component unmounts mid-drag: remove the
-	// document listeners, reset the body styles, and persist the latest height.
+	// Tear down an in-flight resize: remove the document listeners, reset the body
+	// styles, and persist the latest height. Stable across renders (refs only).
+	const teardownActiveDrag = useCallback(() => {
+		if (!activeDragCleanup.current) return;
+		activeDragCleanup.current();
+		activeDragCleanup.current = null;
+		isDragging.current = false;
+		document.body.style.cursor = "";
+		document.body.style.userSelect = "";
+		try {
+			localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
+		} catch {
+			// Ignore storage errors in restricted environments.
+		}
+	}, []);
+
+	// Clean up an in-flight resize when the component unmounts mid-drag.
 	useEffect(() => {
 		return () => {
-			if (!activeDragCleanup.current) return;
-			activeDragCleanup.current();
-			activeDragCleanup.current = null;
-			isDragging.current = false;
-			document.body.style.cursor = "";
-			document.body.style.userSelect = "";
-			try {
-				localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
-			} catch {
-				// Ignore storage errors in restricted environments.
-			}
+			teardownActiveDrag();
 		};
-	}, []);
+	}, [teardownActiveDrag]);
+
+	// Also clean up when the panel is hidden: the component returns null but stays
+	// mounted, so the unmount effect above does not run on visibility change.
+	useEffect(() => {
+		if (!isVisible) {
+			teardownActiveDrag();
+		}
+	}, [isVisible, teardownActiveDrag]);
 
 	if (!isVisible) return null;
 
