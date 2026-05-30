@@ -13,8 +13,9 @@
 //! carry `Origin: https://evil.com`, which will not match the server's own
 //! `Host`. We reject that. This works for *any* `ip:port` the server happens to
 //! bind to (including a tunnel hostname) without needing a preconfigured list.
-//! Non-browser clients (curl, scripts) that omit `Origin` are allowed through,
-//! exactly as before — they are not a CSWSH vector.
+//! Requests that omit `Origin` are **rejected with 403** (fail closed): since
+//! browsers always send it on WS upgrades, a missing header is anomalous, and
+//! for a PTY/RCE surface we prefer to reject rather than guess.
 //!
 //! The Dozzle incident (GHSA-j643-x8pv-8m67) is the canonical example of what
 //! goes wrong when origin checking is skipped: an `CheckOrigin: true` upgrader

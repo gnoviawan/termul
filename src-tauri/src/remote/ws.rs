@@ -11,10 +11,10 @@
 //!
 //! Per product requirement, the server is reachable by `ip:port` alone — there is
 //! no auth token. To still defend against Cross-Site WebSocket Hijacking (CSWSH),
-//! we enforce a **same-origin** check: the `Origin` header (if present) must match
-//! the request `Host`. A browser page on another site therefore cannot open a
-//! socket to this server using the victim's network position. Non-browser clients
-//! (curl, etc.) that omit `Origin` are allowed. The server still binds to
+//! we enforce a **same-origin** check: the `Origin` header must be present and
+//! match the request `Host`. A browser page on another site therefore cannot open
+//! a socket to this server using the victim's network position. Requests missing
+//! `Origin` are rejected with 403 (fail closed). The server still binds to
 //! `127.0.0.1` by default; exposing it via a tunnel is the operator's risk.
 //!
 //! Multiple clients per terminal are supported via broadcast fan-out. All clients
