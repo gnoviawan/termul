@@ -6,10 +6,10 @@
 use crate::ssh::profile_manager::SSHProfile;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use ssh2::Session;
+use ssh2::{CheckResult, KnownHostFileKind, KnownHostKeyFormat, Session};
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -125,21 +125,43 @@ impl SSHConnectionManager {
         Ok(connected_info)
     }
 
+    /// Resolve `host:port` (DNS name or literal IP) and open a TCP connection to
+    /// the first address that accepts within the timeout.
+    ///
+    /// `TcpStream::connect_timeout` requires a `SocketAddr`, which only parses
+    /// numeric IPs. Resolving via `ToSocketAddrs` first lets us connect to
+    /// hostnames (e.g. `example.com`) as well as IPs.
+    fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
+        let addr = format!("{}:{}", host, port);
+        let resolved = addr
+            .to_socket_addrs()
+            .map_err(|e| format!("Failed to resolve {}: {}", addr, e))?;
+
+        let mut last_err: Option<String> = None;
+        for socket_addr in resolved {
+            match TcpStream::connect_timeout(
+                &socket_addr,
+                Duration::from_secs(TCP_CONNECT_TIMEOUT_SECS),
+            ) {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last_err = Some(e.to_string()),
+            }
+        }
+
+        Err(format!(
+            "TCP connection to {} failed: {}",
+            addr,
+            last_err.unwrap_or_else(|| "no addresses resolved".to_string())
+        ))
+    }
+
     /// Create an SSH session to the given profile
     fn create_session(
         &self,
         profile: &SSHProfile,
         password: Option<&str>,
     ) -> Result<Session, String> {
-        let addr = format!("{}:{}", profile.host, profile.port);
-
-        let tcp = TcpStream::connect_timeout(
-            &addr
-                .parse()
-                .map_err(|e| format!("Invalid address {}: {}", addr, e))?,
-            Duration::from_secs(TCP_CONNECT_TIMEOUT_SECS),
-        )
-        .map_err(|e| format!("TCP connection to {} failed: {}", addr, e))?;
+        let tcp = Self::connect_tcp(&profile.host, profile.port)?;
 
         let mut session =
             Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
@@ -148,6 +170,11 @@ impl SSHConnectionManager {
             .handshake()
             .map_err(|e| format!("SSH handshake failed: {}", e))?;
 
+        // Verify the server host key against ~/.ssh/known_hosts (TOFU /
+        // accept-new semantics) before authenticating, so the SFTP/port-forward
+        // channel is not silently exposed to MITM.
+        Self::verify_host_key(&session, &profile.host, profile.port)?;
+
         // Authenticate
         Self::authenticate_session(&session, profile, password)?;
 
@@ -155,6 +182,77 @@ impl SSHConnectionManager {
         session.set_keepalive(true, HEARTBEAT_INTERVAL_SECS as u32);
 
         Ok(session)
+    }
+
+    /// Path to the user's `~/.ssh/known_hosts` file.
+    fn known_hosts_path() -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from)?;
+        Some(home.join(".ssh").join("known_hosts"))
+    }
+
+    /// Verify the server host key against the user's `known_hosts`, applying
+    /// `accept-new` behavior: unknown hosts are added and persisted, changed
+    /// keys are rejected (potential MITM). This mirrors the interactive terminal
+    /// path which uses `StrictHostKeyChecking=accept-new`.
+    fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), String> {
+        let (key, key_type) = session
+            .host_key()
+            .ok_or_else(|| "Server did not present a host key".to_string())?;
+
+        let mut known_hosts = session
+            .known_hosts()
+            .map_err(|e| format!("Failed to access known_hosts: {}", e))?;
+
+        let kh_path = Self::known_hosts_path();
+        if let Some(ref path) = kh_path {
+            if path.exists() {
+                // A read error is non-fatal: we treat it as an empty store.
+                let _ = known_hosts.read_file(path, KnownHostFileKind::OpenSSH);
+            }
+        }
+
+        match known_hosts.check_port(host, port, key) {
+            CheckResult::Match => Ok(()),
+            CheckResult::Mismatch => Err(format!(
+                "Host key verification failed for {}:{}: the server key does not match the known_hosts entry (possible man-in-the-middle). Remove the stale entry to reconnect.",
+                host, port
+            )),
+            CheckResult::NotFound => {
+                // accept-new: remember this host for next time.
+                let key_format = match key_type {
+                    ssh2::HostKeyType::Rsa => KnownHostKeyFormat::SshRsa,
+                    ssh2::HostKeyType::Dss => KnownHostKeyFormat::SshDss,
+                    ssh2::HostKeyType::Ecdsa256 => KnownHostKeyFormat::Ecdsa256,
+                    ssh2::HostKeyType::Ecdsa384 => KnownHostKeyFormat::Ecdsa384,
+                    ssh2::HostKeyType::Ecdsa521 => KnownHostKeyFormat::Ecdsa521,
+                    ssh2::HostKeyType::Ed25519 => KnownHostKeyFormat::Ed25519,
+                    ssh2::HostKeyType::Unknown => KnownHostKeyFormat::Unknown,
+                };
+                let host_entry = if port == 22 {
+                    host.to_string()
+                } else {
+                    format!("[{}]:{}", host, port)
+                };
+                if let Err(e) = known_hosts.add(&host_entry, key, "", key_format) {
+                    log::warn!("[SSH] Failed to record new host key for {}: {}", host_entry, e);
+                    return Ok(());
+                }
+                if let Some(ref path) = kh_path {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Err(e) = known_hosts.write_file(path, KnownHostFileKind::OpenSSH) {
+                        log::warn!("[SSH] Failed to persist known_hosts at {:?}: {}", path, e);
+                    }
+                }
+                Ok(())
+            }
+            CheckResult::Failure => {
+                Err("Host key verification failed: unable to check known_hosts".to_string())
+            }
+        }
     }
 
     fn authenticate_session(
@@ -276,20 +374,19 @@ impl SSHConnectionManager {
 
                     tokio::time::sleep(Duration::from_millis(backoff)).await;
 
-                    // Try to create new session
-                    let addr = format!("{}:{}", profile.host, profile.port);
-                    let tcp_result = TcpStream::connect_timeout(
-                        &match addr.parse() {
-                            Ok(a) => a,
-                            Err(_) => continue,
-                        },
-                        Duration::from_secs(TCP_CONNECT_TIMEOUT_SECS),
-                    );
+                    // Try to create new session (resolves DNS names, not just IPs)
+                    let tcp_result = Self::connect_tcp(&profile.host, profile.port);
 
                     if let Ok(tcp) = tcp_result {
                         if let Ok(mut new_session) = Session::new() {
                             new_session.set_tcp_stream(tcp);
                             if new_session.handshake().is_ok()
+                                && Self::verify_host_key(
+                                    &new_session,
+                                    &profile.host,
+                                    profile.port,
+                                )
+                                .is_ok()
                                 && Self::authenticate_session(
                                     &new_session,
                                     &profile,
@@ -540,5 +637,37 @@ mod tests {
                 .expect_err("unknown auth method must fail before network authentication");
 
         assert_eq!(error, "Unknown auth method: webauthn");
+    }
+
+    #[test]
+    fn connect_tcp_rejects_unresolvable_host_without_panicking() {
+        // A syntactically valid but non-resolvable host must produce a
+        // descriptive error rather than the old IP-only parse failure.
+        let err = SSHConnectionManager::connect_tcp(
+            "nonexistent.invalid.example.test.",
+            22,
+        )
+        .expect_err("unresolvable host should error");
+        assert!(
+            err.contains("resolve") || err.contains("TCP connection"),
+            "unexpected error message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn connect_tcp_accepts_hostname_syntax() {
+        // Regression for the IP-only bug: an address must reach DNS resolution
+        // (and then a connection attempt) rather than failing with "invalid
+        // socket address syntax". Localhost on a closed high port refuses
+        // immediately, so this proves the host:port was parsed/resolved.
+        let err = SSHConnectionManager::connect_tcp("localhost", 1)
+            .expect_err("closed port should not connect");
+        assert!(
+            !err.contains("invalid socket address"),
+            "hostname should resolve, got: {}",
+            err
+        );
+        assert!(err.contains("TCP connection"), "unexpected error: {}", err);
     }
 }

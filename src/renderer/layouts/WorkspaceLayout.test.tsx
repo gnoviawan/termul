@@ -290,6 +290,7 @@ vi.mock('@/lib/api', () => ({
   addRendererRef: mockApi.addRendererRef,
   removeRendererRef: mockApi.removeRendererRef,
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
+  sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   tauriUpdaterApi: {},
   tauriVersionSkipService: {}
 }))

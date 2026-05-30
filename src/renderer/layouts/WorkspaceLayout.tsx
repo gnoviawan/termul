@@ -38,7 +38,7 @@ import {
 	useFileExplorerVisible,
 } from "@/stores/file-explorer-store";
 import { useSidebarVisible } from "@/stores/sidebar-store";
-import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile } from "@/stores/ssh-store";
+import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile, useSSHStore } from "@/stores/ssh-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCommandHistoryStore } from "@/stores/command-history-store";
 import {
@@ -203,6 +203,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		} catch (error) {
 			toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- specific sshConn fields cover all usage
 	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
 
 	const handleSSHCreateFile = useCallback(async () => {
@@ -217,6 +218,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		} catch (error) {
 			toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- specific sshConn fields cover all usage
 	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
 
 	const handleSSHDelete = useCallback(async (entry: SFTPEntry) => {
@@ -229,6 +231,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		} catch (error) {
 			toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- specific sshConn fields cover all usage
 	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
 
 	const handleSSHRename = useCallback(async (entry: SFTPEntry) => {
@@ -243,12 +246,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		} catch (error) {
 			toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- specific sshConn fields cover all usage
 	}, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]);
 
 	// Load SSH profiles on mount
 	useEffect(() => {
 		loadSSHProfiles();
 	}, [loadSSHProfiles]);
+
+	// Reconcile real SSH connection status from the backend (heartbeat,
+	// reconnect, failure). Without this the badge can only ever show the
+	// optimistic state set at connect time.
+	useEffect(() => {
+		if (typeof sshApi?.onConnectionStatusChanged !== 'function') return;
+		const unlisten = sshApi.onConnectionStatusChanged((connectionId, status, error) => {
+			useSSHStore.getState().updateConnectionStatus(connectionId, status, error);
+		});
+		return () => { unlisten?.(); };
+	}, []);
 
 	const handleSelectSSHProfile = useCallback((profileId: string) => {
 		selectSSHProfile(profileId);

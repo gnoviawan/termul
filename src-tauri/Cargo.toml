@@ -50,7 +50,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # without a full Perl module setup; see README SSH development notes.
 ssh2 = "0.9"
 
-# Secure storage (OS keychain for secure credential storage)
+# Secure storage (OS keychain for secure credential storage).
+# IMPORTANT: keyring selects its backend at COMPILE TIME via cargo features.
+# Without an OS-backend feature it silently falls back to an in-memory mock
+# store, so set_password "succeeds" but get_password always returns NoEntry
+# (credentials never persist). Enable the native backend per OS below.
 keyring = "3.6"
 
 # Logging
@@ -59,6 +63,20 @@ env_logger = { version = "0.11", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
+
+# --- OS keychain backends for `keyring` (see note on the keyring dep above) ---
+# Windows Credential Manager
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
+# macOS Keychain
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+# Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
+# don't require a system OpenSSL/Perl build toolchain.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

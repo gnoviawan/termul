@@ -21,7 +21,7 @@ vi.mock('@/lib/api', () => ({
   },
   sshApi: {
     connect: mocks.connect,
-    sftpListDir: vi.fn(),
+    sftpListDir: vi.fn().mockResolvedValue({ success: true, data: [] }),
   },
   createAskpassScript: mocks.createAskpassScript,
 }))
@@ -104,5 +104,59 @@ describe('useSSHConnection', () => {
       'pty-1',
       expect.not.stringContaining('UserKnownHostsFile')
     )
+  })
+
+  it('marks connected and readies SFTP only after the backend connect succeeds', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('connected')
+    expect(conn?.id).toBe('conn-1') // swapped to the backend id
+    expect(result.current.sftpReady).toBe(true)
+  })
+
+  it('does NOT report connected when the backend SSH connect fails', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'Password authentication failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+    expect(conn?.error).toBe('Password authentication failed')
+    expect(result.current.isConnected).toBe(false)
+    expect(result.current.sftpReady).toBe(false)
+  })
+
+  it('downgrades to failed when the interactive ssh process exits before connecting', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'timed out',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    act(() => {
+      result.current.handleSSHProcessExit()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+    expect(result.current.isConnected).toBe(false)
   })
 })

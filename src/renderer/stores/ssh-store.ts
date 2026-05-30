@@ -39,9 +39,11 @@ export interface SSHState {
   setEditingContent: (content: string) => void
 
   // Manual connection tracking (for terminal-based SSH)
+  markConnecting: (profileId: string, terminalId: string) => void
   markConnected: (profileId: string, terminalId: string) => void
   markDisconnected: (profileId: string) => void
   updateConnectionId: (profileId: string, backendConnectionId: string) => void
+  updateConnectionStatusByProfile: (profileId: string, status: SSHConnectionStatus, error?: string) => void
 
   // Port forward actions
   startPortForward: (connectionId: string, config: PortForwardConfig) => Promise<boolean>
@@ -145,7 +147,12 @@ export const useSSHStore = create<SSHState>((set, get) => ({
   },
 
   disconnect: async (connectionId: string) => {
-    const result = await sshApi.disconnect(connectionId)
+    // Connections whose id still starts with 'ssh-conn-' were never registered
+    // with the backend (SFTP/ssh2 never connected), so calling the backend
+    // would fail with an unknown id. Treat those as local-only and just clear
+    // local state.
+    const isLocalOnly = connectionId.startsWith('ssh-conn-')
+    const result = isLocalOnly ? { success: true as const } : await sshApi.disconnect(connectionId)
     if (result.success) {
       set((state) => ({
         connections: state.connections.filter((c) => c.id !== connectionId),
@@ -169,6 +176,22 @@ export const useSSHStore = create<SSHState>((set, get) => ({
 
   setEditingFile: (file) => set({ editingFile: file }),
   setEditingContent: (content) => set({ editingContent: content }),
+
+  markConnecting: (profileId: string, terminalId: string) => {
+    set((state) => {
+      // Remove any existing connection for this profile
+      const filtered = state.connections.filter((c) => c.profileId !== profileId)
+      const newConn: SSHConnection = {
+        id: `ssh-conn-${Date.now()}`,
+        profileId,
+        status: 'connecting',
+        terminalId,
+        activeForwards: [],
+        reconnectAttempts: 0,
+      }
+      return { connections: [...filtered, newConn] }
+    })
+  },
 
   markConnected: (profileId: string, terminalId: string) => {
     set((state) => {
@@ -197,6 +220,24 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     set((state) => ({
       connections: state.connections.map((c) =>
         c.profileId === profileId ? { ...c, id: backendConnectionId } : c
+      ),
+    }))
+  },
+
+  updateConnectionStatusByProfile: (profileId: string, status: SSHConnectionStatus, error?: string) => {
+    set((state) => ({
+      connections: state.connections.map((c) =>
+        c.profileId === profileId
+          ? {
+              ...c,
+              status,
+              error,
+              connectedAt:
+                status === 'connected' && !c.connectedAt
+                  ? new Date().toISOString()
+                  : c.connectedAt,
+            }
+          : c
       ),
     }))
   },
@@ -295,9 +336,11 @@ export const useSSHActions = () =>
       stopPortForward: state.stopPortForward,
       clearCompletedTransfers: state.clearCompletedTransfers,
       selectProfile: state.selectProfile,
+      markConnecting: state.markConnecting,
       markConnected: state.markConnected,
       markDisconnected: state.markDisconnected,
       updateConnectionId: state.updateConnectionId,
+      updateConnectionStatusByProfile: state.updateConnectionStatusByProfile,
       setEditingFile: state.setEditingFile,
       setEditingContent: state.setEditingContent,
     }))

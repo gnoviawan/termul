@@ -26,6 +26,10 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
               <span className="flex items-center gap-1 text-[10px] text-green-500">
                 <span className="h-1.5 w-1.5 rounded-full bg-green-500" />Connected
               </span>
+            ) : conn.isConnectingStatus || conn.isConnecting ? (
+              <span className="flex items-center gap-1 text-[10px] text-yellow-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />Connecting
+              </span>
             ) : (
               <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />Disconnected
@@ -62,7 +66,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             </div>
           ) : conn.isConnected && conn.localTerminalPtyId ? (
             <div className="absolute inset-0 overflow-hidden">
-              <ConnectedTerminal terminalId={conn.localTerminalPtyId} autoSpawn={false} isVisible={true} />
+              <ConnectedTerminal terminalId={conn.localTerminalPtyId} autoSpawn={false} isVisible={true} onExit={conn.handleSSHProcessExit} />
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
