@@ -540,7 +540,6 @@ interface WorkspaceTabBarProps {
 	closingTerminalIds?: string[];
 	onAddTerminal?: (shell?: ShellInfo) => void;
 	onAddBrowserTab?: () => void;
-	onAddGitTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -554,7 +553,6 @@ export function WorkspaceTabBar({
 	closingTerminalIds = [],
 	onAddTerminal,
 	onAddBrowserTab,
-	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -1023,16 +1021,6 @@ export function WorkspaceTabBar({
 						title="New Browser Tab"
 					>
 						<Globe size={12} />
-					</button>
-				)}
-
-				{onAddGitTab && (
-					<button
-						onClick={onAddGitTab}
-						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-						title="Git Changes"
-					>
-						<GitBranch size={12} />
 					</button>
 				)}
 			</div>

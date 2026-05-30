@@ -113,6 +113,7 @@ describe("app-settings-store", () => {
 				terminalUrlOpenMode: "termul" as const,
 				sidebarVisible: false,
 				fileExplorerVisible: true,
+				sshPanelVisible: true,
 			};
 
 			const { setSettings } = useAppSettingsStore.getState();
@@ -142,6 +143,7 @@ describe("app-settings-store", () => {
 					terminalUrlOpenMode: "termul",
 					sidebarVisible: false,
 					fileExplorerVisible: false,
+					sshPanelVisible: false,
 				},
 				isLoaded: true,
 			});
