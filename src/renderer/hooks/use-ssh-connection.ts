@@ -84,10 +84,26 @@ export function useSSHConnection(profile: SSHProfile | null) {
     }
 
     try {
-      // Build SSH command as a quoted string. Each argument is wrapped so that
-      // Windows key paths / usernames containing spaces survive being written
-      // into the shell (e.g. -i "C:\Users\John Doe\.ssh\id_rsa").
-      const quoteArg = (arg: string): string => (/[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg)
+      // Build the SSH command as a quoted string written into the interactive
+      // shell. Quoting rules differ per shell, so quote per platform and fully
+      // escape metacharacters (including backslashes) to avoid both breakage
+      // and injection from profile fields.
+      //
+      // - POSIX shells (bash/zsh on macOS/Linux): single-quote wrapping makes
+      //   the contents fully literal (backslashes, $, backticks, spaces). An
+      //   embedded single quote is closed, escaped, and reopened: '\'' .
+      // - Windows (cmd.exe / PowerShell): wrap in double quotes. Windows file
+      //   paths, usernames and hostnames cannot contain a double quote, so any
+      //   stray quote (or control char) is stripped defensively rather than
+      //   risking a broken/injectable command.
+      const quoteArg = (arg: string): string => {
+        if (isWindows) {
+          // eslint-disable-next-line no-control-regex -- strip control chars defensively
+          const safe = arg.replace(/["\u0000-\u001f]/g, '')
+          return `"${safe}"`
+        }
+        return `'${arg.replace(/'/g, "'\\''")}'`
+      }
       const sshArgs: string[] = ['ssh']
       sshArgs.push(`${profile.username}@${profile.host}`)
       if (profile.port !== 22) {

@@ -96,14 +96,44 @@ describe('useSSHConnection', () => {
       await vi.advanceTimersByTimeAsync(500)
     })
 
+    // Args are individually quoted for the shell. On non-Windows (jsdom test
+    // env) that means single-quote wrapping, so the option appears quoted.
     expect(mocks.write).toHaveBeenCalledWith(
       'pty-1',
-      expect.stringContaining('-o StrictHostKeyChecking=accept-new')
+      expect.stringContaining("'StrictHostKeyChecking=accept-new'")
     )
     expect(mocks.write).toHaveBeenCalledWith(
       'pty-1',
       expect.not.stringContaining('UserKnownHostsFile')
     )
+  })
+
+  it('neutralizes shell metacharacters and backslashes in profile fields (no injection)', async () => {
+    // A key path with a shell-injection payload and backslashes must be fully
+    // quoted so the shell cannot execute the payload. (jsdom => POSIX quoting.)
+    const malicious: SSHProfile = {
+      ...baseProfile,
+      authMethod: 'key',
+      privateKeyPath: "/tmp/key'; rm -rf $HOME #",
+    }
+    const { result } = renderHook(() => useSSHConnection(malicious))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    const written = mocks.write.mock.calls.find((c) => c[0] === 'pty-1')?.[1] as string
+    expect(written).toBeDefined()
+    // The payload is fully contained in a single-quoted span: the inner single
+    // quote is closed/escaped/reopened ('\''), so the shell sees the whole
+    // thing as one literal -i argument and cannot execute `rm`.
+    expect(written).toContain("'/tmp/key'\\''; rm -rf $HOME #'")
+    // The command must remain a single `ssh` invocation: there is no unquoted
+    // command separator that would start a second command.
+    expect(written.startsWith("'ssh' ")).toBe(true)
   })
 
   it('marks connected and readies SFTP only after the backend connect succeeds', async () => {
