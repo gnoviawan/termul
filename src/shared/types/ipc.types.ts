@@ -77,12 +77,31 @@ export interface GitStatusDetail {
 	staged: boolean;
 }
 
+// A single commit row for the history/graph view.
+export interface GitCommit {
+	/** Full 40-char commit hash. */
+	hash: string;
+	/** Abbreviated commit hash. */
+	shortHash: string;
+	/** Parent full hashes, first-parent first. Empty for the root commit. */
+	parents: string[];
+	/** Ref decorations (branches, tags, HEAD) attached to this commit. */
+	refs: string[];
+	/** Author name. */
+	author: string;
+	/** Author date in ISO 8601 strict format. */
+	date: string;
+	/** Commit subject (first line of the message). */
+	subject: string;
+}
+
 export interface GitApi {
 	getStatus: (cwd: string) => Promise<GitStatusDetail[]>;
 	getDiff: (cwd: string, path: string, staged?: boolean) => Promise<string>;
 	stage: (cwd: string, path: string) => Promise<void>;
 	unstage: (cwd: string, path: string) => Promise<void>;
 	discard: (cwd: string, path: string) => Promise<void>;
+	getLog: (cwd: string, limit?: number) => Promise<GitCommit[]>;
 }
 
 // Terminal API exposed via preload

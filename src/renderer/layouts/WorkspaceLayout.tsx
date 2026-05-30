@@ -682,6 +682,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		}
 	}, [activeProject?.path]);
 
+	const handleAddGitHistoryTab = useCallback((paneId?: string) => {
+		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
+		if (resolvedPaneId && activeProject?.path) {
+			useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
+				type: "git-history",
+				id: `git-history-${crypto.randomUUID()}`,
+				cwd: activeProject.path,
+			});
+		}
+	}, [activeProject?.path]);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Safety net: skip workspace handling when an earlier handler has already
@@ -720,6 +731,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 						}
 					}
 				} else if (activeTab?.type === "git") {
+					useWorkspaceStore.getState().removeTab(activeTab.id);
+				} else if (activeTab?.type === "git-history") {
 					useWorkspaceStore.getState().removeTab(activeTab.id);
 				} else if (activeTab?.type === "terminal") {
 					handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id);
@@ -1230,6 +1243,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 					onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
 					onOpenGitChanges={() => handleAddGitTab()}
 					canOpenGitChanges={Boolean(activeProject?.path)}
+					onOpenGitHistory={() => handleAddGitHistoryTab()}
+					canOpenGitHistory={Boolean(activeProject?.path)}
 				/>
 				<div className="flex-1 flex flex-col min-w-0">
 					{/* macOS: draggable band clearing native traffic lights over the content column */}

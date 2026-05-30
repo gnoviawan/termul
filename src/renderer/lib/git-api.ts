@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { GitStatusDetail } from "@shared/types/ipc.types";
+import { GitCommit, GitStatusDetail } from "@shared/types/ipc.types";
 
 export const gitApi = {
   getStatus: (cwd: string) =>
@@ -16,4 +16,7 @@ export const gitApi = {
 
   discard: (cwd: string, path: string) =>
     invoke<void>("git_discard", { cwd, path }),
+
+  getLog: (cwd: string, limit?: number) =>
+    invoke<GitCommit[]>("git_get_log", { cwd, limit }),
 };

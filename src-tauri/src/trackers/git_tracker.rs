@@ -176,6 +176,30 @@ pub struct GitStatusDetail {
     pub staged: bool,
 }
 
+/// A single commit row for the history/graph view.
+///
+/// `parents` holds full parent SHAs in order (first parent first); a merge has
+/// two or more. `refs` is the raw `%D` decoration list split on ", " with empty
+/// entries dropped (e.g. `HEAD -> main`, `tag: v1.0`, `origin/main`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    /// Full 40-char commit hash.
+    pub hash: String,
+    /// Abbreviated commit hash.
+    pub short_hash: String,
+    /// Parent full hashes, first-parent first. Empty for the root commit.
+    pub parents: Vec<String>,
+    /// Ref decorations attached to this commit (branches, tags, HEAD).
+    pub refs: Vec<String>,
+    /// Author name.
+    pub author: String,
+    /// Author date in ISO 8601 / strict format (`%aI`).
+    pub date: String,
+    /// Commit subject (first line of the message).
+    pub subject: String,
+}
+
 impl GitStatus {
     /// Create a new GitStatus with all zeros
     pub fn new() -> Self {
@@ -880,6 +904,107 @@ pub fn git_discard_file(cwd: &str, path: &str) -> Result<(), String> {
     }
 }
 
+/// Default number of commits to read for the history view.
+const GIT_LOG_DEFAULT_LIMIT: u32 = 200;
+/// Upper bound on the history fetch to keep render/parse cost bounded.
+const GIT_LOG_MAX_LIMIT: u32 = 1000;
+
+/// Field separator inside one `git log` record (NUL, `%x00`).
+const LOG_FIELD_SEP: char = '\u{0}';
+/// Record terminator between `git log` entries (`%x1e`, record separator).
+const LOG_RECORD_SEP: char = '\u{1e}';
+
+/// Read commit history for `cwd` as structured [`GitCommit`] rows, newest first.
+///
+/// Uses a NUL-delimited `--pretty` format with a record terminator so commit
+/// subjects containing spaces, pipes, or other punctuation cannot break parsing.
+/// `--parents` yields parent SHAs (for graph topology) and `--decorate=short`
+/// yields ref names. A non-zero exit (empty repo, not a repo) is treated as an
+/// empty history rather than an error, so the UI shows an empty state.
+pub fn git_get_log(cwd: &str, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit
+        .unwrap_or(GIT_LOG_DEFAULT_LIMIT)
+        .clamp(1, GIT_LOG_MAX_LIMIT);
+    let limit_str = limit.to_string();
+
+    let args = [
+        "log",
+        "--no-color",
+        "-n",
+        &limit_str,
+        "--parents",
+        "--decorate=short",
+        "--pretty=format:%H%x00%h%x00%P%x00%D%x00%an%x00%aI%x00%s%x1e",
+    ];
+
+    let output = GitTracker::run_git_command(cwd, &args)
+        .ok_or_else(|| "Failed to run git log".to_string())?;
+
+    // Empty repo / not a repo: surface an empty list, not an error.
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    Ok(parse_git_log(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Parse the NUL-delimited, record-terminated `git log` output produced by
+/// [`git_get_log`] into [`GitCommit`] rows. Pure function over captured stdout
+/// so it is unit-testable without spawning git.
+fn parse_git_log(stdout: &str) -> Vec<GitCommit> {
+    let mut commits = Vec::new();
+
+    for record in stdout.split(LOG_RECORD_SEP) {
+        // Trim only leading newlines git inserts between records; the fields
+        // themselves are NUL-separated so internal whitespace is preserved.
+        let record = record.trim_start_matches(['\n', '\r']);
+        if record.is_empty() {
+            continue;
+        }
+
+        let fields: Vec<&str> = record.split(LOG_FIELD_SEP).collect();
+        // hash, shortHash, parents, refs, author, date, subject
+        if fields.len() < 7 {
+            continue;
+        }
+
+        let hash = fields[0].trim();
+        if hash.is_empty() {
+            continue;
+        }
+
+        let parents = fields[2]
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        // `%D` separates decorations with ", " (comma-space). Split on that exact
+        // separator rather than a bare comma so a ref name containing a comma is
+        // not torn into two chips.
+        let refs = fields[3]
+            .split(", ")
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        commits.push(GitCommit {
+            hash: hash.to_string(),
+            short_hash: fields[1].trim().to_string(),
+            parents,
+            refs,
+            author: fields[4].to_string(),
+            date: fields[5].trim().to_string(),
+            // Subject is the final field and may legitimately be empty. Re-join
+            // any trailing fields with the NUL separator so a stray NUL in an
+            // earlier field cannot silently truncate the subject.
+            subject: fields[6..].join("\u{0}"),
+        });
+    }
+
+    commits
+}
+
 fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
     let output = GitTracker::run_git_command(cwd, &["check-ignore", "--quiet", "--", path])
         .ok_or_else(|| "Failed to run git check-ignore".to_string())?;
@@ -1475,6 +1600,172 @@ mod tests {
         assert!(!details[1].staged);
     }
 
+    // ========== parse_git_log unit tests ==========
+
+    /// Build one NUL-delimited, record-terminated log record matching the
+    /// `git_get_log` pretty format: hash, shortHash, parents, refs, author,
+    /// date, subject.
+    fn log_record(
+        hash: &str,
+        short: &str,
+        parents: &str,
+        refs: &str,
+        author: &str,
+        date: &str,
+        subject: &str,
+    ) -> String {
+        format!(
+            "{hash}\u{0}{short}\u{0}{parents}\u{0}{refs}\u{0}{author}\u{0}{date}\u{0}{subject}\u{1e}"
+        )
+    }
+
+    #[test]
+    fn test_parse_git_log_linear() {
+        let out = format!(
+            "{}\n{}",
+            log_record(
+                "a1b2c3d4e5f6",
+                "a1b2c3d",
+                "00ff11ee22dd",
+                "HEAD -> main",
+                "Ada",
+                "2026-05-30T10:00:00+00:00",
+                "second commit",
+            ),
+            log_record(
+                "00ff11ee22dd",
+                "00ff11e",
+                "",
+                "",
+                "Ada",
+                "2026-05-29T09:00:00+00:00",
+                "first commit",
+            ),
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, "a1b2c3d4e5f6");
+        assert_eq!(commits[0].short_hash, "a1b2c3d");
+        assert_eq!(commits[0].parents, vec!["00ff11ee22dd".to_string()]);
+        assert_eq!(commits[0].refs, vec!["HEAD -> main".to_string()]);
+        assert_eq!(commits[0].author, "Ada");
+        assert_eq!(commits[0].subject, "second commit");
+        // Root commit has no parents.
+        assert!(commits[1].parents.is_empty());
+        assert!(commits[1].refs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_git_log_merge_multiple_parents() {
+        let out = log_record(
+            "merge00",
+            "merge00",
+            "parentA1 parentB2",
+            "",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "Merge branch 'feature'",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(
+            commits[0].parents,
+            vec!["parentA1".to_string(), "parentB2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_decorations() {
+        let out = log_record(
+            "dec00",
+            "dec00",
+            "p0",
+            "HEAD -> main, tag: v1.0, origin/main",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "release",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(
+            commits[0].refs,
+            vec![
+                "HEAD -> main".to_string(),
+                "tag: v1.0".to_string(),
+                "origin/main".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_special_char_subject() {
+        // Subject with pipes, spaces, and unicode must survive verbatim because
+        // fields are NUL-delimited, not whitespace/pipe-delimited.
+        let subject = "fix: a | b  with  spaces — café 🚀";
+        let out = log_record(
+            "sp00", "sp00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", subject,
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits[0].subject, subject);
+    }
+
+    #[test]
+    fn test_parse_git_log_empty_input() {
+        assert!(parse_git_log("").is_empty());
+        assert!(parse_git_log("\n\n").is_empty());
+    }
+
+    #[test]
+    fn test_parse_git_log_skips_malformed_record() {
+        // A record with too few fields is dropped; a valid one is kept.
+        let out = format!(
+            "not\u{0}enough\u{1e}{}",
+            log_record("ok00", "ok00", "", "", "Ada", "2026-05-30T12:00:00+00:00", "ok")
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].hash, "ok00");
+    }
+
+    #[test]
+    fn test_parse_git_log_empty_subject_is_kept() {
+        let out = log_record("es00", "es00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", "");
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "");
+    }
+
+    #[test]
+    fn test_parse_git_log_ref_name_with_comma_is_one_chip() {
+        // `%D` joins decorations with ", "; a ref whose name contains a comma
+        // must stay one chip. Splitting on ", " (not bare ',') keeps it intact.
+        let out = log_record(
+            "rc00",
+            "rc00",
+            "p0",
+            "HEAD -> main, tag: v1,2",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "x",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(
+            commits[0].refs,
+            vec!["HEAD -> main".to_string(), "tag: v1,2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_subject_with_embedded_nul_is_preserved() {
+        // A stray NUL in the subject would create an 8th field; re-joining the
+        // trailing fields keeps the subject whole instead of truncating it.
+        let record = format!(
+            "h00\u{0}h00\u{0}p0\u{0}\u{0}Ada\u{0}2026-05-30T12:00:00+00:00\u{0}before\u{0}after\u{1e}"
+        );
+        let commits = parse_git_log(&record);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "before\u{0}after");
+    }
+
     // ========== Windows-specific tests for CWD dedupe and throttling ==========
 
     #[cfg(target_os = "windows")]
@@ -1769,6 +2060,98 @@ mod tests {
         let repo = init_repo("discard-missing");
         // No such file; classified clean -> Noop, must not error.
         git_discard_file(repo.to_str().unwrap(), "ghost.txt").unwrap();
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_empty_repo_is_empty() {
+        if git_missing() {
+            return;
+        }
+        // A freshly-init'd repo has no commits; git log exits non-zero and we
+        // must surface an empty list instead of an error.
+        let repo = init_repo("log-empty");
+        let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+        assert!(commits.is_empty());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_reads_linear_history_newest_first() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-linear");
+        std::fs::write(repo.join("a.txt"), "1\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "first commit"]);
+        std::fs::write(repo.join("a.txt"), "2\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "second | commit"]);
+
+        let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+        assert_eq!(commits.len(), 2);
+        // Newest first; subject with a pipe survives intact.
+        assert_eq!(commits[0].subject, "second | commit");
+        assert_eq!(commits[1].subject, "first commit");
+        // The newer commit's first parent is the older commit.
+        assert_eq!(commits[0].parents, vec![commits[1].hash.clone()]);
+        // Root commit has no parents.
+        assert!(commits[1].parents.is_empty());
+        // HEAD decoration is present somewhere on the tip.
+        assert!(commits[0].refs.iter().any(|r| r.contains("HEAD")));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_captures_merge_parents() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-merge");
+        let cwd = repo.to_str().unwrap();
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        // Create a feature branch with its own commit.
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(repo.join("b.txt"), "feat\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "feature work"]);
+        // Diverge main.
+        git(&repo, &["checkout", "-q", "-"]); // back to default branch
+        std::fs::write(repo.join("c.txt"), "main\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "main work"]);
+        // Force a merge commit (no fast-forward).
+        git(&repo, &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"]);
+
+        let commits = git_get_log(cwd, None).unwrap();
+        let merge = commits
+            .iter()
+            .find(|c| c.subject == "Merge feature")
+            .expect("merge commit present");
+        assert!(
+            merge.parents.len() >= 2,
+            "merge should have >= 2 parents, got {:?}",
+            merge.parents
+        );
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_respects_limit() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-limit");
+        for i in 0..5 {
+            std::fs::write(repo.join("a.txt"), format!("{i}\n")).unwrap();
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-qm", &format!("commit {i}")]);
+        }
+        let commits = git_get_log(repo.to_str().unwrap(), Some(3)).unwrap();
+        assert_eq!(commits.len(), 3);
         std::fs::remove_dir_all(&repo).ok();
     }
 }
