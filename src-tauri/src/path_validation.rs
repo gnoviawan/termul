@@ -17,23 +17,6 @@ use std::path::{Path, PathBuf};
 /// - Path traversal attacks (../, ../../, etc.)
 /// - Absolute paths that escape the project boundary
 /// - Symlink attacks that point outside the project
-/// Validates that a search path is within the allowed project boundary.
-/// Returns the canonicalized path if valid, or an error if the path
-/// attempts to escape the project root or contains path traversal.
-///
-/// # Arguments
-/// * `search_path` - The path to validate (can be relative or absolute)
-/// * `project_root` - The project root directory that bounds the search
-///
-/// # Returns
-/// * `Ok(PathBuf)` - The canonicalized search path if valid
-/// * `Err(String)` - Error message if validation fails
-///
-/// # Security
-/// This function prevents:
-/// - Path traversal attacks (../, ../../, etc.)
-/// - Absolute paths that escape the project boundary
-/// - Symlink attacks that point outside the project
 pub fn validate_search_path(
     search_path: &str,
     project_root: &str,
