@@ -87,6 +87,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   // Reset the commit footer and any multi-selection when the repo (cwd) changes
   // so half-typed messages or stale selections never carry over between repos.
   useEffect(() => {
+    setSelectedFile(null);
+    setSelectedStaged(false);
     setSummary("");
     setDescription("");
     setAmend(false);
@@ -94,7 +96,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     setSelectedPaths(new Set());
     setSelectionSection(null);
     setAnchorPath(null);
-  }, [cwd]);
+  }, [cwd, setSelectedFile]);
 
   useEffect(() => {
     if (!isVisible || !selectedFile) {
