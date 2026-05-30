@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { Download, Terminal, Clock } from 'lucide-react'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import {
   updaterStore,
   useUpdaterState,
@@ -11,6 +12,7 @@ import {
   useDownloadProgress
 } from '@/stores/updater-store'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 
 // Local storage keys
 const UPDATE_REMINDER_KEY = 'update-reminder-timestamp'
@@ -93,17 +95,26 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
-  toast.success(`Update ready to restart`, {
+  toast.success(`Update ready to install`, {
     duration: 30000,
-    description: `Version ${version} has been downloaded. Restart the app to finish applying the update.`,
+    description: `Version ${version} has been downloaded. Install now to apply it — the app will restart and any running terminal sessions will close.`,
     action: {
       label: (
         <div className="flex items-center gap-2">
           <Download size={14} />
-          <span>Restart to Update</span>
+          <span>Install &amp; Restart</span>
         </div>
       ),
       onClick: async () => {
+        const hasActiveTerminals = hasActiveTerminalSessions()
+        const confirmed = await confirm(
+          hasActiveTerminals
+            ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
+            : `Termul will install version ${version} and restart now. Continue?`,
+          { title: 'Install update', kind: 'warning', okLabel: 'Install & Restart', cancelLabel: 'Not now' }
+        )
+        if (!confirmed) return
+
         const { installAndRestart } = updaterStore.getState()
         await installAndRestart()
         const installError = updaterStore.getState().error

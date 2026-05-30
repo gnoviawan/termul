@@ -39,6 +39,16 @@ vi.mock('@/lib/tauri-updater-api', () => ({
   isAurUpdateMode: vi.fn(() => false)
 }))
 
+const confirmMock = vi.fn(async (_message: string, _options?: unknown) => true)
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  confirm: (message: string, options?: unknown) => confirmMock(message, options)
+}))
+
+const hasActiveTerminalSessions = vi.fn(() => false)
+vi.mock('@/lib/tauri-safe-update', () => ({
+  hasActiveTerminalSessions: () => hasActiveTerminalSessions()
+}))
+
 import { toast } from 'sonner'
 import { showUpdateToast, showUpdateDownloadedToast } from './UpdateAvailableToast'
 
@@ -56,6 +66,8 @@ describe('UpdateAvailableToast error surfacing', () => {
     storeError = null
     downloadUpdate.mockResolvedValue(undefined)
     installAndRestart.mockResolvedValue(undefined)
+    confirmMock.mockResolvedValue(true)
+    hasActiveTerminalSessions.mockReturnValue(false)
   })
 
   it('does not show an error toast when download succeeds', async () => {
@@ -89,6 +101,7 @@ describe('UpdateAvailableToast error surfacing', () => {
 
     await action.onClick()
 
+    expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       'Update install failed',
@@ -102,7 +115,32 @@ describe('UpdateAvailableToast error surfacing', () => {
 
     await action.onClick()
 
+    expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  it('does not install when the user cancels the confirmation dialog', async () => {
+    confirmMock.mockResolvedValue(false)
+    showUpdateDownloadedToast('0.3.8')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(installAndRestart).not.toHaveBeenCalled()
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  it('warns about active terminal sessions in the confirmation dialog', async () => {
+    hasActiveTerminalSessions.mockReturnValue(true)
+    showUpdateDownloadedToast('0.3.8')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    const message = confirmMock.mock.calls[0][0]
+    expect(message).toContain('terminal sessions')
   })
 })

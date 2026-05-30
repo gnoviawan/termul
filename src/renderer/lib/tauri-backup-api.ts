@@ -50,6 +50,31 @@ const MAX_BACKUPS = 3;
 const METADATA_STORE_FILE = 'backup-metadata.json';
 
 /**
+ * Extract a human-readable message from an unknown thrown value.
+ *
+ * Tauri plugin commands reject with plain strings (not Error instances), so a
+ * bare `err instanceof Error` check would discard the real reason and report
+ * "Unknown error". This normalizes Errors, strings, and serializable objects.
+ */
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (typeof err === 'string' && err.trim()) {
+    return err;
+  }
+  try {
+    const serialized = JSON.stringify(err);
+    if (serialized && serialized !== '{}' && serialized !== 'null') {
+      return serialized;
+    }
+  } catch {
+    // fall through to fallback
+  }
+  return fallback;
+}
+
+/**
  * Get the userData directory (source for backups)
  */
 async function getUserDataDir(): Promise<string> {
@@ -319,7 +344,7 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     return { success: true, data: backupInfo };
   } catch (err) {
     // Check for disk space errors
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    const errorMessage = extractErrorMessage(err, 'Unknown error');
 
     if (
       errorMessage.includes('ENOSPC') ||
@@ -482,7 +507,7 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
 
     return { success: true, data: undefined };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    const errorMessage = extractErrorMessage(err, 'Unknown error');
 
     // Attempt rollback: detect actual state and restore original data
     if (oldUserDataPath && tempRestorePath) {

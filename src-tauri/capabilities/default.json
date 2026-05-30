@@ -25,6 +25,7 @@
     "fs:allow-write-text-file",
     "fs:allow-read-dir",
     "fs:allow-mkdir",
+    "fs:allow-copy-file",
     "fs:allow-remove",
     "fs:allow-rename",
     "fs:allow-stat",

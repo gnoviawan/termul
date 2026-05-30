@@ -28,6 +28,7 @@ const UPDATE_MODE: UpdateMode =
  */
 
 let pendingTauriUpdate: Update | null = null
+let downloadedUpdate: Update | null = null
 let pendingAurUpdate: UpdateInfo | null = null
 let manualUpdateInfo: UpdateInfo | null = null
 let autoUpdateEnabled = true
@@ -265,6 +266,13 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
     isManualUpdateMode = false
     manualUpdateInfo = null
     downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
+    // Preserve the already-downloaded Update instance (and its in-memory bytes)
+    // when a periodic re-check returns the same version; otherwise drop it so a
+    // newer version is re-downloaded before install.
+    downloadedUpdate =
+      update && downloadedUpdate && downloadedUpdate.version === update.version
+        ? downloadedUpdate
+        : null
     preparedUpdateVersion =
       update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
     lastCheckedAt = new Date().toISOString()
@@ -390,7 +398,7 @@ export async function downloadUpdate(
       })
     }
 
-    await pendingTauriUpdate.downloadAndInstall((event) => {
+    await pendingTauriUpdate.download((event) => {
       if (!onProgress) return
 
       const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
@@ -399,6 +407,7 @@ export async function downloadUpdate(
       onProgress(mapped.progress)
     })
 
+    downloadedUpdate = pendingTauriUpdate
     downloadedVersion = updateVersion
 
     return { success: true, data: undefined }
@@ -425,7 +434,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     return { success: true, data: undefined }
   }
 
-  if (!pendingTauriUpdate || downloadedVersion !== pendingTauriUpdate.version) {
+  if (!pendingTauriUpdate || downloadedVersion !== pendingTauriUpdate.version || !downloadedUpdate) {
     return {
       success: false,
       error: 'No downloaded update ready to install',
@@ -434,12 +443,15 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   }
 
   try {
+    // Apply the already-downloaded package, then restart into the new version.
+    // Split from download so the app is never force-restarted during download.
+    await downloadedUpdate.install()
     await relaunch()
     return { success: true, data: undefined }
   } catch (error) {
     return {
       success: false,
-      error: getErrorMessage(error, 'Failed to relaunch after update'),
+      error: getErrorMessage(error, 'Failed to install and restart after update'),
       code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
@@ -495,6 +507,7 @@ export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers)
 
 export async function clearPendingUpdate(): Promise<void> {
   pendingTauriUpdate = null
+  downloadedUpdate = null
   pendingAurUpdate = null
   manualUpdateInfo = null
   downloadedVersion = null
@@ -504,6 +517,7 @@ export async function clearPendingUpdate(): Promise<void> {
 
 export function _resetUpdaterStateForTesting(): void {
   pendingTauriUpdate = null
+  downloadedUpdate = null
   pendingAurUpdate = null
   manualUpdateInfo = null
   downloadedVersion = null
