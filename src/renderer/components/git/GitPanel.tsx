@@ -791,10 +791,14 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
   const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.currentTarget !== e.target) {
+      return;
+    }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onClick(e);
     }
+  };
   };
 
   return (
