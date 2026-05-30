@@ -57,6 +57,19 @@ keyring = "3.6"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false }
 
+# Remote terminal server (embedded Axum HTTP + WebSocket)
+# Reuses the existing tokio + hyper 1.x + tower stack already in the dep tree.
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+
+# Cryptographic random generation for auth tokens
+getrandom = "0.2"
+
+# Structured logging for remote server
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = { version = "0.3", default-features = false }
+
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
 

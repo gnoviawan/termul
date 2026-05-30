@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, ExternalLink, X } from 'lucide-react'
+import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, ExternalLink, X, Globe, Copy, Check, ShieldAlert } from 'lucide-react'
 import {
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -37,8 +37,9 @@ import {
   useResetAllShortcuts
 } from '@/hooks/use-keyboard-shortcuts'
 import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
-import { shellApi, terminalApi } from '@/lib/api'
+import { shellApi, terminalApi, remoteServerApi } from '@/lib/api'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import type { RemoteStatus } from '@shared/types/ipc.types'
 
 export default function AppPreferences(): React.JSX.Element {
   const navigate = useNavigate()
@@ -61,6 +62,12 @@ export default function AppPreferences(): React.JSX.Element {
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [isResetShortcutsDialogOpen, setIsResetShortcutsDialogOpen] = useState(false)
+
+  // Remote terminal server state
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null)
+  const [remoteBusy, setRemoteBusy] = useState(false)
+  const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [copiedUrl, setCopiedUrl] = useState(false)
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const updateShortcut = useUpdateShortcut()
@@ -85,6 +92,48 @@ export default function AppPreferences(): React.JSX.Element {
     }
     void loadShells()
   }, [])
+
+  // Load remote server status on mount
+  useEffect(() => {
+    async function loadRemoteStatus(): Promise<void> {
+      try {
+        const result = await remoteServerApi.status()
+        if (result.success) {
+          setRemoteStatus(result.data)
+        }
+      } catch {
+        // Non-Tauri context or command unavailable; leave status null.
+      }
+    }
+    void loadRemoteStatus()
+  }, [])
+
+  const handleRemoteToggle = async (enable: boolean): Promise<void> => {
+    setRemoteBusy(true)
+    setRemoteError(null)
+    try {
+      const result = enable ? await remoteServerApi.start() : await remoteServerApi.stop()
+      if (result.success) {
+        setRemoteStatus(result.data)
+      } else {
+        setRemoteError(result.error)
+      }
+    } catch (error) {
+      setRemoteError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRemoteBusy(false)
+    }
+  }
+
+  const handleCopyRemote = async (value: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedUrl(true)
+      setTimeout(() => setCopiedUrl(false), 1500)
+    } catch {
+      // Clipboard unavailable; ignore.
+    }
+  }
 
   const handleFontFamilyChange = (value: string) => {
     updateSetting('terminalFontFamily', value)
@@ -468,6 +517,115 @@ export default function AppPreferences(): React.JSX.Element {
                     Terminals inactive for this duration will be cleaned up (only if not displayed).
                   </p>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Remote Terminal Access Section */}
+          <section>
+            <div className="flex items-start gap-6 border-b border-border pb-8">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground flex items-center gap-2">
+                  <Globe className="w-4 h-4" />
+                  Remote Terminal Access
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Access your active terminals from a web browser over HTTP + WebSocket.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-4">
+                {/* Toggle */}
+                <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                  <div className="flex-1">
+                    <div className="text-sm text-foreground">Enable remote access</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      Starts a local server bound to 127.0.0.1 (localhost only)
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRemoteToggle(!remoteStatus?.running)}
+                    disabled={remoteBusy}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed',
+                      remoteStatus?.running ? 'bg-primary' : 'bg-input'
+                    )}
+                    role="switch"
+                    aria-checked={remoteStatus?.running ?? false}
+                    aria-label="Toggle remote terminal access"
+                  >
+                    <span
+                      className={cn(
+                        'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                        remoteStatus?.running ? 'translate-x-6' : 'translate-x-1'
+                      )}
+                    />
+                  </button>
+                </div>
+
+                {/* Error */}
+                {remoteError && (
+                  <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">
+                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>{remoteError}</span>
+                  </div>
+                )}
+
+                {/* Running: show address/port + open URL */}
+                {remoteStatus?.running && remoteStatus.url && (
+                  <div className="space-y-3">
+                    {/* Security warning */}
+                    <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
+                      <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>
+                        Anyone who can reach this address can run commands on this machine. The
+                        server listens on localhost only and rejects cross-origin browsers — to
+                        reach it from another device, tunnel it (e.g. <code>cloudflared</code>) at
+                        your own risk.
+                      </span>
+                    </div>
+
+                    {/* Address / Port */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">Address</div>
+                        <div className="text-sm font-mono text-foreground bg-secondary/50 border border-border rounded-md px-3 py-2">
+                          {remoteStatus.url.replace(/^https?:\/\//, '')}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">Port</div>
+                        <div className="text-sm font-mono text-foreground bg-secondary/50 border border-border rounded-md px-3 py-2">
+                          {remoteStatus.port ?? '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Open URL */}
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">Open in browser</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={remoteStatus.url}
+                          className="flex-1 text-sm font-mono text-foreground bg-secondary/50 border border-border rounded-md px-3 py-2 outline-none select-all"
+                          onFocus={(e) => e.currentTarget.select()}
+                        />
+                        <button
+                          onClick={() => handleCopyRemote(remoteStatus.url ?? '')}
+                          className="shrink-0 inline-flex items-center gap-1 text-sm bg-secondary hover:bg-secondary/80 border border-border rounded-md px-3 py-2 transition-colors"
+                          aria-label="Copy URL"
+                        >
+                          {copiedUrl ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                          {copiedUrl ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Open this URL in a browser to see your projects and terminals. No token
+                        required.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </section>

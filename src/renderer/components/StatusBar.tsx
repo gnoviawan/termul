@@ -1,4 +1,4 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
+import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown, Globe, Eye, EyeOff } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -13,6 +13,11 @@ import {
   useShowExitCode
 } from '@/stores/context-bar-settings-store'
 import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
+import {
+  useRemoteStatus,
+  useRemoteAddressRevealed,
+  useRemoteStatusStore
+} from '@/stores/remote-status-store'
 
 interface StatusBarProps {
   project: Project | undefined
@@ -32,6 +37,12 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   // Updater state
   const updateDownloaded = useUpdateDownloaded()
   const updateVersion = useUpdateVersion()
+
+  // Remote terminal server status
+  const remoteStatus = useRemoteStatus()
+  const remoteAddressRevealed = useRemoteAddressRevealed()
+  const toggleRemoteAddress = useRemoteStatusStore((s) => s.toggleAddressRevealed)
+  const remoteAddress = remoteStatus?.url?.replace(/^https?:\/\//, '') ?? null
 
   // Display terminal CWD if available, otherwise fall back to project path
   const displayPath = activeTerminal?.cwd || project?.path
@@ -122,6 +133,34 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center space-x-4">
+        {remoteStatus?.running && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={toggleRemoteAddress}
+                className="flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                aria-label={remoteAddressRevealed ? 'Hide remote address' : 'Show remote address'}
+              >
+                <Globe size={14} className="mr-1.5" />
+                {remoteAddressRevealed && remoteAddress ? (
+                  <span className="font-mono">{remoteAddress}</span>
+                ) : (
+                  <span className="opacity-80">Remote</span>
+                )}
+                <span className="ml-1.5 opacity-70">
+                  {remoteAddressRevealed ? <EyeOff size={12} /> : <Eye size={12} />}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {remoteAddressRevealed
+                ? 'Remote access on — click to hide address'
+                : 'Remote access on — click to show ip:port'}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>

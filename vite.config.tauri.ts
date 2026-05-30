@@ -4,6 +4,10 @@ import path from 'path'
 import pkg from './package.json' with { type: 'json' }
 
 const host = process.env.TAURI_DEV_HOST
+// Dev server port. Override with TAURI_DEV_PORT (must match devUrl in
+// src-tauri/tauri.conf.json, or pass a matching --config override to tauri).
+const devPort = Number(process.env.TAURI_DEV_PORT) || 5180
+const hmrPort = devPort + 1
 
 export default defineConfig({
   root: './',
@@ -25,14 +29,14 @@ export default defineConfig({
 
   // Vite dev server config for Tauri
   server: {
-    port: 5173,
+    port: devPort,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: 'ws',
           host,
-          port: 5174
+          port: hmrPort
         }
       : undefined,
     watch: {

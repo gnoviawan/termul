@@ -3,6 +3,7 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
+use crate::remote;
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
@@ -2223,6 +2224,56 @@ pub async fn sftp_create_file(
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_CREATE_ERROR")),
     }
+}
+
+// ==================== Remote Server Commands ====================
+
+/// Start the remote terminal server
+#[tauri::command]
+pub async fn remote_server_start(
+    app_handle: AppHandle,
+    pty_manager: State<'_, Arc<PtyManager>>,
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    match remote_state
+        .start(pty_manager.inner().clone(), app_handle)
+        .await
+    {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
+    }
+}
+
+/// Stop the remote terminal server
+#[tauri::command]
+pub async fn remote_server_stop(
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    match remote_state.stop().await {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
+    }
+}
+
+/// Get remote server status
+#[tauri::command]
+pub async fn remote_server_status(
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    Ok(IpcResult::success(remote_state.status()))
+}
+
+/// Publish the renderer's project → terminal tree to the remote server.
+///
+/// The web client reads this tree from `GET /api/projects`. The renderer should
+/// call this whenever its projects/terminals change (and once on server start).
+#[tauri::command]
+pub async fn remote_publish_projects(
+    tree: remote::ProjectTree,
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<()>, String> {
+    remote_state.registry.replace(tree);
+    Ok(IpcResult::success(()))
 }
 
 // ==================== Git Commands ====================
