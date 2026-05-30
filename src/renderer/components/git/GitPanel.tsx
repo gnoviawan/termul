@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { useGitStatusStore } from "@/stores/git-status-store";
+import { useGitStatusStore, diffKey } from "@/stores/git-status-store";
 import { cn } from "@/lib/utils";
 import { 
   FileCode, 
@@ -12,11 +12,12 @@ import {
   ChevronDown,
   GitBranch,
   RefreshCw,
-  Search
+  Search,
+  Undo2
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { gitApi } from "@/lib/git-api";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { toast } from "sonner";
 import { GitFileStatus, GitStatusDetail } from "@shared/types/ipc.types";
 
@@ -32,11 +33,21 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const setSelectedFile = useGitStatusStore((state) => state.setSelectedFile);
   const refreshStatus = useGitStatusStore((state) => state.refreshStatus);
   const fetchDiff = useGitStatusStore((state) => state.fetchDiff);
+  const stageFile = useGitStatusStore((state) => state.stageFile);
+  const unstageFile = useGitStatusStore((state) => state.unstageFile);
+  const discardFile = useGitStatusStore((state) => state.discardFile);
   const isFetchingStatus = useGitStatusStore((state) => state.isFetchingStatus);
 
   const [searchQuery, setSearchQuery] = useState("");
-  
-  const currentDiff = selectedFile ? diffs[`${cwd}:${selectedFile}`] : null;
+  // Track which side (staged vs unstaged) of the selected path is shown, since
+  // an `MM` file appears in both sections under the same path.
+  const [selectedStaged, setSelectedStaged] = useState(false);
+  const [isMutating, setIsMutating] = useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+
+  const currentDiff = selectedFile
+    ? diffs[diffKey(cwd, selectedFile, selectedStaged)]
+    : null;
 
   useEffect(() => {
     if (isVisible) {
@@ -49,11 +60,11 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       return;
     }
 
-    const key = `${cwd}:${selectedFile}`;
+    const key = diffKey(cwd, selectedFile, selectedStaged);
     if (!Object.prototype.hasOwnProperty.call(diffs, key)) {
-      fetchDiff(cwd, selectedFile);
+      fetchDiff(cwd, selectedFile, selectedStaged);
     }
-  }, [isVisible, selectedFile, cwd, diffs, fetchDiff]);
+  }, [isVisible, selectedFile, selectedStaged, cwd, diffs, fetchDiff]);
 
   const filteredStatuses = useMemo(() => {
     const currentStatuses = statuses[cwd] || [];
@@ -69,9 +80,62 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     return { stagedFiles: staged, unstagedFiles: unstaged };
   }, [filteredStatuses]);
 
-  const handleFileClick = (path: string) => {
+  const handleFileClick = (path: string, staged: boolean) => {
+    // Only update selection; the effect below is the single source of truth for
+    // fetching the diff, which avoids a duplicate request on click.
     setSelectedFile(path);
-    fetchDiff(cwd, path);
+    setSelectedStaged(staged);
+  };
+
+  const handleStage = async () => {
+    if (!selectedFile) return;
+    setIsMutating(true);
+    try {
+      await stageFile(cwd, selectedFile);
+      setSelectedStaged(true);
+    } catch (error) {
+      toast.error(`Failed to stage file: ${String(error)}`);
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const handleUnstage = async () => {
+    if (!selectedFile) return;
+    setIsMutating(true);
+    try {
+      await unstageFile(cwd, selectedFile);
+      setSelectedStaged(false);
+    } catch (error) {
+      toast.error(`Failed to unstage file: ${String(error)}`);
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const handleDiscard = () => {
+    if (!selectedFile) return;
+    // Discard only reverts unstaged (working-tree) changes via `git checkout`.
+    // Staged content is not affected, so block the action on staged rows.
+    if (selectedStaged) return;
+    // Use the app's ConfirmDialog rather than window.confirm, which is
+    // unreliable inside the Tauri webview and bypasses the app's styling.
+    setConfirmDiscardOpen(true);
+  };
+
+  const confirmDiscard = async () => {
+    if (!selectedFile) return;
+    setIsMutating(true);
+    try {
+      await discardFile(cwd, selectedFile);
+      setSelectedFile(null);
+      setSelectedStaged(false);
+    } catch (error) {
+      toast.error(`Failed to discard changes: ${String(error)}`);
+    } finally {
+      setIsMutating(false);
+      setConfirmDiscardOpen(false);
+    }
   };
 
   const getFileIcon = (status: GitFileStatus) => {
@@ -85,7 +149,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   };
 
   return (
-    <div className="flex h-full w-full bg-background overflow-hidden border-t border-border">
+    <div className="flex h-full w-full bg-background overflow-hidden">
       {/* File List Sidebar */}
       <div className="w-80 border-r border-border flex flex-col shrink-0">
         <div className="p-3 border-b border-border flex items-center justify-between gap-2">
@@ -122,8 +186,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <FileItem 
                     key={file.path} 
                     file={file} 
-                    isSelected={selectedFile === file.path}
-                    onClick={() => handleFileClick(file.path)}
+                    isSelected={selectedFile === file.path && selectedStaged}
+                    onClick={() => handleFileClick(file.path, true)}
                     icon={getFileIcon(file.status)}
                   />
                 ))}
@@ -144,8 +208,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <FileItem 
                     key={file.path} 
                     file={file} 
-                    isSelected={selectedFile === file.path}
-                    onClick={() => handleFileClick(file.path)}
+                    isSelected={selectedFile === file.path && !selectedStaged}
+                    onClick={() => handleFileClick(file.path, false)}
                     icon={getFileIcon(file.status)}
                   />
                 ))
@@ -165,12 +229,46 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <span className="text-sm font-medium truncate">{selectedFile}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="h-8 text-xs gap-2" disabled aria-disabled="true" title="Not implemented yet">
-                   Discard
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-2"
+                  onClick={handleDiscard}
+                  disabled={isMutating || selectedStaged}
+                  title={
+                    selectedStaged
+                      ? "Unstage first to discard — Discard only reverts unstaged (working-tree) changes"
+                      : "Discard unstaged changes to this file"
+                  }
+                >
+                  <RotateCcw size={14} />
+                  Discard
                 </Button>
-                <Button variant="default" size="sm" className="h-8 text-xs gap-2" disabled aria-disabled="true" title="Not implemented yet">
-                   Stage
-                </Button>
+                {selectedStaged ? (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-8 text-xs gap-2"
+                    onClick={handleUnstage}
+                    disabled={isMutating}
+                    title="Unstage this file"
+                  >
+                    <Undo2 size={14} />
+                    Unstage
+                  </Button>
+                ) : (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-8 text-xs gap-2"
+                    onClick={handleStage}
+                    disabled={isMutating}
+                    title="Stage this file"
+                  >
+                    <Check size={14} />
+                    Stage
+                  </Button>
+                )}
               </div>
             </div>
             <ScrollArea className="flex-1 font-mono text-xs">
@@ -180,7 +278,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
-                <div className="p-4 whitespace-pre">
+                <div className="p-4 whitespace-pre" style={{ tabSize: 4, MozTabSize: 4 }}>
                   {currentDiff.split('\n').map((line: string, i: number) => {
                     const isAddition = line.startsWith('+');
                     const isDeletion = line.startsWith('-');
@@ -226,6 +324,21 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmDiscardOpen}
+        variant="danger"
+        title="Discard changes"
+        message={
+          selectedFile
+            ? `Discard changes to "${selectedFile}"? This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Discard"
+        isLoading={isMutating}
+        onConfirm={confirmDiscard}
+        onCancel={() => setConfirmDiscardOpen(false)}
+      />
     </div>
   );
 }

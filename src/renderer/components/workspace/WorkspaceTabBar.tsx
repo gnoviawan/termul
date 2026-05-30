@@ -475,11 +475,11 @@ function GitTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors",
+					"group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent",
 					isActive
-						? "bg-secondary text-foreground"
+						? "bg-background border-b-primary text-foreground"
 						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-					isDragging && "opacity-50",
+					isDragging && "opacity-50 scale-[0.98]",
 					isDropTarget &&
 						dropPosition === "before" &&
 						"border-l-2 border-l-primary",
@@ -513,10 +513,6 @@ function GitTabInline({
 				>
 					<XIcon size={10} />
 				</button>
-
-				{isActive && (
-					<div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />
-				)}
 			</div>
 
 			{contextMenu && (

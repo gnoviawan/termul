@@ -95,8 +95,25 @@ export function RemoveWorktreeDialog({
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [isOpen, onClose])
 
+	// Guard against an empty/undefined project path, which would cause the
+	// backend git command to fail. Surfaces an error toast and aborts.
+	const ensureProjectPath = useCallback((): boolean => {
+		if (!projectPath) {
+			const message = 'Project path is not set'
+			setError(message)
+			toast({
+				title: 'Failed to remove worktree',
+				description: message,
+				variant: 'destructive',
+			})
+			return false
+		}
+		return true
+	}, [projectPath])
+
 	const handleArchive = useCallback(async () => {
 		if (!worktree) return
+		if (!ensureProjectPath()) return
 		setIsRemoving(true)
 		setError(null)
 		setWorktreeOperationLock(true)
@@ -118,10 +135,11 @@ export function RemoveWorktreeDialog({
 			setIsRemoving(false)
 			setWorktreeOperationLock(false)
 		}
-	}, [worktree, projectPath, projectId, removeWorktree, setWorktreeOperationLock, onClose])
+	}, [worktree, projectPath, projectId, removeWorktree, setWorktreeOperationLock, onClose, ensureProjectPath])
 
 	const handleRemove = useCallback(async () => {
 		if (!worktree) return
+		if (!ensureProjectPath()) return
 
 		setIsRemoving(true)
 		setError(null)
@@ -130,7 +148,7 @@ export function RemoveWorktreeDialog({
 		try {
 			// Use --force when there are uncommitted changes so git doesn't block removal
 			const force = hasUncommittedChanges
-			const result = await worktreeApi.remove(worktree.path, force)
+			const result = await worktreeApi.remove(projectPath, worktree.path, force)
 			if (result.success) {
 				removeWorktree(projectId, worktree.id)
 				toast({
@@ -152,7 +170,7 @@ export function RemoveWorktreeDialog({
 			setIsRemoving(false)
 			setWorktreeOperationLock(false)
 		}
-	}, [worktree, projectId, removeWorktree, setWorktreeOperationLock, onClose, hasUncommittedChanges])
+	}, [worktree, projectId, projectPath, removeWorktree, setWorktreeOperationLock, onClose, hasUncommittedChanges, ensureProjectPath])
 
 	if (!worktree) return null
 

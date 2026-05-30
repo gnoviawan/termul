@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent, useMemo } from "react";
-import type { ChangeEvent, MouseEvent } from "react";
 import { Reorder, AnimatePresence, motion } from "framer-motion";
 import {
 	Plus,
@@ -11,6 +10,7 @@ import {
 	RotateCcw,
 	ChevronDown,
 	ChevronRight,
+	Search,
 	Loader2,
 	AlertTriangle,
 	Settings,
@@ -38,6 +38,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
+import { SSHPanel } from "./ssh/SSHPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
@@ -50,6 +51,7 @@ import { useWorktreeStatus } from "@/hooks/use-worktree-status";
 import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
 import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
 import { filterWorktrees } from "@/lib/worktree-filter";
+import { filterProjects, shouldShowProjectSearch } from "@/lib/project-filter";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -112,6 +114,9 @@ interface ProjectSidebarProps {
 	onArchiveProject: (id: string) => void;
 	onRestoreProject: (id: string) => void;
 	onReorderProjects: (projectIds: string[]) => void;
+	onSSHConnect?: (profileId: string) => void;
+	onSelectSSHProfile?: (profileId: string) => void;
+	activeSSHProfileId?: string | null;
 }
 
 export function ProjectSidebar({
@@ -124,6 +129,9 @@ export function ProjectSidebar({
 	onArchiveProject,
 	onRestoreProject,
 	onReorderProjects,
+	onSSHConnect,
+	onSelectSSHProfile,
+	activeSSHProfileId,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
 	const { selectProject, setActiveWorktree, setWorktreeOperationLock } = useProjectActions();
@@ -137,6 +145,10 @@ export function ProjectSidebar({
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
+
+	// Project search/filter query
+	const [searchQuery, setSearchQuery] = useState("");
+	const searchInputRef = useRef<HTMLInputElement>(null);
 
 	// Expanded worktree projects — active project auto-expands
 	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
@@ -340,9 +352,15 @@ export function ProjectSidebar({
 		async (projectId: string, worktree: Worktree): Promise<void> => {
 			if (!isWorktreeTermulManaged(worktree)) return; // Only remove Termul-managed worktrees
 
+			const projectPath = useProjectStore.getState().projects.find((p) => p.id === projectId)?.path;
+			if (!projectPath) {
+				toast({ title: "Failed to remove worktree", description: "Project path not found" });
+				return;
+			}
+
 			setWorktreeOperationLock(true);
 			try {
-				const result = await worktreeApi.remove(worktree.path, false);
+				const result = await worktreeApi.remove(projectPath, worktree.path, false);
 				if (result.success) {
 					useProjectStore.getState().removeWorktree(projectId, worktree.id);
 					toast({ title: "Worktree removed", description: `"${worktree.name}" has been removed.` });
@@ -663,8 +681,18 @@ export function ProjectSidebar({
 				{
 					label: "Remove Worktree",
 					icon: <Trash2 size={14} />,
-					onClick: () =>
-						setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree }),
+					onClick: () => {
+						const projectPath = useProjectStore.getState().projects.find((p) => p.id === projectId)?.path;
+						if (!projectPath) {
+							toast({
+								title: "Failed to remove worktree",
+								description: "Project path not found",
+								variant: "destructive",
+							});
+							return;
+						}
+						setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree });
+					},
 					variant: "danger" as const,
 					disabled: !canRemove || isWorktreeOperationLocked,
 				},
@@ -677,9 +705,59 @@ export function ProjectSidebar({
 		(p) => p.id === colorPicker.projectId,
 	);
 
-	// Filter active and archived projects
-	const activeProjects = projects.filter((p) => !p.isArchived);
-	const archivedProjects = projects.filter((p) => p.isArchived);
+	// Split active and archived projects
+	const activeProjects = useMemo(() => projects.filter((p) => !p.isArchived), [projects]);
+	const archivedProjects = useMemo(() => projects.filter((p) => p.isArchived), [projects]);
+
+	// The search box only renders once the list is long enough to be worth filtering.
+	const showSearch = shouldShowProjectSearch(projects.length);
+
+	// Apply the search query to each group. Filtering is gated on `showSearch` so a
+	// lingering query can never keep the list filtered after the search box unmounts
+	// (e.g. project count drops below the threshold). The unfiltered `activeProjects`
+	// is kept for shortcut-index math below.
+	const trimmedQuery = showSearch ? searchQuery.trim() : "";
+	const isSearching = trimmedQuery.length > 0;
+	const filteredActiveProjects = useMemo(
+		() => filterProjects(activeProjects, { searchQuery: trimmedQuery }),
+		[activeProjects, trimmedQuery],
+	);
+	const filteredArchivedProjects = useMemo(
+		() => filterProjects(archivedProjects, { searchQuery: trimmedQuery }),
+		[archivedProjects, trimmedQuery],
+	);
+
+	// Map each active project id to its position in the UNFILTERED active list.
+	// The badge reflects this position (not the filtered render index) so the
+	// number a user sees doesn't shift around as they type a search query.
+	const activeIndexById = useMemo(() => {
+		const map = new Map<string, number>();
+		activeProjects.forEach((p, i) => map.set(p.id, i));
+		return map;
+	}, [activeProjects]);
+
+	// Reset a lingering query if the search box is no longer shown.
+	useEffect(() => {
+		if (!showSearch && searchQuery) setSearchQuery("");
+	}, [showSearch, searchQuery]);
+
+	// When the active project CHANGES to one that the current query hides (e.g. a
+	// project was just created, or a Ctrl+1..9 shortcut selected a hidden project),
+	// clear the search so the now-active project becomes visible instead of silently
+	// vanishing. Keyed on a change of `activeProjectId` only — searching for OTHER
+	// projects while the active one stays put must NOT wipe the query.
+	const prevActiveProjectId = useRef(activeProjectId);
+	useEffect(() => {
+		const changed = prevActiveProjectId.current !== activeProjectId;
+		prevActiveProjectId.current = activeProjectId;
+		if (!changed || !isSearching || !activeProjectId) return;
+		const visible =
+			filteredActiveProjects.some((p) => p.id === activeProjectId) ||
+			filteredArchivedProjects.some((p) => p.id === activeProjectId);
+		if (!visible) setSearchQuery("");
+	}, [activeProjectId, isSearching, filteredActiveProjects, filteredArchivedProjects]);
+	const hasNoSearchResults =
+		isSearching && filteredActiveProjects.length === 0 && filteredArchivedProjects.length === 0;
 
 	// Determine which menu items to show based on project archived status
 	const getMenuItems = useCallback(
@@ -714,32 +792,96 @@ export function ProjectSidebar({
 				</button>
 			</div>
 
+			{/* Project search — flat style matching the file explorer search */}
+			{showSearch && (
+				<div className="px-3 py-1.5 border-b border-sidebar-border">
+					<div className="relative">
+						<Search
+							size={13}
+							className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+							aria-hidden="true"
+						/>
+						<input
+							ref={searchInputRef}
+							type="search"
+							placeholder="Search projects…"
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Escape" && searchQuery) {
+									e.preventDefault();
+									e.stopPropagation();
+									setSearchQuery("");
+								}
+							}}
+							className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
+							aria-label="Search projects"
+							data-testid="project-search-input"
+						/>
+						{searchQuery && (
+							<button
+								onClick={() => {
+									setSearchQuery("");
+									// Clearing unmounts this button; return focus to the input.
+									searchInputRef.current?.focus();
+								}}
+								className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+								title="Clear search"
+								aria-label="Clear project search"
+								data-testid="project-search-clear"
+							>
+								<X size={11} />
+							</button>
+						)}
+					</div>
+				</div>
+			)}
+
 			{/* Project List */}
 			<div className="flex-1 overflow-y-auto py-1">
-				{activeProjects.length === 0 && archivedProjects.length === 0 ? (
+				{projects.length === 0 ? (
 					<div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
 						<p className="text-sm text-muted-foreground">No projects yet</p>
 						<p className="text-xs text-muted-foreground mt-1">
 							Create your first project to get started
 						</p>
 					</div>
+				) : hasNoSearchResults ? (
+					<div
+						className="flex flex-col items-center justify-center p-6 text-center opacity-60"
+						data-testid="project-search-empty"
+						role="status"
+						aria-live="polite"
+					>
+						<p className="text-sm text-muted-foreground">No projects found</p>
+						<p className="text-xs text-muted-foreground mt-1 break-words">
+							Nothing matches “{trimmedQuery}”
+						</p>
+					</div>
 				) : (
 					<>
 						<Reorder.Group
 							axis="y"
-							values={activeProjects}
-							onReorder={(reordered) =>
-								onReorderProjects(reordered.map((p) => p.id))
-							}
+							values={filteredActiveProjects}
+							onReorder={(reordered) => {
+								// Reordering a filtered subset would drop the hidden projects,
+								// so only persist a new order when the full list is visible.
+								if (isSearching) return;
+								onReorderProjects(reordered.map((p) => p.id));
+							}}
 							className="flex flex-col"
 							data-testid="active-projects-container"
 						>
-							{activeProjects.map((project, index) => {
+							{filteredActiveProjects.map((project) => {
 								const hasActivity = projectActivityIds.includes(project.id);
+								// Shortcut badge reflects the project's position in the UNFILTERED
+								// active list to stay in sync with the global Ctrl+1..9 handler.
+								const shortcutIndex = activeIndexById.get(project.id) ?? -1;
 								return (
 									<Reorder.Item
 										key={project.id}
 										value={project}
+										drag={isSearching ? false : undefined}
 										className="list-none"
 										whileDrag={{
 											scale: 1.02,
@@ -753,7 +895,7 @@ export function ProjectSidebar({
 											onToggleExpand={() => toggleProjectExpanded(project.id)}
 											isEditing={editingId === project.id}
 											editName={editName}
-											shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
+											shortcut={shortcutIndex >= 0 && shortcutIndex < 9 ? `Ctrl+${shortcutIndex + 1}` : undefined}
 											hasActivity={hasActivity}
 											hasError={projectErrorIds.has(project.id)}
 											onClick={() => {
@@ -782,23 +924,24 @@ export function ProjectSidebar({
 						</Reorder.Group>
 
 						{/* Archived Projects Section */}
-						{archivedProjects.length > 0 && (
+						{filteredArchivedProjects.length > 0 && (
 							<div className="mt-2">
 								<button
 									onClick={() => setShowArchived(!showArchived)}
-									className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-									aria-expanded={showArchived}
-									aria-label={`Archived projects (${archivedProjects.length})`}
+									disabled={isSearching}
+									className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
+									aria-expanded={showArchived || isSearching}
+									aria-label={`Archived projects (${filteredArchivedProjects.length})`}
 								>
-									{showArchived ? (
+									{showArchived || isSearching ? (
 										<ChevronDown size={14} className="mr-2" />
 									) : (
 										<ChevronRight size={14} className="mr-2" />
 									)}
-									Archived ({archivedProjects.length})
+									Archived ({filteredArchivedProjects.length})
 								</button>
-								{showArchived &&
-									archivedProjects.map((project) => {
+								{(showArchived || isSearching) &&
+									filteredArchivedProjects.map((project) => {
 										const hasActivity = projectActivityIds.includes(project.id);
 										return (
 											<ArchivedProjectItem
@@ -820,7 +963,10 @@ export function ProjectSidebar({
 				)}
 			</div>
 
-			{/* Bottom toolbar - Version */}
+			{/* SSH Connections - Resizable */}
+			<SSHResizableSection onSSHConnect={onSSHConnect} onSelectProfile={onSelectSSHProfile} activeProfileId={activeSSHProfileId} />
+
+			{/* Version - pinned bottom */}
 			<div className="p-2 rounded-b-xl">
 				<div className="w-full h-6 inline-flex items-center justify-center">
 					<span className="text-xs text-muted-foreground">Termul v0.3.8</span>
@@ -1164,17 +1310,19 @@ const ProjectItem = memo(function ProjectItem({
 						onChange={(e) => onEditNameChange(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onBlur={onSaveRename}
-						className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
 						onClick={(e) => e.stopPropagation()}
 					/>
 				) : (
 					<span
 						className={cn(
-							"text-sm transition-colors flex-1 mr-2",
+							"text-sm transition-colors flex-1 min-w-0 truncate mr-2",
+							// flex-1 min-w-0 is required for truncate to clip inside a flex row
 							isActive
 								? "text-foreground"
 								: "text-muted-foreground group-hover:text-foreground",
 						)}
+						title={project.name}
 					>
 						{project.name}
 					</span>
@@ -1227,16 +1375,41 @@ const ProjectItem = memo(function ProjectItem({
 						transition={{ duration: 0.15, ease: "easeInOut" }}
 						className="ml-5 border-l border-sidebar-border overflow-hidden"
 					>
-						{/* Worktree search bar - visible at 10+ worktrees */}
+						{/* Worktree search bar - visible at 10+ worktrees, flat style matching the file explorer */}
 					{worktrees.length >= 10 && (
 						<div className="px-2 py-1">
-							<input
-								type="text"
-								placeholder="Search worktrees..."
-								value={worktreeSearchQuery}
-								onChange={(e) => setWorktreeSearchQuery(e.target.value)}
-								className="w-full text-xs bg-sidebar-accent border border-border rounded px-2 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary"
-							/>
+							<div className="relative">
+								<Search
+									size={12}
+									className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<input
+									type="search"
+									placeholder="Search worktrees…"
+									value={worktreeSearchQuery}
+									onChange={(e) => setWorktreeSearchQuery(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Escape" && worktreeSearchQuery) {
+											e.preventDefault();
+											e.stopPropagation();
+											setWorktreeSearchQuery("");
+										}
+									}}
+									className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
+									aria-label="Search worktrees"
+								/>
+								{worktreeSearchQuery && (
+									<button
+										onClick={() => setWorktreeSearchQuery("")}
+										className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+										title="Clear search"
+										aria-label="Clear worktree search"
+									>
+										<X size={11} />
+									</button>
+								)}
+							</div>
 						</div>
 					)}
 					{/* Root item */}
@@ -1469,7 +1642,10 @@ function ArchivedProjectItem({
 					{firstLetter}
 				</span>
 			</div>
-			<span className="text-sm text-muted-foreground group-hover:text-foreground flex-1">
+			<span
+				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
+				title={project.name}
+			>
 				{project.name}
 			</span>
 			{hasActivity && (
@@ -1484,5 +1660,98 @@ function ArchivedProjectItem({
 			)}
 			<Archive size={12} className="text-muted-foreground mr-3" />
 		</button>
+	);
+}
+
+// ============================================================================
+// SSH Resizable Section
+// ============================================================================
+
+const SSH_HEIGHT_KEY = "termul-ssh-panel-height";
+const SSH_MIN_HEIGHT = 48;
+const SSH_MAX_HEIGHT = 400;
+const SSH_DEFAULT_HEIGHT = 140;
+
+function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }: { onSSHConnect?: (profileId: string) => void; onSelectProfile?: (profileId: string) => void; activeProfileId?: string | null }): React.JSX.Element {
+	const [height, setHeight] = useState(() => {
+		try {
+			const saved = localStorage.getItem(SSH_HEIGHT_KEY);
+			if (saved) {
+				const parsed = parseInt(saved, 10);
+				if (parsed >= SSH_MIN_HEIGHT && parsed <= SSH_MAX_HEIGHT) return parsed;
+			}
+		} catch {
+			return SSH_DEFAULT_HEIGHT;
+		}
+		return SSH_DEFAULT_HEIGHT;
+	});
+
+	const isDragging = useRef(false);
+	const startY = useRef(0);
+	const startHeight = useRef(0);
+	const latestHeight = useRef(height);
+
+	useEffect(() => {
+		latestHeight.current = height;
+	}, [height]);
+
+	const handleMouseDown = useCallback((e: React.MouseEvent) => {
+		e.preventDefault();
+		isDragging.current = true;
+		startY.current = e.clientY;
+		startHeight.current = height;
+		document.body.style.cursor = "row-resize";
+		document.body.style.userSelect = "none";
+
+		const handleMouseMove = (ev: MouseEvent) => {
+			if (!isDragging.current) return;
+			// Dragging UP = increase height (startY - currentY)
+			const delta = startY.current - ev.clientY;
+			const newHeight = Math.min(SSH_MAX_HEIGHT, Math.max(SSH_MIN_HEIGHT, startHeight.current + delta));
+			setHeight(newHeight);
+		};
+
+		const handleMouseUp = () => {
+			isDragging.current = false;
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+			document.removeEventListener("mousemove", handleMouseMove);
+			document.removeEventListener("mouseup", handleMouseUp);
+			// Persist
+			try {
+				localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current));
+			} catch {
+				// Ignore storage errors in restricted environments.
+			}
+		};
+
+		document.addEventListener("mousemove", handleMouseMove);
+		document.addEventListener("mouseup", handleMouseUp);
+	}, [height]);
+
+	// Persist on height change (debounced via ref)
+	useEffect(() => {
+		try {
+			localStorage.setItem(SSH_HEIGHT_KEY, String(height));
+		} catch {
+			// Ignore storage errors in restricted environments.
+		}
+	}, [height]);
+
+	return (
+		<div className="flex-shrink-0 flex flex-col" style={{ height: `${height}px` }}>
+			{/* Drag handle */}
+			<div
+				onMouseDown={handleMouseDown}
+				className="h-[3px] border-t border-sidebar-border cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors group flex items-center justify-center"
+				title="Drag to resize"
+			>
+				<div className="w-8 h-[2px] rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
+			</div>
+			{/* SSH Panel content */}
+			<div className="flex-1 overflow-hidden">
+				<SSHPanel onConnect={onSSHConnect} onSelectProfile={onSelectProfile} activeProfileId={activeProfileId} />
+			</div>
+		</div>
 	);
 }
