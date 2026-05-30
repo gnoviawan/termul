@@ -26,6 +26,9 @@ export interface GitStatusState {
   stageFile: (cwd: string, path: string) => Promise<void>;
   unstageFile: (cwd: string, path: string) => Promise<void>;
   discardFile: (cwd: string, path: string) => Promise<void>;
+  stageFiles: (cwd: string, paths: string[]) => Promise<void>;
+  unstageFiles: (cwd: string, paths: string[]) => Promise<void>;
+  discardFiles: (cwd: string, paths: string[]) => Promise<void>;
   commit: (
     cwd: string,
     summary: string,
@@ -116,27 +119,56 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
     }
   },
 
-  stageFile: async (cwd, path) => {
-    await gitApi.stage(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
-    // Keep the commit footer's staged count in sync so Commit enables/disables
-    // correctly right after a stage toggle.
-    await get().fetchCommitContext(cwd);
+  // Single-file mutations delegate to the batch variants so the post-mutation
+  // refresh logic lives in exactly one place. The commit footer's staged count
+  // is refreshed afterwards so Commit enables/disables correctly.
+  stageFile: async (cwd, path) => get().stageFiles(cwd, [path]),
+
+  unstageFile: async (cwd, path) => get().unstageFiles(cwd, [path]),
+
+  discardFile: async (cwd, path) => get().discardFiles(cwd, [path]),
+
+  // Batch mutations apply the per-file git operation to every path, then
+  // refresh status + commit context once at the end rather than after each
+  // file. The first failing path aborts the run (subsequent files are left
+  // untouched) but a refresh still runs so the UI reflects what did change.
+  stageFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.stage(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
   },
 
-  unstageFile: async (cwd, path) => {
-    await gitApi.unstage(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
-    await get().fetchCommitContext(cwd);
+  unstageFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.unstage(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
   },
 
-  discardFile: async (cwd, path) => {
-    await gitApi.discard(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
-    await get().fetchCommitContext(cwd);
+  discardFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.discard(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
   },
 
   commit: async (cwd, summary, description, amend) => {

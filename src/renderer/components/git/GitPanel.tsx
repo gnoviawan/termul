@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useGitStatusStore, diffKey } from "@/stores/git-status-store";
 import { cn } from "@/lib/utils";
 import { 
@@ -7,13 +7,10 @@ import {
   Plus, 
   Minus, 
   RotateCcw,
-  Check,
-  ChevronRight,
   ChevronDown,
   GitBranch,
   RefreshCw,
   Search,
-  Undo2,
   GitCommit,
   ArrowUp
 } from "lucide-react";
@@ -28,6 +25,8 @@ interface GitPanelProps {
   isVisible: boolean;
 }
 
+type Section = "staged" | "unstaged";
+
 export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const statuses = useGitStatusStore((state) => state.statuses);
   const diffs = useGitStatusStore((state) => state.diffs);
@@ -35,9 +34,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const setSelectedFile = useGitStatusStore((state) => state.setSelectedFile);
   const refreshStatus = useGitStatusStore((state) => state.refreshStatus);
   const fetchDiff = useGitStatusStore((state) => state.fetchDiff);
-  const stageFile = useGitStatusStore((state) => state.stageFile);
-  const unstageFile = useGitStatusStore((state) => state.unstageFile);
-  const discardFile = useGitStatusStore((state) => state.discardFile);
+  const stageFiles = useGitStatusStore((state) => state.stageFiles);
+  const unstageFiles = useGitStatusStore((state) => state.unstageFiles);
+  const discardFiles = useGitStatusStore((state) => state.discardFiles);
   const isFetchingStatus = useGitStatusStore((state) => state.isFetchingStatus);
   const commitContexts = useGitStatusStore((state) => state.commitContexts);
   const fetchCommitContext = useGitStatusStore((state) => state.fetchCommitContext);
@@ -51,7 +50,17 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   // an `MM` file appears in both sections under the same path.
   const [selectedStaged, setSelectedStaged] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+
+  // Multi-selection model. Selection is scoped to a single section (staged or
+  // unstaged), since the same path can exist in both and they are staged /
+  // unstaged independently. `anchorPath` is the pivot for shift-range selects.
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [selectionSection, setSelectionSection] = useState<Section | null>(null);
+  const [anchorPath, setAnchorPath] = useState<string | null>(null);
+
+  // Discard is confirmed through the app dialog; remember what it targets.
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [discardTargets, setDiscardTargets] = useState<string[]>([]);
 
   // Commit footer state.
   const [summary, setSummary] = useState("");
@@ -75,13 +84,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     }
   }, [isVisible, cwd, refreshStatus, fetchCommitContext]);
 
-  // Reset the commit footer when the repo (cwd) changes so a half-typed message
-  // or an Amend toggle from one repo never carries over into another.
+  // Reset the commit footer and any multi-selection when the repo (cwd) changes
+  // so half-typed messages or stale selections never carry over between repos.
   useEffect(() => {
     setSummary("");
     setDescription("");
     setAmend(false);
     setConfirmAmendOpen(false);
+    setSelectedPaths(new Set());
+    setSelectionSection(null);
+    setAnchorPath(null);
   }, [cwd]);
 
   useEffect(() => {
@@ -109,63 +121,140 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     return { stagedFiles: staged, unstagedFiles: unstaged };
   }, [filteredStatuses]);
 
-  const handleFileClick = (path: string, staged: boolean) => {
-    // Only update selection; the effect below is the single source of truth for
-    // fetching the diff, which avoids a duplicate request on click.
-    setSelectedFile(path);
-    setSelectedStaged(staged);
-  };
+  const clearSelection = useCallback(() => {
+    setSelectedPaths(new Set());
+    setSelectionSection(null);
+    setAnchorPath(null);
+  }, []);
 
-  const handleStage = async () => {
-    if (!selectedFile) return;
-    setIsMutating(true);
-    try {
-      await stageFile(cwd, selectedFile);
-      setSelectedStaged(true);
-    } catch (error) {
-      toast.error(`Failed to stage file: ${String(error)}`);
-    } finally {
-      setIsMutating(false);
-    }
-  };
+  // Click selection with VSCode-style modifiers:
+  // - plain click  → select only this row
+  // - ctrl/cmd     → toggle this row in the selection
+  // - shift        → select the contiguous range from the anchor
+  // Selection is always scoped to the clicked row's section.
+  const handleFileClick = useCallback(
+    (
+      e: React.MouseEvent | React.KeyboardEvent,
+      path: string,
+      staged: boolean,
+      sectionFiles: GitStatusDetail[],
+    ) => {
+      const section: Section = staged ? "staged" : "unstaged";
+      const sameSection = selectionSection === section;
 
-  const handleUnstage = async () => {
-    if (!selectedFile) return;
-    setIsMutating(true);
-    try {
-      await unstageFile(cwd, selectedFile);
-      setSelectedStaged(false);
-    } catch (error) {
-      toast.error(`Failed to unstage file: ${String(error)}`);
-    } finally {
-      setIsMutating(false);
-    }
-  };
+      if (e.shiftKey && sameSection && anchorPath) {
+        const paths = sectionFiles.map((f) => f.path);
+        const a = paths.indexOf(anchorPath);
+        const b = paths.indexOf(path);
+        if (a !== -1 && b !== -1) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          setSelectedPaths(new Set(paths.slice(lo, hi + 1)));
+          setSelectionSection(section);
+        }
+      } else if (e.ctrlKey || e.metaKey) {
+        const next = new Set(sameSection ? selectedPaths : []);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        setSelectedPaths(next);
+        setSelectionSection(next.size > 0 ? section : null);
+        setAnchorPath(path);
+      } else {
+        setSelectedPaths(new Set([path]));
+        setSelectionSection(section);
+        setAnchorPath(path);
+      }
 
-  const handleDiscard = () => {
-    if (!selectedFile) return;
-    // Discard only reverts unstaged (working-tree) changes via `git checkout`.
-    // Staged content is not affected, so block the action on staged rows.
-    if (selectedStaged) return;
-    // Use the app's ConfirmDialog rather than window.confirm, which is
-    // unreliable inside the Tauri webview and bypasses the app's styling.
+      // The diff view always follows the most-recently clicked row.
+      setSelectedFile(path);
+      setSelectedStaged(staged);
+    },
+    [selectionSection, selectedPaths, anchorPath, setSelectedFile],
+  );
+
+  // Resolve the paths an inline row action should affect: when the row is part
+  // of an active multi-selection in its section, act on the whole selection;
+  // otherwise act on just that row.
+  const targetsFor = useCallback(
+    (path: string, section: Section): string[] => {
+      if (
+        selectionSection === section &&
+        selectedPaths.size > 0 &&
+        selectedPaths.has(path)
+      ) {
+        return [...selectedPaths];
+      }
+      return [path];
+    },
+    [selectionSection, selectedPaths],
+  );
+
+  const runStage = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      setIsMutating(true);
+      try {
+        await stageFiles(cwd, paths);
+        clearSelection();
+        if (selectedFile && paths.includes(selectedFile)) {
+          setSelectedStaged(true);
+        }
+      } catch (error) {
+        toast.error(`Failed to stage: ${String(error)}`);
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [cwd, stageFiles, clearSelection, selectedFile],
+  );
+
+  const runUnstage = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      setIsMutating(true);
+      try {
+        await unstageFiles(cwd, paths);
+        clearSelection();
+        if (selectedFile && paths.includes(selectedFile)) {
+          setSelectedStaged(false);
+        }
+      } catch (error) {
+        toast.error(`Failed to unstage: ${String(error)}`);
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [cwd, unstageFiles, clearSelection, selectedFile],
+  );
+
+  // Discard only reverts unstaged (working-tree) changes, so it is only ever
+  // offered for unstaged rows. Confirm before destroying work.
+  const requestDiscard = useCallback((paths: string[]) => {
+    if (paths.length === 0) return;
+    setDiscardTargets(paths);
     setConfirmDiscardOpen(true);
-  };
+  }, []);
 
-  const confirmDiscard = async () => {
-    if (!selectedFile) return;
+  const confirmDiscard = useCallback(async () => {
+    if (discardTargets.length === 0) return;
     setIsMutating(true);
     try {
-      await discardFile(cwd, selectedFile);
-      setSelectedFile(null);
-      setSelectedStaged(false);
+      await discardFiles(cwd, discardTargets);
+      if (selectedFile && discardTargets.includes(selectedFile)) {
+        setSelectedFile(null);
+        setSelectedStaged(false);
+      }
+      clearSelection();
     } catch (error) {
       toast.error(`Failed to discard changes: ${String(error)}`);
     } finally {
       setIsMutating(false);
       setConfirmDiscardOpen(false);
+      setDiscardTargets([]);
     }
-  };
+  }, [cwd, discardTargets, discardFiles, selectedFile, setSelectedFile, clearSelection]);
 
   // Toggling amend on prefills the message from the last commit so the user can
   // reword it — but only when the inputs are empty, so we never clobber text the
@@ -264,6 +353,11 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     }
   };
 
+  const stagedSelectionCount =
+    selectionSection === "staged" ? selectedPaths.size : 0;
+  const unstagedSelectionCount =
+    selectionSection === "unstaged" ? selectedPaths.size : 0;
+
   return (
     <div className="flex h-full w-full bg-background overflow-hidden">
       {/* File List Sidebar */}
@@ -297,41 +391,99 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           <div className="p-2 space-y-4">
             {stagedFiles.length > 0 && (
               <div className="space-y-1">
-                <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                  <ChevronDown size={12} />
-                  Staged Changes
-                </div>
-                {stagedFiles.map((file: GitStatusDetail) => (
-                  <FileItem 
-                    key={file.path} 
-                    file={file} 
-                    isSelected={selectedFile === file.path && selectedStaged}
-                    onClick={() => handleFileClick(file.path, true)}
-                    icon={getFileIcon(file.status)}
+                <SectionHeader
+                  label="Staged Changes"
+                  count={stagedFiles.length}
+                  selectionCount={stagedSelectionCount}
+                >
+                  <SectionAction
+                    icon={<Minus size={13} />}
+                    label="Unstage all changes"
+                    disabled={isMutating}
+                    onClick={() => runUnstage(stagedFiles.map((f) => f.path))}
                   />
-                ))}
+                </SectionHeader>
+                {stagedFiles.map((file: GitStatusDetail) => {
+                  const inSelection =
+                    selectionSection === "staged" && selectedPaths.has(file.path);
+                  return (
+                    <FileItem
+                      key={file.path}
+                      file={file}
+                      isActive={selectedFile === file.path && selectedStaged}
+                      isSelected={inSelection}
+                      onClick={(e) => handleFileClick(e, file.path, true, stagedFiles)}
+                      icon={getFileIcon(file.status)}
+                    >
+                      <RowAction
+                        icon={<Minus size={13} />}
+                        label="Unstage changes"
+                        disabled={isMutating}
+                        onClick={() => runUnstage(targetsFor(file.path, "staged"))}
+                      />
+                    </FileItem>
+                  );
+                })}
               </div>
             )}
 
             <div className="space-y-1">
-              <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                <ChevronDown size={12} />
-                Changes ({unstagedFiles.length})
-              </div>
+              <SectionHeader
+                label="Changes"
+                count={unstagedFiles.length}
+                selectionCount={unstagedSelectionCount}
+              >
+                {unstagedFiles.length > 0 && (
+                  <>
+                    <SectionAction
+                      icon={<RotateCcw size={13} />}
+                      label="Discard all changes"
+                      variant="danger"
+                      disabled={isMutating}
+                      onClick={() => requestDiscard(unstagedFiles.map((f) => f.path))}
+                    />
+                    <SectionAction
+                      icon={<Plus size={13} />}
+                      label="Stage all changes"
+                      disabled={isMutating}
+                      onClick={() => runStage(unstagedFiles.map((f) => f.path))}
+                    />
+                  </>
+                )}
+              </SectionHeader>
               {unstagedFiles.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <p className="text-xs text-muted-foreground">No changes detected</p>
                 </div>
               ) : (
-                unstagedFiles.map((file: GitStatusDetail) => (
-                  <FileItem 
-                    key={file.path} 
-                    file={file} 
-                    isSelected={selectedFile === file.path && !selectedStaged}
-                    onClick={() => handleFileClick(file.path, false)}
-                    icon={getFileIcon(file.status)}
-                  />
-                ))
+                unstagedFiles.map((file: GitStatusDetail) => {
+                  const inSelection =
+                    selectionSection === "unstaged" && selectedPaths.has(file.path);
+                  return (
+                    <FileItem
+                      key={file.path}
+                      file={file}
+                      isActive={selectedFile === file.path && !selectedStaged}
+                      isSelected={inSelection}
+                      onClick={(e) => handleFileClick(e, file.path, false, unstagedFiles)}
+                      icon={getFileIcon(file.status)}
+                    >
+                      <RowAction
+                        icon={<RotateCcw size={13} />}
+                        label="Discard changes"
+                        variant="danger"
+                        disabled={isMutating}
+                        onClick={() => requestDiscard(targetsFor(file.path, "unstaged"))}
+                      />
+                      <RowAction
+                        icon={<Plus size={13} />}
+                        label="Stage changes"
+                        disabled={isMutating}
+                        onClick={() => runStage(targetsFor(file.path, "unstaged"))}
+                      />
+                    </FileItem>
+                  );
+                })
               )}
             </div>
           </div>
@@ -436,48 +588,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <FileCode size={16} className="text-primary shrink-0" />
                 <span className="text-sm font-medium truncate">{selectedFile}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs gap-2"
-                  onClick={handleDiscard}
-                  disabled={isMutating || selectedStaged}
-                  title={
-                    selectedStaged
-                      ? "Unstage first to discard — Discard only reverts unstaged (working-tree) changes"
-                      : "Discard unstaged changes to this file"
-                  }
-                >
-                  <RotateCcw size={14} />
-                  Discard
-                </Button>
-                {selectedStaged ? (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="h-8 text-xs gap-2"
-                    onClick={handleUnstage}
-                    disabled={isMutating}
-                    title="Unstage this file"
-                  >
-                    <Undo2 size={14} />
-                    Unstage
-                  </Button>
-                ) : (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="h-8 text-xs gap-2"
-                    onClick={handleStage}
-                    disabled={isMutating}
-                    title="Stage this file"
-                  >
-                    <Check size={14} />
-                    Stage
-                  </Button>
-                )}
-              </div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                {selectedStaged ? "Staged" : "Working tree"}
+              </span>
             </div>
             <ScrollArea className="flex-1 font-mono text-xs">
               {currentDiff === undefined || currentDiff === null ? (
@@ -538,14 +651,19 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         variant="danger"
         title="Discard changes"
         message={
-          selectedFile
-            ? `Discard changes to "${selectedFile}"? This cannot be undone.`
-            : ""
+          discardTargets.length > 1
+            ? `Discard changes to ${discardTargets.length} files? This cannot be undone.`
+            : discardTargets[0]
+              ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
+              : ""
         }
         confirmLabel="Discard"
         isLoading={isMutating}
         onConfirm={confirmDiscard}
-        onCancel={() => setConfirmDiscardOpen(false)}
+        onCancel={() => {
+          setConfirmDiscardOpen(false);
+          setDiscardTargets([]);
+        }}
       />
 
       <ConfirmDialog
@@ -562,25 +680,137 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   );
 }
 
-function FileItem({ file, isSelected, onClick, icon }: {
+function SectionHeader({
+  label,
+  count,
+  selectionCount,
+  children,
+}: {
+  label: string;
+  count: number;
+  selectionCount: number;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="group/section flex items-center justify-between px-2 py-1">
+      <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+        <ChevronDown size={12} />
+        {label} ({count})
+        {selectionCount > 1 && (
+          <span className="text-primary normal-case font-medium">
+            · {selectionCount} selected
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-0.5 opacity-0 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SectionAction({
+  icon,
+  label,
+  onClick,
+  disabled,
+  variant,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  variant?: "danger";
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        variant === "danger"
+          ? "text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
+          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      )}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function RowAction({
+  icon,
+  label,
+  onClick,
+  disabled,
+  variant,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  variant?: "danger";
+}) {
+  // Stop the click from bubbling to the row, which would otherwise change the
+  // selection / diff target instead of running the action.
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClick();
+  };
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={handleClick}
+      className={cn(
+        "flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        variant === "danger"
+          ? "text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
+          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      )}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
   file: { path: string, status: GitFileStatus },
+  isActive: boolean,
   isSelected: boolean,
-  onClick: () => void,
-  icon: React.ReactNode
+  onClick: (e: React.MouseEvent | React.KeyboardEvent) => void,
+  icon: React.ReactNode,
+  children?: React.ReactNode,
 }) {
   const fileName = file.path.split('/').pop() || file.path;
   const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick(e);
+    }
+  };
+
   return (
-    <button
-      type="button"
+    <div
+      role="option"
+      tabIndex={0}
       onClick={onClick}
-      aria-pressed={isSelected}
+      onKeyDown={handleKeyDown}
+      aria-selected={isSelected || isActive}
       className={cn(
-        "flex w-full items-center gap-3 px-3 py-2 rounded-md border-0 bg-transparent text-left cursor-pointer transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
-        isSelected 
-          ? "bg-primary/10 text-primary" 
-          : "hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
+        "group/row flex w-full items-center gap-3 px-3 py-2 rounded-md text-left cursor-pointer transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+        isSelected
+          ? "bg-primary/15 text-foreground"
+          : isActive
+            ? "bg-primary/10 text-primary"
+            : "hover:bg-secondary/80 text-muted-foreground hover:text-foreground",
       )}
     >
       <div className="shrink-0">{icon}</div>
@@ -588,8 +818,11 @@ function FileItem({ file, isSelected, onClick, icon }: {
         <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
+      <div className="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
+        {children}
+      </div>
       <div className={cn(
-        "text-[10px] uppercase font-bold px-1 rounded",
+        "text-[10px] uppercase font-bold px-1 rounded shrink-0",
         file.status === 'added' && "text-green-500",
         file.status === 'modified' && "text-amber-500",
         file.status === 'deleted' && "text-red-500",
@@ -597,6 +830,6 @@ function FileItem({ file, isSelected, onClick, icon }: {
       )}>
         {file.status === 'modified' ? 'M' : file.status.charAt(0).toUpperCase()}
       </div>
-    </button>
+    </div>
   );
 }

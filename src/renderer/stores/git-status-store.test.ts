@@ -156,3 +156,55 @@ describe("git-status-store commit footer", () => {
     expect(diffKey(CWD, "a.txt", true)).not.toBe(diffKey(CWD, "a.txt", false));
   });
 });
+
+describe("git-status-store batch staging", () => {
+  it("stageFile delegates to a single-path stage", async () => {
+    await useGitStatusStore.getState().stageFile(CWD, "a.txt");
+    expect(gitApi.stage).toHaveBeenCalledWith(CWD, "a.txt");
+    expect(gitApi.stage).toHaveBeenCalledOnce();
+  });
+
+  it("stageFiles stages every path then refreshes once", async () => {
+    await useGitStatusStore.getState().stageFiles(CWD, ["a.txt", "b.txt", "c.txt"]);
+    expect(gitApi.stage).toHaveBeenCalledTimes(3);
+    expect(gitApi.stage).toHaveBeenNthCalledWith(1, CWD, "a.txt");
+    expect(gitApi.stage).toHaveBeenNthCalledWith(2, CWD, "b.txt");
+    expect(gitApi.stage).toHaveBeenNthCalledWith(3, CWD, "c.txt");
+    // Status + context refresh run exactly once for the whole batch.
+    expect(gitApi.getStatus).toHaveBeenCalledOnce();
+    expect(gitApi.getCommitContext).toHaveBeenCalledOnce();
+  });
+
+  it("unstageFiles unstages every path then refreshes once", async () => {
+    await useGitStatusStore.getState().unstageFiles(CWD, ["a.txt", "b.txt"]);
+    expect(gitApi.unstage).toHaveBeenCalledTimes(2);
+    expect(gitApi.getStatus).toHaveBeenCalledOnce();
+    expect(gitApi.getCommitContext).toHaveBeenCalledOnce();
+  });
+
+  it("discardFiles discards every path then refreshes once", async () => {
+    await useGitStatusStore.getState().discardFiles(CWD, ["a.txt", "b.txt"]);
+    expect(gitApi.discard).toHaveBeenCalledTimes(2);
+    expect(gitApi.getStatus).toHaveBeenCalledOnce();
+    expect(gitApi.getCommitContext).toHaveBeenCalledOnce();
+  });
+
+  it("empty batch is a no-op (no git calls, no refresh)", async () => {
+    await useGitStatusStore.getState().stageFiles(CWD, []);
+    expect(gitApi.stage).not.toHaveBeenCalled();
+    expect(gitApi.getStatus).not.toHaveBeenCalled();
+  });
+
+  it("stageFiles still refreshes when a mid-batch stage fails", async () => {
+    gitApi.stage
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("add failed"));
+    await expect(
+      useGitStatusStore.getState().stageFiles(CWD, ["a.txt", "b.txt"]),
+    ).rejects.toThrow("add failed");
+    // The second file aborts the loop, but a refresh still runs so the UI
+    // reflects the first file that did stage.
+    expect(gitApi.stage).toHaveBeenCalledTimes(2);
+    expect(gitApi.getStatus).toHaveBeenCalledOnce();
+  });
+});
