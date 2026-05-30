@@ -140,7 +140,7 @@ const FeatureSection = () => {
             >
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden flex flex-col">
                 {/* Visual Header */}
-                <div className="aspect-[4/3] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
+                <div className="aspect-[16/9] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
                   <Suspense
                     fallback={
                       <div
