@@ -283,7 +283,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             variant="ghost" 
             size="icon" 
             className="h-8 w-8" 
-            onClick={() => refreshStatus(cwd)}
+            onClick={() => {
+              refreshStatus(cwd);
+              fetchCommitContext(cwd);
+            }}
             disabled={isFetchingStatus}
           >
             <RefreshCw className={cn("h-4 w-4", isFetchingStatus && "animate-spin")} />
@@ -338,6 +341,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <div className="border-t border-border p-3 space-y-2 bg-background/60">
           <input
             type="text"
+            aria-label="Commit summary"
             placeholder={amend ? "Update commit message" : "Summary (required)"}
             className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
             value={summary}
@@ -345,6 +349,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             disabled={isCommitting}
           />
           <textarea
+            aria-label="Commit description"
             placeholder="Description (optional)"
             rows={3}
             className="w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"

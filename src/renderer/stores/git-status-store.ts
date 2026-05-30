@@ -67,13 +67,19 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   },
 
   fetchCommitContext: async (cwd) => {
+    // Guard against out-of-order responses: a slow earlier fetch must not
+    // overwrite or delete a fresher result. Mirror the fetchDiff token pattern.
+    const token = (commitContextRequests[cwd] = (commitContextRequests[cwd] ?? 0) + 1);
+    const isCurrent = () => commitContextRequests[cwd] === token;
     try {
       const context = await gitApi.getCommitContext(cwd);
+      if (!isCurrent()) return;
       set((state) => ({
         commitContexts: { ...state.commitContexts, [cwd]: context },
       }));
     } catch (error) {
       console.error("Failed to fetch commit context:", error);
+      if (!isCurrent()) return;
       // Drop any stale context so the footer disables its actions rather than
       // acting on out-of-date ahead/staged/HEAD data.
       set((state) => {
@@ -166,6 +172,12 @@ async function refreshAfterMutation(
  * so an in-flight `fetchDiff` can detect it has been superseded. Kept outside
  * React state because it is control metadata, not render data. */
 const diffRequestVersions: Record<string, number> = {};
+
+/** Monotonic request token per cwd for `fetchCommitContext`. Lets a late
+ * response detect it has been superseded by a newer fetch, so out-of-order
+ * responses cannot overwrite or delete fresher context. Control metadata, not
+ * render data, so it lives outside React state (same rationale as above). */
+const commitContextRequests: Record<string, number> = {};
 
 function bumpDiffVersion(key: string) {
   diffRequestVersions[key] = (diffRequestVersions[key] ?? 0) + 1;

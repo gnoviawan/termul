@@ -76,6 +76,26 @@ describe("git-status-store commit footer", () => {
     expect(useGitStatusStore.getState().commitContexts[CWD]).toBeUndefined();
   });
 
+  it("fetchCommitContext ignores a stale (out-of-order) response", async () => {
+    // First call resolves slowly with stale data; second call resolves fast
+    // with fresh data. The slow one must not overwrite the fresh result.
+    let resolveSlow: (v: GitCommitContext) => void = () => {};
+    const slow = new Promise<GitCommitContext>((r) => {
+      resolveSlow = r;
+    });
+    gitApi.getCommitContext.mockReturnValueOnce(slow);
+    gitApi.getCommitContext.mockResolvedValueOnce(makeContext({ ahead: 9 }));
+
+    const first = useGitStatusStore.getState().fetchCommitContext(CWD);
+    const second = useGitStatusStore.getState().fetchCommitContext(CWD);
+    await second;
+    // Now let the older request resolve with stale data.
+    resolveSlow(makeContext({ ahead: 1 }));
+    await first;
+
+    expect(useGitStatusStore.getState().commitContexts[CWD].ahead).toBe(9);
+  });
+
   it("fetchCommitContext drops stale context when the fetch fails", async () => {
     // Seed a context, then make the next fetch fail.
     await useGitStatusStore.getState().fetchCommitContext(CWD);
