@@ -670,6 +670,17 @@ pub fn run() {
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
             app.manage(ssh_manager);
 
+            // Verify the OS keychain backend actually persists secrets. If this
+            // fails, stored SSH passwords/passphrases silently vanish (mock
+            // store), so surface it loudly in logs.
+            match ssh::credential_store::self_test() {
+                Ok(()) => log::info!("[SSH] Credential keychain self-test passed"),
+                Err(e) => log::error!(
+                    "[SSH] Credential keychain self-test FAILED: {} -- stored SSH credentials will not persist",
+                    e
+                ),
+            }
+
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
