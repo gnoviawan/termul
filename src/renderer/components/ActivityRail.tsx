@@ -1,9 +1,10 @@
-import { PanelLeft, PanelRight, SlidersHorizontal, FolderKanban, GitBranch } from 'lucide-react'
+import { PanelLeft, PanelRight, SlidersHorizontal, FolderKanban, GitBranch, Network } from 'lucide-react'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { TermulMark } from '@/components/TermulMark'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { toast } from 'sonner'
 import { isMac } from '@/lib/platform'
@@ -30,7 +31,7 @@ interface ActivityRailProps {
  *   On macOS there is no separate top title strip, so this rail also carries the
  *   window-drag affordance at the top-left.
  * - Brand mark at the top, followed by a separator.
- * - Top group: projects (command palette), git changes.
+ * - Top group: projects (command palette), git changes, SSH panel toggle.
  * - Bottom group (pinned via `mt-auto`): sidebar toggle, file explorer toggle,
  *   keyboard shortcuts, preferences.
  *
@@ -47,6 +48,7 @@ export function ActivityRail({
 }: ActivityRailProps = {}): React.JSX.Element {
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
+  const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
   const location = useLocation()
@@ -66,6 +68,15 @@ export function ActivityRail({
       await updatePanelVisibility('fileExplorerVisible', !isExplorerVisible)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to update file explorer visibility')
+    }
+  }
+
+  const handleToggleSSHPanel = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
+    e.stopPropagation()
+    try {
+      await updatePanelVisibility('sshPanelVisible', !isSSHPanelVisible)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update SSH panel visibility')
     }
   }
 
@@ -113,6 +124,21 @@ export function ActivityRail({
         <GitBranch
           size={18}
           className={canOpenGitChanges ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        onClick={(e) => {
+          void handleToggleSSHPanel(e)
+        }}
+        className={railButtonClass}
+        title="Toggle SSH panel"
+        aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
+        aria-pressed={isSSHPanelVisible}
+      >
+        <Network
+          size={18}
+          className={isSSHPanelVisible ? 'text-foreground' : 'text-muted-foreground'}
         />
       </button>
 

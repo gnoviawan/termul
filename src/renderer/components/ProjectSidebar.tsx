@@ -39,6 +39,7 @@ import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
 import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { SSHPanel } from "./ssh/SSHPanel";
+import { useSSHPanelVisible } from "@/stores/ssh-panel-store";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
@@ -1672,7 +1673,8 @@ const SSH_MIN_HEIGHT = 48;
 const SSH_MAX_HEIGHT = 400;
 const SSH_DEFAULT_HEIGHT = 140;
 
-function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }: { onSSHConnect?: (profileId: string) => void; onSelectProfile?: (profileId: string) => void; activeProfileId?: string | null }): React.JSX.Element {
+function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }: { onSSHConnect?: (profileId: string) => void; onSelectProfile?: (profileId: string) => void; activeProfileId?: string | null }): React.JSX.Element | null {
+	const isVisible = useSSHPanelVisible();
 	const [height, setHeight] = useState(() => {
 		try {
 			const saved = localStorage.getItem(SSH_HEIGHT_KEY);
@@ -1737,6 +1739,8 @@ function SSHResizableSection({ onSSHConnect, onSelectProfile, activeProfileId }:
 			// Ignore storage errors in restricted environments.
 		}
 	}, [height]);
+
+	if (!isVisible) return null;
 
 	return (
 		<div className="flex-shrink-0 flex flex-col" style={{ height: `${height}px` }}>

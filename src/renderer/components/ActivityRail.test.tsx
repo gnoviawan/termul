@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { ActivityRail } from './ActivityRail'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
 
 const { mockUpdatePanelVisibility, mockToastError, mockNavigate, platformState } = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ describe('ActivityRail', () => {
     )
     useSidebarStore.setState({ isVisible: true })
     useFileExplorerStore.setState({ isVisible: true })
+    useSSHPanelStore.setState({ isVisible: true })
   })
 
   function renderRail() {
@@ -156,5 +158,15 @@ describe('ActivityRail', () => {
     expect(gitButton).toBeDisabled()
     fireEvent.click(gitButton)
     expect(onOpenGitChanges).not.toHaveBeenCalled()
+  })
+
+  it('toggles the SSH panel via persistence-aware updater on click', async () => {
+    renderRail()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide SSH panel' }))
+
+    await waitFor(() => {
+      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sshPanelVisible', false)
+    })
   })
 })
