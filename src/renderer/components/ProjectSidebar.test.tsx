@@ -350,6 +350,41 @@ describe('ProjectSidebar', () => {
   })
 })
 
+describe('ProjectSidebar Name Truncation', () => {
+  const longName =
+    'A Very Long Project Name That Would Otherwise Wrap Onto A Second Line In The Narrow Sidebar'
+
+  it('truncates a long active project name instead of wrapping', () => {
+    renderWithRouter({
+      projects: [{ id: '1', name: longName, color: 'blue', gitBranch: 'main' }],
+      activeProjectId: '1'
+    })
+
+    const nameEl = screen.getByText(longName)
+    // truncate => overflow-hidden + text-ellipsis + whitespace-nowrap;
+    // min-w-0 lets the flex child shrink below its content width so clipping kicks in.
+    expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
+    // Full name remains discoverable on hover.
+    expect(nameEl).toHaveAttribute('title', longName)
+  })
+
+  it('truncates a long archived project name and exposes the full name via title', () => {
+    renderWithRouter({
+      projects: [
+        { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
+        { id: '2', name: longName, color: 'green', gitBranch: 'develop', isArchived: true }
+      ]
+    })
+
+    // Expand the archived section.
+    fireEvent.click(screen.getByText(/Archived \(1\)/))
+
+    const nameEl = screen.getByText(longName)
+    expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
+    expect(nameEl).toHaveAttribute('title', longName)
+  })
+})
+
 describe('ProjectSidebar Archived Projects', () => {
   const projectsWithArchived: Project[] = [
     { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },

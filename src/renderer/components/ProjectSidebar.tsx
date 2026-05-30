@@ -1164,17 +1164,19 @@ const ProjectItem = memo(function ProjectItem({
 						onChange={(e) => onEditNameChange(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onBlur={onSaveRename}
-						className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
 						onClick={(e) => e.stopPropagation()}
 					/>
 				) : (
 					<span
 						className={cn(
-							"text-sm transition-colors flex-1 mr-2",
+							"text-sm transition-colors flex-1 min-w-0 truncate mr-2",
+							// flex-1 min-w-0 is required for truncate to clip inside a flex row
 							isActive
 								? "text-foreground"
 								: "text-muted-foreground group-hover:text-foreground",
 						)}
+						title={project.name}
 					>
 						{project.name}
 					</span>
@@ -1469,7 +1471,10 @@ function ArchivedProjectItem({
 					{firstLetter}
 				</span>
 			</div>
-			<span className="text-sm text-muted-foreground group-hover:text-foreground flex-1">
+			<span
+				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
+				title={project.name}
+			>
 				{project.name}
 			</span>
 			{hasActivity && (
