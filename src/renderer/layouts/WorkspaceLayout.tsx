@@ -54,6 +54,7 @@ import {
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { useCreateSnapshot, useSnapshotLoader } from "@/hooks/use-snapshots";
 import { useRecentCommandsLoader } from "@/hooks/use-recent-commands";
+import { usePinnedCommandsLoader } from "@/hooks/use-pinned-commands";
 import {
 	useCommandHistoryLoader,
 	useAddCommand,
@@ -418,6 +419,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	useSnapshotLoader();
 	// Load recent commands for command palette
 	useRecentCommandsLoader();
+	// Load pinned commands for command palette
+	usePinnedCommandsLoader();
 	// Load command history for current project
 	useCommandHistoryLoader(activeProjectId);
 	const addCommand = useAddCommand();

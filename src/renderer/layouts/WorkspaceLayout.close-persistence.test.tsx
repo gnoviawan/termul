@@ -173,6 +173,10 @@ vi.mock('@/hooks/use-recent-commands', () => ({
   useRecentCommandsLoader: () => undefined
 }))
 
+vi.mock('@/hooks/use-pinned-commands', () => ({
+  usePinnedCommandsLoader: () => undefined
+}))
+
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: () => undefined,
   useAddCommand: () => vi.fn(),

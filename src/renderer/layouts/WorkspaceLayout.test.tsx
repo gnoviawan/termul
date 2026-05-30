@@ -143,6 +143,12 @@ vi.mock('@/hooks/use-recent-commands', () => ({
   useSaveRecentCommand: vi.fn()
 }))
 
+vi.mock('@/hooks/use-pinned-commands', () => ({
+  usePinnedCommandsLoader: vi.fn(),
+  usePinnedCommandIds: vi.fn(() => []),
+  useTogglePinnedCommand: vi.fn()
+}))
+
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: vi.fn(),
   useAddCommand: vi.fn(() => vi.fn()),
