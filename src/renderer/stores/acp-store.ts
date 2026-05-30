@@ -60,6 +60,11 @@ import {
   type SessionPayload
 } from '@/lib/acp-history-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
+import {
+  loadMcpServers as loadMcpServersFromDisk,
+  saveMcpServers as saveMcpServersToDisk,
+  type StoredMcpServer
+} from '@/lib/acp-mcp-persistence'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -107,6 +112,9 @@ interface AcpState {
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
 
+  // Global MCP server registry (persisted)
+  mcpServers: StoredMcpServer[]
+
   // Sessions
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
@@ -137,6 +145,11 @@ interface AcpState {
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   deleteHistorySession: (id: string) => Promise<void>
+
+  // Actions — MCP server registry (P6)
+  loadMcpServers: () => Promise<void>
+  saveMcpServer: (server: StoredMcpServer) => Promise<void>
+  deleteMcpServer: (id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -281,6 +294,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   agentConfigs: [],
   configToLiveAgent: {},
   sessionIndex: [],
+  mcpServers: [],
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -535,6 +549,36 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       await deleteSessionPayload(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)
+    }
+  },
+
+  loadMcpServers: async () => {
+    const list = await loadMcpServersFromDisk()
+    set({ mcpServers: list })
+  },
+
+  saveMcpServer: async (server) => {
+    const list = get().mcpServers
+    const idx = list.findIndex((s) => s.id === server.id)
+    const next = idx === -1 ? [...list, server] : list.map((s) => (s.id === server.id ? server : s))
+    set({ mcpServers: next })
+    try {
+      await saveMcpServersToDisk(next)
+    } catch (err) {
+      set({ mcpServers: list })
+      throw err
+    }
+  },
+
+  deleteMcpServer: async (id) => {
+    const list = get().mcpServers
+    const next = list.filter((s) => s.id !== id)
+    set({ mcpServers: next })
+    try {
+      await saveMcpServersToDisk(next)
+    } catch (err) {
+      set({ mcpServers: list })
+      throw err
     }
   },
 

@@ -25,6 +25,14 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => {
     deleteSessionPayload: vi.fn(async () => {})
   }
 })
+vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-mcp-persistence')>()
+  return {
+    ...actual,
+    loadMcpServers: vi.fn(async () => []),
+    saveMcpServers: vi.fn(async () => {})
+  }
+})
 
 import { invoke } from '@tauri-apps/api/core'
 import { useAcpStore } from './acp-store'
@@ -35,6 +43,7 @@ const FRESH = {
   agentConfigs: [],
   configToLiveAgent: {},
   sessionIndex: [],
+  mcpServers: [],
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -544,5 +553,29 @@ describe('acp-store', () => {
     })
     await useAcpStore.getState().deleteHistorySession('s1')
     expect(useAcpStore.getState().sessionIndex).toHaveLength(0)
+  })
+
+  it('MCP registry CRUD persists and removes (P6)', async () => {
+    await useAcpStore.getState().saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs', command: 'npx' })
+    expect(useAcpStore.getState().mcpServers).toHaveLength(1)
+    await useAcpStore.getState().saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs2', command: 'npx' })
+    expect(useAcpStore.getState().mcpServers).toHaveLength(1)
+    expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
+    await useAcpStore.getState().deleteMcpServer('m1')
+    expect(useAcpStore.getState().mcpServers).toHaveLength(0)
+  })
+
+  it('startChat forwards selected MCP servers to new_session (P6)', async () => {
+    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('agent-9')
+      .mockResolvedValueOnce({ sessionId: 'sess-9' })
+    const servers = [{ type: 'stdio' as const, name: 'fs', command: 'npx' }]
+    await useAcpStore.getState().startChat('cfg-1', '/work', servers)
+    expect(invoke).toHaveBeenNthCalledWith(2, 'acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: servers
+    })
   })
 })

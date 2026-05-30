@@ -34,11 +34,11 @@ describe('acp-api command wrappers', () => {
 
   it('acpNewSession passes agentId, cwd, mcpServers', async () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1' })
-    await acpNewSession('agent-1', '/home/user', [{ name: 'fs' }])
+    await acpNewSession('agent-1', '/home/user', [{ type: 'stdio', name: 'fs', command: 'npx' }])
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/home/user',
-      mcpServers: [{ name: 'fs' }]
+      mcpServers: [{ type: 'stdio', name: 'fs', command: 'npx' }]
     })
   })
 

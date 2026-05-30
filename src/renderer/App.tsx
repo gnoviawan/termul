@@ -34,6 +34,7 @@ import { useUpdateCheck } from './hooks/use-updater'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { isWindows } from '@/lib/platform'
@@ -96,6 +97,7 @@ function AppEffects(): null {
   useAcpListeners()
   useAcpAgents()
   useAcpHistory()
+  useAcpMcp()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()

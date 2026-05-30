@@ -18,10 +18,12 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2, Plus, Server } from 'lucide-react'
 import { useAcpStore } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useProjectStore } from '@/stores/project-store'
+import { buildMcpServers } from '@/lib/acp-mcp-persistence'
+import { McpServerDialog } from './McpServerDialog'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 
 interface NewChatDialogProps {
@@ -43,6 +45,7 @@ export function NewChatDialog({
   targetPaneId
 }: NewChatDialogProps): React.JSX.Element {
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  const mcpServers = useAcpStore((s) => s.mcpServers)
   const startChat = useAcpStore((s) => s.startChat)
   const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
@@ -52,6 +55,8 @@ export function NewChatDialog({
 
   const [configId, setConfigId] = useState<string>(agentConfigs[0]?.id ?? '')
   const [cwd, setCwd] = useState<string>(defaultCwd)
+  const [selectedMcp, setSelectedMcp] = useState<string[]>([])
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const [starting, setStarting] = useState(false)
 
   // Keep defaults fresh when the dialog (re)opens.
@@ -71,7 +76,8 @@ export function NewChatDialog({
     if (!canStart) return
     setStarting(true)
     try {
-      const sessionId = await startChat(configId, cwd.trim())
+      const servers = buildMcpServers(mcpServers, selectedMcp)
+      const sessionId = await startChat(configId, cwd.trim(), servers.length > 0 ? servers : undefined)
       addAgentChatTab(sessionId, targetPaneId)
       onOpenChange(false)
     } catch (err) {
@@ -79,7 +85,11 @@ export function NewChatDialog({
     } finally {
       setStarting(false)
     }
-  }, [canStart, startChat, configId, cwd, addAgentChatTab, targetPaneId, onOpenChange])
+  }, [canStart, startChat, configId, cwd, mcpServers, selectedMcp, addAgentChatTab, targetPaneId, onOpenChange])
+
+  const toggleMcp = useCallback((id: string) => {
+    setSelectedMcp((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }, [])
 
   const handleDelete = useCallback(
     (id: string) => {
@@ -94,6 +104,7 @@ export function NewChatDialog({
   )
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
@@ -184,6 +195,44 @@ export function NewChatDialog({
                 className="font-mono"
               />
             </div>
+
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">MCP Servers</Label>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+                  onClick={() => setMcpDialogOpen(true)}
+                >
+                  <Plus size={11} /> Add server
+                </button>
+              </div>
+              {mcpServers.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  No MCP servers configured. Agents will use only their built-in tools.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1 rounded-md border border-border/60 p-1">
+                  {mcpServers.map((server) => (
+                    <label
+                      key={server.id}
+                      className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-accent cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedMcp.includes(server.id)}
+                        onChange={() => toggleMcp(server.id)}
+                      />
+                      <Server size={11} className="text-muted-foreground" />
+                      <span className="truncate flex-1">{server.name}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {server.type ?? 'stdio'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -199,5 +248,7 @@ export function NewChatDialog({
         )}
       </DialogContent>
     </Dialog>
+    <McpServerDialog open={mcpDialogOpen} onOpenChange={setMcpDialogOpen} />
+    </>
   )
 }

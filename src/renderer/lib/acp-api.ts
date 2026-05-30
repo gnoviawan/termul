@@ -163,8 +163,37 @@ export interface PermissionOption {
   [k: string]: unknown
 }
 
-/** McpServer config passed through to `session/new` (P6 builds the UI). */
-export type McpServer = Record<string, unknown>
+/** MCP server config passed through to `session/new`. */
+export interface McpEnvVar {
+  name: string
+  value: string
+}
+export interface McpHeader {
+  name: string
+  value: string
+}
+export interface McpStdioServer {
+  type?: 'stdio'
+  name: string
+  command: string
+  args?: string[]
+  env?: McpEnvVar[]
+}
+export interface McpHttpServer {
+  type: 'http'
+  name: string
+  url: string
+  headers?: McpHeader[]
+}
+export interface McpSseServer {
+  type: 'sse'
+  name: string
+  url: string
+  headers?: McpHeader[]
+}
+export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
+/** Wire type forwarded verbatim to the backend `acp_new_session` command. */
+export type McpServer = McpServerConfig
 
 export interface AgentConfig {
   name: string
