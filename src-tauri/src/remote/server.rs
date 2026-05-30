@@ -27,7 +27,7 @@ use crate::remote::registry::ProjectRegistry;
 use crate::remote::ws::{ws_upgrade, WsState};
 use axum::{
     extract::{FromRef, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
@@ -105,10 +105,24 @@ impl RemoteServer {
         // - GET  /api/terminals → flat list of live PTY terminals
         // - GET  /api/projects  → project → terminal tree (published by renderer)
         // - POST /api/spawn     → request the renderer to open a new terminal
+        // - GET  /static/*      → vendored xterm.js + Urbanist assets (no CDN)
         let app = Router::new()
             .route("/ws", get(ws_upgrade))
             .route("/", get(serve_index))
             .route("/health", get(health_check))
+            .route("/static/vendor/xterm.min.css", get(serve_xterm_css))
+            .route("/static/vendor/xterm.min.js", get(serve_xterm_js))
+            .route("/static/vendor/addon-fit.min.js", get(serve_addon_fit))
+            .route("/static/vendor/addon-web-links.min.js", get(serve_addon_web_links))
+            .route("/static/fonts/urbanist.css", get(serve_urbanist_css))
+            .route(
+                "/static/fonts/urbanist-latin.woff2",
+                get(serve_urbanist_latin),
+            )
+            .route(
+                "/static/fonts/urbanist-latin-ext.woff2",
+                get(serve_urbanist_latin_ext),
+            )
             .route("/api/terminals", get(list_terminals))
             .route("/api/projects", get(list_projects))
             .route("/api/spawn", post(request_spawn))
@@ -240,6 +254,81 @@ async fn serve_index() -> impl IntoResponse {
     Html(include_str!("static/index.html"))
 }
 
+// Vendored UI assets, embedded at compile time so the client never reaches out
+// to a CDN (works fully offline / behind locked-down networks, no third-party
+// supply-chain or privacy exposure). Long cache: these are version-pinned.
+const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+async fn serve_xterm_css() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_str!("static/vendor/xterm.min.css"),
+    )
+}
+
+async fn serve_xterm_js() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_str!("static/vendor/xterm.min.js"),
+    )
+}
+
+async fn serve_addon_fit() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_str!("static/vendor/addon-fit.min.js"),
+    )
+}
+
+async fn serve_addon_web_links() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_str!("static/vendor/addon-web-links.min.js"),
+    )
+}
+
+async fn serve_urbanist_css() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_str!("static/fonts/urbanist.css"),
+    )
+}
+
+async fn serve_urbanist_latin() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_bytes!("static/fonts/urbanist-latin.woff2").as_slice(),
+    )
+}
+
+async fn serve_urbanist_latin_ext() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
+        ],
+        include_bytes!("static/fonts/urbanist-latin-ext.woff2").as_slice(),
+    )
+}
+
 /// Health check endpoint.
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
@@ -349,5 +438,109 @@ impl RemoteServerState {
 impl Default for RemoteServerState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt; // for `oneshot`
+
+    /// Router with only the vendored static-asset routes (no AppHandle / state
+    /// needed), so we can verify each embedded asset is served correctly.
+    fn static_router() -> Router {
+        Router::new()
+            .route("/static/vendor/xterm.min.css", get(serve_xterm_css))
+            .route("/static/vendor/xterm.min.js", get(serve_xterm_js))
+            .route("/static/vendor/addon-fit.min.js", get(serve_addon_fit))
+            .route(
+                "/static/vendor/addon-web-links.min.js",
+                get(serve_addon_web_links),
+            )
+            .route("/static/fonts/urbanist.css", get(serve_urbanist_css))
+            .route(
+                "/static/fonts/urbanist-latin.woff2",
+                get(serve_urbanist_latin),
+            )
+            .route(
+                "/static/fonts/urbanist-latin-ext.woff2",
+                get(serve_urbanist_latin_ext),
+            )
+    }
+
+    async fn fetch(path: &str) -> (StatusCode, String, Vec<u8>) {
+        let resp = static_router()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let status = resp.status();
+        let ctype = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body")
+            .to_vec();
+        (status, ctype, body)
+    }
+
+    #[tokio::test]
+    async fn vendored_assets_are_served_with_correct_types() {
+        let cases = [
+            ("/static/vendor/xterm.min.css", "text/css"),
+            ("/static/vendor/xterm.min.js", "text/javascript"),
+            ("/static/vendor/addon-fit.min.js", "text/javascript"),
+            ("/static/vendor/addon-web-links.min.js", "text/javascript"),
+            ("/static/fonts/urbanist.css", "text/css"),
+            ("/static/fonts/urbanist-latin.woff2", "font/woff2"),
+            ("/static/fonts/urbanist-latin-ext.woff2", "font/woff2"),
+        ];
+        for (path, expected_type) in cases {
+            let (status, ctype, body) = fetch(path).await;
+            assert_eq!(status, StatusCode::OK, "{path} should return 200");
+            assert!(
+                ctype.starts_with(expected_type),
+                "{path} content-type `{ctype}` should start with `{expected_type}`"
+            );
+            assert!(!body.is_empty(), "{path} body should be non-empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn vendored_woff2_have_valid_magic_bytes() {
+        for path in [
+            "/static/fonts/urbanist-latin.woff2",
+            "/static/fonts/urbanist-latin-ext.woff2",
+        ] {
+            let (_, _, body) = fetch(path).await;
+            assert_eq!(&body[..4], b"wOF2", "{path} should be a valid woff2 file");
+        }
+    }
+
+    #[tokio::test]
+    async fn index_html_references_only_local_assets() {
+        // Guard against re-introducing CDN runtime deps for UI assets.
+        let html = include_str!("static/index.html");
+        assert!(!html.contains("cdn.jsdelivr.net"), "no jsDelivr CDN refs");
+        assert!(!html.contains("fonts.googleapis.com"), "no Google Fonts CSS");
+        assert!(!html.contains("fonts.gstatic.com"), "no gstatic font refs");
+        assert!(
+            html.contains("/static/vendor/xterm.min.js"),
+            "uses local xterm js"
+        );
+        assert!(
+            html.contains("/static/fonts/urbanist.css"),
+            "uses local font css"
+        );
     }
 }

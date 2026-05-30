@@ -72,6 +72,7 @@ futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

@@ -5273,6 +5273,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
