@@ -3,9 +3,11 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
+mod secure_storage;
 mod shell_paths;
 mod ssh;
 mod trackers;
+mod worktree;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -282,10 +284,16 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
-    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
-        "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "wsl" | "wsl.exe"
+        "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
+            | "wsl"
+            | "wsl.exe"
     )
 }
 
@@ -604,7 +612,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -739,6 +748,7 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            commands::browser_tab_open_devtools,
             commands::browser_tab_inject_annotation,
             commands::browser_tab_remove_annotation_overlay,
             commands::browser_tab_inject_annotation_markers,
@@ -750,6 +760,20 @@ pub fn run() {
             commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
             commands::browser_tab_report_annotation_marker_clicked,
+            // Worktree commands
+            commands::worktree_list,
+            commands::worktree_create,
+            commands::worktree_remove,
+            commands::worktree_branches,
+            commands::worktree_check_dirty,
+            commands::worktree_remove_all_managed,
+            commands::worktree_parse_gitignore,
+            commands::worktree_create_symlinks,
+            commands::worktree_ensure_symlinks,
+            commands::worktree_archive,
+            commands::worktree_restore,
+            commands::worktree_merge_preview,
+            commands::worktree_merge_execute,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,
@@ -785,6 +809,16 @@ pub fn run() {
             commands::data_migration_get_schema_info,
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
+            // Git commands
+            commands::git_get_status,
+            commands::git_get_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_discard,
+            // Secure storage commands
+            secure_storage::secure_storage_set,
+            secure_storage::secure_storage_get,
+            secure_storage::secure_storage_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

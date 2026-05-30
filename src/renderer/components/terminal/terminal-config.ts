@@ -50,6 +50,7 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
 	scrollback: 10000,
 	tabStopWidth: 4,
 	convertEol: false,
+	ignoreBracketedPasteMode: false,
 	rightClickSelectsWord: true,
 	screenReaderMode: true,
 };

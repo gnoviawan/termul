@@ -47,7 +47,13 @@ interface PersistedBrowserTabRef {
   url?: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef
+interface PersistedGitTabRef {
+  type: 'git'
+  id: string
+  cwd: string
+}
+
+type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -119,6 +125,10 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
       if (tab.type === 'browser') {
         const browserTab = useBrowserSessionStore.getState().tabs.get(tab.browserTabId)
         return [{ type: 'browser', browserTabId: tab.browserTabId, url: browserTab?.url }]
+      }
+
+      if (tab.type === 'git') {
+        return [{ type: 'git', id: tab.id, cwd: tab.cwd }]
       }
 
       return []
@@ -281,6 +291,10 @@ function reconcileTerminalTabs(
           return [tab]
         }
 
+        if (tab.type === 'git') {
+          return [tab]
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -327,7 +341,7 @@ function reconcileTerminalTabs(
 }
 
 // Deserialize pane tree with full tab mapping
-function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
+export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
   if (persisted.type === 'leaf') {
     const tabs: WorkspaceTab[] = ('tabs' in persisted ? persisted.tabs : []).flatMap(
       (tab): WorkspaceTab[] => {
@@ -350,6 +364,16 @@ function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
               type: 'browser',
               id: bTabId,
               browserTabId: tab.browserTabId
+            }
+          ]
+        }
+
+        if (tab.type === 'git') {
+          return [
+            {
+              type: 'git',
+              id: tab.id,
+              cwd: tab.cwd
             }
           ]
         }

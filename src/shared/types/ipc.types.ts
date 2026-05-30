@@ -64,7 +64,25 @@ export interface GitStatus {
 	modified: number;
 	staged: number;
 	untracked: number;
+	ahead: number;
+	behind: number;
 	hasChanges: boolean;
+}
+
+export type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "staged";
+
+export interface GitStatusDetail {
+	path: string;
+	status: GitFileStatus;
+	staged: boolean;
+}
+
+export interface GitApi {
+	getStatus: (cwd: string) => Promise<GitStatusDetail[]>;
+	getDiff: (cwd: string, path: string, staged?: boolean) => Promise<string>;
+	stage: (cwd: string, path: string) => Promise<void>;
+	unstage: (cwd: string, path: string) => Promise<void>;
+	discard: (cwd: string, path: string) => Promise<void>;
 }
 
 // Terminal API exposed via preload
@@ -116,6 +134,15 @@ export const IpcErrorCodes = {
 	FILE_EXISTS: "FILE_EXISTS",
 	DELETE_FAILED: "DELETE_FAILED",
 	RENAME_FAILED: "RENAME_FAILED",
+	// Worktree error codes
+	WORKTREE_NOT_FOUND: "WORKTREE_NOT_FOUND",
+	WORKTREE_EXISTS: "WORKTREE_EXISTS",
+	WORKTREE_CREATE_FAILED: "WORKTREE_CREATE_FAILED",
+	WORKTREE_REMOVE_FAILED: "WORKTREE_REMOVE_FAILED",
+	BRANCH_ALREADY_HAS_WORKTREE: "BRANCH_ALREADY_HAS_WORKTREE",
+	NOT_A_GIT_REPO: "NOT_A_GIT_REPO",
+	GIT_NOT_FOUND: "GIT_NOT_FOUND",
+	PATH_TOO_LONG: "PATH_TOO_LONG",
 	// Session persistence error codes
 	SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
 	SESSION_INVALID: "SESSION_INVALID",
@@ -130,6 +157,49 @@ export const IpcErrorCodes = {
 } as const;
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes];
+
+// ============================================================================
+// Worktree Types
+// ============================================================================
+
+export interface WorktreeInfo {
+	name: string;
+	branch: string;
+	path: string;
+	headCommit: string;
+}
+
+export interface BranchInfo {
+	name: string;
+	isRemote: boolean;
+	isCurrent: boolean;
+	upstream?: string | null;
+}
+
+export interface DirtyStatus {
+	modified: number;
+	staged: number;
+	untracked: number;
+	hasChanges: boolean;
+}
+
+export interface RemoveResult {
+	worktreePath: string;
+	success: boolean;
+	error?: string | null;
+}
+
+export interface GitignoreDir {
+	dirName: string;
+	exists: boolean;
+}
+
+export interface SymlinkResult {
+	path: string;
+	target: string;
+	status: 'created' | 'skipped' | 'failed';
+	reason?: string;
+}
 
 // Dialog API for file/directory selection
 export interface DialogApi {
@@ -209,6 +279,7 @@ export interface WindowApi {
 export interface ClipboardApi {
 	readText: () => Promise<IpcResult<string>>;
 	writeText: (text: string) => Promise<IpcResult<void>>;
+	hasImage: () => Promise<IpcResult<boolean>>;
 }
 
 // Visibility API for renderer to notify main process of visibility changes

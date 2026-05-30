@@ -14,6 +14,7 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 import NotFound from './pages/NotFound'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useCrashRecovery } from './hooks/use-crash-recovery'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useCwd } from './hooks/use-cwd'
 import { useGitBranch } from './hooks/use-git-branch'
@@ -27,6 +28,8 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { initNotificationPermissions } from './lib/tauri-notification-api'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 const queryClient = new QueryClient()
@@ -35,6 +38,7 @@ const queryClient = new QueryClient()
 function AppEffects(): null {
   useTerminalAutoSave()
   useTerminalRestore()
+  useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
@@ -49,6 +53,14 @@ function AppEffects(): null {
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()
+  useTerminalExitNotification()
+
+  // Initialize desktop notification permissions once at app startup
+  // so the OS permission prompt appears early, not on first terminal exit
+  useEffect(() => {
+    initNotificationPermissions()
+  }, [])
+
   return null
 }
 

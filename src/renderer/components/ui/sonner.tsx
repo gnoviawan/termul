@@ -33,19 +33,15 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           // Default (neutral) toast keeps the app's surface colour. Typed
-          // toasts (success / info / warning / error) opt out of
-          // bg-background so Sonner's richColors palette can show
-          // through — otherwise the only visible signal of severity is
-          // the close button tint, which defeats the point of
-          // richColors.
+          // toasts (success / info / warning / error) rely on Sonner's
+          // richColors palette for their tinted background. Do NOT force a
+          // background here: a `!bg-transparent` override beats richColors'
+          // own `background: var(--success-bg)` rule (Tailwind emits
+          // !important), leaving the toast see-through over the app.
           toast:
-            'group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
+            'group toast group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
           default:
             'group-[.toaster]:bg-background group-[.toaster]:text-foreground',
-          success: 'group-[.toaster]:!bg-transparent',
-          info: 'group-[.toaster]:!bg-transparent',
-          warning: 'group-[.toaster]:!bg-transparent',
-          error: 'group-[.toaster]:!bg-transparent',
           description: 'group-[.toast]:text-muted-foreground',
           actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
           cancelButton: 'group-[.toast]:bg-muted group-[.toast]:text-muted-foreground'

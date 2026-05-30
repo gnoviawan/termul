@@ -1,27 +1,229 @@
 import { useEffect, useCallback, useRef } from 'react'
 import { useProjectStore } from '@/stores/project-store'
-import { persistenceApi } from '@/lib/api'
+import { persistenceApi, secureStorageApi, worktreeApi } from '@/lib/api'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
-import type { PersistedProjectData, PersistedProject } from '../../shared/types/persistence.types'
-import type { Project, ProjectColor } from '@/types/project'
+import type {
+  PersistedProjectData,
+  PersistedProject,
+  PersistedWorktree
+} from '../../shared/types/persistence.types'
+import type { Project, ProjectColor, EnvVariable, Worktree } from '@/types/project'
 
-function toPersistedEnvVars(project: Project): PersistedProject['envVars'] {
-  return project.envVars?.map((envVar) => ({
-    key: envVar.key,
-    value: envVar.isSecret ? '' : envVar.value,
-    isSecret: envVar.isSecret
-  }))
+const REDACTED_VALUE = '[REDACTED]'
+type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
+type ProjectSnapshot = Pick<Project, 'id'> & { envVars?: EnvVariableSnapshot[] }
+
+/**
+ * Generate secure storage key for a project environment variable
+ */
+function getSecureStorageKey(projectId: string, envKey: string): string {
+  return `project:${projectId}:env:${envKey}`
 }
 
-function fromPersistedEnvVars(persisted: PersistedProject): Project['envVars'] {
-  return persisted.envVars?.map((envVar) => ({
-    key: envVar.key,
-    value: envVar.isSecret ? '' : envVar.value,
-    isSecret: envVar.isSecret
-  }))
+function isSecretEnvVar(envVar: Pick<EnvVariableSnapshot, 'isSecret'>): boolean {
+  return envVar.isSecret === true
 }
 
-function toPersistedProject(project: Project): PersistedProject {
+async function deleteSecretEntry(projectId: string, envKey: string): Promise<void> {
+  const storageKey = getSecureStorageKey(projectId, envKey)
+  const deleteResult = await secureStorageApi.deleteSecret(storageKey)
+
+  if (!deleteResult.success) {
+    console.warn(
+      `Failed to delete secret ${envKey} for project ${projectId}:`,
+      deleteResult.error
+    )
+  }
+}
+
+async function cleanupObsoleteSecrets(
+  projectId: string,
+  previousEnvVars: EnvVariableSnapshot[] | undefined,
+  nextEnvVars: EnvVariable[] | undefined
+): Promise<void> {
+  if (!previousEnvVars || previousEnvVars.length === 0) {
+    return
+  }
+
+  const nextSecretKeys = new Set(
+    (nextEnvVars ?? []).filter((envVar) => isSecretEnvVar(envVar)).map((envVar) => envVar.key)
+  )
+
+  for (const previousEnvVar of previousEnvVars) {
+    if (!isSecretEnvVar(previousEnvVar)) {
+      continue
+    }
+
+    if (nextSecretKeys.has(previousEnvVar.key)) {
+      continue
+    }
+
+    await deleteSecretEntry(projectId, previousEnvVar.key)
+  }
+}
+
+async function cleanupRemovedProjects(
+  previousProjects: ProjectSnapshot[],
+  nextProjects: Project[]
+): Promise<void> {
+  const nextProjectIds = new Set(nextProjects.map((project) => project.id))
+
+  for (const previousProject of previousProjects) {
+    if (nextProjectIds.has(previousProject.id)) {
+      continue
+    }
+
+    await deleteSecrets(previousProject.id, previousProject.envVars)
+  }
+}
+
+async function getPersistedProjectsSnapshot(): Promise<PersistedProject[]> {
+  const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
+
+  if (!result.success || !result.data) {
+    return []
+  }
+
+  return result.data.projects
+}
+
+/**
+ * Store secret environment variables in secure storage
+ * Returns the env vars with secrets redacted for persistence
+ */
+async function storeSecretsAndRedact(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      if (envVar.value === REDACTED_VALUE) {
+        result.push(envVar)
+        continue
+      }
+
+      // Store in secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const storeResult = await secureStorageApi.setSecret(storageKey, envVar.value)
+
+      if (!storeResult.success) {
+        // Abort the save instead of writing the raw secret to disk. Throwing
+        // keeps the recoverable plaintext value in the in-memory store while
+        // ensuring neither the secret nor a misleading [REDACTED] placeholder
+        // is persisted when the keychain write fails.
+        throw new Error(
+          `Failed to store secret ${envVar.key} for project ${projectId}: ${
+            storeResult.error ?? 'unknown error'
+          }`
+        )
+      }
+
+      // Add redacted version to result
+      result.push({
+        ...envVar,
+        value: REDACTED_VALUE,
+        isSecret: true
+      })
+    } else {
+      // Non-secret, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Load secret environment variables from secure storage
+ * Replaces redacted values with actual secrets
+ */
+async function loadSecrets(
+  projectId: string,
+  envVars: EnvVariable[] | undefined
+): Promise<EnvVariable[] | undefined> {
+  if (!envVars || envVars.length === 0) {
+    return envVars
+  }
+
+  const result: EnvVariable[] = []
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret && envVar.value === REDACTED_VALUE) {
+      // Load from secure storage
+      const storageKey = getSecureStorageKey(projectId, envVar.key)
+      const getResult = await secureStorageApi.getSecret(storageKey)
+
+      if (getResult.success) {
+        result.push({
+          key: envVar.key,
+          value: getResult.data,
+          isSecret: true
+        })
+      } else {
+        // Secret not found or error - keep redacted
+        console.warn(
+          `Failed to load secret ${envVar.key} for project ${projectId}:`,
+          getResult.error
+        )
+        result.push(envVar)
+      }
+    } else {
+      // Non-secret or already has value, keep as-is
+      result.push(envVar)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Delete secret environment variables from secure storage
+ */
+async function deleteSecrets(projectId: string, envVars: EnvVariable[] | undefined): Promise<void> {
+  if (!envVars || envVars.length === 0) {
+    return
+  }
+
+  for (const envVar of envVars) {
+    if (envVar.isSecret) {
+      await deleteSecretEntry(projectId, envVar.key)
+    }
+  }
+}
+
+function toPersistedWorktree(worktree: Worktree): PersistedWorktree {
+  return {
+    id: worktree.id,
+    name: worktree.name,
+    branch: worktree.branch,
+    path: worktree.path,
+    createdAt: worktree.createdAt,
+  }
+}
+
+function fromPersistedWorktree(persisted: PersistedWorktree): Worktree {
+  return {
+    id: persisted.id,
+    name: persisted.name,
+    branch: persisted.branch,
+    path: persisted.path,
+    createdAt: persisted.createdAt,
+  }
+}
+
+async function toPersistedProject(
+  project: Project,
+  previousEnvVars?: EnvVariableSnapshot[]
+): Promise<PersistedProject> {
+  await cleanupObsoleteSecrets(project.id, previousEnvVars, project.envVars)
+  const redactedEnvVars = await storeSecretsAndRedact(project.id, project.envVars)
+
   return {
     id: project.id,
     name: project.name,
@@ -30,13 +232,42 @@ function toPersistedProject(project: Project): PersistedProject {
     isArchived: project.isArchived,
     gitBranch: project.gitBranch,
     defaultShell: project.defaultShell,
-    // TODO: Secret values (isSecret===true) should be stored in secure OS storage (keyring/secureStore)
-    // instead of plaintext. Until secure storage exists, secret keys are preserved but values are redacted.
-    envVars: toPersistedEnvVars(project)
+    envVars: redactedEnvVars,
+    worktrees: project.worktrees?.map(toPersistedWorktree),
+    activeWorktreeId: project.activeWorktreeId,
+    isGitRepo: project.isGitRepo,
   }
 }
 
-function fromPersistedProject(persisted: PersistedProject): Project {
+async function persistProjectsSnapshot(
+  projects: Project[],
+  activeProjectId: string,
+  writeProjects: (key: string, data: PersistedProjectData) => Promise<unknown>,
+  previousProjects?: ProjectSnapshot[]
+): Promise<void> {
+  const previousProjectsSnapshot = previousProjects ?? (await getPersistedProjectsSnapshot())
+  await cleanupRemovedProjects(previousProjectsSnapshot, projects)
+
+  const previousEnvVarsByProjectId = new Map(
+    previousProjectsSnapshot.map((project) => [project.id, project.envVars])
+  )
+  const persistedProjects = await Promise.all(
+    projects.map((project) =>
+      toPersistedProject(project, previousEnvVarsByProjectId.get(project.id))
+    )
+  )
+  const data: PersistedProjectData = {
+    projects: persistedProjects,
+    activeProjectId,
+    updatedAt: new Date().toISOString()
+  }
+
+  await writeProjects(PersistenceKeys.projects, data)
+}
+
+async function fromPersistedProject(persisted: PersistedProject): Promise<Project> {
+  const loadedEnvVars = await loadSecrets(persisted.id, persisted.envVars)
+
   return {
     id: persisted.id,
     name: persisted.name,
@@ -45,7 +276,127 @@ function fromPersistedProject(persisted: PersistedProject): Project {
     isArchived: persisted.isArchived,
     gitBranch: persisted.gitBranch,
     defaultShell: persisted.defaultShell,
-    envVars: fromPersistedEnvVars(persisted)
+    envVars: loadedEnvVars,
+    worktrees: persisted.worktrees?.map(fromPersistedWorktree),
+    activeWorktreeId: persisted.activeWorktreeId,
+    isGitRepo: persisted.isGitRepo,
+  }
+}
+
+/**
+ * Reconcile worktrees for a single project against `git worktree list --porcelain`.
+ * Adds worktrees that git knows about but we don't; removes stale entries.
+ * All actions are logged with [WorktreeReconciler] prefix for debugging.
+ */
+async function reconcileProjectWorktrees(project: Project): Promise<void> {
+  if (!project.path) return
+
+  const result = await worktreeApi.list(project.path)
+  if (!result.success) {
+    // Not a git repo or git not available
+    if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
+      useProjectStore.getState().updateProject(project.id, { isGitRepo: false })
+      console.debug(`[WorktreeReconciler] Not a git repo or git not found: ${project.name}`)
+    }
+    return
+  }
+
+  // Mark project as a git repo
+  useProjectStore.getState().updateProject(project.id, { isGitRepo: true })
+
+  const gitWorktrees = result.data
+  if (!gitWorktrees) return
+
+  const storedWorktrees = project.worktrees ?? []
+  const storedByPath = new Map(storedWorktrees.map((w) => [w.path, w]))
+  const gitByPath = new Map(gitWorktrees.map((w) => [w.path, w]))
+
+  let changed = false
+  const updatedWorktrees = [...storedWorktrees]
+
+  // Git has worktree not in store → add it
+  for (const gitWt of gitWorktrees) {
+    if (!storedByPath.has(gitWt.path)) {
+      const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
+      updatedWorktrees.push({
+        id: crypto.randomUUID(),
+        name: gitWt.name,
+        branch: gitWt.branch,
+        path: gitWt.path,
+        createdAt: new Date().toISOString(),
+      })
+      console.debug(`[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`)
+      changed = true
+    }
+  }
+
+  // Store has worktree git doesn't show → remove stale entry
+  // But only remove if we can verify (the path no longer exists or git doesn't list it)
+  const staleIds: string[] = []
+  for (const storedWt of storedWorktrees) {
+    if (!gitByPath.has(storedWt.path)) {
+      staleIds.push(storedWt.id)
+      console.debug(`[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    const finalList = updatedWorktrees.filter((w) => !staleIds.includes(w.id))
+
+    // Reconcile activeWorktreeId: if the active worktree was pruned, reset it
+    const currentProject = useProjectStore.getState().projects.find((p) => p.id === project.id)
+    const activeId = currentProject?.activeWorktreeId
+    const newActiveId = activeId && staleIds.includes(activeId) ? null : activeId
+
+    useProjectStore.getState().updateProject(project.id, {
+      worktrees: finalList,
+      activeWorktreeId: newActiveId,
+    })
+  }
+}
+
+/**
+ * Hook that reconciles worktrees for the active project.
+ * Runs on project selection and periodically (every 60s).
+ * Also reconciles all projects on initial load.
+ */
+export function useWorktreeReconciler(): void {
+  const activeProjectId = useProjectStore((state) => state.activeProjectId)
+  // Use a stable selector that returns only what we need to avoid retriggers on store writes
+  const projectRef = useRef<Project | null>(null)
+
+  useEffect(() => {
+    const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
+    if (!project?.path) return
+
+    projectRef.current = project
+
+    // Reconcile on project selection
+    reconcileProjectWorktrees(project)
+
+    // Periodic reconciliation every 60s for active project
+    const interval = setInterval(() => {
+      const currentProject = useProjectStore.getState().projects.find(
+        (p) => p.id === activeProjectId
+      )
+      if (currentProject?.path) {
+        reconcileProjectWorktrees(currentProject)
+      }
+    }, 60_000)
+
+    return () => clearInterval(interval)
+  }, [activeProjectId])
+}
+
+/**
+ * Force-reconcile worktrees for a specific project after create/remove operations.
+ * Always re-lists from git to ensure consistency.
+ */
+export async function reconcileProjectWorktreesNow(projectId: string): Promise<void> {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  if (project) {
+    await reconcileProjectWorktrees(project)
   }
 }
 
@@ -58,7 +409,10 @@ export function useProjectsLoader(): void {
         PersistenceKeys.projects
       )
       if (result.success && result.data) {
-        const projects = result.data.projects.map(fromPersistedProject)
+        // Load projects with secrets from secure storage
+        const projects = await Promise.all(
+          result.data.projects.map(fromPersistedProject)
+        )
         // Validate activeProjectId exists in projects
         const validActiveId = projects.some((p) => p.id === result.data.activeProjectId)
           ? result.data.activeProjectId
@@ -66,6 +420,15 @@ export function useProjectsLoader(): void {
             ? projects[0].id
             : ''
         setProjects(projects, validActiveId)
+
+        // Reconcile all projects against git in parallel after loading
+        for (const project of projects) {
+          if (project.path) {
+            reconcileProjectWorktrees(project).catch((err) =>
+              console.debug('[WorktreeReconciler] Reconciliation error:', err)
+            )
+          }
+        }
       } else {
         // No saved projects - start with empty state
         setProjects([])
@@ -99,15 +462,13 @@ export function useProjectsAutoSave(): void {
         return
       }
 
-      const data: PersistedProjectData = {
-        projects: state.projects.map(toPersistedProject),
-        activeProjectId: state.activeProjectId,
-        updatedAt: new Date().toISOString()
-      }
-
-      // Use debounced write via API
-      persistenceApi
-        .writeDebounced(PersistenceKeys.projects, data)
+      // Convert projects to persisted format (async)
+      persistProjectsSnapshot(
+        state.projects,
+        state.activeProjectId,
+        persistenceApi.writeDebounced,
+        prevState.projects
+      )
         .catch((err: unknown) => {
           console.error('Failed to auto-save projects:', err)
         })
@@ -122,30 +483,28 @@ export function useProjectsAutoSave(): void {
 export function usePersistProjects(): () => Promise<void> {
   return useCallback(async () => {
     const { projects, activeProjectId } = useProjectStore.getState()
-    const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
-      activeProjectId,
-      updatedAt: new Date().toISOString()
-    }
-    await persistenceApi.writeDebounced(PersistenceKeys.projects, data)
+    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.writeDebounced)
   }, [])
 }
 
 export function usePersistProjectsImmediate(): () => Promise<void> {
   return useCallback(async () => {
     const { projects, activeProjectId } = useProjectStore.getState()
-    const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
-      activeProjectId,
-      updatedAt: new Date().toISOString()
-    }
-    await persistenceApi.write(PersistenceKeys.projects, data)
+    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.write)
   }, [])
 }
 
 export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
   return useCallback(async (id: string) => {
-    // First delete the project from the store
+    // Get project before deletion to clean up secrets
+    const project = useProjectStore.getState().projects.find((p) => p.id === id)
+
+    // Delete secrets from secure storage
+    if (project) {
+      await deleteSecrets(project.id, project.envVars)
+    }
+
+    // Delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
     // Cascade delete: remove terminal layout and snapshots for this project
@@ -156,8 +515,11 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
 
     // Persist the updated projects list
     const { projects, activeProjectId } = useProjectStore.getState()
+    const persistedProjects = await Promise.all(
+      projects.map((project) => toPersistedProject(project))
+    )
     const data: PersistedProjectData = {
-      projects: projects.map(toPersistedProject),
+      projects: persistedProjects,
       activeProjectId,
       updatedAt: new Date().toISOString()
     }

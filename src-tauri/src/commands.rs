@@ -3,7 +3,8 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
+use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -220,6 +221,348 @@ pub async fn terminal_set_visibility(
     Ok(IpcResult::success(()))
 }
 
+// ==================== Worktree Commands ====================
+
+/// List all worktrees for a git repo at the given path.
+/// Filters out bare worktrees and detached-HEAD worktrees.
+#[tauri::command]
+pub async fn worktree_list(
+    project_path: String,
+) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
+    match WorktreeManager::list(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<WorktreeInfo> = entries
+                .into_iter()
+                .map(|e| WorktreeInfo {
+                    name: e.name,
+                    branch: e.branch,
+                    path: e.path,
+                    head_commit: e.head_commit,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create a new worktree.
+#[tauri::command]
+pub async fn worktree_create(
+    project_path: String,
+    name: String,
+    branch: String,
+    is_new_branch: bool,
+    start_ref: Option<String>,
+    target_path: Option<String>,
+) -> Result<IpcResult<WorktreeInfo>, String> {
+    match WorktreeManager::create(
+        &project_path,
+        &name,
+        &branch,
+        is_new_branch,
+        start_ref.as_deref(),
+        target_path.as_deref(),
+    ) {
+        Ok(entry) => Ok(IpcResult::success(WorktreeInfo {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        })),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove a worktree. Uses --force if requested. Runs `git worktree prune` after.
+#[tauri::command]
+pub async fn worktree_remove(
+    project_path: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::remove(&project_path, &worktree_path, force) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// List local and remote branches for a git repo.
+#[tauri::command]
+pub async fn worktree_branches(
+    project_path: String,
+) -> Result<IpcResult<Vec<BranchInfo>>, String> {
+    match WorktreeManager::branches(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<BranchInfo> = entries
+                .into_iter()
+                .map(|e| BranchInfo {
+                    name: e.name,
+                    is_remote: e.is_remote,
+                    is_current: e.is_current,
+                    upstream: e.upstream,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Check dirty status for a worktree checkout.
+#[tauri::command]
+pub async fn worktree_check_dirty(
+    worktree_path: String,
+) -> Result<IpcResult<DirtyStatus>, String> {
+    match WorktreeManager::check_dirty(&worktree_path) {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove all Termul-managed worktrees for a project.
+/// Reports per-worktree success/failure.
+#[tauri::command]
+pub async fn worktree_remove_all_managed(
+    project_path: String,
+    worktrees_json: String,
+) -> Result<IpcResult<Vec<RemoveResult>>, String> {
+    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+        Ok(results) => Ok(IpcResult::success(results)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Parse `.gitignore` and return directory entries that could be symlinked into worktrees.
+/// Returns simple directory entries with whether they exist in the project root.
+#[tauri::command]
+pub async fn worktree_parse_gitignore(
+    project_path: String,
+) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
+    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+        Ok(dirs) => {
+            let infos: Vec<GitignoreDirInfo> = dirs
+                .into_iter()
+                .map(|d| GitignoreDirInfo {
+                    dir_name: d.dir_name,
+                    exists: d.exists,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create symlinks from project root directories into a worktree.
+/// `symlink_dirs` is a JSON array of directory names to symlink (e.g. ["node_modules", "dist"]).
+#[tauri::command]
+pub async fn worktree_create_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
+    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
+/// Ensure symlinks exist for all directories in symlink_dirs.
+/// Creates any missing symlinks. Does not remove or overwrite existing ones.
+#[tauri::command]
+pub async fn worktree_ensure_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
+    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
+/// Archive a worktree by moving it to `.termul/archives/`.
+#[tauri::command]
+pub async fn worktree_archive(
+    project_path: String,
+    worktree_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::archive(&project_path, &worktree_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Restore an archived worktree back to its original location.
+#[tauri::command]
+pub async fn worktree_restore(
+    project_path: String,
+    archive_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::restore(&project_path, &archive_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Generate a merge preview for a worktree against a target branch.
+#[tauri::command]
+pub async fn worktree_merge_preview(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<MergePreviewInfo>, String> {
+    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+        Ok(preview) => {
+            let info = MergePreviewInfo {
+                direction: preview.direction,
+                source_branch: preview.source_branch,
+                target_branch: preview.target_branch,
+                conflict_files: preview.conflict_files.into_iter().map(|f| ConflictFileInfo {
+                    path: f.path,
+                    severity: f.severity,
+                    conflict_count: f.conflict_count,
+                    is_lock_file: f.is_lock_file,
+                }).collect(),
+                changed_files: preview.changed_files,
+                total_changes: preview.total_changes,
+                detection_mode: preview.detection_mode,
+            };
+            Ok(IpcResult::success(info))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Execute a merge from the worktree's current branch to target_branch.
+#[tauri::command]
+pub async fn worktree_merge_execute(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<String>, String> {
+    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+        Ok(result) => Ok(IpcResult::success(result)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Worktree info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub name: String,
+    pub branch: String,
+    pub path: String,
+    pub head_commit: String,
+}
+
+impl From<GitWorktreeEntry> for WorktreeInfo {
+    fn from(entry: GitWorktreeEntry) -> Self {
+        Self {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        }
+    }
+}
+
+/// Branch info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_remote: bool,
+    pub is_current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+impl From<BranchEntry> for BranchInfo {
+    fn from(entry: BranchEntry) -> Self {
+        Self {
+            name: entry.name,
+            is_remote: entry.is_remote,
+            is_current: entry.is_current,
+            upstream: entry.upstream,
+        }
+    }
+}
+
+/// Gitignore directory info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreDirInfo {
+    pub dir_name: String,
+    pub exists: bool,
+}
+
+/// Symlink result info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymlinkResultInfo {
+    pub path: String,
+    pub target: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Merge preview info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreviewInfo {
+    pub direction: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub conflict_files: Vec<ConflictFileInfo>,
+    pub changed_files: Vec<String>,
+    pub total_changes: usize,
+    pub detection_mode: String,
+}
+
+/// Conflict file info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileInfo {
+    pub path: String,
+    pub severity: String,
+    pub conflict_count: usize,
+    pub is_lock_file: bool,
+}
+
 // ==================== Browser Tab Commands ====================
 
 /// Create a new browser tab webview
@@ -333,6 +676,19 @@ pub async fn browser_tab_reload(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_RELOAD_FAILED")),
     }
 }
+
+/// Open DevTools for a browser tab
+#[tauri::command]
+pub async fn browser_tab_open_devtools(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.open_devtools(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
+    }
+}
+
 
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
@@ -1867,6 +2223,48 @@ pub async fn sftp_create_file(
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "SFTP_CREATE_ERROR")),
     }
+}
+
+// ==================== Git Commands ====================
+
+/// Get git status for a repository
+#[tauri::command]
+pub async fn git_get_status(
+    cwd: String,
+) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd)
+        .map_err(|e: String| e)
+}
+
+/// Get git diff for a file. `staged` selects the index-vs-HEAD diff
+/// (`git diff --cached`) instead of the worktree-vs-index diff.
+#[tauri::command]
+pub async fn git_get_diff(
+    cwd: String,
+    path: String,
+    staged: Option<bool>,
+) -> Result<String, String> {
+    crate::trackers::git_tracker::git_get_diff(&cwd, &path, staged.unwrap_or(false))
+        .map_err(|e: String| e)
+}
+
+/// Stage a single file (`git add`).
+#[tauri::command]
+pub async fn git_stage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_stage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Unstage a single file (`git restore --staged`).
+#[tauri::command]
+pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Discard changes to a single file. Untracked files are deleted; tracked
+/// changes revert to HEAD. This is destructive and irreversible.
+#[tauri::command]
+pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
 }
 
 /// Get available shells

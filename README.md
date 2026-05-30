@@ -26,66 +26,66 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 ### 🪟 Workspace & Terminal Management
 
-| Feature | Description |
-|---------|-------------|
+| Feature                      | Description                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **Project-Based Workspaces** | Organize terminals by project with dedicated workspace directories, separate state, and per-project configuration |
-| **Pane-Based Split Layout** | Split your workspace into resizable panes and arrange terminals, editors, and browser tabs side by side |
-| **Tabbed Interface** | Windows Terminal-style tab bar with drag-and-drop reordering, rename, and context menu |
-| **Multiple Shell Support** | Auto-detects PowerShell, CMD, Git Bash, WSL, fish, zsh, and more; switch shells per tab |
+| **Pane-Based Split Layout**  | Split your workspace into resizable panes and arrange terminals, editors, and browser tabs side by side           |
+| **Tabbed Interface**         | Windows Terminal-style tab bar with drag-and-drop reordering, rename, and context menu                            |
+| **Multiple Shell Support**   | Auto-detects PowerShell, CMD, Git Bash, WSL, fish, zsh, and more; switch shells per tab                           |
 
 ### 📝 Editor & File Management
 
-| Feature | Description |
-|---------|-------------|
-| **Code Editor** | Built-in code editor with syntax highlighting, file buffers, dirty-state tracking, and save/reload |
-| **Markdown Editor** | Rich markdown editing powered by BlockNote with live preview, table of contents, and heading navigation |
-| **Mermaid Diagrams** | Render Mermaid diagrams inline within your markdown documents |
-| **File Explorer** | Full file tree with create, rename, delete, clipboard operations, drag-and-drop, and context menus |
-| **File Watching** | Live file watching for real-time updates as files change on disk |
+| Feature              | Description                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Code Editor**      | Built-in code editor with syntax highlighting, file buffers, dirty-state tracking, and save/reload      |
+| **Markdown Editor**  | Rich markdown editing powered by BlockNote with live preview, table of contents, and heading navigation |
+| **Mermaid Diagrams** | Render Mermaid diagrams inline within your markdown documents                                           |
+| **File Explorer**    | Full file tree with create, rename, delete, clipboard operations, drag-and-drop, and context menus      |
+| **File Watching**    | Live file watching for real-time updates as files change on disk                                        |
 
 ### 🌐 Browser & Annotation
 
-| Feature | Description |
-|---------|-------------|
+| Feature                   | Description                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
 | **Embedded Browser Tabs** | Browse the web directly inside your workspace using child webview tabs — no app switching |
-| **Annotation Workflow** | Capture browser states, annotate with severity and intent labels, review, and export |
-| **Annotation Export** | Package annotations with metadata into structured export formats |
+| **Annotation Workflow**   | Capture browser states, annotate with severity and intent labels, review, and export      |
+| **Annotation Export**     | Package annotations with metadata into structured export formats                          |
 
 ### ⚡ Power User Tools
 
-| Feature | Description |
-|---------|-------------|
-| **Command Palette** | Global command launcher (`Ctrl+K` / `Ctrl+Shift+P`) for project switching, workspace actions, and more |
-| **Command History** | Per-project and aggregate command history viewer with search |
-| **Keyboard Shortcuts** | Fully customizable shortcut bindings for every action |
-| **Git Integration** | Status bar shows current branch, working directory, git status, and exit code |
-| **Custom Title Bar** | Desktop-native title bar with window controls, sidebar toggles, and settings navigation |
+| Feature                | Description                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Command Palette**    | Global command launcher (`Ctrl+K` / `Ctrl+Shift+P`) for project switching, workspace actions, and more |
+| **Command History**    | Per-project and aggregate command history viewer with search                                           |
+| **Keyboard Shortcuts** | Fully customizable shortcut bindings for every action                                                  |
+| **Git Integration**    | Status bar shows current branch, working directory, git status, and exit code                          |
+| **Custom Title Bar**   | Desktop-native title bar with window controls, sidebar toggles, and settings navigation                |
 
 ### 🔧 System & Reliability
 
-| Feature | Description |
-|---------|-------------|
-| **Auto-Updater** | Built-in update infrastructure with signed artifacts — get notified and update without leaving the app |
-| **State Management** | Zustand-powered reactive stores for projects, terminals, workspace layout, editor buffers, browser sessions, and settings |
-| **Configurable Settings** | Terminal and UI preferences, color picker, theme customization, and shell configuration |
-| **Cross-Platform** | Works on Windows, macOS, and Linux with native platform packaging |
-| **Error Boundaries** | Graceful error handling with runtime error boundaries and user-friendly fallback UI |
+| Feature                   | Description                                                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Auto-Updater**          | Built-in update infrastructure with signed artifacts — get notified and update without leaving the app                    |
+| **State Management**      | Zustand-powered reactive stores for projects, terminals, workspace layout, editor buffers, browser sessions, and settings |
+| **Configurable Settings** | Terminal and UI preferences, color picker, theme customization, and shell configuration                                   |
+| **Cross-Platform**        | Works on Windows, macOS, and Linux with native platform packaging                                                         |
+| **Error Boundaries**      | Graceful error handling with runtime error boundaries and user-friendly fallback UI                                       |
 
 <details>
 <summary>🗺️ Feature Map — Component Overview</summary>
 
-| Domain | Key Components | Zustand Store |
-|--------|---------------|---------------|
-| **Workspace** | `WorkspaceLayout`, `PaneRenderer`, `PaneContent`, `WorkspaceTabBar` | `workspace-store` |
-| **Terminal** | `ConnectedTerminal`, `XTerminal`, `TerminalSearchBar`, `ActivityIndicator` | `terminal-store` |
-| **Editor** | `EditorPanel`, `CodeEditor`, `MarkdownEditor`, `EditorToolbar`, `MermaidBlock` | `editor-store` |
-| **Browser** | `BrowserPanel`, `BrowserControls`, `AnnotationPanel`, `AnnotationExportModal` | `browser-session-store`, `annotation-store` |
-| **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu` | — |
-| **Snapshots** | `CreateSnapshotModal`, `RestoreSnapshotModal`, `DeleteSnapshotModal` | `snapshot-store` |
-| **Projects** | `ProjectSidebar`, `NewProjectModal` | `project-store` |
-| **Settings** | `ShortcutRecorder`, `ColorPickerPopover`, `ContextBarSettingsPopover` | `app-settings-store`, `context-bar-settings-store` |
-| **Updates** | `UpdateAvailableToast`, `UpdateReadyModal` | `updater-store` |
-| **Shared** | `CommandPalette`, `ContextMenu`, `ConfirmDialog`, `ShellSelector`, `ErrorBoundary` | — |
+| Domain            | Key Components                                                                     | Zustand Store                                      |
+| ----------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------- |
+| **Workspace**     | `WorkspaceLayout`, `PaneRenderer`, `PaneContent`, `WorkspaceTabBar`                | `workspace-store`                                  |
+| **Terminal**      | `ConnectedTerminal`, `XTerminal`, `TerminalSearchBar`, `ActivityIndicator`         | `terminal-store`                                   |
+| **Editor**        | `EditorPanel`, `CodeEditor`, `MarkdownEditor`, `EditorToolbar`, `MermaidBlock`     | `editor-store`                                     |
+| **Browser**       | `BrowserPanel`, `BrowserControls`, `AnnotationPanel`, `AnnotationExportModal`      | `browser-session-store`, `annotation-store`        |
+| **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu`                              | —                                                  |
+| **Snapshots**     | `CreateSnapshotModal`, `RestoreSnapshotModal`, `DeleteSnapshotModal`               | `snapshot-store`                                   |
+| **Projects**      | `ProjectSidebar`, `NewProjectModal`                                                | `project-store`                                    |
+| **Settings**      | `ShortcutRecorder`, `ColorPickerPopover`, `ContextBarSettingsPopover`              | `app-settings-store`, `context-bar-settings-store` |
+| **Updates**       | `UpdateAvailableToast`, `UpdateReadyModal`                                         | `updater-store`                                    |
+| **Shared**        | `CommandPalette`, `ContextMenu`, `ConfirmDialog`, `ShellSelector`, `ErrorBoundary` | —                                                  |
 
 </details>
 
@@ -97,11 +97,10 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 ### Prerequisites
 
-| Dependency | Version | Notes |
-| ---------- | ------- | ----- |
-| [Node.js](https://nodejs.org) | 18+ | Recommended: use [nvm](https://github.com/nvm-sh/nvm) |
-| [Rust](https://www.rust-lang.org/tools/install) | Latest stable | Required for Tauri builds |
-| npm / bun | Any | Package manager |
+| Dependency                                      | Version       | Notes                                  |
+| ----------------------------------------------- | ------------- | -------------------------------------- |
+| [Bun](https://bun.sh)                           | 1.3+          | JavaScript runtime and package manager |
+| [Rust](https://www.rust-lang.org/tools/install) | Latest stable | Required for Tauri builds              |
 
 #### Platform-Specific Requirements
 
@@ -163,26 +162,44 @@ git clone https://github.com/gnoviawan/termul.git
 cd termul
 
 # Install dependencies
-npm install
+bun install
 
 # Launch in development mode
-npm run dev
+bun run dev
+```
+
+### Landing Page
+
+This repository also includes a standalone Vite landing page under `landing/`.
+
+```bash
+# Install landing page dependencies (from landing/)
+cd landing && bun install
+
+# Start the landing page dev server
+bun run landing:dev
+
+# Lint the landing page
+bun run landing:lint
+
+# Build the landing page for production
+bun run landing:build
 ```
 
 ### Building for Production
 
 ```bash
 # Build for your current platform
-npm run build
+bun run build
 
 # Platform-specific builds
-npm run build:tauri:win        # Windows (x64)
-npm run build:tauri:mac-arm    # macOS (Apple Silicon)
-npm run build:tauri:mac-x64    # macOS (Intel)
-npm run build:tauri:linux      # Linux (x64)
+bun run build:tauri:win        # Windows (x64)
+bun run build:tauri:mac-arm    # macOS (Apple Silicon)
+bun run build:tauri:mac-x64    # macOS (Intel)
+bun run build:tauri:linux      # Linux (x64)
 
 # Debug build (faster compilation, larger binary)
-npm run build:tauri:debug
+bun run build:tauri:debug
 ```
 
 Build output: `src-tauri/target/release/bundle/`
@@ -199,21 +216,21 @@ Build output: `src-tauri/target/release/bundle/`
 
 #### Terminal Tabs
 
-| Action | How |
-| ------ | --- |
-| New terminal | Click **+** next to tabs |
-| Select specific shell | Click the dropdown arrow |
-| Reorder tabs | Drag and drop |
-| Rename tab | Double-click the tab |
-| Context menu | Right-click (rename, close, kill process) |
+| Action                | How                                       |
+| --------------------- | ----------------------------------------- |
+| New terminal          | Click **+** next to tabs                  |
+| Select specific shell | Click the dropdown arrow                  |
+| Reorder tabs          | Drag and drop                             |
+| Rename tab            | Double-click the tab                      |
+| Context menu          | Right-click (rename, close, kill process) |
 
 #### Keyboard Shortcuts
 
-| Action | Default Shortcut |
-| ------ | ---------------- |
-| New Terminal | `Ctrl+T` |
-| Next Tab | `Ctrl+PageDown` |
-| Previous Tab | `Ctrl+PageUp` |
+| Action          | Default Shortcut          |
+| --------------- | ------------------------- |
+| New Terminal    | `Ctrl+T`                  |
+| Next Tab        | `Ctrl+PageDown`           |
+| Previous Tab    | `Ctrl+PageUp`             |
 | Command Palette | `Ctrl+K` / `Ctrl+Shift+P` |
 
 > Shortcuts are customizable in Settings. On Tauri/WebView2, browser-reserved shortcuts such as `Ctrl+Tab` are not used as defaults because they are not reliably interceptable.
@@ -222,29 +239,29 @@ Build output: `src-tauri/target/release/bundle/`
 
 #### Tech Stack
 
-| Layer | Technology |
-| ----- | ---------- |
-| Desktop Runtime | [Tauri 2.0](https://tauri.app) |
-| Backend | [Rust](https://www.rust-lang.org) |
-| UI Framework | [React 18](https://react.dev) |
-| Type System | [TypeScript](https://www.typescriptlang.org) |
-| Build Tool | [Vite](https://vitejs.dev) |
-| Styling | [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) |
-| State Management | [Zustand](https://zustand-demo.pmnd.rs) |
+| Layer              | Technology                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| Desktop Runtime    | [Tauri 2.0](https://tauri.app)                                                       |
+| Backend            | [Rust](https://www.rust-lang.org)                                                    |
+| UI Framework       | [React 18](https://react.dev)                                                        |
+| Type System        | [TypeScript](https://www.typescriptlang.org)                                         |
+| Build Tool         | [Vite](https://vitejs.dev)                                                           |
+| Styling            | [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com)         |
+| State Management   | [Zustand](https://zustand-demo.pmnd.rs)                                              |
 | Terminal Emulation | [tauri-pty](https://github.com/nicegram/tauri-pty) + [xterm.js](https://xtermjs.org) |
-| Animations | [Framer Motion](https://www.framer.com/motion) |
+| Animations         | [Framer Motion](https://www.framer.com/motion)                                       |
 
 #### Tauri Plugins
 
-| Plugin | Purpose |
-| ------ | ------- |
-| `@tauri-apps/plugin-fs` | Filesystem access |
-| `@tauri-apps/plugin-store` | Configuration persistence |
-| `@tauri-apps/plugin-os` | OS information |
-| `@tauri-apps/plugin-dialog` | Native dialogs |
-| `@tauri-apps/plugin-clipboard-manager` | Clipboard operations |
-| `@tauri-apps/plugin-updater` | Automatic updates |
-| `@tauri-apps/plugin-process` | Process management |
+| Plugin                                 | Purpose                   |
+| -------------------------------------- | ------------------------- |
+| `@tauri-apps/plugin-fs`                | Filesystem access         |
+| `@tauri-apps/plugin-store`             | Configuration persistence |
+| `@tauri-apps/plugin-os`                | OS information            |
+| `@tauri-apps/plugin-dialog`            | Native dialogs            |
+| `@tauri-apps/plugin-clipboard-manager` | Clipboard operations      |
+| `@tauri-apps/plugin-updater`           | Automatic updates         |
+| `@tauri-apps/plugin-process`           | Process management        |
 
 #### Project Structure
 
@@ -275,12 +292,12 @@ src/renderer/lib/
 ## 🛠️ Development
 
 ```bash
-npm run dev              # Development mode with hot reload
-npm test                 # Run tests
-npm run test:watch       # Tests in watch mode
-npm run typecheck        # Type checking
-npm run lint             # Linting
-npm run tauri <command>  # Direct Tauri CLI access
+bun run dev              # Development mode with hot reload
+bun run test             # Run tests
+bun run test:watch       # Tests in watch mode
+bun run typecheck        # Type checking
+bun run lint             # Linting
+bun run tauri <command>  # Direct Tauri CLI access
 ```
 
 ## SSH Development Notes

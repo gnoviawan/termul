@@ -108,6 +108,8 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
 
   const { containerRef } = useBrowserWebview(browserTabId, isVisible, url);
   const injectedModeRef = useRef<AnnotationSubMode | null>(null);
+  const desiredModeRef = useRef<AnnotationSubMode | null>(null);
+  const reconcileChainRef = useRef<Promise<void>>(Promise.resolve());
   const [annotationOverlayAvailable, setAnnotationOverlayAvailable] = useState(true);
 
   // Subscribe to annotation capture events
@@ -126,101 +128,110 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
     return () => subscription.unlisten();
   }, [browserTabId]);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Serialized overlay reconciler.
+  //
+  // Overlay presence is tracked in three places that drift apart under rapid
+  // tab/project switches: this renderer ref, the Rust `annotation_injected` map,
+  // and the live webview DOM. The fix is to (1) keep a single `desiredModeRef`
+  // describing what SHOULD be injected (a mode, or null for "removed"), and
+  // (2) funnel every inject/remove IPC through one promise chain so a hide's
+  // remove always settles before a later show's inject. Each reconcile pass
+  // re-reads the latest desired state, so stale in-flight passes converge on the
+  // newest intent instead of clobbering it.
+  const reconcileOverlay = useCallback(() => {
+    const run = async () => {
+      // Tracks a mode we tore down specifically to switch modes, so a failed
+      // re-inject can roll the store's submode back to the last working mode
+      // (preserves the pre-existing rollback-on-mode-change behavior).
+      let tornDownForSwitch: AnnotationSubMode | null = null;
 
-    const removeOverlayIfNeeded = async () => {
-      if (!injectedModeRef.current) return;
-      await browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
-      if (!cancelled) {
-        injectedModeRef.current = null;
-      }
-    };
+      // Loop until the actual injected mode matches the latest desired mode.
+      // Re-reading desiredModeRef each iteration absorbs intent changes that
+      // landed while a prior IPC was in flight.
+      for (;;) {
+        const desired = desiredModeRef.current;
+        const current = injectedModeRef.current;
 
-    const ensureOverlay = async (targetMode: AnnotationSubMode, allowRollback: boolean) => {
-      const previousMode = injectedModeRef.current;
-      const modeChanged = previousMode !== null && previousMode !== targetMode;
+        if (desired === current) return;
 
-      if (modeChanged) {
-        await browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
-        if (cancelled) return;
-        injectedModeRef.current = null;
-      }
+        if (desired === null) {
+          await browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
+          injectedModeRef.current = null;
+          continue;
+        }
 
-      const result = await browserTabInjectAnnotation(browserTabId, targetMode);
-      if (cancelled) return;
+        // Switching modes requires a clean teardown first so the overlay rewires
+        // handlers for the new mode rather than reconciling in place.
+        if (current !== null) {
+          tornDownForSwitch = current;
+          await browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
+          injectedModeRef.current = null;
+          // Desired may have changed during the await; re-evaluate from the top.
+          continue;
+        }
 
-      if (result.success) {
-        injectedModeRef.current = targetMode;
-        setAnnotationOverlayAvailable(true);
-        return;
-      }
-
-      setAnnotationOverlayAvailable(false);
-      toast.error(ANNOTATION_UNAVAILABLE_MESSAGE);
-
-      if (modeChanged && allowRollback && previousMode) {
-        useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, previousMode);
-      }
-    };
-
-    if (!annotationMode || !isVisible) {
-      void removeOverlayIfNeeded();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (loading) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (injectedModeRef.current === annotationSubMode) {
-      setAnnotationOverlayAvailable(true);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void ensureOverlay(annotationSubMode, true);
-
-    return () => {
-      cancelled = true;
-    };
-  }, [annotationMode, annotationSubMode, loading, browserTabId, isVisible]);
-
-  // Re-inject overlay when page loads while annotation mode is enabled
-  useEffect(() => {
-    const subscription = onBrowserTabLoaded(async (payload) => {
-      if (payload.browserTabId !== browserTabId) return;
-      injectedModeRef.current = null;
-
-      if (annotationMode && isVisible) {
-        await browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
-        const result = await browserTabInjectAnnotation(browserTabId, annotationSubMode);
+        const result = await browserTabInjectAnnotation(browserTabId, desired);
         if (result.success) {
-          injectedModeRef.current = annotationSubMode;
+          injectedModeRef.current = desired;
           setAnnotationOverlayAvailable(true);
         } else {
+          injectedModeRef.current = null;
           setAnnotationOverlayAvailable(false);
           toast.error(ANNOTATION_UNAVAILABLE_MESSAGE);
+          // Desired injection is impossible on this page; stop retrying.
+          desiredModeRef.current = null;
+          // If this failure was a mode switch, roll the submode back to the last
+          // working mode (re-triggers reconcile to restore the prior overlay).
+          if (tornDownForSwitch && tornDownForSwitch !== desired) {
+            useBrowserSessionStore.getState().setAnnotationSubMode(browserTabId, tornDownForSwitch);
+          }
+          return;
         }
       }
+    };
+
+    // Chain onto the previous reconcile so overlay IPC never overlaps.
+    const next = reconcileChainRef.current.then(run, run);
+    reconcileChainRef.current = next;
+    return next;
+  }, [browserTabId]);
+
+  useEffect(() => {
+    if (!annotationMode || !isVisible || loading) {
+      // Loading is transient: only force removal when annotation is actually off
+      // or the panel is hidden. While loading with annotation on, leave the
+      // desired mode intact so the post-load effect re-injects.
+      if (!annotationMode || !isVisible) {
+        desiredModeRef.current = null;
+      }
+      void reconcileOverlay();
+      return;
+    }
+
+    desiredModeRef.current = annotationSubMode;
+    void reconcileOverlay();
+  }, [annotationMode, annotationSubMode, loading, isVisible, reconcileOverlay]);
+
+  // Re-inject overlay when page loads while annotation mode is enabled.
+  // The webview's prior overlay is gone after navigation, so reset the actual
+  // state and let the serialized reconciler drive it back to the desired mode.
+  useEffect(() => {
+    const subscription = onBrowserTabLoaded((payload) => {
+      if (payload.browserTabId !== browserTabId) return;
+      injectedModeRef.current = null;
+      desiredModeRef.current = annotationMode && isVisible ? annotationSubMode : null;
+      void reconcileOverlay();
     });
     return () => subscription.unlisten();
-  }, [annotationMode, annotationSubMode, browserTabId, isVisible]);
+  }, [annotationMode, annotationSubMode, browserTabId, isVisible, reconcileOverlay]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (injectedModeRef.current) {
-        browserTabRemoveAnnotationOverlay(browserTabId).catch(console.error);
-        injectedModeRef.current = null;
-      }
+      desiredModeRef.current = null;
+      void reconcileOverlay();
     };
-  }, [browserTabId]);
+  }, [reconcileOverlay]);
 
   return (
     <div

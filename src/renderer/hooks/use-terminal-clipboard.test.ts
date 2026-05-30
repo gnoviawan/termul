@@ -5,7 +5,8 @@ import type { Terminal } from '@xterm/xterm'
 const { mockClipboardApi } = vi.hoisted(() => ({
   mockClipboardApi: {
     readText: vi.fn(),
-    writeText: vi.fn()
+    writeText: vi.fn(),
+    hasImage: vi.fn()
   }
 }))
 
@@ -34,6 +35,8 @@ describe('useTerminalClipboard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedSelectionCallback = null
+    // Default hasImage to false so existing text-paste tests work unchanged
+    mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: false })
   })
 
   afterEach(() => {
@@ -293,7 +296,7 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockTerminal.paste).toHaveBeenCalledWith(clipboardText)
+      expect(mockTerminal.paste).toHaveBeenCalledWith('Line 1\rLine 2\rLine 3')
     })
 
     it('should paste text with special characters correctly', async () => {
@@ -324,7 +327,7 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockTerminal.paste).toHaveBeenCalledWith(clipboardText)
+      expect(mockTerminal.paste).toHaveBeenCalledWith('function hello() {\r  console.log("Hello, World!");\r  return true;\r}')
     })
 
     it('should not paste content exceeding max size', async () => {
@@ -391,6 +394,86 @@ Line 3`
         await result.current.copySelection()
       })
       expect(mockClipboardApi.writeText).toHaveBeenCalledWith('text2')
+    })
+  })
+
+  describe('pasteFromClipboard image branch', () => {
+    it('should call onImagePaste when clipboard has image', async () => {
+      const mockTerminal = createMockTerminal(false, '')
+      mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: true })
+      const onImagePaste = vi.fn()
+
+      const { result } = renderHook(() => useTerminalClipboard({
+        terminal: mockTerminal as unknown as Terminal,
+        onImagePaste
+      }))
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockClipboardApi.hasImage).toHaveBeenCalled()
+      expect(onImagePaste).toHaveBeenCalled()
+      expect(mockClipboardApi.readText).not.toHaveBeenCalled()
+      expect(mockTerminal.paste).not.toHaveBeenCalled()
+    })
+
+    it('should use text paste when clipboard has no image', async () => {
+      const mockTerminal = createMockTerminal(false, '')
+      mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: false })
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: 'pasted text' })
+      const onImagePaste = vi.fn()
+
+      const { result } = renderHook(() => useTerminalClipboard({
+        terminal: mockTerminal as unknown as Terminal,
+        onImagePaste
+      }))
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockClipboardApi.hasImage).toHaveBeenCalled()
+      expect(onImagePaste).not.toHaveBeenCalled()
+      expect(mockClipboardApi.readText).toHaveBeenCalled()
+      expect(mockTerminal.paste).toHaveBeenCalledWith('pasted text')
+    })
+
+    it('should fall back to text paste when hasImage throws', async () => {
+      const mockTerminal = createMockTerminal(false, '')
+      mockClipboardApi.hasImage.mockResolvedValue({ success: false, error: 'Unsupported' })
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: 'fallback text' })
+      const onImagePaste = vi.fn()
+
+      const { result } = renderHook(() => useTerminalClipboard({
+        terminal: mockTerminal as unknown as Terminal,
+        onImagePaste
+      }))
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(onImagePaste).not.toHaveBeenCalled()
+      expect(mockClipboardApi.readText).toHaveBeenCalled()
+      expect(mockTerminal.paste).toHaveBeenCalledWith('fallback text')
+    })
+
+    it('should not call onImagePaste when not provided even if image present', async () => {
+      const mockTerminal = createMockTerminal(false, '')
+      mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: true })
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
+
+      const { result } = renderHook(() => useTerminalClipboard({
+        terminal: mockTerminal as unknown as Terminal
+      }))
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockClipboardApi.hasImage).toHaveBeenCalled()
+      expect(mockTerminal.paste).not.toHaveBeenCalled()
     })
   })
 })

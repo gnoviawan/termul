@@ -101,7 +101,7 @@ static GIT_BINARY: OnceLock<String> = OnceLock::new();
 /// On Unix, runs `which -a git`.
 /// Skips any path that contains "laragon" (case-insensitive).
 /// Falls back to plain `"git"` if no suitable path is found.
-fn resolve_git_binary() -> &'static str {
+pub fn resolve_git_binary() -> &'static str {
     GIT_BINARY.get_or_init(|| {
         #[cfg(target_os = "windows")]
         {
@@ -163,7 +163,17 @@ pub struct GitStatus {
     pub modified: u32,
     pub staged: u32,
     pub untracked: u32,
+    pub ahead: u32,
+    pub behind: u32,
     pub has_changes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusDetail {
+    pub path: String,
+    pub status: String,
+    pub staged: bool,
 }
 
 impl GitStatus {
@@ -173,6 +183,8 @@ impl GitStatus {
             modified: 0,
             staged: 0,
             untracked: 0,
+            ahead: 0,
+            behind: 0,
             has_changes: false,
         }
     }
@@ -588,7 +600,7 @@ impl GitTracker {
         .unwrap_or((None, None))
     }
 
-    fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
+    pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
         let mut child = backend_command(resolve_git_binary())
             .args(args)
             .current_dir(cwd)
@@ -621,7 +633,6 @@ impl GitTracker {
         }
     }
 
-    /// Shutdown the tracker and stop polling
     pub fn shutdown(&self) {
         // Abort the polling task if running
         let mut poll_handle_guard = self.poll_handle.write();
@@ -634,6 +645,253 @@ impl GitTracker {
         #[cfg(target_os = "windows")]
         self.cwd_poll_states.write().clear();
     }
+}
+
+pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> {
+    let output = GitTracker::run_git_command(cwd, &["status", "--porcelain"])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(git_get_status_detail_from_output(&stdout))
+}
+
+fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDetail> {
+    let mut details = Vec::new();
+
+    for line in output.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+
+        let index_status = line.chars().next().unwrap_or(' ');
+        let work_tree_status = line.chars().nth(1).unwrap_or(' ');
+        let raw_path = &line[3..];
+        let path = if index_status == 'R' || work_tree_status == 'R' {
+            raw_path
+                .rsplit_once(" -> ")
+                .map(|(_, new_path)| new_path)
+                .unwrap_or(raw_path)
+                .to_string()
+        } else {
+            raw_path.to_string()
+        };
+
+        if index_status != ' ' && index_status != '?' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match index_status {
+                    'A' => "added",
+                    'M' => "modified",
+                    'D' => "deleted",
+                    'R' => "renamed",
+                    _ => "modified",
+                }
+                .to_string(),
+                staged: true,
+            });
+        }
+
+        if work_tree_status != ' ' {
+            details.push(GitStatusDetail {
+                path: path.clone(),
+                status: match work_tree_status {
+                    'M' => "modified",
+                    'D' => "deleted",
+                    '?' => "untracked",
+                    _ => "modified",
+                }
+                .to_string(),
+                staged: false,
+            });
+        }
+    }
+
+    details
+}
+
+/// Git treats `/dev/null` as a magic empty-file token on all platforms,
+/// including Git for Windows, so it is safe to use for `diff --no-index`.
+const NULL_DEVICE: &str = "/dev/null";
+
+/// Select the `git diff` argument vector for a single path.
+///
+/// - Untracked files have nothing in the index, so they are shown in full as
+///   additions via `--no-index`.
+/// - Staged rows compare the index against HEAD (`--cached`).
+/// - Unstaged rows compare the working tree against the index.
+fn build_diff_args(path: &str, is_untracked: bool, staged: bool) -> Vec<&str> {
+    if is_untracked {
+        vec!["diff", "--no-index", "--", NULL_DEVICE, path]
+    } else if staged {
+        vec!["diff", "--cached", "--", path]
+    } else {
+        vec!["diff", "--", path]
+    }
+}
+
+pub fn git_get_diff(cwd: &str, path: &str, staged: bool) -> Result<String, String> {
+    if is_git_ignored(cwd, path)? {
+        return Ok(String::new());
+    }
+
+    // First check if file is untracked (but not ignored)
+    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", "--", path])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    let is_untracked = status_str.starts_with("??");
+
+    let args = build_diff_args(path, is_untracked, staged);
+
+    let output = GitTracker::run_git_command(cwd, &args)
+        .ok_or_else(|| "Failed to run git diff".to_string())?;
+
+    // git diff returns 1 if there are differences, which is "success" for us
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if stdout.is_empty() && is_untracked {
+        // Fallback for untracked files if diff --no-index fails or returns empty
+        return std::fs::read_to_string(std::path::Path::new(cwd).join(path))
+            .map_err(|e| e.to_string());
+    }
+
+    Ok(stdout)
+}
+
+/// What discarding a path should do, derived from its `git status --porcelain` line.
+#[derive(Debug, PartialEq, Eq)]
+enum DiscardAction {
+    /// Untracked entry: delete it from disk.
+    DeleteUntracked,
+    /// Tracked change: revert the working tree to the index (`git checkout -- <path>`).
+    /// This never touches the index, so staged content is preserved.
+    RevertWorktree,
+    /// Nothing to discard (clean or unknown path).
+    Noop,
+}
+
+/// Classify the discard action from a `git status --porcelain` line.
+/// The first column is the index (staged) status; `??` marks untracked entries.
+fn classify_discard_action(status_line: &str) -> DiscardAction {
+    if status_line.trim().is_empty() {
+        return DiscardAction::Noop;
+    }
+    if status_line.starts_with('?') {
+        return DiscardAction::DeleteUntracked;
+    }
+    DiscardAction::RevertWorktree
+}
+
+/// Whether `path` is a safe repo-relative path (no absolute root, drive prefix,
+/// or `..` traversal). Used to gate raw filesystem deletes against escaping `cwd`.
+fn is_safe_relative_path(path: &str) -> bool {
+    use std::path::Component;
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return false;
+    }
+    !p.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
+
+fn git_command_result(
+    cwd: &str,
+    args: &[&str],
+    failure_context: &str,
+) -> Result<(), String> {
+    let output = GitTracker::run_git_command(cwd, args)
+        .ok_or_else(|| format!("Failed to run {failure_context}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Whether the repository has a resolvable HEAD (i.e. at least one commit).
+fn repo_has_head(cwd: &str) -> bool {
+    GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Stage a single file (`git add -- <path>`). Works for modified and untracked files.
+pub fn git_stage_file(cwd: &str, path: &str) -> Result<(), String> {
+    git_command_result(cwd, &["add", "--", path], "git add")
+}
+
+/// Unstage a single file.
+///
+/// When the repo has a HEAD, `git reset -q HEAD -- <path>` restores the index
+/// entry to its committed version. `git reset` only touches the index (never
+/// the working tree) and works on all Git versions, unlike `git restore`
+/// (Git >= 2.23). With no commits yet there is no HEAD to reset to, so the
+/// entry is removed from the index while the working-tree file is kept intact.
+pub fn git_unstage_file(cwd: &str, path: &str) -> Result<(), String> {
+    if repo_has_head(cwd) {
+        git_command_result(cwd, &["reset", "-q", "HEAD", "--", path], "git reset")
+    } else {
+        git_command_result(cwd, &["rm", "--cached", "--", path], "git rm --cached")
+    }
+}
+
+/// Delete an untracked file or directory from disk. Treats an already-missing
+/// path as success (a concurrent delete still satisfies the intent).
+fn delete_untracked_path(cwd: &str, path: &str) -> Result<(), String> {
+    if !is_safe_relative_path(path) {
+        return Err(format!("Refusing to delete unsafe path: {path}"));
+    }
+    let target = std::path::Path::new(cwd).join(path);
+    let result = if target.is_dir() {
+        std::fs::remove_dir_all(&target)
+    } else {
+        std::fs::remove_file(&target)
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Discard changes to a single file. Untracked entries are deleted from disk;
+/// tracked changes revert the working tree to the index (`git checkout -- <path>`),
+/// which preserves any staged content. A clean/unknown path is a no-op.
+pub fn git_discard_file(cwd: &str, path: &str) -> Result<(), String> {
+    let status_output = GitTracker::run_git_command(cwd, &["status", "--porcelain", "--", path])
+        .ok_or_else(|| "Failed to run git status".to_string())?;
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    let status_line = status_str.lines().next().unwrap_or("");
+
+    match classify_discard_action(status_line) {
+        DiscardAction::DeleteUntracked => delete_untracked_path(cwd, path),
+        DiscardAction::RevertWorktree => {
+            git_command_result(cwd, &["checkout", "--", path], "git checkout")
+        }
+        DiscardAction::Noop => Ok(()),
+    }
+}
+
+fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
+    let output = GitTracker::run_git_command(cwd, &["check-ignore", "--quiet", "--", path])
+        .ok_or_else(|| "Failed to run git check-ignore".to_string())?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+    }
+}
+
+impl GitTracker {
 
     /// Start the polling task
     ///
@@ -838,7 +1096,8 @@ impl GitTracker {
 
     /// Check the git status for a directory
     ///
-    /// Runs `git status --porcelain` and returns parsed status.
+    /// Runs `git status --porcelain` and `git rev-list --left-right --count HEAD...@{u}`
+    /// and returns parsed status.
     /// Returns None if not in a git repository.
     fn check_status_internal(cwd: &str) -> Option<GitStatus> {
         log::debug!("[GitTracker] Polling git status for cwd: {}", cwd);
@@ -848,9 +1107,35 @@ impl GitTracker {
             return None;
         }
 
-        Some(Self::parse_git_status(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let mut status = Self::parse_git_status(&String::from_utf8_lossy(&output.stdout));
+
+        log::debug!("[GitTracker] Fetching ahead/behind for cwd: {}", cwd);
+        // Get ahead/behind count
+        if let Some(rev_output) =
+            Self::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
+            if rev_output.status.success() {
+                let counts = String::from_utf8_lossy(&rev_output.stdout);
+                let parts: Vec<&str> = counts.split_whitespace().collect();
+                if parts.len() == 2 {
+                    status.ahead = parts[0].parse().unwrap_or(0);
+                    status.behind = parts[1].parse().unwrap_or(0);
+                    log::debug!(
+                        "[GitTracker] CWD: {}, ahead: {}, behind: {}",
+                        cwd,
+                        status.ahead,
+                        status.behind
+                    );
+                }
+            } else {
+                log::debug!(
+                    "[GitTracker] rev-list failed (possibly no upstream): {}",
+                    String::from_utf8_lossy(&rev_output.stderr)
+                );
+            }
+        }
+
+        Some(status)
     }
 
     /// Parse git status --porcelain output
@@ -925,6 +1210,99 @@ impl GitTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_diff_args_untracked_uses_no_index() {
+        // Untracked files have no index entry; staged flag is irrelevant.
+        assert_eq!(
+            build_diff_args("new.txt", true, false),
+            vec!["diff", "--no-index", "--", NULL_DEVICE, "new.txt"]
+        );
+        assert_eq!(
+            build_diff_args("new.txt", true, true),
+            vec!["diff", "--no-index", "--", NULL_DEVICE, "new.txt"]
+        );
+    }
+
+    #[test]
+    fn test_build_diff_args_staged_uses_cached() {
+        assert_eq!(
+            build_diff_args("a.txt", false, true),
+            vec!["diff", "--cached", "--", "a.txt"]
+        );
+    }
+
+    #[test]
+    fn test_build_diff_args_unstaged_uses_worktree() {
+        // Unstaged tracked diff compares worktree against the index (no HEAD,
+        // no --cached), so the staged and unstaged rows of one file differ.
+        assert_eq!(
+            build_diff_args("a.txt", false, false),
+            vec!["diff", "--", "a.txt"]
+        );
+    }
+
+    #[test]
+    fn test_classify_discard_action_untracked() {
+        assert_eq!(
+            classify_discard_action("?? new.txt"),
+            DiscardAction::DeleteUntracked
+        );
+    }
+
+    #[test]
+    fn test_classify_discard_action_added_reverts_worktree() {
+        // A staged-added file with no worktree change reverts the worktree only;
+        // git checkout -- <path> is a safe no-op that never deletes staged content.
+        assert_eq!(
+            classify_discard_action("A  added.txt"),
+            DiscardAction::RevertWorktree
+        );
+    }
+
+    #[test]
+    fn test_classify_discard_action_modified_variants_revert_worktree() {
+        // Worktree-modified, staged-modified, MM, and deleted all revert the
+        // working tree to the index without touching staged content.
+        assert_eq!(
+            classify_discard_action(" M mod.txt"),
+            DiscardAction::RevertWorktree
+        );
+        assert_eq!(
+            classify_discard_action("M  staged.txt"),
+            DiscardAction::RevertWorktree
+        );
+        assert_eq!(
+            classify_discard_action("MM both.txt"),
+            DiscardAction::RevertWorktree
+        );
+        assert_eq!(
+            classify_discard_action(" D del.txt"),
+            DiscardAction::RevertWorktree
+        );
+    }
+
+    #[test]
+    fn test_classify_discard_action_empty_is_noop() {
+        assert_eq!(classify_discard_action(""), DiscardAction::Noop);
+        assert_eq!(classify_discard_action("   "), DiscardAction::Noop);
+    }
+
+    #[test]
+    fn test_is_safe_relative_path() {
+        assert!(is_safe_relative_path("src/main.rs"));
+        assert!(is_safe_relative_path("a.txt"));
+        assert!(is_safe_relative_path("dir/sub/file"));
+        // Traversal and absolute / drive-rooted paths are rejected.
+        assert!(!is_safe_relative_path("../escape.txt"));
+        assert!(!is_safe_relative_path("a/../../b"));
+        assert!(!is_safe_relative_path("/etc/passwd"));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(!is_safe_relative_path("C:\\Windows\\x"));
+            assert!(!is_safe_relative_path("\\\\server\\share"));
+        }
+    }
 
     #[test]
     fn test_parse_git_status_empty() {
@@ -1054,6 +1432,49 @@ mod tests {
         assert!(status.has_changes);
     }
 
+    #[test]
+    fn test_git_get_status_detail_skips_short_lines() {
+        let details = git_get_status_detail_from_output("M\n\n?? file.txt\n");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].path, "file.txt");
+        assert_eq!(details[0].status, "untracked");
+        assert!(!details[0].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_parses_staged_and_unstaged_entries() {
+        let details = git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
+        assert_eq!(details.len(), 4);
+
+        assert_eq!(details[0].path, "both.txt");
+        assert_eq!(details[0].status, "modified");
+        assert!(details[0].staged);
+
+        assert_eq!(details[1].path, "both.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
+
+        assert_eq!(details[2].path, "added.txt");
+        assert_eq!(details[2].status, "added");
+        assert!(details[2].staged);
+
+        assert_eq!(details[3].path, "deleted.txt");
+        assert_eq!(details[3].status, "deleted");
+        assert!(!details[3].staged);
+    }
+
+    #[test]
+    fn test_git_get_status_detail_uses_rename_destination_path() {
+        let details = git_get_status_detail_from_output("RM old.txt -> new.txt\n");
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].path, "new.txt");
+        assert_eq!(details[0].status, "renamed");
+        assert!(details[0].staged);
+        assert_eq!(details[1].path, "new.txt");
+        assert_eq!(details[1].status, "modified");
+        assert!(!details[1].staged);
+    }
+
     // ========== Windows-specific tests for CWD dedupe and throttling ==========
 
     #[cfg(target_os = "windows")]
@@ -1158,5 +1579,196 @@ mod tests {
             Instant::now().duration_since(state.last_checked)
                 < Duration::from_millis(POLL_INTERVAL_MS)
         );
+    }
+
+    // ---- Integration tests for stage / unstage / discard against real repos ----
+
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("termul-git-it-{tag}-{pid}-{n}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn git(cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+        let out = GitTracker::run_git_command(cwd.to_str().unwrap(), args)
+            .expect("git command should run");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    }
+
+    /// Init a repo with deterministic identity. Returns the repo path.
+    fn init_repo(tag: &str) -> std::path::PathBuf {
+        let dir = unique_temp_dir(tag);
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "user.name", "Test"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
+        // Keep line endings byte-exact so content assertions are deterministic
+        // across platforms (Windows git defaults can rewrite LF -> CRLF).
+        git(&dir, &["config", "core.autocrlf", "false"]);
+        dir
+    }
+
+    fn porcelain(cwd: &std::path::Path, path: &str) -> String {
+        let out = git(cwd, &["status", "--porcelain", "--", path]);
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    /// Skip the test body (returning true) when git is unavailable in the env.
+    fn git_missing() -> bool {
+        GitTracker::run_git_command(std::env::temp_dir().to_str().unwrap(), &["--version"]).is_none()
+    }
+
+    #[test]
+    fn it_stage_then_unstage_modified_file_roundtrips() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("stage-unstage");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+
+        let cwd = repo.to_str().unwrap();
+        git_stage_file(cwd, "a.txt").unwrap();
+        assert!(porcelain(&repo, "a.txt").starts_with("M "), "should be staged");
+
+        git_unstage_file(cwd, "a.txt").unwrap();
+        assert!(
+            porcelain(&repo, "a.txt").starts_with(" M"),
+            "should be unstaged but still modified"
+        );
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_unstage_preserves_worktree_on_staged_modified_file() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("unstage-preserve");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "changed\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+
+        // Unstage must NOT delete or revert the working-tree content.
+        git_unstage_file(repo.to_str().unwrap(), "a.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "changed\n");
+        assert!(porcelain(&repo, "a.txt").starts_with(" M"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_unstage_no_head_repo_removes_from_index_keeps_file() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("unstage-nohead");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]); // staged-added, no commit -> no HEAD
+        assert!(!repo_has_head(repo.to_str().unwrap()));
+
+        git_unstage_file(repo.to_str().unwrap(), "a.txt").unwrap();
+        // File stays on disk, now untracked.
+        assert!(repo.join("a.txt").exists());
+        assert!(porcelain(&repo, "a.txt").starts_with("??"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_reverts_tracked_modification_to_index() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("discard-modified");
+        std::fs::write(repo.join("a.txt"), "orig\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "dirty\n").unwrap();
+
+        git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "orig\n");
+        assert!(porcelain(&repo, "a.txt").is_empty(), "clean after discard");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_staged_row_of_mm_file_preserves_staged_content() {
+        if git_missing() {
+            return;
+        }
+        // MM: staged edit + further worktree edit. Discard reverts the worktree
+        // to the index and must keep the staged edit intact.
+        let repo = init_repo("discard-mm");
+        std::fs::write(repo.join("a.txt"), "orig\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "staged\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+        std::fs::write(repo.join("a.txt"), "staged-plus-worktree\n").unwrap();
+        assert!(porcelain(&repo, "a.txt").starts_with("MM"));
+
+        git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
+        // Worktree reverts to the staged (index) version, not HEAD.
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "staged\n");
+        assert!(porcelain(&repo, "a.txt").starts_with("M "));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_untracked_file_deletes_it() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("discard-untracked");
+        std::fs::write(repo.join("n.txt"), "new\n").unwrap();
+        assert!(porcelain(&repo, "n.txt").starts_with("??"));
+
+        git_discard_file(repo.to_str().unwrap(), "n.txt").unwrap();
+        assert!(!repo.join("n.txt").exists());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_untracked_directory_deletes_it() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("discard-untracked-dir");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(repo.join("sub/inner.txt"), "x\n").unwrap();
+        // Porcelain collapses the untracked dir to "?? sub/".
+        assert!(porcelain(&repo, "sub").starts_with("??"));
+
+        git_discard_file(repo.to_str().unwrap(), "sub").unwrap();
+        assert!(!repo.join("sub").exists());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_already_missing_untracked_is_ok() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("discard-missing");
+        // No such file; classified clean -> Noop, must not error.
+        git_discard_file(repo.to_str().unwrap(), "ghost.txt").unwrap();
+        std::fs::remove_dir_all(&repo).ok();
     }
 }
