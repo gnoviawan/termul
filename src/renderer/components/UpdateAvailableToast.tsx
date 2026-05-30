@@ -57,7 +57,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
           <span>{isAur ? 'Use yay' : 'Download'}</span>
         </div>
       ),
-      onClick: () => {
+      onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {
             description: 'yay -S termul-manager'
@@ -66,7 +66,13 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
         }
 
         const { downloadUpdate } = updaterStore.getState()
-        downloadUpdate()
+        await downloadUpdate()
+        const downloadError = updaterStore.getState().error
+        if (downloadError) {
+          toast.error('Update download failed', {
+            description: downloadError
+          })
+        }
       }
     },
     cancel: {
@@ -97,9 +103,15 @@ export function showUpdateDownloadedToast(version: string): void {
           <span>Restart to Update</span>
         </div>
       ),
-      onClick: () => {
+      onClick: async () => {
         const { installAndRestart } = updaterStore.getState()
-        installAndRestart()
+        await installAndRestart()
+        const installError = updaterStore.getState().error
+        if (installError) {
+          toast.error('Update install failed', {
+            description: installError
+          })
+        }
       }
     }
   })

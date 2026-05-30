@@ -258,12 +258,15 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     // Create backup directory
     await mkdir(backupPath, { recursive: true });
 
-    // Copy entire userData directory (except backups folder)
+    // Copy entire userData directory (except backups and versions folders)
     const entries = await readDir(userDataPath);
 
     for (const entry of entries) {
-      // Skip the backups directory itself
-      if (entry.name === 'backups') {
+      // Skip the backups directory itself, and the rollback versions store
+      // (both grow unbounded relative to a single backup and would otherwise
+      // be copied recursively into every new backup, making backups slow and
+      // fragile enough to silently block updates).
+      if (entry.name === 'backups' || entry.name === 'versions') {
         continue;
       }
 
