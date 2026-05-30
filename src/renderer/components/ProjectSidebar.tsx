@@ -770,19 +770,19 @@ export function ProjectSidebar({
 				</button>
 			</div>
 
-			{/* Project search — appears once the list is long enough to be worth filtering */}
+			{/* Project search — flat style matching the file explorer search */}
 			{showSearch && (
-				<div className="px-2 py-1.5 border-b border-sidebar-border">
+				<div className="px-3 py-1.5 border-b border-sidebar-border">
 					<div className="relative">
 						<Search
-							size={12}
-							className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+							size={13}
+							className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
 							aria-hidden="true"
 						/>
 						<input
 							ref={searchInputRef}
 							type="search"
-							placeholder="Search projects..."
+							placeholder="Search projects…"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							onKeyDown={(e) => {
@@ -792,7 +792,7 @@ export function ProjectSidebar({
 									setSearchQuery("");
 								}
 							}}
-							className="w-full text-xs bg-sidebar-accent border border-border rounded pl-7 pr-7 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary [&::-webkit-search-cancel-button]:hidden"
+							className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
 							aria-label="Search projects"
 							data-testid="project-search-input"
 						/>
@@ -803,12 +803,12 @@ export function ProjectSidebar({
 									// Clearing unmounts this button; return focus to the input.
 									searchInputRef.current?.focus();
 								}}
-								className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 inline-flex items-center justify-center rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+								className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
 								title="Clear search"
 								aria-label="Clear project search"
 								data-testid="project-search-clear"
 							>
-								<X size={12} />
+								<X size={11} />
 							</button>
 						)}
 					</div>
@@ -1350,16 +1350,41 @@ const ProjectItem = memo(function ProjectItem({
 						transition={{ duration: 0.15, ease: "easeInOut" }}
 						className="ml-5 border-l border-sidebar-border overflow-hidden"
 					>
-						{/* Worktree search bar - visible at 10+ worktrees */}
+						{/* Worktree search bar - visible at 10+ worktrees, flat style matching the file explorer */}
 					{worktrees.length >= 10 && (
 						<div className="px-2 py-1">
-							<input
-								type="text"
-								placeholder="Search worktrees..."
-								value={worktreeSearchQuery}
-								onChange={(e) => setWorktreeSearchQuery(e.target.value)}
-								className="w-full text-xs bg-sidebar-accent border border-border rounded px-2 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary"
-							/>
+							<div className="relative">
+								<Search
+									size={12}
+									className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<input
+									type="search"
+									placeholder="Search worktrees…"
+									value={worktreeSearchQuery}
+									onChange={(e) => setWorktreeSearchQuery(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Escape" && worktreeSearchQuery) {
+											e.preventDefault();
+											e.stopPropagation();
+											setWorktreeSearchQuery("");
+										}
+									}}
+									className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
+									aria-label="Search worktrees"
+								/>
+								{worktreeSearchQuery && (
+									<button
+										onClick={() => setWorktreeSearchQuery("")}
+										className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+										title="Clear search"
+										aria-label="Clear worktree search"
+									>
+										<X size={11} />
+									</button>
+								)}
+							</div>
 						</div>
 					)}
 					{/* Root item */}

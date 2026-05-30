@@ -760,3 +760,51 @@ describe('ProjectSidebar Project Search', () => {
     expect(toggle).toBeDisabled()
   })
 })
+
+describe('ProjectSidebar Worktree Search', () => {
+  // 10+ worktrees crosses the worktree-search threshold.
+  const projectWithManyWorktrees: Project[] = [
+    {
+      id: '1',
+      name: 'Big Repo',
+      color: 'blue',
+      gitBranch: 'main',
+      isGitRepo: true,
+      worktrees: Array.from({ length: 11 }, (_, i) => ({
+        id: `wt-${i}`,
+        name: `worktree-${i}`,
+        branch: `feature/branch-${i}`,
+        path: `/repo/.termul/worktrees/worktree-${i}`,
+        createdAt: new Date().toISOString()
+      }))
+    }
+  ]
+
+  it('shows a worktree search box with an icon once there are 10+ worktrees', () => {
+    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expect(screen.getByLabelText('Search worktrees')).toBeInTheDocument()
+  })
+
+  it('shows a clear button only after typing, and clears on click', () => {
+    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+
+    const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
+    expect(screen.queryByLabelText('Clear worktree search')).not.toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: 'worktree-3' } })
+    expect(screen.getByLabelText('Clear worktree search')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText('Clear worktree search'))
+    expect(input.value).toBe('')
+  })
+
+  it('clears the worktree query on Escape', () => {
+    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+
+    const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'worktree-3' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(input.value).toBe('')
+  })
+})
