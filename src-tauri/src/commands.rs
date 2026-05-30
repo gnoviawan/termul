@@ -2,6 +2,7 @@ use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManage
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
+use crate::path_validation;
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
@@ -1248,9 +1249,36 @@ pub async fn search_content_stream(
         return Ok(IpcResult::success(()));
     }
 
+    // Validate search path to prevent path traversal attacks
+    // Use the root_path as both the search path and project boundary
+    let validated_root = match path_validation::validate_search_path(
+        &request.root_path,
+        &request.root_path,
+    ) {
+        Ok(path) => path.to_string_lossy().to_string(),
+        Err(e) => {
+            log::warn!(
+                "[Security] File search rejected: invalid root_path '{}': {}",
+                request.root_path,
+                e
+            );
+            let _ = app_handle.emit(
+                "search-content-done",
+                SearchContentDoneEvent {
+                    search_id: request.search_id,
+                    truncated: false,
+                    scanned_files: 0,
+                    failed_files: 0,
+                    error: Some(format!("Invalid search path: {}", e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
+        }
+    };
+
     let max_files_with_matches: usize = 100;
     let max_matches_per_file: usize = 30;
-    let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
+    let args = build_search_args(&trimmed_query, &validated_root, max_matches_per_file);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
