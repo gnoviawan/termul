@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { Download, Terminal, Clock } from 'lucide-react'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import {
   updaterStore,
   useUpdaterState,
@@ -11,6 +12,7 @@ import {
   useDownloadProgress
 } from '@/stores/updater-store'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 
 // Local storage keys
 const UPDATE_REMINDER_KEY = 'update-reminder-timestamp'
@@ -57,7 +59,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
           <span>{isAur ? 'Use yay' : 'Download'}</span>
         </div>
       ),
-      onClick: () => {
+      onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {
             description: 'yay -S termul-manager'
@@ -66,7 +68,19 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
         }
 
         const { downloadUpdate } = updaterStore.getState()
-        downloadUpdate()
+        try {
+          await downloadUpdate()
+          const downloadError = updaterStore.getState().error
+          if (downloadError) {
+            toast.error('Update download failed', {
+              description: downloadError
+            })
+          }
+        } catch (error) {
+          toast.error('Update download failed', {
+            description: error instanceof Error ? error.message : 'Unexpected error during download'
+          })
+        }
       }
     },
     cancel: {
@@ -87,19 +101,40 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
-  toast.success(`Update ready to restart`, {
+  toast.success(`Update ready to install`, {
     duration: 30000,
-    description: `Version ${version} has been downloaded. Restart the app to finish applying the update.`,
+    description: `Version ${version} has been downloaded. Install now to apply it — the app will restart and any running terminal sessions will close.`,
     action: {
       label: (
         <div className="flex items-center gap-2">
           <Download size={14} />
-          <span>Restart to Update</span>
+          <span>Install &amp; Restart</span>
         </div>
       ),
-      onClick: () => {
-        const { installAndRestart } = updaterStore.getState()
-        installAndRestart()
+      onClick: async () => {
+        try {
+          const hasActiveTerminals = hasActiveTerminalSessions()
+          const confirmed = await confirm(
+            hasActiveTerminals
+              ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
+              : `Termul will install version ${version} and restart now. Continue?`,
+            { title: 'Install update', kind: 'warning', okLabel: 'Install & Restart', cancelLabel: 'Not now' }
+          )
+          if (!confirmed) return
+
+          const { installAndRestart } = updaterStore.getState()
+          await installAndRestart()
+          const installError = updaterStore.getState().error
+          if (installError) {
+            toast.error('Update install failed', {
+              description: installError
+            })
+          }
+        } catch (error) {
+          toast.error('Update install failed', {
+            description: error instanceof Error ? error.message : 'Unexpected error during install'
+          })
+        }
       }
     }
   })
