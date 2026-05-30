@@ -52,6 +52,7 @@ export interface AppSettings {
 	terminalUrlOpenMode: TerminalUrlOpenMode; // Controls how Ctrl/Cmd+Click terminal URLs are opened
 	sidebarVisible: boolean;
 	fileExplorerVisible: boolean;
+	sshPanelVisible: boolean;
 }
 
 // Terminal buffer size options
@@ -123,6 +124,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalUrlOpenMode: "system",
 	sidebarVisible: true,
 	fileExplorerVisible: true,
+	sshPanelVisible: true,
 };
 
 // Persistence key for app settings

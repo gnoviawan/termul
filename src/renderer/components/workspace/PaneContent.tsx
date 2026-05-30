@@ -25,7 +25,6 @@ interface PaneContentProps {
 	pane: LeafNode;
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
 	onAddBrowserTab?: (paneId: string) => void;
-	onAddGitTab?: (paneId: string) => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -37,7 +36,6 @@ export function PaneContent({
 	pane,
 	onAddTerminal,
 	onAddBrowserTab,
-	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -193,10 +191,6 @@ export function PaneContent({
 				onAddBrowserTab={useMemo(
 					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
 					[onAddBrowserTab, pane.id],
-				)}
-				onAddGitTab={useMemo(
-					() => (onAddGitTab ? () => onAddGitTab(pane.id) : undefined),
-					[onAddGitTab, pane.id],
 				)}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}

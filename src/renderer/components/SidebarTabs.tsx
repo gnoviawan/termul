@@ -3,19 +3,10 @@ import { ProjectSidebar } from './ProjectSidebar'
 import { ChatHistoryTab } from './chat/ChatHistoryTab'
 import { cn } from '@/lib/utils'
 import { FolderGit2, MessagesSquare } from 'lucide-react'
-import type { Project } from '@/types/project'
 
-interface SidebarTabsProps {
-  projects: Project[]
-  activeProjectId: string
-  onSelectProject: (id: string) => void
-  onNewProject: () => void
-  onUpdateProject: (id: string, updates: Partial<Project>) => void
-  onDeleteProject: (id: string) => void
-  onArchiveProject: (id: string) => void
-  onRestoreProject: (id: string) => void
-  onReorderProjects: (projectIds: string[]) => void
-}
+// Forward exactly what ProjectSidebar accepts so new sidebar props (e.g. SSH
+// handlers) flow through without having to be re-declared here.
+type SidebarTabsProps = React.ComponentProps<typeof ProjectSidebar>
 
 type SidebarTab = 'projects' | 'chats'
 

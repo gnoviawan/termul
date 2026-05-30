@@ -47,9 +47,11 @@ export const worktreeApi = {
 	/**
 	 * Remove a worktree. Uses --force if force=true.
 	 * Runs `git worktree prune` after removal.
+	 * `projectPath` is the repository root; git runs there so the worktree
+	 * metadata can be located.
 	 */
-	remove: (worktreePath: string, force: boolean): Promise<IpcResult<void>> =>
-		invoke('worktree_remove', { worktreePath, force }),
+	remove: (projectPath: string, worktreePath: string, force: boolean): Promise<IpcResult<void>> =>
+		invoke('worktree_remove', { projectPath, worktreePath, force }),
 
 	/**
 	 * List local and remote branches for a git repo.

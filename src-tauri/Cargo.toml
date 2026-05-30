@@ -52,12 +52,21 @@ lazy_static = "1.4"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Secure storage
+# SSH
+# Keep ssh2 on system OpenSSL for now. Enabling ssh2/vendored-openssl forces a
+# local OpenSSL source build that fails in common Windows/MSYS dev environments
+# without a full Perl module setup; see README SSH development notes.
+ssh2 = "0.9"
+
+# Secure storage (OS keychain for secure credential storage)
 keyring = "3.6"
 
 # Logging
 log = "0.4"
 env_logger = { version = "0.11", default-features = false }
+
+[dev-dependencies]
+tauri = { version = "2.0", features = ["test"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

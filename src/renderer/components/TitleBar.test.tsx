@@ -1,91 +1,88 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TitleBar } from './TitleBar'
-import { useSidebarStore } from '@/stores/sidebar-store'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import * as appSettingsHooks from '@/hooks/use-app-settings'
 
-const { mockUpdatePanelVisibility, mockToastError, mockWindowApi } = vi.hoisted(() => ({
-  mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
-  mockToastError: vi.fn(),
+const { mockWindowApi, platformState, maximizeRef } = vi.hoisted(() => ({
   mockWindowApi: {
-    onMaximizeChange: vi.fn(() => vi.fn()),
+    onMaximizeChange: vi.fn(),
     minimize: vi.fn(),
     toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
     close: vi.fn()
-  }
+  },
+  platformState: { isMac: false },
+  maximizeRef: { cb: null as null | ((maximized: boolean) => void) }
 }))
 
 vi.mock('@/lib/api', () => ({
   windowApi: mockWindowApi
 }))
 
-vi.mock('sonner', () => ({
-  toast: {
-    error: mockToastError
+vi.mock('@/lib/platform', () => ({
+  get isMac() {
+    return platformState.isMac
   }
 }))
 
-describe('TitleBar', () => {
+describe('TitleBar (window control strip)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(
-      mockUpdatePanelVisibility
-    )
-    useSidebarStore.setState({ isVisible: true })
-    useFileExplorerStore.setState({ isVisible: true })
-  })
-
-  function renderTitleBar() {
-    return render(
-      <MemoryRouter>
-        <TitleBar />
-      </MemoryRouter>
-    )
-  }
-
-  it('toggles sidebar via persistence-aware updater on click', async () => {
-    renderTitleBar()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
+    platformState.isMac = false
+    maximizeRef.cb = null
+    mockWindowApi.onMaximizeChange.mockImplementation((cb: (maximized: boolean) => void) => {
+      maximizeRef.cb = cb
+      return vi.fn()
     })
   })
 
-  it('toggles file explorer via persistence-aware updater on click', async () => {
-    renderTitleBar()
+  it('renders window controls on Windows/Linux', () => {
+    render(<TitleBar />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
+    expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument()
+  })
+
+  it('renders nothing on macOS (native traffic lights)', () => {
+    platformState.isMac = true
+    const { container } = render(<TitleBar />)
+
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByRole('button', { name: 'Minimize window' })).not.toBeInTheDocument()
+  })
+
+  it('minimizes the window on click', () => {
+    render(<TitleBar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize window' }))
+
+    expect(mockWindowApi.minimize).toHaveBeenCalledTimes(1)
+  })
+
+  it('toggles maximize on click', async () => {
+    render(<TitleBar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize window' }))
 
     await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
+      expect(mockWindowApi.toggleMaximize).toHaveBeenCalledTimes(1)
     })
   })
 
-  it('shows error toast when sidebar persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
+  it('closes the window on click', () => {
+    render(<TitleBar />)
 
-    renderTitleBar()
+    fireEvent.click(screen.getByRole('button', { name: 'Close window' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
-    })
+    expect(mockWindowApi.close).toHaveBeenCalledTimes(1)
   })
 
-  it('shows error toast when file explorer persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
+  it('reflects maximize state via onMaximizeChange', () => {
+    render(<TitleBar />)
 
-    renderTitleBar()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
+    act(() => {
+      maximizeRef.cb?.(true)
     })
+
+    expect(screen.getByRole('button', { name: 'Restore window' })).toBeInTheDocument()
   })
 })

@@ -173,6 +173,10 @@ vi.mock('@/hooks/use-recent-commands', () => ({
   useRecentCommandsLoader: () => undefined
 }))
 
+vi.mock('@/hooks/use-pinned-commands', () => ({
+  usePinnedCommandsLoader: () => undefined
+}))
+
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: () => undefined,
   useAddCommand: () => vi.fn(),
@@ -212,6 +216,10 @@ vi.mock('@/components/StatusBar', () => ({
 
 vi.mock('@/components/TitleBar', () => ({
   TitleBar: () => <div data-testid="title-bar" />
+}))
+
+vi.mock('@/components/ActivityRail', () => ({
+  ActivityRail: () => <div data-testid="activity-rail" />
 }))
 
 vi.mock('@/components/NewProjectModal', () => ({

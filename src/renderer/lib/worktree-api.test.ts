@@ -89,9 +89,10 @@ describe('worktreeApi', () => {
 		it('calls invoke with worktree_remove and path', async () => {
 			mockInvoke.mockResolvedValue({ success: true, data: null })
 
-			const result = await worktreeApi.remove('/project/.termul/worktrees/feat-1', false)
+			const result = await worktreeApi.remove('/test/project', '/project/.termul/worktrees/feat-1', false)
 
 			expect(mockInvoke).toHaveBeenCalledWith('worktree_remove', {
+				projectPath: '/test/project',
 				worktreePath: '/project/.termul/worktrees/feat-1',
 				force: false,
 			})
@@ -101,9 +102,10 @@ describe('worktreeApi', () => {
 		it('passes force=true when requested', async () => {
 			mockInvoke.mockResolvedValue({ success: true, data: null })
 
-			await worktreeApi.remove('/project/.termul/worktrees/feat-1', true)
+			await worktreeApi.remove('/test/project', '/project/.termul/worktrees/feat-1', true)
 
 			expect(mockInvoke).toHaveBeenCalledWith('worktree_remove', {
+				projectPath: '/test/project',
 				worktreePath: '/project/.termul/worktrees/feat-1',
 				force: true,
 			})

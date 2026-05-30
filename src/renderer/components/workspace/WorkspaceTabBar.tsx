@@ -12,7 +12,6 @@ import {
 	GitBranch,
 	GitPullRequest,
 	Bot,
-	MessageSquarePlus,
 } from "lucide-react";
 import { useGitStatusStore, type GitStatusState } from "@/stores/git-status-store";
 import type { GitStatusDetail } from "@shared/types/ipc.types";
@@ -30,9 +29,6 @@ import type { TabReorderPosition } from "@/types/workspace.types";
 import { ContextMenu } from "@/components/ContextMenu";
 import { useBrowserSessionStore } from "@/stores/browser-session-store";
 import { useAcpStore } from "@/stores/acp-store";
-import { NewChatDialog } from "@/components/chat/NewChatDialog";
-import { AgentConfigDialog } from "@/components/chat/AgentConfigDialog";
-import type { StoredAgentConfig } from "@/lib/acp-agents-persistence";
 import { useAnnotationStore } from "@/stores/annotation-store";
 import { shellApi, clipboardApi } from "@/lib/api";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
@@ -481,11 +477,11 @@ function GitTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors",
+					"group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent",
 					isActive
-						? "bg-secondary text-foreground"
+						? "bg-background border-b-primary text-foreground"
 						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-					isDragging && "opacity-50",
+					isDragging && "opacity-50 scale-[0.98]",
 					isDropTarget &&
 						dropPosition === "before" &&
 						"border-l-2 border-l-primary",
@@ -519,10 +515,6 @@ function GitTabInline({
 				>
 					<XIcon size={10} />
 				</button>
-
-				{isActive && (
-					<div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />
-				)}
 			</div>
 
 			{contextMenu && (
@@ -653,7 +645,6 @@ interface WorkspaceTabBarProps {
 	closingTerminalIds?: string[];
 	onAddTerminal?: (shell?: ShellInfo) => void;
 	onAddBrowserTab?: () => void;
-	onAddGitTab?: () => void;
 	onCloseTerminal?: (id: string, tabId: string) => void;
 	onRenameTerminal?: (id: string, name: string) => void;
 	onCloseEditorTab?: (filePath: string) => void;
@@ -667,7 +658,6 @@ export function WorkspaceTabBar({
 	closingTerminalIds = [],
 	onAddTerminal,
 	onAddBrowserTab,
-	onAddGitTab,
 	onCloseTerminal,
 	onRenameTerminal,
 	onCloseEditorTab,
@@ -693,9 +683,6 @@ export function WorkspaceTabBar({
 	} = usePaneDnd();
 
 	const [isTerminalMenuOpen, setIsTerminalMenuOpen] = useState(false);
-	const [isNewChatOpen, setIsNewChatOpen] = useState(false);
-	const [isAddAgentOpen, setIsAddAgentOpen] = useState(false);
-	const [editingAgent, setEditingAgent] = useState<StoredAgentConfig | undefined>(undefined);
 	const [shells, setShells] = useState<DetectedShells | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [hasOverflow, setHasOverflow] = useState(false);
@@ -1166,45 +1153,7 @@ export function WorkspaceTabBar({
 						<Globe size={12} />
 					</button>
 				)}
-
-				{onAddGitTab && (
-					<button
-						onClick={onAddGitTab}
-						className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-						title="Git Changes"
-					>
-						<GitBranch size={12} />
-					</button>
-				)}
-
-				<button
-					onClick={() => setIsNewChatOpen(true)}
-					className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-					title="New Agent Chat"
-				>
-					<MessageSquarePlus size={12} />
-				</button>
 			</div>
-
-			<NewChatDialog
-				open={isNewChatOpen}
-				onOpenChange={setIsNewChatOpen}
-				onAddAgent={() => {
-					setEditingAgent(undefined);
-					setIsAddAgentOpen(true);
-				}}
-				onEditAgent={(cfg) => {
-					setEditingAgent(cfg);
-					setIsAddAgentOpen(true);
-				}}
-				targetPaneId={paneId}
-			/>
-			<AgentConfigDialog
-				key={editingAgent?.id ?? "new"}
-				open={isAddAgentOpen}
-				onOpenChange={setIsAddAgentOpen}
-				existing={editingAgent}
-			/>
 		</div>
 	);
 }

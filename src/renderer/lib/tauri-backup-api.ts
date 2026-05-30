@@ -50,6 +50,31 @@ const MAX_BACKUPS = 3;
 const METADATA_STORE_FILE = 'backup-metadata.json';
 
 /**
+ * Extract a human-readable message from an unknown thrown value.
+ *
+ * Tauri plugin commands reject with plain strings (not Error instances), so a
+ * bare `err instanceof Error` check would discard the real reason and report
+ * "Unknown error". This normalizes Errors, strings, and serializable objects.
+ */
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (typeof err === 'string' && err.trim()) {
+    return err;
+  }
+  try {
+    const serialized = JSON.stringify(err);
+    if (serialized && serialized !== '{}' && serialized !== 'null') {
+      return serialized;
+    }
+  } catch {
+    // fall through to fallback
+  }
+  return fallback;
+}
+
+/**
  * Get the userData directory (source for backups)
  */
 async function getUserDataDir(): Promise<string> {
@@ -258,12 +283,15 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     // Create backup directory
     await mkdir(backupPath, { recursive: true });
 
-    // Copy entire userData directory (except backups folder)
+    // Copy entire userData directory (except backups and versions folders)
     const entries = await readDir(userDataPath);
 
     for (const entry of entries) {
-      // Skip the backups directory itself
-      if (entry.name === 'backups') {
+      // Skip the backups directory itself, and the rollback versions store
+      // (both grow unbounded relative to a single backup and would otherwise
+      // be copied recursively into every new backup, making backups slow and
+      // fragile enough to silently block updates).
+      if (entry.name === 'backups' || entry.name === 'versions') {
         continue;
       }
 
@@ -316,7 +344,7 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     return { success: true, data: backupInfo };
   } catch (err) {
     // Check for disk space errors
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    const errorMessage = extractErrorMessage(err, 'Unknown error');
 
     if (
       errorMessage.includes('ENOSPC') ||
@@ -479,7 +507,7 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
 
     return { success: true, data: undefined };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    const errorMessage = extractErrorMessage(err, 'Unknown error');
 
     // Attempt rollback: detect actual state and restore original data
     if (oldUserDataPath && tempRestorePath) {

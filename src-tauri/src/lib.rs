@@ -6,6 +6,7 @@ mod migrations;
 mod pty;
 mod secure_storage;
 mod shell_paths;
+mod ssh;
 mod trackers;
 mod worktree;
 
@@ -216,7 +217,11 @@ fn get_available_shells() -> Vec<ShellInfo> {
             ("pwsh", r"C:\Program Files\PowerShell\7\pwsh.exe", None),
             ("pwsh", r"C:\Program Files\PowerShell\6\pwsh.exe", None),
             // Windows PowerShell 5 (explicit path)
-            ("powershell", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", None),
+            (
+                "powershell",
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                None,
+            ),
             // PATH-based fallbacks (checked last)
             ("pwsh", "pwsh.exe", None),
             ("powershell", "powershell.exe", None),
@@ -659,12 +664,17 @@ pub fn run() {
             app.manage(pty_manager.clone());
 
             // Create Browser Tab Manager
-            let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            let browser_tab_manager =
+                Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
-            // Create ACP Manager (ADR-003 P0) — spawns/owns ACP agent subprocesses
+            // Create ACP Manager — spawns/owns ACP agent subprocesses
             let acp_manager = Arc::new(AcpManager::new(handle.clone()));
             app.manage(acp_manager);
+
+            // Create SSH Manager
+            let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
+            app.manage(ssh_manager);
 
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
@@ -776,6 +786,28 @@ pub fn run() {
             commands::search_content_stream,
             commands::search_content_cancel,
             commands::search_file_names,
+            // SSH commands
+            commands::ssh_list_profiles,
+            commands::ssh_save_profile,
+            commands::ssh_delete_profile,
+            commands::ssh_import_config,
+            commands::ssh_connect,
+            commands::ssh_disconnect,
+            commands::ssh_get_connections,
+            commands::ssh_port_forward_start,
+            commands::ssh_port_forward_stop,
+            commands::sftp_list_dir,
+            commands::sftp_download,
+            commands::sftp_upload,
+            commands::sftp_delete,
+            commands::sftp_mkdir,
+            commands::sftp_rename,
+            // SSH askpass helper
+            commands::ssh_create_askpass,
+            // SFTP file operations
+            commands::sftp_read_file,
+            commands::sftp_write_file,
+            commands::sftp_create_file,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,
@@ -786,6 +818,9 @@ pub fn run() {
             // Git commands
             commands::git_get_status,
             commands::git_get_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_discard,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
@@ -816,6 +851,9 @@ pub fn run() {
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
                 .map(|state| state.inner().clone());
+            let ssh_manager = app_handle
+                .try_state::<Arc<ssh::SSHManager>>()
+                .map(|state| state.inner().clone());
 
             let acp_manager = app_handle
                 .try_state::<Arc<AcpManager>>()
@@ -829,6 +867,9 @@ pub fn run() {
                 // (not tokio::spawn directly — the run callback may fire on
                 // a thread without a Tokio reactor, e.g. macOS WKWebView events)
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
                     pty_manager_clone.kill_all().await;
                     if let Some(acp_manager) = acp_manager {
                         acp_manager.kill_all().await;
@@ -849,11 +890,17 @@ pub fn run() {
                     app_handle_clone.exit(0);
                 });
             } else {
-                if let Some(browser_tab_manager) = browser_tab_manager {
-                    browser_tab_manager.destroy_all();
-                }
-                // No PTY or ACP manager, just exit
-                app_handle.exit(0);
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
+                    // No PTY or ACP manager, just exit
+                    app_handle_clone.exit(0);
+                });
             }
         }
     });
