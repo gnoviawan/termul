@@ -18,6 +18,7 @@ import {
   type AgentId,
   type SessionId,
   type AgentCapabilities,
+  type AgentConfig,
   type ContentBlock,
   type SessionMode,
   type SessionModeState,
@@ -43,6 +44,11 @@ import {
   type SessionClosedEvent,
   type McpServer
 } from '@/lib/acp-api'
+import {
+  loadAgentConfigs as loadAgentConfigsFromDisk,
+  saveAgentConfigs as saveAgentConfigsToDisk,
+  type StoredAgentConfig
+} from '@/lib/acp-agents-persistence'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -81,6 +87,11 @@ interface AcpState {
   agents: Record<AgentId, { id: AgentId; capabilities: AgentCapabilities | null }>
   agentStatus: Record<AgentId, AgentStatus>
 
+  // User-configured agents (persisted, distinct from the live `agents` map)
+  agentConfigs: StoredAgentConfig[]
+  /** Maps a configured agent id to its live spawned AgentId (for reuse). */
+  configToLiveAgent: Record<string, AgentId>
+
   // Sessions
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
@@ -98,6 +109,14 @@ interface AcpState {
   createSession: (agentId: AgentId, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
+
+  // Actions — configured agents (P4)
+  loadAgentConfigs: () => Promise<void>
+  saveAgentConfig: (config: StoredAgentConfig) => Promise<void>
+  deleteAgentConfig: (id: string) => Promise<void>
+  testConnection: (config: AgentConfig) => Promise<AgentCapabilities | null>
+  /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
+  startChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -198,6 +217,8 @@ function dropPermissionsForAgent(
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
+  agentConfigs: [],
+  configToLiveAgent: {},
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -296,6 +317,85 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
+
+  loadAgentConfigs: async () => {
+    const configs = await loadAgentConfigsFromDisk()
+    set({ agentConfigs: configs })
+  },
+
+  saveAgentConfig: async (config) => {
+    const list = get().agentConfigs
+    const idx = list.findIndex((c) => c.id === config.id)
+    const next = idx === -1 ? [...list, config] : list.map((c) => (c.id === config.id ? config : c))
+    set({ agentConfigs: next })
+    try {
+      await saveAgentConfigsToDisk(next)
+    } catch (err) {
+      // roll back the in-memory change on persistence failure
+      set({ agentConfigs: list })
+      throw err
+    }
+  },
+
+  deleteAgentConfig: async (id) => {
+    const list = get().agentConfigs
+    const next = list.filter((c) => c.id !== id)
+    set({ agentConfigs: next })
+    try {
+      await saveAgentConfigsToDisk(next)
+    } catch (err) {
+      set({ agentConfigs: list })
+      throw err
+    }
+  },
+
+  testConnection: async (config) => {
+    let agentId: AgentId | null = null
+    try {
+      agentId = await acpApi.spawnAgent(config)
+      // capabilities arrive via acp:agent_spawned; read them from the store if present
+      const caps = get().agents[agentId]?.capabilities ?? null
+      return caps
+    } finally {
+      // Always clean up the test process.
+      if (agentId) {
+        try {
+          await acpApi.killAgent(agentId)
+        } catch {
+          /* best-effort cleanup */
+        }
+        const id = agentId
+        set((s) => {
+          const agents = { ...s.agents }
+          const agentStatus = { ...s.agentStatus }
+          delete agents[id]
+          delete agentStatus[id]
+          return { agents, agentStatus }
+        })
+      }
+    }
+  },
+
+  startChat: async (configId, cwd, mcpServers) => {
+    const config = get().agentConfigs.find((c) => c.id === configId)
+    if (!config) throw new Error(`unknown agent config ${configId}`)
+    // Reuse a live agent for this config when it is still connected; otherwise spawn.
+    const existing = get().configToLiveAgent[configId]
+    const reuse = existing && get().agentStatus[existing] === 'connected' ? existing : null
+    let agentId: AgentId
+    if (reuse) {
+      agentId = reuse
+    } else {
+      agentId = await get().spawnAgent({
+        name: config.name,
+        command: config.command,
+        args: config.args,
+        env: config.env
+      })
+      set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
+    }
+    return get().createSession(agentId, cwd, mcpServers)
+  },
 
   sendPrompt: async (sessionId, text) => {
     const session = get().sessions[sessionId]

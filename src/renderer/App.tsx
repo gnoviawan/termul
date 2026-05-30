@@ -32,6 +32,7 @@ import { useProjectsLoader, useProjectsAutoSave } from './hooks/use-projects-per
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useAcpListeners } from './hooks/use-acp-listeners'
+import { useAcpAgents } from './hooks/use-acp-agents'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { isWindows } from '@/lib/platform'
@@ -92,6 +93,7 @@ function AppEffects(): null {
   useProjectsAutoSave()
   useMenuUpdaterListener()
   useAcpListeners()
+  useAcpAgents()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()

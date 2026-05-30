@@ -6,6 +6,14 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()
 }))
+vi.mock('@/lib/acp-agents-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
+  return {
+    ...actual,
+    loadAgentConfigs: vi.fn(async () => []),
+    saveAgentConfigs: vi.fn(async () => {})
+  }
+})
 
 import { invoke } from '@tauri-apps/api/core'
 import { useAcpStore } from './acp-store'
@@ -13,6 +21,8 @@ import { useAcpStore } from './acp-store'
 const FRESH = {
   agents: {},
   agentStatus: {},
+  agentConfigs: [],
+  configToLiveAgent: {},
   sessions: {},
   activeSessionId: null,
   messages: {},
@@ -398,5 +408,60 @@ describe('acp-store', () => {
     })
     const pending = useAcpStore.getState().pendingPermissions['req-1']
     expect((pending.toolCall as { toolCallId: string }).toolCallId).toBe('tc-1')
+  })
+
+  it('saveAgentConfig adds then updates a config (P4)', async () => {
+    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    expect(useAcpStore.getState().agentConfigs).toHaveLength(1)
+    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Renamed', command: 'gemini', args: [], env: {} })
+    expect(useAcpStore.getState().agentConfigs).toHaveLength(1)
+    expect(useAcpStore.getState().agentConfigs[0].name).toBe('Renamed')
+  })
+
+  it('deleteAgentConfig removes a config (P4)', async () => {
+    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore.getState().deleteAgentConfig('a1')
+    expect(useAcpStore.getState().agentConfigs).toHaveLength(0)
+  })
+
+  it('startChat spawns a configured agent then creates a session (P4)', async () => {
+    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('agent-9')
+      .mockResolvedValueOnce({ sessionId: 'sess-9' })
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    expect(sessionId).toBe('sess-9')
+    expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
+    expect(useAcpStore.getState().configToLiveAgent['cfg-1']).toBe('agent-9')
+  })
+
+  it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
+    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-1': 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-2' })
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    expect(sessionId).toBe('sess-2')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: undefined
+    })
+  })
+
+  it('testConnection spawns then always kills the test process (P4)', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('agent-test')
+      .mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().testConnection({ name: 'X', command: 'x', args: [], env: {} })
+    expect(invoke).toHaveBeenNthCalledWith(1, 'acp_spawn_agent', {
+      config: { name: 'X', command: 'x', args: [], env: {} }
+    })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'acp_kill_agent', { agentId: 'agent-test' })
+    expect(useAcpStore.getState().agents['agent-test']).toBeUndefined()
   })
 })
