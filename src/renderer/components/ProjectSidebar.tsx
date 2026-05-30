@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent, useMemo } from "react";
-import { Reorder, AnimatePresence, motion } from "framer-motion";
+import { Reorder, AnimatePresence, motion, LayoutGroup } from "framer-motion";
 import {
 	Plus,
 	Archive,
@@ -851,6 +851,11 @@ export function ProjectSidebar({
 					</div>
 				) : (
 					<>
+						{/* LayoutGroup keeps Reorder layout measurements in sync when an item's
+						    own height changes (e.g. expanding/collapsing worktrees via the
+						    chevron). Without it, the group caches stale item boxes after a
+						    height change and drag-to-reorder stops working. */}
+						<LayoutGroup>
 						<Reorder.Group
 							axis="y"
 							values={filteredActiveProjects}
@@ -873,6 +878,10 @@ export function ProjectSidebar({
 										key={project.id}
 										value={project}
 										drag={isSearching ? false : undefined}
+										// layout="position" lets framer-motion remeasure the item when
+										// its height changes (worktree expand/collapse) so the group's
+										// order calculations stay accurate and drag keeps working.
+										layout="position"
 										className="list-none"
 										whileDrag={{
 											scale: 1.02,
@@ -913,6 +922,7 @@ export function ProjectSidebar({
 								);
 							})}
 						</Reorder.Group>
+						</LayoutGroup>
 
 						{/* Archived Projects Section */}
 						{filteredArchivedProjects.length > 0 && (
