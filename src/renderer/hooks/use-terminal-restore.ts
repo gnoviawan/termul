@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Terminal as TerminalRecord } from '@/types/project'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
@@ -6,6 +6,7 @@ import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
 import { terminalApi, sessionApi, shellApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
@@ -17,6 +18,10 @@ import {
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
 import { waitForWorkspaceLayoutReady } from './use-workspace-persistence'
+
+import { isVisibleReady } from '@/lib/visibility-signal'
+
+const DEFERRED_RETRY_MS = 50
 
 const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
@@ -279,6 +284,8 @@ export function useTerminalRestore(): void {
   const previousProjectIdRef = useRef<string>('')
   // FIX #4: Use Set instead of boolean to track multiple restoring projects
   const isRestoringRef = useRef<Set<string>>(new Set())
+  // Retry counter for visibility-deferred restore
+  const [visibilityRetry, setVisibilityRetry] = useState(0)
 
   useEffect(() => {
     const callId = Math.random().toString(36).slice(2, 9)
@@ -356,6 +363,19 @@ export function useTerminalRestore(): void {
         // Check for cancellation before starting
         if (isCancelled()) {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] before restore`)
+          return
+        }
+
+        // Gate: don't spawn terminals until the app window is visible.
+        // In production builds, Tauri starts with `visible: false` and
+        // `showWindow()` resolves asynchronously. Spawning during the hidden
+        // phase causes the Rust backend to defer PTY cleanup, accumulating
+        // zombie PTYs and RAM growth (manager.rs:993).
+        // When `isAppHidden` flips to `false`, the effect re-runs via the
+        // `visibilityRetry` dependency, and this check passes.
+        if (!isVisibleReady()) {
+          debugLog('useTerminalRestore', `DEFERRED [${callId}]: window not visible yet`)
+          setTimeout(() => setVisibilityRetry((v) => v + 1), DEFERRED_RETRY_MS)
           return
         }
 
@@ -644,7 +664,7 @@ export function useTerminalRestore(): void {
       // and prevents a race condition where terminals are wiped before being saved to disk.
       // PTYs are managed by the backend and their lifecycle is independent of the renderer store.
     }
-  }, [activeProjectId])
+  }, [activeProjectId, visibilityRetry])
 }
 
 /**
@@ -883,6 +903,7 @@ async function restoreFromLayout(
         // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
         // FIX #1b: Kill orphan PTY if timeout fires after spawn resolves
         let spawnPtyId: string | null = null
+        let timedOut = false
         const spawnResult = await Promise.race([
           (async () => {
             const result = await terminalApi.spawn({
@@ -890,13 +911,27 @@ async function restoreFromLayout(
               cwd: persistedTerminal.cwd,
               ...(hasProjectEnv ? { env } : {})
             })
-            spawnPtyId = result.success ? result.data.id : null
-            if (spawnTimeout) clearTimeout(spawnTimeout)
+            if (spawnTimeout) {
+              clearTimeout(spawnTimeout)
+              spawnTimeout = null
+            }
+            if (result.success) {
+              if (timedOut) {
+                void killOrphanPty(result.data.id, terminalCallId)
+                spawnPtyId = null
+                return { success: false, error: 'Spawn timeout exceeded', data: null }
+              }
+
+              spawnPtyId = result.data.id
+            } else {
+              spawnPtyId = null
+            }
             return result
           })(),
           (async () => {
             return new Promise<{ success: false; error: string; data: null }>((resolve) => {
               spawnTimeout = setTimeout(() => {
+                timedOut = true
                 debugLog('restoreFromLayout', `SPAWN TIMEOUT for terminal [${terminalCallId}]`)
                 if (spawnPtyId) void killOrphanPty(spawnPtyId, terminalCallId)
                 resolve({ success: false, error: 'Spawn timeout exceeded', data: null })
@@ -908,20 +943,22 @@ async function restoreFromLayout(
         debugLog('restoreFromLayout', `Spawn result [${terminalCallId}]`, {
           success: spawnResult.success,
           error: spawnResult.success ? undefined : spawnResult.error,
-          ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
+          ptyId: spawnResult.success && spawnResult.data ? spawnResult.data.id : 'FAILED'
         })
 
-        if (!spawnResult.success) {
+        const spawnData = spawnResult.success ? spawnResult.data : null
+
+        if (!spawnResult.success || !spawnData) {
           debugLog('restoreFromLayout', `Spawn FAILED, skipping [${terminalCallId}]`)
           continue
         }
 
         if (isCancelled()) {
           debugLog('restoreFromLayout', `CANCELLED [${terminalCallId}] after spawn; killing PTY`, {
-            ptyId: spawnResult.data.id
+            ptyId: spawnData.id
           })
 
-          const killResult = await terminalApi.kill(spawnResult.data.id)
+          const killResult = await terminalApi.kill(spawnData.id)
           if (!killResult.success) {
             console.error('Failed to kill cancelled restore PTY:', killResult.error)
           }
@@ -941,7 +978,7 @@ async function restoreFromLayout(
           output: [],
           pendingScrollback: persistedTerminal.scrollback,
           transcript: persistedTerminal.transcript,
-          ptyId: spawnResult.data.id
+          ptyId: spawnData.id
         })
       } finally {
         if (spawnTimeout) clearTimeout(spawnTimeout)
@@ -1020,7 +1057,7 @@ async function restoreFromLayout(
       restoredTerminalCount: newTerminals.length
     }
   } finally {
-    // FIX #2: Always release the global spawn lock
+    cleanupGlobalState(restoreId)
     releaseGlobalSpawnLock(restoreId)
     debugLog('restoreFromLayout', `RELEASED LOCK [${restoreId}]`, {
       totalSpawnCalls: SPAWN_CALL_COUNT
@@ -1107,27 +1144,51 @@ async function createDefaultTerminal(
     // TODO: Pass actual system env from backend for variable expansion
     const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
 
+    const cwd = getDefaultCwdForProject(projectId)
+
+    // Ensure worktree symlinks are reconciled before spawning
+    try {
+      await ensureWorktreeSymlinks(projectId)
+    } catch {
+      // Symlink reconciliation is best-effort during restore
+    }
+
     debugLog('createDefaultTerminal', `Spawning default terminal [${defaultId}]`, {
       shell,
-      cwd: project?.path
+      cwd
     })
 
     // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
     let spawnPtyId: string | null = null
+    let timedOut = false
     const spawnResult = await Promise.race([
       (async () => {
         const result = await terminalApi.spawn({
           shell,
-          cwd: project?.path,
+          cwd,
           ...(hasProjectEnv ? { env } : {})
         })
-        spawnPtyId = result.success ? result.data.id : null
-        if (spawnTimeout) clearTimeout(spawnTimeout)
+        if (spawnTimeout) {
+          clearTimeout(spawnTimeout)
+          spawnTimeout = null
+        }
+        if (result.success) {
+          if (timedOut) {
+            void killOrphanPty(result.data.id, defaultId)
+            spawnPtyId = null
+            return { success: false, error: 'Spawn timeout exceeded', data: null }
+          }
+
+          spawnPtyId = result.data.id
+        } else {
+          spawnPtyId = null
+        }
         return result
       })(),
       (async () => {
         return new Promise<{ success: false; error: string; data: null }>((resolve) => {
           spawnTimeout = setTimeout(() => {
+            timedOut = true
             debugLog('createDefaultTerminal', `SPAWN TIMEOUT [${defaultId}]`)
             if (spawnPtyId) void killOrphanPty(spawnPtyId, defaultId)
             resolve({ success: false, error: 'Spawn timeout exceeded', data: null })
@@ -1139,16 +1200,18 @@ async function createDefaultTerminal(
     debugLog('createDefaultTerminal', `Spawn result [${defaultId}]`, {
       success: spawnResult.success,
       error: spawnResult.success ? undefined : spawnResult.error,
-      ptyId: spawnResult.success ? spawnResult.data.id : 'FAILED'
+      ptyId: spawnResult.success && spawnResult.data ? spawnResult.data.id : 'FAILED'
     })
 
+    const spawnData = spawnResult.success ? spawnResult.data : null
+
     if (isCancelled()) {
-      if (spawnResult.success) {
+      if (spawnData) {
         debugLog('createDefaultTerminal', `CANCELLED [${defaultId}] after spawn; killing PTY`, {
-          ptyId: spawnResult.data.id
+          ptyId: spawnData.id
         })
 
-        const killResult = await terminalApi.kill(spawnResult.data.id)
+        const killResult = await terminalApi.kill(spawnData.id)
         if (!killResult.success) {
           console.error('Failed to kill cancelled default terminal PTY:', killResult.error)
         }
@@ -1158,7 +1221,7 @@ async function createDefaultTerminal(
       return { status: 'cancelled', path: 'default-terminal' }
     }
 
-    if (!spawnResult.success) {
+    if (!spawnData) {
       debugLog('createDefaultTerminal', `Spawn FAILED [${defaultId}]`)
       return { status: 'failed', path: 'default-terminal' }
     }
@@ -1169,8 +1232,8 @@ async function createDefaultTerminal(
     const newTerminalName = existingTerminals.length > 0
       ? `Terminal ${existingTerminals.length + 1}`
       : 'Terminal 1'
-    const newTerminal = terminalStore.addTerminal(newTerminalName, projectId, shell, project?.path)
-    terminalStore.setTerminalPtyId(newTerminal.id, spawnResult.data.id)
+    const newTerminal = terminalStore.addTerminal(newTerminalName, projectId, shell, cwd)
+    terminalStore.setTerminalPtyId(newTerminal.id, spawnData.id)
 
     // Explicitly select to ensure activeTerminalId is set correctly
     terminalStore.selectTerminal(newTerminal.id)
@@ -1180,7 +1243,7 @@ async function createDefaultTerminal(
 
     debugLog('createDefaultTerminal', `COMPLETE [${defaultId}]`, {
       terminalId: newTerminal.id,
-      ptyId: spawnResult.data.id,
+      ptyId: spawnData.id,
       totalTerminalsInStore: freshTerminalStore.terminals.length,
       totalSpawnCalls: SPAWN_CALL_COUNT
     })

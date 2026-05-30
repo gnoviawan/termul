@@ -20,7 +20,7 @@ import {
 import { keyboardApi } from './keyboard-api'
 import { visibilityApi } from './visibility-api'
 import { shellApi as tauriShellApi } from './shell-api'
-import { tauriGitApi } from './git-api'
+import { gitApi as tauriGitApi } from './git-api'
 import { openerApi } from './tauri-opener-api'
 import { tauriTunnelApi } from './tunnel-api'
 import * as tauriUpdaterApi from './tauri-updater-api'
@@ -28,6 +28,8 @@ import * as tauriVersionSkipService from './tauri-version-skip'
 import { hasActiveTerminalSessions } from './tauri-safe-update'
 import { tauriSessionApi } from './tauri-session-api'
 import { createTauriDataMigrationApi } from './tauri-data-migration-api'
+import { tauriSecureStorageApi } from './tauri-secure-storage-api'
+import { worktreeApi } from './worktree-api'
 import { isTauri } from './api-bridge'
 import { wsGitApi, wsTunnelApi, wsTerminalApi, wsShellApi } from './ws-api-adapters'
 
@@ -66,12 +68,12 @@ export {
   _filesystemApi as filesystemApi,
   _dialogApi as dialogApi,
   openerApi,
+  worktreeApi,
   tauriUpdaterApi,
   tauriVersionSkipService,
   hasActiveTerminalSessions
 }
 
-
-
 export const sessionApi = tauriSessionApi
 export const dataMigrationApi = createTauriDataMigrationApi()
+export const secureStorageApi = tauriSecureStorageApi

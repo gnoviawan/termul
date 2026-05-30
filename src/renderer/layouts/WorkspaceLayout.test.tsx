@@ -48,8 +48,24 @@ const mockUseTerminalActions = vi.fn(() => ({
 }))
 
 vi.mock('@/stores/project-store', () => ({
-  useProjectStore: vi.fn((selector) =>
-    selector ? selector({ projects: [], activeProjectId: '', isLoaded: true }) : { projects: [], activeProjectId: '', isLoaded: true }
+  useProjectStore: Object.assign(
+    vi.fn((selector) => {
+      const state = {
+        projects: [],
+        activeProjectId: '',
+        isLoaded: true,
+        isWorktreeOperationLocked: false
+      }
+      return selector ? selector(state) : state
+    }),
+    { getState: vi.fn(() => ({
+      projects: [],
+      activeProjectId: '',
+      isLoaded: true,
+      isWorktreeOperationLocked: false,
+      removeWorktree: vi.fn(),
+      updateProject: vi.fn()
+    })) }
   ),
   useProjectsLoaded: () => mockUseProjectsLoaded(),
   useProjects: () => mockUseProjects(),

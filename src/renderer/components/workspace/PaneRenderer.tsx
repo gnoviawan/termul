@@ -42,7 +42,7 @@ export function PaneRenderer({
 				onAddTerminal={onAddTerminal}
 				onAddBrowserTab={onAddBrowserTab}
 				onAddGitTab={onAddGitTab}
-				onAddTunnelTab={onAddTunnelTab}
+		onAddTunnelTab={onAddTunnelTab}
 				onCloseTerminal={onCloseTerminal}
 				onRenameTerminal={onRenameTerminal}
 				onCloseEditorTab={onCloseEditorTab}
@@ -86,7 +86,7 @@ const PaneLeafRenderer = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
-		onAddTunnelTab,
+	onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -100,7 +100,7 @@ const PaneLeafRenderer = memo(
 					onAddTerminal={onAddTerminal}
 					onAddBrowserTab={onAddBrowserTab}
 					onAddGitTab={onAddGitTab}
-					onAddTunnelTab={onAddTunnelTab}
+		onAddTunnelTab={onAddTunnelTab}
 					onCloseTerminal={onCloseTerminal}
 					onRenameTerminal={onRenameTerminal}
 					onCloseEditorTab={onCloseEditorTab}
@@ -131,7 +131,7 @@ const PaneSplitRenderer = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
-		onAddTunnelTab,
+	onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -188,7 +188,7 @@ const PaneSplitRenderer = memo(
 						onAddTerminal={onAddTerminal}
 						onAddBrowserTab={onAddBrowserTab}
 						onAddGitTab={onAddGitTab}
-						onAddTunnelTab={onAddTunnelTab}
+		onAddTunnelTab={onAddTunnelTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}
@@ -228,7 +228,7 @@ const PaneRendererPanel = memo(
 		onAddTerminal,
 		onAddBrowserTab,
 		onAddGitTab,
-		onAddTunnelTab,
+	onAddTunnelTab,
 		onCloseTerminal,
 		onRenameTerminal,
 		onCloseEditorTab,
@@ -248,7 +248,7 @@ const PaneRendererPanel = memo(
 						onAddTerminal={onAddTerminal}
 						onAddBrowserTab={onAddBrowserTab}
 						onAddGitTab={onAddGitTab}
-						onAddTunnelTab={onAddTunnelTab}
+		onAddTunnelTab={onAddTunnelTab}
 						onCloseTerminal={onCloseTerminal}
 						onRenameTerminal={onRenameTerminal}
 						onCloseEditorTab={onCloseEditorTab}

@@ -44,7 +44,7 @@ const intentBadgeClass: Record<Intent, string> = {
 const selectorConfidenceClass: Record<ElementGeometry["selectorConfidence"], string> = {
   "unique-id": "bg-green-100 text-green-800 border-green-200",
   "unique-class": "bg-orange-100 text-orange-800 border-orange-200",
-  fallback: "bg-gray-100 text-gray-700 border-gray-200",
+  fallback: "bg-secondary text-secondary-foreground border-border",
 };
 
 function truncateForDisplay(value: string, maxLength: number): string {

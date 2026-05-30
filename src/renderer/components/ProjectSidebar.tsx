@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef, useEffect, KeyboardEvent, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, memo, KeyboardEvent, useMemo } from "react";
 import type { ChangeEvent, MouseEvent } from "react";
-import { motion, Reorder } from "framer-motion";
+import { Reorder, AnimatePresence, motion } from "framer-motion";
 import {
 	Plus,
 	Archive,
@@ -18,20 +18,40 @@ import {
 	FolderOpen,
 	X,
 	Smartphone,
+	GitBranch,
+	Copy,
+	Home,
+	CheckCircle2,
+	AlertCircle,
+	ArrowUpCircle,
+	ArrowDownCircle,
+	XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { Project, ProjectColor } from "@/types/project";
+import type { Project, ProjectColor, Worktree } from "@/types/project";
 import type { DetectedShells } from "@shared/types/ipc.types";
+import { isWorktreeTermulManaged } from "@/types/project";
 import { getColorClasses, availableColors } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem, ContextMenuSubItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { RemoveWorktreeDialog } from "./RemoveWorktreeDialog";
+import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { Skeleton } from "@/components/ui/skeleton";
-import { shellApi, dialogApi } from "@/lib/api";
+import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
 import { isTauri } from "@/lib/api-bridge";
+import { useProjectStore, useProjectActions } from "@/stores/project-store";
+import { toast } from "@/hooks/use-toast";
+import { activateAndOpenTerminal } from "@/lib/terminal-spawn";
+import type { WorktreeHealthStatus } from "@/types/worktree-status";
+import { getWorktreeStatusFromCache } from "@/hooks/use-worktree-status";
+import { useWorktreeStatus } from "@/hooks/use-worktree-status";
+import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
+import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
+import { filterWorktrees } from "@/lib/worktree-filter";
 
 function getFirstLetter(name: string): string {
 	if (!name) return "?";
@@ -65,6 +85,26 @@ interface SettingsDialogState {
 	projectId: string;
 }
 
+interface NewWorktreeModalState {
+	isOpen: boolean;
+	projectId: string;
+}
+
+interface WorktreeContextMenuState {
+	isOpen: boolean;
+	x: number;
+	y: number;
+	worktree: Worktree | null;
+	projectId: string;
+}
+
+interface WorktreeDeleteConfirmState {
+	isOpen: boolean;
+	projectId: string;
+	worktree: Worktree | null;
+}
+
+
 interface ProjectSidebarProps {
 	projects: Project[];
 	activeProjectId: string;
@@ -90,9 +130,33 @@ export function ProjectSidebar({
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
 	const isDesktopApp = isTauri();
+	const { selectProject, setActiveWorktree, setWorktreeOperationLock } = useProjectActions();
+	const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked);
+
+	// Poll worktree status for the active project (populates shared cache for sidebar badges)
+	useWorktreeStatus(activeProjectId);
+
+	// Reconcile stored worktrees against actual git state (detects orphaned entries)
+	useWorktreeReconciler(activeProjectId);
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
+
+	// Expanded worktree projects — active project auto-expands
+	const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
+		const set = new Set<string>();
+		if (activeProjectId) set.add(activeProjectId);
+		return set;
+	});
+
+	// Auto-expand/contract active project
+	useEffect(() => {
+		setExpandedProjects((prev) => {
+			const next = new Set(prev);
+			next.add(activeProjectId);
+			return next;
+		});
+	}, [activeProjectId]);
 
 	// Context menu state
 	const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -100,6 +164,22 @@ export function ProjectSidebar({
 		x: 0,
 		y: 0,
 		projectId: "",
+	});
+
+	// Worktree context menu state
+	const [worktreeContextMenu, setWorktreeContextMenu] = useState<WorktreeContextMenuState>({
+		isOpen: false,
+		x: 0,
+		y: 0,
+		worktree: null,
+		projectId: "",
+	});
+
+	// Worktree delete confirmation state
+	const [worktreeDeleteConfirm, setWorktreeDeleteConfirm] = useState<WorktreeDeleteConfirmState>({
+		isOpen: false,
+		projectId: "",
+		worktree: null,
 	});
 
 	// Inline editing state
@@ -126,6 +206,13 @@ export function ProjectSidebar({
 		isOpen: false,
 		projectId: "",
 	});
+
+	// New worktree modal state
+	const [newWorktreeModal, setNewWorktreeModal] = useState<NewWorktreeModalState>({
+		isOpen: false,
+		projectId: "",
+	});
+
 
 	// Settings form state
 	const [settingsName, setSettingsName] = useState("");
@@ -157,6 +244,148 @@ export function ProjectSidebar({
 	// Optimized subscription: only re-render sidebar if which projects have activity changes.
 	// This prevents re-renders when terminal text output changes.
 	const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()];
+
+	const toggleProjectExpanded = useCallback((projectId: string): void => {
+		setExpandedProjects((prev) => {
+			const next = new Set(prev);
+			if (next.has(projectId)) {
+				next.delete(projectId);
+			} else {
+				next.add(projectId);
+			}
+			return next;
+		});
+	}, []);
+
+	const handleWorktreeSelect = useCallback(
+		(projectId: string, worktreeId: string | null): void => {
+			setActiveWorktree(projectId, worktreeId);
+			if (worktreeId) {
+				const project = useProjectStore.getState().projects.find((p) => p.id === projectId);
+				const worktree = project?.worktrees?.find((w) => w.id === worktreeId);
+				toast({
+					title: "Switched worktree",
+					description: `Active worktree switched to "${worktree?.name}". New terminals will open here. Existing terminals remain where they are.`,
+				});
+			} else {
+				toast({
+					title: "Switched to project root",
+					description: "Switched to project root. New terminals will open here.",
+				});
+			}
+		},
+		[setActiveWorktree],
+	);
+
+	// Activate a worktree AND open a terminal in it, in one action.
+	// Shared by the row hover terminal button and the "Open Terminal Here" context menu.
+	const handleOpenTerminalInWorktree = useCallback(
+		async (projectId: string, worktreeId: string | null, worktreePath: string, worktreeName: string): Promise<void> => {
+			const outcome = await activateAndOpenTerminal(projectId, worktreeId, worktreePath);
+			if (outcome.status === "opened") {
+				toast({ title: "Terminal opened", description: `Terminal opened in "${worktreeName}"` });
+			} else if (outcome.status === "no-pane") {
+				toast({ title: "No active pane", description: "Cannot open terminal without an active workspace pane." });
+			} else {
+				toast({ title: "Failed to open terminal", description: outcome.error || "Could not create a terminal in this worktree." });
+			}
+		},
+		[],
+	);
+
+	const handleWorktreeContextMenu = useCallback(
+		(e: React.MouseEvent, projectId: string, worktree: Worktree): void => {
+			e.preventDefault();
+			e.stopPropagation();
+			setWorktreeContextMenu({
+				isOpen: true,
+				x: e.clientX,
+				y: e.clientY,
+				worktree,
+				projectId,
+			});
+		},
+		[],
+	);
+
+	const closeWorktreeContextMenu = useCallback((): void => {
+		setWorktreeContextMenu((prev) => ({ ...prev, isOpen: false }));
+	}, []);
+
+	const handleCopyWorktreePath = useCallback(async (path: string): Promise<void> => {
+		try {
+			await clipboardApi.writeText(path);
+			toast({ title: "Path copied", description: path });
+		} catch {
+			// Fallback: try navigator.clipboard
+			try {
+				await navigator.clipboard.writeText(path);
+				toast({ title: "Path copied", description: path });
+			} catch {
+				toast({ title: "Failed to copy path", description: "Could not copy to clipboard" });
+			}
+		}
+	}, []);
+
+	const handleOpenInFileExplorer = useCallback(
+		async (worktreePath: string): Promise<void> => {
+			// Use the filesystem API to open the directory in the OS file manager
+			try {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				await (window as any).__TAURI_INTERNALS__?.invoke('open_path_in_file_manager', { path: worktreePath });
+			} catch {
+				// Fallback — just copy the path
+				handleCopyWorktreePath(worktreePath);
+			}
+		},
+		[handleCopyWorktreePath],
+	);
+
+	const handleRemoveWorktree = useCallback(
+		async (projectId: string, worktree: Worktree): Promise<void> => {
+			if (!isWorktreeTermulManaged(worktree)) return; // Only remove Termul-managed worktrees
+
+			setWorktreeOperationLock(true);
+			try {
+				const result = await worktreeApi.remove(worktree.path, false);
+				if (result.success) {
+					useProjectStore.getState().removeWorktree(projectId, worktree.id);
+					toast({ title: "Worktree removed", description: `"${worktree.name}" has been removed.` });
+					// Reconcile worktrees after removal
+					const project = useProjectStore.getState().projects.find((p) => p.id === projectId);
+					if (project?.path) {
+						const listResult = await worktreeApi.list(project.path);
+						if (listResult.success && listResult.data) {
+							// Preserve existing IDs for stable references (activeWorktreeId, status cache)
+							const existingWorktrees = useProjectStore.getState().projects
+								.find((p) => p.id === projectId)?.worktrees ?? []
+							const existingByPath = new Map(existingWorktrees.map((w) => [w.path, w]))
+
+							const updatedWorktrees: Worktree[] = listResult.data.map((wt) => {
+								const existing = existingByPath.get(wt.path)
+								return existing ?? {
+									id: crypto.randomUUID(),
+									name: wt.name,
+									branch: wt.branch,
+									path: wt.path,
+									createdAt: new Date().toISOString(),
+								}
+							});
+							useProjectStore.getState().updateProject(projectId, { worktrees: updatedWorktrees });
+						}
+					}
+				} else {
+					toast({ title: "Failed to remove worktree", description: result.error ?? "Unknown error" });
+				}
+			} catch (err) {
+				toast({ title: "Error removing worktree", description: String(err) });
+			} finally {
+				setWorktreeOperationLock(false);
+			}
+		},
+		[setWorktreeOperationLock],
+	);
+
 
 	const handleContextMenu = useCallback(
 		(e: React.MouseEvent, projectId: string): void => {
@@ -270,20 +499,23 @@ export function ProjectSidebar({
 			setSettingsShell(project.defaultShell || "");
 			setSettingsColor(project.color || "blue");
 		}
-	}
-}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
+		}
+	}, [settingsDialog.isOpen, settingsDialog.projectId, projects]);
 
-const handleSaveSettings = useCallback(() => {
-	if (settingsDialog.projectId) {
+	const handleSaveSettings = useCallback(() => {
+		const name = settingsName.trim();
+		if (!name || !settingsDialog.projectId) {
+			return;
+		}
+
 		onUpdateProject(settingsDialog.projectId, {
-			name: settingsName.trim(),
+			name,
 			path: settingsPath.trim() || undefined,
 			defaultShell: settingsShell || undefined,
 			color: settingsColor,
 		});
-	}
-	handleCloseSettings();
-}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
+		handleCloseSettings();
+	}, [settingsDialog.projectId, settingsName, settingsPath, settingsShell, settingsColor, onUpdateProject, handleCloseSettings]);
 
 	const handleBrowsePath = useCallback(async (): Promise<void> => {
 		try {
@@ -302,6 +534,7 @@ const handleSaveSettings = useCallback(() => {
 	const getContextMenuItems = useCallback(
 		(projectId: string): ContextMenuItem[] => {
 			const project = projects.find((p) => p.id === projectId);
+			const isGitRepo = project?.isGitRepo ?? false;
 			const shellSubmenu: ContextMenuSubItem[] =
 				availableShells?.available.map((shell) => ({
 					label: shell.displayName,
@@ -309,11 +542,8 @@ const handleSaveSettings = useCallback(() => {
 					isSelected: (() => {
 						const projectShell = project?.defaultShell;
 						if (!projectShell) return false;
-						// Match by full path
 						if (projectShell === shell.path) return true;
-						// Match by name
 						if (projectShell === shell.name) return true;
-						// Match by basename of path
 						const pathBasename = shell.path.split(/[\\/]/).pop();
 						return projectShell === pathBasename;
 					})(),
@@ -321,9 +551,22 @@ const handleSaveSettings = useCallback(() => {
 
 			const items: ContextMenuItem[] = [
 				{
+					label: "Settings",
+					icon: <Settings size={14} />,
+					onClick: () => {
+						selectProject(projectId);
+						navigate("/settings");
+					},
+				},
+				{
 					label: "Rename",
 					icon: <Edit2 size={14} />,
 					onClick: () => handleStartRename(projectId),
+				},
+				{
+					label: "Project Settings",
+					icon: <Settings size={14} />,
+					onClick: () => handleOpenSettings(projectId),
 				},
 				{
 					label: "Change Color",
@@ -343,7 +586,7 @@ const handleSaveSettings = useCallback(() => {
 
 			if (shellSubmenu.length > 0) {
 				items.push({
-					label: "Set Default Shell",
+					label: "Default Shell",
 					icon: <Terminal size={14} />,
 					submenu: shellSubmenu,
 					onSubmenuSelect: (shellPath: string) => {
@@ -354,6 +597,14 @@ const handleSaveSettings = useCallback(() => {
 
 			items.push(
 				{
+					label: isGitRepo ? "New Worktree" : "New Worktree (no git repo)",
+					icon: <GitBranch size={14} />,
+					onClick: () => {
+						if (isGitRepo) setNewWorktreeModal({ isOpen: true, projectId });
+					},
+					disabled: !isGitRepo,
+				},
+				{
 					label: "Archive",
 					icon: <Archive size={14} />,
 					onClick: () => onArchiveProject(projectId),
@@ -362,7 +613,7 @@ const handleSaveSettings = useCallback(() => {
 					label: "Delete",
 					icon: <Trash2 size={14} />,
 					onClick: () => handleConfirmDelete(projectId),
-					variant: "danger",
+					variant: "danger" as const,
 				},
 			);
 
@@ -380,6 +631,8 @@ const handleSaveSettings = useCallback(() => {
 			onUpdateProject,
 			onArchiveProject,
 			handleConfirmDelete,
+			selectProject,
+			navigate,
 		],
 	);
 
@@ -395,11 +648,44 @@ const handleSaveSettings = useCallback(() => {
 					label: "Delete",
 					icon: <Trash2 size={14} />,
 					onClick: () => handleConfirmDelete(projectId),
-					variant: "danger",
+					variant: "danger" as const,
 				},
 			];
 		},
 		[onRestoreProject, handleConfirmDelete],
+	);
+
+	const getWorktreeContextMenuItems = useCallback(
+		(projectId: string, worktree: Worktree): ContextMenuItem[] => {
+			const canRemove = isWorktreeTermulManaged(worktree);
+			return [
+				{
+					label: "Open Terminal Here",
+					icon: <Terminal size={14} />,
+					onClick: () => void handleOpenTerminalInWorktree(projectId, worktree.id, worktree.path, worktree.name),
+				},
+				{
+					label: "Open in File Explorer",
+					icon: <FolderOpen size={14} />,
+					onClick: () => void handleOpenInFileExplorer(worktree.path),
+				},
+				{
+					label: "Copy Path",
+					icon: <Copy size={14} />,
+					onClick: () => void handleCopyWorktreePath(worktree.path),
+				},
+				{ type: "separator" as const },
+				{
+					label: "Remove Worktree",
+					icon: <Trash2 size={14} />,
+					onClick: () =>
+						setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree }),
+					variant: "danger" as const,
+					disabled: !canRemove || isWorktreeOperationLocked,
+				},
+			];
+		},
+		[handleOpenTerminalInWorktree, handleOpenInFileExplorer, handleCopyWorktreePath, isWorktreeOperationLocked],
 	);
 
 	const colorPickerProject = projects.find(
@@ -477,6 +763,8 @@ const handleSaveSettings = useCallback(() => {
 										<ProjectItem
 											project={project}
 											isActive={project.id === activeProjectId}
+											isExpanded={expandedProjects.has(project.id)}
+											onToggleExpand={() => toggleProjectExpanded(project.id)}
 											isEditing={editingId === project.id}
 											editName={editName}
 											shortcut={index < 9 ? `Ctrl+${index + 1}` : undefined}
@@ -490,6 +778,17 @@ const handleSaveSettings = useCallback(() => {
 											onEditNameChange={setEditName}
 											onSaveRename={() => handleSaveRename(project.id)}
 											onCancelRename={handleCancelRename}
+											onSettingsClick={() => {
+												selectProject(project.id);
+												navigate("/settings");
+											}}
+											onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
+											onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
+											onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
+												void handleOpenTerminalInWorktree(project.id, worktreeId, worktreePath, worktreeName)
+											}
+											isWorktreeOperationLocked={isWorktreeOperationLocked}
+											onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
 										/>
 									</Reorder.Item>
 								);
@@ -549,6 +848,16 @@ const handleSaveSettings = useCallback(() => {
 					x={contextMenu.x}
 					y={contextMenu.y}
 					onClose={closeContextMenu}
+				/>
+			)}
+
+			{/* Worktree Context Menu */}
+			{worktreeContextMenu.isOpen && worktreeContextMenu.worktree && (
+				<ContextMenu
+					items={getWorktreeContextMenuItems(worktreeContextMenu.projectId, worktreeContextMenu.worktree)}
+					x={worktreeContextMenu.x}
+					y={worktreeContextMenu.y}
+					onClose={closeWorktreeContextMenu}
 				/>
 			)}
 
@@ -708,6 +1017,23 @@ const handleSaveSettings = useCallback(() => {
 				onConfirm={handleDelete}
 				onCancel={handleCancelDelete}
 			/>
+
+			{/* Worktree Removal Dialog */}
+			<RemoveWorktreeDialog
+				isOpen={worktreeDeleteConfirm.isOpen}
+				onClose={() => setWorktreeDeleteConfirm({ isOpen: false, projectId: "", worktree: null })}
+				projectId={worktreeDeleteConfirm.projectId}
+				worktree={worktreeDeleteConfirm.worktree}
+				projectPath={projects.find(p => p.id === worktreeDeleteConfirm.projectId)?.path ?? ""}
+				gitBranch={projects.find(p => p.id === worktreeDeleteConfirm.projectId)?.gitBranch}
+			/>
+
+			{/* New Worktree Modal */}
+			<NewWorktreeModal
+				isOpen={newWorktreeModal.isOpen}
+				onClose={() => setNewWorktreeModal({ isOpen: false, projectId: "" })}
+				projectId={newWorktreeModal.projectId}
+			/>
 		</aside>
 	);
 }
@@ -715,6 +1041,8 @@ const handleSaveSettings = useCallback(() => {
 interface ProjectItemProps {
 	project: Project;
 	isActive: boolean;
+	isExpanded: boolean;
+	onToggleExpand: () => void;
 	isEditing: boolean;
 	editName: string;
 	shortcut?: string;
@@ -725,11 +1053,19 @@ interface ProjectItemProps {
 	onEditNameChange: (name: string) => void;
 	onSaveRename: () => void;
 	onCancelRename: () => void;
+	onSettingsClick: () => void;
+	onWorktreeSelect: (worktreeId: string | null) => void;
+	onWorktreeContextMenu: (e: React.MouseEvent, worktree: Worktree) => void;
+	onOpenTerminalInWorktree: (worktreeId: string | null, worktreePath: string, worktreeName: string) => void;
+	isWorktreeOperationLocked: boolean;
+	onNewWorktree: (projectId: string) => void;
 }
 
-function ProjectItem({
+const ProjectItem = memo(function ProjectItem({
 	project,
 	isActive,
+	isExpanded,
+	onToggleExpand,
 	isEditing,
 	editName,
 	shortcut,
@@ -740,6 +1076,12 @@ function ProjectItem({
 	onEditNameChange,
 	onSaveRename,
 	onCancelRename,
+	onSettingsClick,
+	onWorktreeSelect,
+	onWorktreeContextMenu,
+	onOpenTerminalInWorktree,
+	isWorktreeOperationLocked,
+	onNewWorktree,
 }: ProjectItemProps): React.JSX.Element {
 	const colors = getColorClasses(project.color);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -763,81 +1105,339 @@ function ProjectItem({
 	};
 
 	const firstLetter = getFirstLetter(project.name);
+	const hasWorktrees = (project.worktrees?.length ?? 0) > 0 || project.isGitRepo;
+	const worktrees = project.worktrees ?? [];
+
+	// Worktree search and group collapse state
+	const [worktreeSearchQuery, setWorktreeSearchQuery] = useState("");
+	const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
 	return (
-		<button
-			onClick={isEditing ? undefined : onClick}
-			onContextMenu={onContextMenu}
-			className={cn(
-				"w-full flex items-center px-2 py-1 transition-colors group text-left",
-				isActive
-					? "bg-sidebar-accent"
-					: "hover:bg-sidebar-accent/50",
-			)}
-			aria-current={isActive ? "page" : undefined}
-			aria-label={`Project: ${project.name}${isActive ? " (active)" : ""}`}
-			data-testid={`project-item-${project.id}`}
-		>
+		<div data-testid={`project-item-${project.id}`}>
 			<div
+				onClick={isEditing ? undefined : onClick}
+				onContextMenu={onContextMenu}
+				role="button"
+				tabIndex={0}
+				onKeyDown={(e) => {
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault();
+						if (!isEditing) onClick();
+					}
+				}}
 				className={cn(
-					"w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0",
-					colors.bg,
-					isActive && "ring-1 ring-offset-1 ring-offset-sidebar ring-primary",
+					"w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer",
+					isActive
+						? `${colors.border} bg-sidebar-accent`
+						: `${colors.borderMuted} hover:bg-sidebar-accent/50`,
 				)}
+				aria-current={isActive ? "page" : undefined}
+				aria-label={`Project: ${project.name}${isActive ? " (active)" : ""}`}
 			>
-				<span
-					className="text-[10px] leading-none text-white font-semibold"
-					data-testid="project-avatar-letter"
+				{/* Expand/collapse chevron for projects with worktrees or git */}
+				{hasWorktrees ? (
+					<button
+						onClick={(e) => {
+							e.stopPropagation();
+							onToggleExpand();
+						}}
+						className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
+						aria-label={isExpanded ? "Collapse worktrees" : "Expand worktrees"}
+						aria-expanded={isExpanded}
+					>
+						{isExpanded ? (
+							<ChevronDown size={12} className="text-muted-foreground" />
+						) : (
+							<ChevronRight size={12} className="text-muted-foreground" />
+						)}
+					</button>
+				) : (
+					<div className="w-5 flex-shrink-0" />
+				)}
+
+				{/* Circular avatar with first letter */}
+				<div
+					className={cn(
+						"w-4 h-4 rounded-full flex items-center justify-center ml-1 mr-2 flex-shrink-0",
+						colors.bg,
+					)}
+					aria-hidden="true"
 				>
-					{firstLetter}
-				</span>
+					<span
+						className="text-[10px] leading-none text-white"
+						data-testid="project-avatar-letter"
+					>
+						{firstLetter}
+					</span>
+				</div>
+				{isEditing ? (
+					<input
+						ref={inputRef}
+						type="text"
+						value={editName}
+						onChange={(e) => onEditNameChange(e.target.value)}
+						onKeyDown={handleKeyDown}
+						onBlur={onSaveRename}
+						className="flex-1 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+						onClick={(e) => e.stopPropagation()}
+					/>
+				) : (
+					<span
+						className={cn(
+							"text-sm transition-colors flex-1 mr-2",
+							isActive
+								? "text-foreground"
+								: "text-muted-foreground group-hover:text-foreground",
+						)}
+					>
+						{project.name}
+					</span>
+				)}
+				{hasError && (
+					<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
+						<AlertTriangle size={12} />
+					</span>
+				)}
+				{!isEditing && shortcut && (
+					<span
+						className={cn(
+							"text-xs font-mono text-muted-foreground transition-opacity mr-3",
+							isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+						)}
+					>
+						{shortcut}
+					</span>
+				)}
+				{!isEditing && (
+					<button
+						onClick={(e) => {
+							e.stopPropagation();
+							onSettingsClick();
+						}}
+						className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+						title="Project settings"
+						aria-label={`Settings for ${project.name}`}
+					>
+						<Settings size={12} className="text-muted-foreground" />
+					</button>
+				)}
+				{!isEditing && hasActivity && (
+					<span className="flex items-center mr-3" title="Terminal activity" style={{ isolation: "isolate" }}>
+						<Loader2
+							size={12}
+							className={"animate-spin text-primary opacity-100"}
+						/>
+					</span>
+				)}
 			</div>
-			{isEditing ? (
-				<input
-					ref={inputRef}
-					type="text"
-					value={editName}
-					onChange={(e) => onEditNameChange(e.target.value)}
-					onKeyDown={handleKeyDown}
-					onBlur={onSaveRename}
-					className="flex-1 bg-sidebar-accent border border-border rounded px-1.5 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary ml-2"
-					onClick={(e) => e.stopPropagation()}
-				/>
-			) : (
-				<span
-					className={cn(
-						"text-xs transition-colors flex-1 ml-2 truncate",
-						isActive
-							? "text-foreground font-medium"
-							: "text-muted-foreground group-hover:text-foreground",
+
+			{/* Worktree sub-items */}
+			<AnimatePresence initial={false}>
+				{isExpanded && hasWorktrees && (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: 0.15, ease: "easeInOut" }}
+						className="ml-5 border-l border-sidebar-border overflow-hidden"
+					>
+						{/* Worktree search bar - visible at 10+ worktrees */}
+					{worktrees.length >= 10 && (
+						<div className="px-2 py-1">
+							<input
+								type="text"
+								placeholder="Search worktrees..."
+								value={worktreeSearchQuery}
+								onChange={(e) => setWorktreeSearchQuery(e.target.value)}
+								className="w-full text-xs bg-sidebar-accent border border-border rounded px-2 py-1 text-foreground placeholder-muted-foreground outline-none focus:ring-1 focus:ring-primary"
+							/>
+						</div>
 					)}
-				>
-					{project.name}
-				</span>
-			)}
-			{hasError && (
-				<span className="flex items-center ml-auto text-yellow-500 animate-pulse" title="Terminal crashed">
-					<AlertTriangle size={10} />
-				</span>
-			)}
-			{!isEditing && shortcut && (
-				<span
-					className={cn(
-						"text-[10px] font-mono text-muted-foreground/60 transition-opacity ml-auto",
-						isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-					)}
-				>
-					{shortcut}
-				</span>
-			)}
-			{!isEditing && hasActivity && (
-				<span className="flex items-center ml-auto" title="Terminal activity" style={{ isolation: "isolate" }}>
-					<Loader2 size={10} className="animate-spin text-primary" />
-				</span>
-			)}
-		</button>
+					{/* Root item */}
+						<WorktreeItem
+							name="Root"
+							branch={project.gitBranch ?? "main"}
+							path={project.path ?? ""}
+							isRoot
+							isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
+							onClick={() => onWorktreeSelect(null)}
+							onOpenTerminal={project.path ? () => onOpenTerminalInWorktree(null, project.path as string, "project root") : undefined}
+						/>
+						{/* Grouped worktree items with search filter */}
+						{(() => {
+							const filtered = worktreeSearchQuery
+								? filterWorktrees(worktrees, { searchQuery: worktreeSearchQuery })
+								: worktrees;
+							const groups = groupWorktrees(filtered);
+							return groups.map((group) => {
+								const isCollapsed = collapsedGroups.has(group.id);
+								return (
+									<div key={group.id} className="mb-1">
+										{group.id !== 'other' && group.items.length > 1 && (
+											<button
+												onClick={() => {
+													setCollapsedGroups((prev) => {
+														const next = new Set(prev);
+														if (next.has(group.id)) {
+															next.delete(group.id);
+														} else {
+															next.add(group.id);
+														}
+														return next;
+													});
+												}}
+												className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
+											>
+												<span>{isCollapsed ? '▶' : '▼'}</span>
+												<span className="ml-1">{group.name}</span>
+												<span className="ml-auto text-[9px] font-normal text-muted-foreground/40">{group.items.length}</span>
+											</button>
+										)}
+										{(!isCollapsed || group.id === 'other' || group.items.length <= 1) && group.items.map((wt) => (
+											<WorktreeItem
+												key={wt.id}
+												name={wt.name}
+												branch={wt.branch}
+												path={wt.path}
+												worktreeId={wt.id}
+												isActive={project.activeWorktreeId === wt.id}
+												isTermulManaged={isWorktreeTermulManaged(wt)}
+												onClick={() => onWorktreeSelect(wt.id)}
+												onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+												onOpenTerminal={() => onOpenTerminalInWorktree(wt.id, wt.path, wt.name)}
+											/>
+										))}
+									</div>
+								);
+							})
+						})()}
+						{/* New Worktree button */}
+						{project.isGitRepo && (
+							<button
+								onClick={(e) => {
+									e.stopPropagation();
+									onNewWorktree(project.id);
+								}}
+								disabled={isWorktreeOperationLocked}
+								className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
+								title={isWorktreeOperationLocked ? "Another worktree operation in progress" : "Create new worktree"}
+							>
+								<Plus size={10} className="mr-1.5" />
+								New Worktree
+							</button>
+						)}
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</div>
 	);
+});
+
+interface WorktreeItemProps {
+	name: string;
+	branch: string;
+	path: string;
+	isRoot?: boolean;
+	isActive: boolean;
+	isTermulManaged?: boolean;
+	worktreeId?: string;
+	onClick: () => void;
+	onContextMenu?: (e: React.MouseEvent) => void;
+	onOpenTerminal?: () => void;
 }
+
+/** Icon + color for worktree health status */
+function HealthBadge({ status }: { status: WorktreeHealthStatus | undefined }) {
+	if (!status || status === 'clean') return null
+
+	const config: Record<WorktreeHealthStatus, { icon: typeof CheckCircle2; className: string }> = {
+		clean: { icon: CheckCircle2, className: 'text-green-500' },
+		dirty: { icon: AlertCircle, className: 'text-yellow-500' },
+		ahead: { icon: ArrowUpCircle, className: 'text-blue-500' },
+		behind: { icon: ArrowDownCircle, className: 'text-orange-500' },
+		conflicted: { icon: XCircle, className: 'text-red-500' },
+	}
+
+	const { icon: Icon, className } = config[status]
+	return <Icon size={10} className={cn('flex-shrink-0', className)} />
+}
+
+const WorktreeItem = memo(function WorktreeItem({
+	name,
+	branch,
+	path,
+	isRoot,
+	isActive,
+	isTermulManaged,
+	worktreeId,
+	onClick,
+	onContextMenu,
+	onOpenTerminal,
+}: WorktreeItemProps): React.JSX.Element {
+	// Read health status from cache (updated by useWorktreeStatus polling in ProjectSidebar)
+	// This reads a shared Map — no hook subscription needed; the parent sidebar
+	// re-renders on status changes, which causes this item to re-render too.
+	const healthStatus: WorktreeHealthStatus | undefined = worktreeId
+		? getWorktreeStatusFromCache(worktreeId)?.health
+		: undefined
+
+	const tooltip = isRoot
+		? `Project root (${branch})`
+		: `${name} on ${branch}${path ? ` — ${path}` : ''}${isTermulManaged === false ? ' — External worktree' : ''}`
+
+	return (
+		<div
+			onClick={onClick}
+			onContextMenu={onContextMenu}
+			role="button"
+			tabIndex={0}
+			onKeyDown={(e) => {
+				// Only activate row-select for keys on the row itself, not on nested
+				// controls (e.g. the terminal button), which handle their own keys.
+				if (e.target !== e.currentTarget) return;
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					onClick();
+				}
+			}}
+			className={cn(
+				"group w-full flex items-center px-2 py-1 text-xs transition-colors text-left cursor-pointer",
+				isActive
+					? "bg-primary/15 text-foreground"
+					: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
+			)}
+			title={tooltip}
+			aria-current={isActive ? "page" : undefined}
+			aria-label={isRoot ? `Project root on ${branch}` : `Worktree ${name} on ${branch}`}
+		>
+			<div className="mr-1.5 flex-shrink-0 inline-flex items-center" aria-hidden="true">
+				{isRoot ? <Home size={12} className="text-muted-foreground" /> : <GitBranch size={12} className="text-primary/70" />}
+			</div>
+			<span className="truncate flex-1">{isRoot ? "Root" : name}</span>
+			{!isRoot && <HealthBadge status={healthStatus} />}
+			{!isRoot && isTermulManaged === false && (
+				<span className="text-[10px] text-amber-500/70 ml-1" title="External worktree (not created by Termul)">
+					ext
+				</span>
+			)}
+			{onOpenTerminal && (
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation();
+						onOpenTerminal();
+					}}
+					onKeyDown={(e) => e.stopPropagation()}
+					className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-sidebar-accent transition-all ml-1 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+					title={`Open terminal in ${isRoot ? "project root" : name}`}
+					aria-label={`Open terminal in ${isRoot ? "project root" : name}`}
+				>
+					<Terminal size={12} className="text-muted-foreground" aria-hidden="true" />
+				</button>
+			)}
+		</div>
+	);
+});
 
 interface ArchivedProjectItemProps {
 	hasActivity: boolean;
@@ -878,16 +1478,16 @@ function ArchivedProjectItem({
 				{project.name}
 			</span>
 			{hasActivity && (
-				<span className="flex items-center ml-auto" title="Terminal activity" style={{ isolation: "isolate" }}>
+				<span className="flex items-center mr-2" title="Terminal activity" style={{ isolation: "isolate" }}>
 					<Loader2 size={10} className="animate-spin text-primary opacity-60" />
 				</span>
 			)}
 			{hasError && (
-				<span className="flex items-center ml-auto text-yellow-500 animate-pulse" title="Terminal crashed">
+				<span className="flex items-center mr-2 text-yellow-500 animate-pulse" title="Terminal crashed">
 					<AlertTriangle size={10} />
 				</span>
 			)}
-			<Archive size={10} className="text-muted-foreground/40 ml-1" />
+			<Archive size={12} className="text-muted-foreground mr-3" />
 		</button>
 	);
 }

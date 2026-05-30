@@ -1,5 +1,33 @@
 (function() {
-  if (document.getElementById('__termul_annotation_layer')) return;
+  // Reconcile instead of bailing: if a previous overlay layer is still present
+  // (e.g. left behind by an SPA navigation where the DOM was not wiped), tear it
+  // down first so this injection always installs fresh capture-phase handlers for
+  // the current `window.__termul_annotation_mode`. Silently returning here would
+  // leave stale (or, after a cancelled removal, absent) handlers bound.
+  //
+  // The previous overlay's cleanup `delete`s the mode/tab-id globals that the Rust
+  // bootstrap just set before this script ran, so snapshot and restore them around
+  // the teardown to preserve the requested mode/tab for this fresh injection.
+  var __termul_existing_layer = document.getElementById('__termul_annotation_layer');
+  if (__termul_existing_layer) {
+    var __termul_pending_mode = window.__termul_annotation_mode;
+    var __termul_pending_tab_id = window.__termul_annotation_tab_id;
+    if (typeof window.__termul_remove_annotation_overlay === 'function') {
+      try {
+        window.__termul_remove_annotation_overlay();
+      } catch (e) {}
+    }
+    // Sweep any layer node still present — covers a missing cleanup fn, a throw
+    // mid-teardown, or a partial cleanup that left the node behind. Guarantees the
+    // fresh overlay below never collides with a stale duplicate-ID node.
+    var __termul_stale = document.getElementById('__termul_annotation_layer');
+    while (__termul_stale) {
+      __termul_stale.remove();
+      __termul_stale = document.getElementById('__termul_annotation_layer');
+    }
+    window.__termul_annotation_mode = __termul_pending_mode;
+    window.__termul_annotation_tab_id = __termul_pending_tab_id;
+  }
 
   var OVERLAY_ID = '__termul_annotation_layer';
   var RECT_ID = '__termul_annotation_rect';
@@ -92,18 +120,41 @@
     );
   }
 
+  var SENSITIVE_ARIA_ROLES = {
+    'textbox': true,
+    'combobox': true,
+    'listbox': true,
+    'spinbutton': true,
+    'slider': true,
+    'searchbox': true
+  };
+
   function isSensitiveElement(element) {
     if (!element || !(element instanceof Element)) return true;
 
     var tagName = element.tagName.toLowerCase();
+
+    // Password check first — uses live IDL property so dynamically-changed types are caught
+    if (tagName === 'input' && element.type === 'password') return true;
+
+    // All other input elements + textarea
     if (tagName === 'input' || tagName === 'textarea') return true;
 
-    if (tagName === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'password') {
-      return true;
+    // Form-associated elements that contain structured data or live values
+    if (tagName === 'select' || tagName === 'datalist' || tagName === 'output') return true;
+
+    // ARIA widget role heuristics — custom form controls that hold user-entered values
+    // role attribute is a space-separated token list; check each token
+    var roleAttr = element.getAttribute('role');
+    if (roleAttr) {
+      var roleTokens = roleAttr.toLowerCase().split(/\s+/);
+      for (var ri = 0; ri < roleTokens.length; ri += 1) {
+        if (SENSITIVE_ARIA_ROLES[roleTokens[ri]]) return true;
+      }
     }
+    if (element.hasAttribute('aria-valuetext') || element.hasAttribute('aria-valuenow')) return true;
 
     if (element.closest('[contenteditable]')) return true;
-    if (element.closest('form')) return true;
 
     return false;
   }
@@ -299,10 +350,42 @@
     return attributes;
   }
 
+  function getSafeTextContent(element) {
+    // TreeWalker that rejects form-control, datalist, output, and contenteditable
+    // subtrees so descendant values don't leak into the captured text.
+    var result = '';
+    var walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_ALL,
+      {
+        acceptNode: function(node) {
+          if (node.nodeType === 1) {
+            var tag = node.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'datalist' || tag === 'output') {
+              return NodeFilter.FILTER_REJECT;
+            }
+            // Skip contenteditable subtrees
+            if (node.isContentEditable) {
+              return NodeFilter.FILTER_REJECT;
+            }
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+    var node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        result += node.textContent;
+      }
+    }
+    return result;
+  }
+
   function captureElementPayload(element) {
     var rect = element.getBoundingClientRect();
     var selectorInfo = generateSelector(element);
-    var textResult = sanitizeAndTruncate(element.textContent || '', MAX_TEXT_CONTENT_LENGTH);
+    var textResult = sanitizeAndTruncate(getSafeTextContent(element), MAX_TEXT_CONTENT_LENGTH);
 
     return {
       tabId: window.__termul_annotation_tab_id || '',

@@ -83,8 +83,33 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['DM Sans', 'system-ui', '-apple-system', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace']
+        // Variable Inter (bundled). Fall through to native UI fonts so we still
+        // look right if the bundled font fails to load. Ubuntu/Cantarell are
+        // the actual GNOME UI fonts on Linux.
+        sans: [
+          '"Inter Variable"',
+          'Inter',
+          '"SF Pro Text"',
+          '"Segoe UI"',
+          'Ubuntu',
+          'Cantarell',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'sans-serif'
+        ],
+        mono: [
+          '"JetBrains Mono Variable"',
+          '"JetBrains Mono"',
+          '"Cascadia Code"',
+          '"SF Mono"',
+          'Menlo',
+          'Consolas',
+          '"Ubuntu Mono"',
+          '"DejaVu Sans Mono"',
+          '"Liberation Mono"',
+          'monospace'
+        ]
       },
       borderRadius: {
         lg: 'var(--radius)',
@@ -110,10 +135,13 @@ export default {
         }
       },
       animation: {
-        'accordion-down': 'accordion-down 0.2s ease-out',
-        'accordion-up': 'accordion-up 0.2s ease-out',
-        'fade-in': 'fade-in 0.2s ease-out',
-        'slide-in': 'slide-in 0.15s ease-out'
+        // Use custom ease-out token (cubic-bezier(0.23, 1, 0.32, 1)) so
+        // these keyframe animations have the same character as the
+        // tailwindcss-animate Radix overrides in index.css.
+        'accordion-down': 'accordion-down 200ms cubic-bezier(0.23, 1, 0.32, 1)',
+        'accordion-up': 'accordion-up 200ms cubic-bezier(0.23, 1, 0.32, 1)',
+        'fade-in': 'fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1)',
+        'slide-in': 'slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1)'
       },
       boxShadow: {
         'glow-blue': '0 0 15px hsla(217, 91%, 60%, 0.3)',

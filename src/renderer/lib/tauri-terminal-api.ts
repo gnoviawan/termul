@@ -38,7 +38,8 @@ type EventPayloadMap = {
 }
 
 type SharedListenerEntry<T> = {
-  callbacks: Set<(payload: T) => void>
+  callbacks: Map<number, (payload: T) => void>
+  nextCallbackId: number
   unlisten?: Promise<UnlistenFn>
 }
 
@@ -110,8 +111,11 @@ function subscribeSharedEvent<K extends keyof EventPayloadMap>(
     }
 
     entry = {
-      callbacks: new Set<(payload: EventPayloadMap[K]) => void>()
+      callbacks: new Map<number, (payload: EventPayloadMap[K]) => void>(),
+      nextCallbackId: 0
     }
+
+    sharedEventListeners.set(eventName, entry as SharedListenerEntry<unknown>)
 
     try {
       entry.unlisten = listen<EventPayloadMap[K]>(eventName, ({ payload }) => {
@@ -123,19 +127,35 @@ function subscribeSharedEvent<K extends keyof EventPayloadMap>(
           return
         }
 
-        for (const subscriber of currentEntry.callbacks) {
-          subscriber(payload)
+        for (const [subscriberId, subscriber] of currentEntry.callbacks.entries()) {
+          try {
+            subscriber(payload)
+          } catch (error) {
+            console.error(`[TauriTerminalAPI] Listener callback failed`, {
+              eventName,
+              debugLabel,
+              subscriberId,
+              subscriberCount: currentEntry.callbacks.size,
+              error
+            })
+          }
         }
+      }).catch((error) => {
+        console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+        if (sharedEventListeners.get(eventName) === (entry as SharedListenerEntry<unknown>)) {
+          sharedEventListeners.delete(eventName)
+        }
+        return () => {}
       })
     } catch (error) {
       console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+      sharedEventListeners.delete(eventName)
       return () => {}
     }
-
-    sharedEventListeners.set(eventName, entry as SharedListenerEntry<unknown>)
   }
 
-  entry.callbacks.add(callback)
+  const subscriberId = entry.nextCallbackId++
+  entry.callbacks.set(subscriberId, callback)
 
   if (IS_DEV) {
     devLog(
@@ -152,7 +172,7 @@ function subscribeSharedEvent<K extends keyof EventPayloadMap>(
       return
     }
 
-    currentEntry.callbacks.delete(callback)
+    currentEntry.callbacks.delete(subscriberId)
 
     if (IS_DEV) {
       devLog(

@@ -54,7 +54,9 @@ export function PaneContent({
 	const activeProjectId = useProjectStore((state) => state.activeProjectId);
 	const terminalsInPane = useTerminalStore(
 		useShallow((state) =>
-			state.terminals.filter((t) => terminalIdsInPane.has(t.id) && t.projectId === activeProjectId),
+			state.terminals.filter(
+				(t) => terminalIdsInPane.has(t.id) && t.projectId === activeProjectId,
+			),
 		),
 	);
 	const { activePaneId, fullscreenPaneId, setActivePane } = useWorkspaceStore(
@@ -70,10 +72,40 @@ export function PaneContent({
 	const isFullscreenPane = fullscreenPaneId === pane.id;
 	const isActivePane = activePaneId === pane.id;
 	const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
-	const panePreviewPosition = previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null;
+	const activeTerminalIdInPane =
+		activeTab?.type === "terminal" ? activeTab.terminalId : null;
 	const handleFocus = useCallback(() => {
-		if (!isActivePane) setActivePane(pane.id);
-	}, [isActivePane, setActivePane, pane.id]);
+		if (!isActivePane) {
+			setActivePane(pane.id);
+		}
+		// Clicking into the pane is an explicit acknowledgment of its visible terminal:
+		// clear the finished-terminal highlight. This is the ONLY clear path — we do not
+		// auto-clear on tab-switch or remount, so a flagged background tab keeps its border
+		// until the user actually looks at it.
+		if (activeTerminalIdInPane) {
+			const store = useTerminalStore.getState();
+			const term = store.terminals.find((t) => t.id === activeTerminalIdInPane);
+			if (term?.needsAttention) {
+				store.setTerminalNeedsAttention(activeTerminalIdInPane, false);
+			}
+		}
+	}, [isActivePane, setActivePane, pane.id, activeTerminalIdInPane]);
+
+	// Keyboard parity for the mouse acknowledgment above: a keystroke directed at this
+	// pane's visible terminal is an explicit "I'm looking at it" signal, so clear the
+	// highlight. Capture phase + a real key event means this never fires on a passive
+	// tab-switch (which only auto-focuses the terminal, no keypress), avoiding the
+	// flash-and-vanish that auto-clear-on-visibility caused.
+	const handleKeyDownCapture = useCallback(() => {
+		if (!activeTerminalIdInPane) return;
+		const store = useTerminalStore.getState();
+		const term = store.terminals.find((t) => t.id === activeTerminalIdInPane);
+		if (term?.needsAttention) {
+			store.setTerminalNeedsAttention(activeTerminalIdInPane, false);
+		}
+	}, [activeTerminalIdInPane]);
+
+	const panePreviewPosition = previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null;
 	const previewSpaceClass = panePreviewPosition === "left" ? "pl-6" : panePreviewPosition === "right" ? "pr-6" : panePreviewPosition === "top" ? "pt-6" : panePreviewPosition === "bottom" ? "pb-6" : "";
 	const previewTranslateClass = panePreviewPosition === "left" ? "translate-x-2" : panePreviewPosition === "right" ? "-translate-x-2" : panePreviewPosition === "top" ? "translate-y-2" : panePreviewPosition === "bottom" ? "-translate-y-2" : "";
 	const [shells, setShells] = useState<DetectedShells | null>(null);
@@ -99,8 +131,41 @@ export function PaneContent({
 	}), [shells, defaultShell]);
 
 	return (
-		<div className={cn("flex flex-col h-full relative", isActivePane && hasMultiplePanes && !isFullscreenPane && "ring-1 ring-primary/30", isFullscreenPane && "ring-1 ring-primary/30 rounded-xl overflow-hidden")} onMouseDown={handleFocus}>
-			<WorkspaceTabBar paneId={pane.id} tabs={pane.tabs} activeTabId={pane.activeTabId} closingTerminalIds={closingTerminalIds} onAddTerminal={useMemo(() => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined), [onAddTerminal, pane.id])} onAddBrowserTab={useMemo(() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined), [onAddBrowserTab, pane.id])} onAddGitTab={useMemo(() => (onAddGitTab ? () => onAddGitTab(pane.id) : undefined), [onAddGitTab, pane.id])} onAddTunnelTab={useMemo(() => (onAddTunnelTab ? () => onAddTunnelTab(pane.id) : undefined), [onAddTunnelTab, pane.id])} onCloseTerminal={onCloseTerminal} onRenameTerminal={onRenameTerminal} onCloseEditorTab={onCloseEditorTab} defaultShell={defaultShell} />
+		<div
+			className={cn(
+				"flex flex-col h-full relative",
+				isActivePane && hasMultiplePanes && !isFullscreenPane && "ring-1 ring-primary/30",
+				isFullscreenPane && "ring-1 ring-primary/30 rounded-xl overflow-hidden",
+			)}
+			onMouseDown={handleFocus}
+			onKeyDownCapture={handleKeyDownCapture}
+		>
+			<WorkspaceTabBar
+				paneId={pane.id}
+				tabs={pane.tabs}
+				activeTabId={pane.activeTabId}
+				closingTerminalIds={closingTerminalIds}
+				onAddTerminal={useMemo(
+					() => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
+					[onAddTerminal, pane.id],
+				)}
+				onAddBrowserTab={useMemo(
+					() => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
+					[onAddBrowserTab, pane.id],
+				)}
+				onAddGitTab={useMemo(
+					() => (onAddGitTab ? () => onAddGitTab(pane.id) : undefined),
+					[onAddGitTab, pane.id],
+				)}
+				onAddTunnelTab={useMemo(
+					() => (onAddTunnelTab ? () => onAddTunnelTab(pane.id) : undefined),
+					[onAddTunnelTab, pane.id],
+				)}
+				onCloseTerminal={onCloseTerminal}
+				onRenameTerminal={onRenameTerminal}
+				onCloseEditorTab={onCloseEditorTab}
+				defaultShell={defaultShell}
+			/>
 			<div className="flex-1 overflow-hidden bg-terminal-bg relative h-full">
 				<div className={cn("w-full h-full relative transition-all duration-150 ease-out", previewSpaceClass)}>
 					{(panePreviewPosition === "left" || panePreviewPosition === "right") && (<div className={cn("absolute top-0 bottom-0 w-5 rounded-sm border border-primary/40 bg-primary/10 pointer-events-none", panePreviewPosition === "left" ? "left-0" : "right-0")} />)}
@@ -114,24 +179,27 @@ export function PaneContent({
 								return <div key={tab.id} className={isVisible ? "w-full h-full flex items-center justify-center text-muted-foreground text-sm" : "hidden"}>Connecting...</div>;
 							}
 							const isVisible = activeTab?.id === tab.id;
+							const connectedTerminalSpawnOptions = {
+								projectId: terminal.projectId,
+								shell: terminal.shell,
+								cwd: terminal.cwd,
+							};
 							return (
 								<div
 									key={tab.id}
-									className={
+									className={cn(
 										isVisible
 											? "w-full h-full"
-											: "w-full h-full absolute inset-0 invisible"
-									}
+											: "w-full h-full absolute inset-0 invisible",
+										terminal.needsAttention &&
+											"rounded-sm ring-2 ring-inset ring-amber-400/70 animate-pulse motion-reduce:animate-none",
+									)}
 								>
 									<ConnectedTerminal
 										terminalId={terminal.ptyId}
 										storeTerminalId={terminal.id}
 										autoSpawn={false}
-										spawnOptions={{
-											projectId: terminal.projectId,
-											shell: terminal.shell,
-											cwd: terminal.cwd,
-										}}
+										spawnOptions={connectedTerminalSpawnOptions}
 										onBoundToStoreTerminal={(ptyId) => {
 											if (terminal.ptyId !== ptyId) {
 												setTerminalPtyId(terminal.id, ptyId);
@@ -143,7 +211,8 @@ export function PaneContent({
 									/>
 								</div>
 							);
-						})}
+					})}
+
 
 						{pane.tabs
 							.filter(
@@ -237,7 +306,6 @@ export function PaneContent({
 									</div>
 								);
 							})}
-
 						{pane.tabs.length === 0 ? (
 							<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8">
 								<div className="flex flex-col items-center gap-2 text-center">

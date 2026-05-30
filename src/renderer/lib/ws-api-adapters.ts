@@ -162,6 +162,15 @@ export const wsClipboardApi: ClipboardApi = {
     } catch {
       return { success: false, error: 'Clipboard write denied', code: 'CLIPBOARD_ERROR' }
     }
+  },
+  async hasImage() {
+    try {
+      const items = await navigator.clipboard.read()
+      const hasImage = items.some((item) => item.types.includes('image/png'))
+      return { success: true, data: hasImage }
+    } catch {
+      return { success: false, error: 'Clipboard read denied', code: 'CLIPBOARD_ERROR' }
+    }
   }
 }
 

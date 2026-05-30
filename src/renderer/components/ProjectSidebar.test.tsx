@@ -4,8 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
 
-const { mockGetAvailableShells, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
+const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
+  mockSpawnTerminalInPane: vi.fn(),
+  mockActivateAndOpenTerminal: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
   mockUseProjectsWithErrors: vi.fn()
 }))
@@ -15,6 +17,15 @@ const mockIsTauri = vi.fn(() => true)
 vi.mock('@/lib/api', () => ({
   shellApi: {
     getAvailableShells: mockGetAvailableShells
+  },
+  worktreeApi: {
+    list: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    checkDirty: vi.fn().mockResolvedValue({ success: true, data: { modified: 0, staged: 0, untracked: 0, hasChanges: false } }),
+    ensureSymlinks: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    remove: vi.fn().mockResolvedValue({ success: true })
+  },
+  clipboardApi: {
+    writeText: vi.fn().mockResolvedValue({ success: true })
   }
 }))
 
@@ -26,6 +37,11 @@ vi.mock('@/stores/terminal-store', async () => {
     useProjectsWithErrors: () => mockUseProjectsWithErrors()
   }
 })
+
+vi.mock('@/lib/terminal-spawn', () => ({
+  spawnTerminalInPane: mockSpawnTerminalInPane,
+  activateAndOpenTerminal: mockActivateAndOpenTerminal
+}))
 
 vi.mock('@/lib/utils', async () => {
   const actual = await vi.importActual('@/lib/utils')
@@ -40,6 +56,10 @@ vi.mock('@/lib/api-bridge', () => ({
 beforeEach(() => {
   mockIsTauri.mockReturnValue(true)
   mockGetAvailableShells.mockReset()
+  mockSpawnTerminalInPane.mockReset()
+  mockSpawnTerminalInPane.mockResolvedValue({ success: true, data: { id: 'term-1' } })
+  mockActivateAndOpenTerminal.mockReset()
+  mockActivateAndOpenTerminal.mockResolvedValue({ status: 'opened', terminalId: 'term-1' })
   mockGetAvailableShells.mockResolvedValue({
     success: true,
     data: {
@@ -435,7 +455,7 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     fireEvent.contextMenu(projectItem)
 
     await waitFor(() => {
-      expect(screen.getByText('Set Default Shell')).toBeInTheDocument()
+      expect(screen.getByText('Default Shell')).toBeInTheDocument()
     })
   })
 
@@ -451,8 +471,8 @@ describe('ProjectSidebar Default Shell Submenu', () => {
     const projectItem = screen.getByText('Project One')
     fireEvent.contextMenu(projectItem)
 
-    // Hover over Set Default Shell to show submenu
-    const shellMenuItem = await screen.findByText('Set Default Shell')
+    // Hover over Default Shell to show submenu
+    const shellMenuItem = await screen.findByText('Default Shell')
     fireEvent.mouseEnter(shellMenuItem.closest('div')!)
 
     // Click on Zsh in submenu
@@ -505,5 +525,74 @@ describe('ProjectSidebar Terminal Activity Indicator', () => {
     const item = screen.getByTestId('project-item-1')
     const spinner = item.querySelector('svg.animate-spin')
     expect(spinner).not.toBeNull()
+  })
+})
+
+describe('ProjectSidebar Worktree Row', () => {
+  const projectWithWorktree: Project[] = [
+    {
+      id: '1',
+      name: 'Project One',
+      color: 'blue',
+      gitBranch: 'main',
+      isGitRepo: true,
+      worktrees: [
+        {
+          id: 'wt-1',
+          name: 'try-new-hero',
+          branch: 'feature/try-new-hero',
+          path: '/repo/.termul/worktrees/try-new-hero',
+          createdAt: new Date().toISOString()
+        }
+      ]
+    }
+  ]
+
+  it('shows the worktree name but not the branch chip on the row face', () => {
+    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+
+    // Name is shown
+    expect(screen.getByText('try-new-hero')).toBeInTheDocument()
+    // Branch is NOT shown as a visible chip on the row
+    expect(screen.queryByText('feature/try-new-hero')).not.toBeInTheDocument()
+  })
+
+  it('keeps the branch available via the row tooltip', () => {
+    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+
+    const row = screen.getByLabelText('Worktree try-new-hero on feature/try-new-hero')
+    expect(row).toHaveAttribute('title', expect.stringContaining('feature/try-new-hero'))
+  })
+
+  it('exposes an accessible "Open terminal" button on the worktree row', () => {
+    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+
+    expect(
+      screen.getByLabelText('Open terminal in try-new-hero')
+    ).toBeInTheDocument()
+  })
+
+  it('opens a terminal in the worktree when the terminal button is clicked, without triggering row select', async () => {
+    const onSelectProject = vi.fn()
+    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1', onSelectProject })
+
+    fireEvent.click(screen.getByLabelText('Open terminal in try-new-hero'))
+
+    await waitFor(() => {
+      expect(mockActivateAndOpenTerminal).toHaveBeenCalled()
+    })
+    // The terminal-button click must not bubble to the project row's select handler
+    expect(onSelectProject).not.toHaveBeenCalled()
+  })
+
+  it('does not trigger row select when activating the terminal button via keyboard', () => {
+    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+
+    const termButton = screen.getByLabelText('Open terminal in try-new-hero')
+    // Enter on the nested terminal button must not bubble to the row's onKeyDown select
+    fireEvent.keyDown(termButton, { key: 'Enter' })
+
+    // The shared open handler is not invoked by the key event (spawn happens on click)
+    expect(mockActivateAndOpenTerminal).not.toHaveBeenCalled()
   })
 })

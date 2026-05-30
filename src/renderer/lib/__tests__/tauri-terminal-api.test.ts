@@ -17,18 +17,12 @@ describe('tauri-terminal-api', () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
   })
 
-  it('shares one Tauri listener across multiple onData subscribers and tears down after last unsubscribe', async () => {
+  it('shares one Tauri listener across multiple onExit subscribers and tears down after last unsubscribe', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
 
     const unlisten = vi.fn()
-    let eventHandler: ((event: { payload: { id: string; data: string } }) => void) | undefined
 
-    mockListen.mockImplementation(
-      async (_eventName: string, handler: (event: { payload: { id: string; data: string } }) => void) => {
-        eventHandler = handler
-        return unlisten
-      }
-    )
+    mockListen.mockResolvedValue(unlisten)
 
     const { createTauriTerminalApi } = await import('../tauri-terminal-api')
     const api = createTauriTerminalApi()
@@ -36,17 +30,12 @@ describe('tauri-terminal-api', () => {
     const callbackA = vi.fn()
     const callbackB = vi.fn()
 
-    const unsubscribeA = api.onData(callbackA)
-    const unsubscribeB = api.onData(callbackB)
+    const unsubscribeA = api.onExit(callbackA)
+    const unsubscribeB = api.onExit(callbackB)
 
     await Promise.resolve()
 
     expect(mockListen).toHaveBeenCalledTimes(1)
-
-    eventHandler?.({ payload: { id: 'pty-1', data: 'hello' } })
-
-    expect(callbackA).toHaveBeenCalledWith('pty-1', new TextEncoder().encode('hello'))
-    expect(callbackB).toHaveBeenCalledWith('pty-1', new TextEncoder().encode('hello'))
 
     unsubscribeA()
     expect(unlisten).not.toHaveBeenCalled()
@@ -91,7 +80,7 @@ describe('tauri-terminal-api', () => {
     const { createTauriTerminalApi } = await import('../tauri-terminal-api')
     const api = createTauriTerminalApi()
 
-    const unsubscribe = api.onData(vi.fn())
+    const unsubscribe = api.onExit(vi.fn())
     unsubscribe()
 
     expect(mockListen).not.toHaveBeenCalled()

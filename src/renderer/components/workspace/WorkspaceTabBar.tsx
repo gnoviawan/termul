@@ -10,6 +10,8 @@ import {
 	GitBranch,
 	GitPullRequest,
 	Network,
+	Maximize2,
+	Minimize2,
 } from "lucide-react";
 import { useGitStatusStore, type GitStatusState } from "@/stores/git-status-store";
 import type { GitStatusDetail } from "@shared/types/ipc.types";
@@ -118,6 +120,14 @@ function TerminalTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					if (!isClosing) {
+						onClose();
+					}
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -364,6 +374,12 @@ function BrowserTabInline({
 				onDragLeave={onDragLeave}
 				onDrop={onDrop}
 				onClick={onSelect}
+				onAuxClick={(e) => {
+					if (e.button !== 1) return;
+					e.preventDefault();
+					e.stopPropagation();
+					onClose();
+				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -470,20 +486,22 @@ function GitTabInline({
 					setContextMenu({ x: e.clientX, y: e.clientY });
 				}}
 				className={cn(
-					"group relative flex items-center h-full px-2.5 min-w-[100px] max-w-[180px] gap-1.5 cursor-pointer select-none border-r border-border/40 transition-colors",
+					"group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors",
 					isActive
-						? "bg-background text-foreground"
+						? "bg-secondary text-foreground"
 						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
 					isDragging && "opacity-50",
+					isDropTarget &&
+						dropPosition === "before" &&
+						"border-l-2 border-l-primary",
+					isDropTarget &&
+						dropPosition === "after" &&
+						"border-r-2 border-r-primary",
 				)}
 			>
-				{isActive && (
-					<div className="absolute bottom-0 left-1 right-1 h-[2px] bg-primary rounded-t-full" />
-				)}
-
-				<GitBranch size={11} className={cn("shrink-0", isActive ? "text-primary" : "text-muted-foreground/60")} />
+				<GitBranch size={12} className={isActive ? "text-primary" : ""} />
 				<span className="truncate text-[11px] font-medium flex-1">
-					Git
+					Git Changes
 				</span>
 				{totalChanges > 0 && (
 					<span
@@ -502,10 +520,14 @@ function GitTabInline({
 						e.stopPropagation();
 						onClose();
 					}}
-					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-secondary transition-opacity"
+					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
 				>
 					<XIcon size={10} />
 				</button>
+
+				{isActive && (
+					<div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />
+				)}
 			</div>
 
 			{contextMenu && (
@@ -646,6 +668,7 @@ export function WorkspaceTabBar({
 }: WorkspaceTabBarProps): React.JSX.Element {
 	const setActiveTab = useWorkspaceStore((state) => state.setActiveTab);
 	const setActivePane = useWorkspaceStore((state) => state.setActivePane);
+	const fullscreenPaneId = useWorkspaceStore((state) => state.fullscreenPaneId);
 	const {
 		startTabDrag,
 		dragPayload,
@@ -879,6 +902,7 @@ export function WorkspaceTabBar({
 				: [],
 		),
 	);
+	const isFullscreenPane = fullscreenPaneId === paneId;
 
 	// Check if this tab is being dragged
 	const isTabDragging = (tabId: string): boolean =>

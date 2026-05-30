@@ -290,19 +290,27 @@ impl BrowserTabManager {
     }
 
     pub fn remove_annotation_overlay(&self, tab_id: &str) -> Result<(), String> {
-        let was_injected = {
-            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-            annotation_injected
-                .get(tab_id)
-                .and_then(|value| value.as_deref())
-                .is_some()
+        // Do NOT gate the JS cleanup on the `annotation_injected` map: navigation/load
+        // reporting (`browser_tab_report_loaded`/`_url`) invalidates the map entry to
+        // `None` BEFORE the renderer-driven remove runs. Gating here would skip the JS
+        // cleanup and leave a stale overlay in the webview DOM. The cleanup script is
+        // self-guarded, so calling it when no overlay exists is a safe no-op.
+        let webview = match self.get_webview(tab_id) {
+            Ok(webview) => webview,
+            // No webview (tab gone / not yet created) means nothing to clean up.
+            Err(e) => {
+                log::debug!(
+                    "[BrowserTab] remove_annotation_overlay: no webview for tab={} ({}); clearing state",
+                    tab_id,
+                    e
+                );
+                let mut annotation_injected =
+                    self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
+                annotation_injected.insert(tab_id.to_string(), None);
+                return Ok(());
+            }
         };
 
-        if !was_injected {
-            return Ok(());
-        }
-
-        let webview = self.get_webview(tab_id)?;
         let cleanup_script = r#"
             if (window.__termul_remove_annotation_overlay) {
                 window.__termul_remove_annotation_overlay();

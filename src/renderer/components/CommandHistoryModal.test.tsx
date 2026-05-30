@@ -118,13 +118,13 @@ vi.mock('@/components/ConfirmDialog', () => ({
 }))
 
 import { CommandHistoryModal } from './CommandHistoryModal'
-import { CommandHistoryEntry } from '@/stores/command-history-store'
+import type { CommandHistoryEntry } from '@/stores/command-history-store'
 
 describe('CommandHistoryModal', () => {
   const mockEntries: CommandHistoryEntry[] = [
     {
       id: '1',
-      command: 'npm install',
+      command: 'bun install',
       terminalName: 'default',
       terminalId: 'term-1',
       projectId: 'proj-1',
@@ -132,7 +132,7 @@ describe('CommandHistoryModal', () => {
     },
     {
       id: '2',
-      command: 'npm run dev',
+      command: 'bun run dev',
       terminalName: 'default',
       terminalId: 'term-1',
       projectId: 'proj-1',
@@ -185,8 +185,8 @@ describe('CommandHistoryModal', () => {
     render(<CommandHistoryModal {...defaultProps} />)
 
     await waitFor(() => {
-      expect(screen.getByText('npm install')).toBeInTheDocument()
-      expect(screen.getByText('npm run dev')).toBeInTheDocument()
+      expect(screen.getByText('bun install')).toBeInTheDocument()
+      expect(screen.getByText('bun run dev')).toBeInTheDocument()
       expect(screen.getByText('git status')).toBeInTheDocument()
     })
   })
@@ -204,11 +204,11 @@ describe('CommandHistoryModal', () => {
     render(<CommandHistoryModal {...defaultProps} />)
 
     const input = screen.getByPlaceholderText('Search commands...')
-    fireEvent.change(input, { target: { value: 'npm' } })
+    fireEvent.change(input, { target: { value: 'bun' } })
 
     await waitFor(() => {
-      expect(screen.getByText('npm install')).toBeInTheDocument()
-      expect(screen.getByText('npm run dev')).toBeInTheDocument()
+      expect(screen.getByText('bun install')).toBeInTheDocument()
+      expect(screen.getByText('bun run dev')).toBeInTheDocument()
       expect(screen.queryByText('git status')).not.toBeInTheDocument()
     })
   })
@@ -242,19 +242,15 @@ describe('CommandHistoryModal', () => {
     const onSelectCommand = vi.fn()
     const onClose = vi.fn()
     render(
-      <CommandHistoryModal
-        {...defaultProps}
-        onSelectCommand={onSelectCommand}
-        onClose={onClose}
-      />
+      <CommandHistoryModal {...defaultProps} onSelectCommand={onSelectCommand} onClose={onClose} />
     )
 
     await waitFor(() => {
-      const entry = screen.getByText('npm install')
+      const entry = screen.getByText('bun install')
       fireEvent.click(entry)
     })
 
-    expect(onSelectCommand).toHaveBeenCalledWith('npm install')
+    expect(onSelectCommand).toHaveBeenCalledWith('bun install')
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -262,17 +258,13 @@ describe('CommandHistoryModal', () => {
     const onSelectCommand = vi.fn()
     const onClose = vi.fn()
     render(
-      <CommandHistoryModal
-        {...defaultProps}
-        onSelectCommand={onSelectCommand}
-        onClose={onClose}
-      />
+      <CommandHistoryModal {...defaultProps} onSelectCommand={onSelectCommand} onClose={onClose} />
     )
 
     const input = screen.getByPlaceholderText('Search commands...')
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(onSelectCommand).toHaveBeenCalledWith('npm install')
+    expect(onSelectCommand).toHaveBeenCalledWith('bun install')
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -333,7 +325,7 @@ describe('CommandHistoryModal', () => {
       render(<CommandHistoryModal {...defaultProps} />)
 
       await waitFor(() => {
-        expect(screen.getByText('npm install')).toBeInTheDocument()
+        expect(screen.getByText('bun install')).toBeInTheDocument()
         expect(screen.getByText('git status')).toBeInTheDocument()
         expect(screen.queryByText('cargo build')).not.toBeInTheDocument()
       })
@@ -351,7 +343,7 @@ describe('CommandHistoryModal', () => {
       fireEvent.click(allProjectsOption)
 
       await waitFor(() => {
-        expect(screen.getByText('npm install')).toBeInTheDocument()
+        expect(screen.getByText('bun install')).toBeInTheDocument()
         expect(screen.getByText('cargo build')).toBeInTheDocument()
       })
     })
@@ -375,7 +367,7 @@ describe('CommandHistoryModal', () => {
       fireEvent.click(thisProjectOption)
 
       await waitFor(() => {
-        expect(screen.getByText('npm install')).toBeInTheDocument()
+        expect(screen.getByText('bun install')).toBeInTheDocument()
         expect(screen.queryByText('cargo build')).not.toBeInTheDocument()
       })
     })
@@ -385,10 +377,10 @@ describe('CommandHistoryModal', () => {
 
       // Type search query
       const input = screen.getByPlaceholderText('Search commands...')
-      fireEvent.change(input, { target: { value: 'npm' } })
+      fireEvent.change(input, { target: { value: 'bun' } })
 
       await waitFor(() => {
-        expect(screen.getByText('npm install')).toBeInTheDocument()
+        expect(screen.getByText('bun install')).toBeInTheDocument()
         expect(screen.queryByText('git status')).not.toBeInTheDocument()
       })
 
@@ -400,7 +392,7 @@ describe('CommandHistoryModal', () => {
 
       // Search should still filter
       await waitFor(() => {
-        expect(screen.getByText('npm install')).toBeInTheDocument()
+        expect(screen.getByText('bun install')).toBeInTheDocument()
         expect(screen.queryByText('cargo build')).not.toBeInTheDocument()
       })
     })

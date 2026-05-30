@@ -58,6 +58,7 @@ export interface TerminalState {
   setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  setTerminalNeedsAttention: (id: string, value: boolean) => void
   setAppHidden: (isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
@@ -412,6 +413,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  setTerminalNeedsAttention: (id: string, value: boolean): void => {
+    set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      // No-op when the flag is already at the requested value to avoid needless re-renders.
+      if (!target || (target.needsAttention ?? false) === value) {
+        return state
+      }
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === id ? { ...t, needsAttention: value } : t
+        )
+      }
+    })
+  },
+
   setAppHidden: (isHidden: boolean): void => {
     set((state) => {
       // Avoid allocating a new array if every terminal already has the correct state
@@ -456,12 +472,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const terminal = state.terminals.find((t) => t.id === id)
       if (!terminal) return state
       const newPtyId = `restart-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`
+      const newIndex = new Map(state.ptyIdIndex)
+      if (terminal.ptyId) {
+        newIndex.delete(terminal.ptyId)
+      }
+      newIndex.set(newPtyId, id)
       return {
         terminals: state.terminals.map((t) =>
           t.id === id
             ? { ...t, ptyId: newPtyId, healthStatus: 'running', transcript: undefined, pendingScrollback: undefined }
             : t
         ),
+        ptyIdIndex: newIndex,
         activeTerminalId: id
       }
     })
@@ -542,13 +564,26 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   cleanupProjectTerminals: (projectId: string): void => {
-    set((state) => ({
-      terminals: state.terminals.filter((t) => t.projectId !== projectId),
-      activeTerminalId:
-        state.terminals.some((t) => t.id === state.activeTerminalId && t.projectId === projectId)
-          ? ''
-          : state.activeTerminalId
-    }))
+    set((state) => {
+      const removedTerminals = state.terminals.filter((t) => t.projectId === projectId)
+      const remainingTerminals = state.terminals.filter((t) => t.projectId !== projectId)
+      const newIndex = new Map(state.ptyIdIndex)
+
+      for (const terminal of removedTerminals) {
+        if (terminal.ptyId) {
+          newIndex.delete(terminal.ptyId)
+        }
+      }
+
+      return {
+        terminals: remainingTerminals,
+        ptyIdIndex: newIndex,
+        activeTerminalId:
+          state.terminals.some((t) => t.id === state.activeTerminalId && t.projectId === projectId)
+            ? ''
+            : state.activeTerminalId
+      }
+    })
   },
 
   getTerminalCount: (): number => {

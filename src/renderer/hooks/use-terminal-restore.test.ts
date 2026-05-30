@@ -46,7 +46,10 @@ vi.mock('@/lib/api', () => ({
     save: vi.fn(),
     clear: vi.fn(),
     flush: vi.fn()
-  },
+  }
+}))
+
+vi.mock('@/lib/shell-api', () => ({
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { available: [] } })
   }

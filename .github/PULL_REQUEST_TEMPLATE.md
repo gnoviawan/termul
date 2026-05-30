@@ -26,9 +26,9 @@ Closes #
 
 ## How It Was Tested
 
-- [ ] `npm run lint`
-- [ ] `npm run typecheck`
-- [ ] `npm run test`
+- [ ] `bun run lint`
+- [ ] `bun run typecheck`
+- [ ] `bun run test`
 - [ ] Manual verification completed
 - [ ] Not applicable
 

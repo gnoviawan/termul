@@ -14,6 +14,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "core:window:allow-show",
     "core:window:allow-is-maximized",
     "core:window:allow-set-position",
@@ -46,6 +47,7 @@
     "clipboard-manager:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-image",
     "updater:allow-check",
     "updater:allow-download-and-install",
     "process:allow-restart",
@@ -57,6 +59,10 @@
     "opener:default",
     "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",
-    "mcp-bridge:default"
+    "mcp-bridge:default",
+    "notification:default",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
   ]
 }

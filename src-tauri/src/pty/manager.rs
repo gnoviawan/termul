@@ -215,8 +215,8 @@ impl TerminalInstance {
     /// Remove a renderer reference
     pub fn remove_renderer_ref(&self, renderer_id: &str) {
         let mut refs = self.renderer_refs.write();
-        refs.remove(renderer_id);
-        if refs.is_empty() {
+        let removed = refs.remove(renderer_id);
+        if removed && refs.is_empty() {
             *self.orphan_since.write() = Some(Instant::now());
         }
     }

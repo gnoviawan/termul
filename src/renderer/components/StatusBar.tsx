@@ -1,4 +1,4 @@
-import { GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
+import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -41,7 +41,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   return (
     <div
       className={cn(
-        'h-7 text-white/90 flex items-center px-3 text-[11px] select-none flex-shrink-0 relative z-50',
+        'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0 relative z-50',
         bgColor
       )}
     >
@@ -200,8 +200,8 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center gap-0.5 text-white/50">
-            <FileQuestion size={10} />
+          <span className="flex items-center text-muted-foreground">
+            <FileQuestion size={12} className="mr-0.5" />
             {untracked}
           </span>
         </TooltipTrigger>

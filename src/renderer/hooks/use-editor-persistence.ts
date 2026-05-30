@@ -49,6 +49,7 @@ interface PersistedBrowserTabRef {
 
 interface PersistedGitTabRef {
   type: 'git'
+  id: string
   cwd: string
 }
 
@@ -137,7 +138,7 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
       }
 
       if (tab.type === 'git') {
-        return [{ type: 'git', cwd: tab.cwd }]
+        return [{ type: 'git', id: tab.id, cwd: tab.cwd }]
       }
 
       if (tab.type === 'tunnel') {
@@ -312,6 +313,7 @@ function reconcileTerminalTabs(
           return [tab]
         }
 
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -389,7 +391,7 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
           return [
             {
               type: 'git',
-              id: `git-${crypto.randomUUID()}`,
+              id: tab.id,
               cwd: tab.cwd
             }
           ]
@@ -404,6 +406,7 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
             }
           ]
         }
+
 
         return [
           {
