@@ -10,7 +10,12 @@ export function usePinnedCommandsLoader(): void {
   useEffect(() => {
     async function load(): Promise<void> {
       const result = await persistenceApi.read<string[]>(PINNED_COMMANDS_KEY)
-      if (result.success && result.data) {
+      // Guard against corrupt persisted data: only accept an array of strings.
+      if (
+        result.success &&
+        Array.isArray(result.data) &&
+        result.data.every((id) => typeof id === 'string')
+      ) {
         setPinned(result.data)
       }
     }
