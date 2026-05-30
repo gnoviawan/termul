@@ -2267,6 +2267,39 @@ pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
 }
 
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    crate::trackers::git_tracker::git_commit_file(
+        &cwd,
+        &summary,
+        description.as_deref().unwrap_or(""),
+        amend.unwrap_or(false),
+    )
+    .map_err(|e: String| e)
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_push_current(&cwd).map_err(|e: String| e)
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {

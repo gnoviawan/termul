@@ -13,7 +13,9 @@ import {
   GitBranch,
   RefreshCw,
   Search,
-  Undo2
+  Undo2,
+  GitCommit,
+  ArrowUp
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const unstageFile = useGitStatusStore((state) => state.unstageFile);
   const discardFile = useGitStatusStore((state) => state.discardFile);
   const isFetchingStatus = useGitStatusStore((state) => state.isFetchingStatus);
+  const commitContexts = useGitStatusStore((state) => state.commitContexts);
+  const fetchCommitContext = useGitStatusStore((state) => state.fetchCommitContext);
+  const commit = useGitStatusStore((state) => state.commit);
+  const push = useGitStatusStore((state) => state.push);
+
+  const commitContext = commitContexts[cwd] ?? null;
 
   const [searchQuery, setSearchQuery] = useState("");
   // Track which side (staged vs unstaged) of the selected path is shown, since
@@ -45,6 +53,17 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const [isMutating, setIsMutating] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
 
+  // Commit footer state.
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [amend, setAmend] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
+  const [confirmAmendOpen, setConfirmAmendOpen] = useState(false);
+  // Synchronous in-flight guard so a same-tick double-click cannot dispatch two
+  // commits before the isCommitting state has re-rendered.
+  const commitInFlight = React.useRef(false);
+
   const currentDiff = selectedFile
     ? diffs[diffKey(cwd, selectedFile, selectedStaged)]
     : null;
@@ -52,8 +71,18 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   useEffect(() => {
     if (isVisible) {
       refreshStatus(cwd);
+      fetchCommitContext(cwd);
     }
-  }, [isVisible, cwd, refreshStatus]);
+  }, [isVisible, cwd, refreshStatus, fetchCommitContext]);
+
+  // Reset the commit footer when the repo (cwd) changes so a half-typed message
+  // or an Amend toggle from one repo never carries over into another.
+  useEffect(() => {
+    setSummary("");
+    setDescription("");
+    setAmend(false);
+    setConfirmAmendOpen(false);
+  }, [cwd]);
 
   useEffect(() => {
     if (!isVisible || !selectedFile) {
@@ -138,6 +167,93 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     }
   };
 
+  // Toggling amend on prefills the message from the last commit so the user can
+  // reword it — but only when the inputs are empty, so we never clobber text the
+  // user already typed. Toggling off clears a prefill that the user did not edit.
+  const handleToggleAmend = () => {
+    const next = !amend;
+    setAmend(next);
+    if (next && commitContext?.hasHead) {
+      if (summary.trim() === "" && description.trim() === "") {
+        setSummary(commitContext.lastSubject);
+        setDescription(commitContext.lastBody);
+      }
+    } else if (!next) {
+      // Only auto-clear if the inputs still match the prefilled last commit
+      // (i.e. the user did not type their own message over it).
+      if (
+        summary === (commitContext?.lastSubject ?? "") &&
+        description === (commitContext?.lastBody ?? "")
+      ) {
+        setSummary("");
+        setDescription("");
+      }
+    }
+  };
+
+  const stagedCount = commitContext?.stagedCount ?? 0;
+  const canCommit =
+    summary.trim().length > 0 &&
+    !isCommitting &&
+    !isPushing &&
+    (amend ? !!commitContext?.hasHead : stagedCount > 0);
+
+  const runCommit = async () => {
+    if (commitInFlight.current) return;
+    commitInFlight.current = true;
+    setIsCommitting(true);
+    try {
+      await commit(cwd, summary, description, amend);
+      setSummary("");
+      setDescription("");
+      setAmend(false);
+      toast.success(amend ? "Commit amended" : "Changes committed");
+    } catch (error) {
+      toast.error(`Failed to commit: ${String(error)}`);
+    } finally {
+      setIsCommitting(false);
+      setConfirmAmendOpen(false);
+      commitInFlight.current = false;
+    }
+  };
+
+  const handleCommit = () => {
+    if (!canCommit || commitInFlight.current) return;
+    // Amending a commit that already matches the upstream rewrites published
+    // history; gate it behind a confirmation.
+    if (amend && commitContext?.hasUpstream && commitContext.ahead === 0) {
+      setConfirmAmendOpen(true);
+      return;
+    }
+    void runCommit();
+  };
+
+  const handlePush = async () => {
+    if (isPushing || isCommitting) return;
+    setIsPushing(true);
+    try {
+      await push(cwd);
+      toast.success("Pushed to remote");
+    } catch (error) {
+      toast.error(`Failed to push: ${String(error)}`);
+    } finally {
+      setIsPushing(false);
+    }
+  };
+
+  const onBranch = !!commitContext?.branch;
+  const ahead = commitContext?.ahead ?? 0;
+  const behind = commitContext?.behind ?? 0;
+  // Once an upstream exists, there is nothing to push when we are not ahead.
+  // Before an upstream exists, publishing is always meaningful.
+  const hasSomethingToPush = !commitContext?.hasUpstream || ahead > 0;
+  const canPush = onBranch && hasSomethingToPush && !isPushing && !isCommitting;
+  const pushLabel = !commitContext?.hasUpstream
+    ? "Publish branch"
+    : ahead > 0
+      ? `Push ${ahead}`
+      : "Up to date";
+
   const getFileIcon = (status: GitFileStatus) => {
     switch (status) {
       case "added": return <Plus className="text-green-500" size={14} />;
@@ -217,6 +333,93 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             </div>
           </div>
         </ScrollArea>
+
+        {/* Commit footer (GitHub Desktop style) */}
+        <div className="border-t border-border p-3 space-y-2 bg-background/60">
+          <input
+            type="text"
+            placeholder={amend ? "Update commit message" : "Summary (required)"}
+            className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            disabled={isCommitting}
+          />
+          <textarea
+            placeholder="Description (optional)"
+            rows={3}
+            className="w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={isCommitting}
+          />
+          <label
+            className={cn(
+              "flex items-center gap-2 text-[11px] select-none",
+              commitContext?.hasHead
+                ? "text-muted-foreground cursor-pointer"
+                : "text-muted-foreground/40 cursor-not-allowed",
+            )}
+            title={
+              commitContext?.hasHead
+                ? "Amend the last commit instead of creating a new one"
+                : "No commit to amend yet"
+            }
+          >
+            <input
+              type="checkbox"
+              className="h-3 w-3 accent-primary"
+              checked={amend}
+              onChange={handleToggleAmend}
+              disabled={!commitContext?.hasHead || isCommitting}
+            />
+            Amend last commit
+          </label>
+          <Button
+            variant="default"
+            size="sm"
+            className="w-full h-8 text-xs gap-2"
+            onClick={handleCommit}
+            disabled={!canCommit}
+            title={
+              amend
+                ? "Amend the last commit"
+                : stagedCount === 0
+                  ? "Stage files to commit"
+                  : "Commit staged changes"
+            }
+          >
+            <GitCommit size={14} />
+            {isCommitting
+              ? "Committing..."
+              : amend
+                ? "Amend commit"
+                : commitContext?.branch
+                  ? `Commit to ${commitContext.branch}`
+                  : "Commit"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-8 text-xs gap-2"
+            onClick={handlePush}
+            disabled={!canPush}
+            title={
+              !onBranch
+                ? "Not on a branch (detached HEAD)"
+                : !commitContext?.hasUpstream
+                  ? "Publish this branch to origin"
+                  : ahead > 0
+                    ? "Push commits to the remote"
+                    : "Nothing to push — up to date with the remote"
+            }
+          >
+            <ArrowUp size={14} className={cn(isPushing && "animate-pulse")} />
+            {isPushing ? "Pushing..." : pushLabel}
+            {behind > 0 && (
+              <span className="text-[10px] text-amber-500">↓{behind}</span>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Diff View */}
@@ -338,6 +541,17 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         isLoading={isMutating}
         onConfirm={confirmDiscard}
         onCancel={() => setConfirmDiscardOpen(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmAmendOpen}
+        variant="danger"
+        title="Amend pushed commit"
+        message="The last commit appears to already be pushed. Amending rewrites published history and will require a force-push to update the remote. Continue?"
+        confirmLabel="Amend anyway"
+        isLoading={isCommitting}
+        onConfirm={runCommit}
+        onCancel={() => setConfirmAmendOpen(false)}
       />
     </div>
   );

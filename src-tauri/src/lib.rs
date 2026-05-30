@@ -815,6 +815,9 @@ pub fn run() {
             commands::git_stage,
             commands::git_unstage,
             commands::git_discard,
+            commands::git_commit,
+            commands::git_push,
+            commands::git_get_commit_context,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
