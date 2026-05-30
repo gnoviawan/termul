@@ -918,7 +918,7 @@ const LOG_RECORD_SEP: char = '\u{1e}';
 ///
 /// Uses a NUL-delimited `--pretty` format with a record terminator so commit
 /// subjects containing spaces, pipes, or other punctuation cannot break parsing.
-/// `--parents` yields parent SHAs (for graph topology), `--decorate=short`
+/// `--parents` yields parent SHAs (for graph topology), `--decorate=full`
 /// yields ref names, and `--topo-order` emits commits child-before-parent so the
 /// renderer's lane layout never sees a parent before its child.
 ///
