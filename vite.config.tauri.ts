@@ -6,8 +6,22 @@ import pkg from './package.json' with { type: 'json' }
 const host = process.env.TAURI_DEV_HOST
 // Dev server port. Override with TAURI_DEV_PORT (must match devUrl in
 // src-tauri/tauri.conf.json, or pass a matching --config override to tauri).
-const devPort = Number(process.env.TAURI_DEV_PORT) || 5180
-const hmrPort = devPort + 1
+// Validate the env value: must be an integer in the valid TCP port range,
+// else fall back to the default and warn.
+function resolveDevPort(): number {
+  const fallback = 5180
+  const raw = process.env.TAURI_DEV_PORT
+  if (raw === undefined || raw === '') return fallback
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    console.warn(`[vite] Invalid TAURI_DEV_PORT="${raw}"; falling back to ${fallback}.`)
+    return fallback
+  }
+  return parsed
+}
+const devPort = resolveDevPort()
+// Keep the HMR port within range even at the boundary.
+const hmrPort = devPort < 65535 ? devPort + 1 : devPort - 1
 
 export default defineConfig({
   root: './',

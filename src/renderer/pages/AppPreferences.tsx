@@ -38,6 +38,7 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
 import { shellApi, terminalApi, remoteServerApi } from '@/lib/api'
+import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import type { RemoteStatus } from '@shared/types/ipc.types'
 
@@ -115,6 +116,9 @@ export default function AppPreferences(): React.JSX.Element {
       const result = enable ? await remoteServerApi.start() : await remoteServerApi.stop()
       if (result.success) {
         setRemoteStatus(result.data)
+        // Push to the global store so the StatusBar indicator updates immediately
+        // (it otherwise lags until the next 3s poll in use-remote-projects).
+        useRemoteStatusStore.getState().setStatus(result.data)
       } else {
         setRemoteError(result.error)
       }

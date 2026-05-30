@@ -20,6 +20,34 @@ interface SpawnRequestPayload {
 }
 
 /**
+ * Resolve once the workspace has loaded the given project's panes, i.e. the
+ * project is active and an active pane exists. Polls the stores instead of
+ * guessing with a fixed delay (which could spawn into the wrong pane).
+ * Gives up after `timeoutMs` so a stuck switch never hangs the handler.
+ */
+async function waitForActivePane(projectId: string, timeoutMs = 2000): Promise<boolean> {
+  const ready = (): boolean =>
+    useProjectStore.getState().activeProjectId === projectId &&
+    Boolean(useWorkspaceStore.getState().activePaneId)
+  if (ready()) return true
+  const start = Date.now()
+  return new Promise((resolve) => {
+    const tick = (): void => {
+      if (ready()) {
+        resolve(true)
+        return
+      }
+      if (Date.now() - start >= timeoutMs) {
+        resolve(false)
+        return
+      }
+      setTimeout(tick, 30)
+    }
+    tick()
+  })
+}
+
+/**
  * Build the project → terminal tree the web client browses.
  * Only terminals with a live `ptyId` are exposed (those the remote server can attach to).
  */
@@ -99,8 +127,9 @@ export function useRemoteProjects(): void {
         // Switch to the project if it isn't active, so its pane tree is loaded.
         if (projectStore.activeProjectId !== projectId) {
           projectStore.selectProject(projectId)
-          // Allow the workspace store to load the project's panes.
-          await new Promise((resolve) => setTimeout(resolve, 150))
+          // Wait until the workspace actually loaded the project's panes, rather
+          // than guessing with a fixed delay (avoids a spawn-into-wrong-pane race).
+          await waitForActivePane(projectId)
         }
 
         const paneId = useWorkspaceStore.getState().activePaneId

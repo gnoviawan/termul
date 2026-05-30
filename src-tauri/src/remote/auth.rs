@@ -27,7 +27,9 @@ use std::collections::HashMap;
 /// Validate that a WebSocket upgrade is same-origin (CSWSH prevention).
 ///
 /// Rules:
-/// - No `Origin` header → non-browser client (curl/script). Allowed.
+/// - No `Origin` header → reject (fail closed). Browsers always send `Origin`
+///   on WebSocket upgrades per RFC 6455, so a missing one is anomalous; for a
+///   PTY/RCE surface we prefer to reject rather than guess.
 /// - `Origin` present → its host:port must equal the request `Host`. Otherwise
 ///   reject with `403 Forbidden`.
 ///
@@ -38,8 +40,8 @@ pub fn validate_same_origin(headers: &HeaderMap) -> Result<(), (StatusCode, &'st
         Some(o) => o
             .to_str()
             .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid Origin header encoding"))?,
-        // No Origin → non-browser client. Not a CSWSH vector; allow.
-        None => return Ok(()),
+        // Fail closed: no Origin on a WS upgrade is treated as a rejected request.
+        None => return Err((StatusCode::FORBIDDEN, "Missing Origin header")),
     };
 
     // Strip the scheme to get host[:port].
@@ -154,9 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_origin_allowed_for_non_browser() {
+    fn missing_origin_is_rejected_fail_closed() {
+        // A WS upgrade with no Origin is anomalous (browsers always send it);
+        // we fail closed for the PTY/RCE surface.
         let h = headers(None, Some("127.0.0.1:5180"));
-        assert!(validate_same_origin(&h).is_ok());
+        assert!(validate_same_origin(&h).is_err());
     }
 
     #[test]

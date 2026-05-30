@@ -637,8 +637,11 @@
               }
             } catch (_) {}
           });
-          ws.addEventListener("close", (event) => {
-            if (manualClose || event.code === 1000) return;
+          ws.addEventListener("close", () => {
+            // Only suppress reconnect for intentional local teardown. A code-1000
+            // close from a proxy/tunnel idle-timeout should still reconnect, so we
+            // no longer special-case 1000 (our own teardown nulls onclose anyway).
+            if (manualClose) return;
             if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
               setPaneStatus("failed");
               showOverlayFailed("Connection lost", "Couldn't reconnect after " + MAX_RECONNECT_ATTEMPTS + " attempts");

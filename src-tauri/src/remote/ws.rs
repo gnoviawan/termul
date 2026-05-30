@@ -177,7 +177,7 @@ async fn handle_socket(
     let terminal_id_sender = terminal_id.clone();
     let terminal_id_receiver = terminal_id.clone();
 
-    let sender_task = tokio::spawn(async move {
+    let mut sender_task = tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(data) => {
@@ -209,7 +209,7 @@ async fn handle_socket(
         }
     });
 
-    let receiver_task = tokio::spawn(async move {
+    let mut receiver_task = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
@@ -264,13 +264,19 @@ async fn handle_socket(
         }
     });
 
-    // Wait for either task to complete (client disconnect or terminal exit)
+    // Wait for either task to complete (client disconnect or terminal exit),
+    // then abort the survivor so cleanup is deterministic (no leaked task
+    // holding the socket half or broadcast receiver).
     tokio::select! {
-        _ = sender_task => {
+        _ = &mut sender_task => {
             debug!("Sender task finished for {}", terminal_id);
+            receiver_task.abort();
+            let _ = receiver_task.await;
         }
-        _ = receiver_task => {
+        _ = &mut receiver_task => {
             debug!("Receiver task finished for {}", terminal_id);
+            sender_task.abort();
+            let _ = sender_task.await;
         }
     }
 
