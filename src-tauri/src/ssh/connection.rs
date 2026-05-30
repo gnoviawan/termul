@@ -165,7 +165,10 @@ impl SSHConnectionManager {
     /// back to IPv4.
     fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
         let addr = format!("{}:{}", host, port);
-        let resolved: Vec<_> = addr
+        // Resolve via the (host, port) tuple rather than the formatted string so
+        // bare IPv6 literals (which as a string would need bracket form
+        // `[::1]:22`) resolve correctly. The `addr` string is kept for messages.
+        let resolved: Vec<_> = (host, port)
             .to_socket_addrs()
             .map_err(|e| format!("Failed to resolve {}: {}", addr, e))?
             .collect();
@@ -272,18 +275,32 @@ impl SSHConnectionManager {
             .map_err(|e| format!("Failed to access known_hosts: {}", e))?;
 
         // Load the user's shared known_hosts (read-only) and the app-managed
-        // file. If a file exists but cannot be read, fail closed rather than
-        // silently downgrading a populated store to accept-new.
-        for path in [Self::known_hosts_path(), Self::app_known_hosts_path()]
+        // file. The user's file is treated leniently (system ssh remains its
+        // source of truth); the app-managed file is ours, so if it exists but
+        // cannot be read we fail closed rather than silently downgrading a
+        // populated store to accept-new.
+        let app_path = Self::app_known_hosts_path();
+        for path in [Self::known_hosts_path(), app_path.clone()]
             .into_iter()
             .flatten()
         {
             if path.exists() {
                 if let Err(e) = known_hosts.read_file(&path, KnownHostFileKind::OpenSSH) {
-                    // A genuinely empty file reads as Ok; an error here means the
-                    // file is present but unreadable/partially parseable. Treat
-                    // the user's file leniently (system ssh remains source of
-                    // truth) but log; only the app file is ours to trust.
+                    let is_app_file = app_path.as_deref() == Some(path.as_path());
+                    if is_app_file {
+                        log::error!(
+                            "[SSH] Failed to read app known_hosts {:?}: {}",
+                            path,
+                            e
+                        );
+                        return Err(format!(
+                            "Failed to read app known_hosts {:?}: {}",
+                            path, e
+                        ));
+                    }
+                    // A genuinely empty file reads as Ok; an error on the user's
+                    // file means it is present but unreadable/partially
+                    // parseable. Log and continue (system ssh owns that file).
                     log::warn!("[SSH] Could not fully read known_hosts {:?}: {}", path, e);
                 }
             }
@@ -467,6 +484,10 @@ impl SSHConnectionManager {
                 // Attempt reconnect with exponential backoff
                 let mut attempts = 0u32;
                 let mut reconnected = false;
+                // Set when reconnect aborts due to a host-key verification
+                // failure, so the generic "Reconnect failed" message below does
+                // not clobber the precise error already stored.
+                let mut host_key_failed = false;
 
                 while attempts < MAX_RECONNECT_ATTEMPTS
                     && !should_stop.load(std::sync::atomic::Ordering::Relaxed)
@@ -497,18 +518,25 @@ impl SSHConnectionManager {
                             } else {
                                 Ok(())
                             };
-                            if let Err(e) = &verify_result {
-                                // A rotated/changed host key turns a transient
-                                // reconnect into a hard failure; log the cause so
-                                // it is diagnosable rather than a generic retry.
-                                log::warn!(
+                            // A changed/rotated host key is not a transient
+                            // failure: retrying cannot fix it and continuing to
+                            // retry hides the cause. Fail fast and surface the
+                            // exact verification error to the UI.
+                            if let Err(e) = verify_result {
+                                let mut state_guard = state.lock().await;
+                                state_guard.info.status = "failed".to_string();
+                                state_guard.info.error = Some(e.clone());
+                                state_guard.session = None;
+                                Self::emit_status_static(&app_handle, &state_guard.info);
+                                log::error!(
                                     "[SSH] Host key verification failed during reconnect of {}: {}",
                                     connection_id,
                                     e
                                 );
+                                host_key_failed = true;
+                                break;
                             }
                             if handshake_ok
-                                && verify_result.is_ok()
                                 && Self::authenticate_session(
                                     &new_session,
                                     &profile,
@@ -544,7 +572,7 @@ impl SSHConnectionManager {
                     }
                 }
 
-                if !reconnected {
+                if !reconnected && !host_key_failed {
                     let mut state_guard = state.lock().await;
                     state_guard.info.status = "failed".to_string();
                     state_guard.info.error =
@@ -557,6 +585,12 @@ impl SSHConnectionManager {
                         connection_id,
                         attempts
                     );
+                    break;
+                }
+
+                // A host-key failure already set a precise error and status;
+                // stop the heartbeat loop without overwriting it.
+                if host_key_failed {
                     break;
                 }
             }
@@ -804,5 +838,22 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn connect_tcp_accepts_ipv6_literal() {
+        // Regression: resolving via the (host, port) tuple (not a formatted
+        // string) lets bare IPv6 literals resolve without bracket form.
+        // `::1` port 1 should reach a connection attempt, not a resolve/parse
+        // error. If the host has no IPv6 loopback it still must not be an
+        // "invalid socket address" failure.
+        let err = SSHConnectionManager::connect_tcp("::1", 1)
+            .expect_err("closed port should not connect");
+        assert!(
+            !err.contains("invalid socket address"),
+            "IPv6 literal should resolve via tuple, got: {}",
+            err
+        );
+        assert!(err.contains("TCP connection"), "unexpected error: {}", err);
     }
 }

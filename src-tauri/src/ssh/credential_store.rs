@@ -117,16 +117,26 @@ pub fn self_test() -> Result<(), String> {
     let read_back = match entry.get_password() {
         Ok(v) => v,
         Err(e) => {
-            let _ = entry.delete_credential();
+            if let Err(del_err) = entry.delete_credential() {
+                return Err(format!(
+                    "keyring read-back failed ({}) and probe cleanup also failed: {}",
+                    e, del_err
+                ));
+            }
             return Err(format!(
                 "keyring read-back failed (likely no OS backend compiled in): {}",
                 e
             ));
         }
     };
-    let _ = entry.delete_credential();
+    // Clean up the probe; a cleanup failure indicates a partially-working
+    // backend and is itself worth surfacing.
+    let delete_result = entry.delete_credential();
     if read_back != probe {
         return Err("keyring read-back mismatch (mock/in-memory store active)".to_string());
+    }
+    if let Err(del_err) = delete_result {
+        return Err(format!("keyring probe cleanup failed: {}", del_err));
     }
     Ok(())
 }

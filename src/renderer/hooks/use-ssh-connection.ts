@@ -209,6 +209,8 @@ export function useSSHConnection(profile: SSHProfile | null) {
     // If SFTP never came up (id still the local placeholder), retry the backend connect.
     if (connectionId.startsWith('ssh-conn-')) {
       if (!profile) return
+      // sshApi.connect never rejects (invokeIpc catches and returns an
+      // IpcResult), so a failure surfaces as !success rather than a throw.
       const sftpResult = await sshApi.connect(profile.id, profile.password)
       if (sftpResult.success && sftpResult.data?.id) {
         const backendId = sftpResult.data.id
@@ -217,7 +219,11 @@ export function useSSHConnection(profile: SSHProfile | null) {
         setSftpReady(true)
         void loadDirectory('/', backendId)
       } else {
+        // Don't leave the placeholder connection stuck: reflect the failure so
+        // the badge and SFTP state are accurate.
         const errMsg = sftpResult.success ? 'connection not established' : sftpResult.error
+        updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
+        setSftpReady(false)
         toast.error(`SFTP unavailable: ${errMsg ?? 'connection not established'}`)
       }
       return
