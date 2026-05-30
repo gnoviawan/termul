@@ -76,6 +76,13 @@ export function useSSHConnection(profile: SSHProfile | null) {
     if (isConnecting || isConnected) return
     setIsConnecting(true)
 
+    // If a previous attempt left a local PTY (e.g. a failed connect the user is
+    // retrying), kill it first so we don't orphan a running ssh process.
+    if (localTerminalPtyId) {
+      void terminalApi.kill(localTerminalPtyId)
+      setLocalTerminalPtyId(null)
+    }
+
     try {
       // Build SSH command as a quoted string. Each argument is wrapped so that
       // Windows key paths / usernames containing spaces survive being written
@@ -140,8 +147,11 @@ export function useSSHConnection(profile: SSHProfile | null) {
         void loadDirectory('/', backendId)
         toast.success(`Connected: ${profile.name}`)
       } else {
-        // SSH did not authenticate. Keep the terminal open (the user can still
-        // type a password manually) but tell the truth in the badge.
+        // SSH did not authenticate over the ssh2 backend. Keep the interactive
+        // terminal visible (it stays mounted via localTerminalPtyId, so the user
+        // can still type a password / read the error and a Disconnect control is
+        // shown), but tell the truth in the badge. Cancel the queued command
+        // write so it doesn't fire into a terminal the user may be using.
         const errMsg = sftpResult.success ? 'connection not established' : sftpResult.error
         updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
         toast.error(`SSH connection failed: ${errMsg ?? 'unknown error'}`)
@@ -152,17 +162,21 @@ export function useSSHConnection(profile: SSHProfile | null) {
     } finally {
       setIsConnecting(false)
     }
-  }, [profile, isConnecting, isConnected, markConnecting, updateConnectionId, updateConnectionStatusByProfile, loadDirectory])
+  }, [profile, isConnecting, isConnected, localTerminalPtyId, markConnecting, updateConnectionId, updateConnectionStatusByProfile, loadDirectory])
 
-  // Called when the interactive ssh process in the PTY exits. An immediate exit
-  // typically means ssh failed to connect (bad key, refused auth, ssh client
-  // missing). Clear SFTP state; only downgrade the badge if we are not already
-  // in a real connected state driven by the ssh2 backend.
+  // Called when the interactive ssh process in the PTY exits (e.g. the user
+  // typed `exit`, or ssh failed and quit). The terminal PTY is now dead, so
+  // drop our reference to it (the workspace will show the reconnect prompt).
+  // The ssh2/SFTP backend connection is independent: only tear that down /
+  // downgrade the badge if it was never actually connected. Typing `exit` on a
+  // healthy connection must NOT blank the file browser.
   const handleSSHProcessExit = useCallback(() => {
     if (!profile) return
-    setSftpReady(false)
-    setEntries([])
+    if (writeTimerRef.current) { clearTimeout(writeTimerRef.current); writeTimerRef.current = null }
+    setLocalTerminalPtyId(null)
     if (!isConnected) {
+      setSftpReady(false)
+      setEntries([])
       updateConnectionStatusByProfile(profile.id, 'failed', 'SSH session ended')
     }
   }, [profile, isConnected, updateConnectionStatusByProfile])

@@ -40,7 +40,6 @@ export interface SSHState {
 
   // Manual connection tracking (for terminal-based SSH)
   markConnecting: (profileId: string, terminalId: string) => void
-  markConnected: (profileId: string, terminalId: string) => void
   markDisconnected: (profileId: string) => void
   updateConnectionId: (profileId: string, backendConnectionId: string) => void
   updateConnectionStatusByProfile: (profileId: string, status: SSHConnectionStatus, error?: string) => void
@@ -193,23 +192,6 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     })
   },
 
-  markConnected: (profileId: string, terminalId: string) => {
-    set((state) => {
-      // Remove any existing connection for this profile
-      const filtered = state.connections.filter((c) => c.profileId !== profileId)
-      const newConn: SSHConnection = {
-        id: `ssh-conn-${Date.now()}`,
-        profileId,
-        status: 'connected',
-        terminalId,
-        activeForwards: [],
-        reconnectAttempts: 0,
-        connectedAt: new Date().toISOString(),
-      }
-      return { connections: [...filtered, newConn] }
-    })
-  },
-
   markDisconnected: (profileId: string) => {
     set((state) => ({
       connections: state.connections.filter((c) => c.profileId !== profileId),
@@ -337,7 +319,6 @@ export const useSSHActions = () =>
       clearCompletedTransfers: state.clearCompletedTransfers,
       selectProfile: state.selectProfile,
       markConnecting: state.markConnecting,
-      markConnected: state.markConnected,
       markDisconnected: state.markDisconnected,
       updateConnectionId: state.updateConnectionId,
       updateConnectionStatusByProfile: state.updateConnectionStatusByProfile,

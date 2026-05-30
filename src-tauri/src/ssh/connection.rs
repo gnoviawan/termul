@@ -6,7 +6,7 @@
 use crate::ssh::profile_manager::SSHProfile;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use ssh2::{CheckResult, KnownHostFileKind, KnownHostKeyFormat, Session};
+use ssh2::{CheckResult, KnownHostFileKind, Session};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -21,6 +21,33 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 const INITIAL_BACKOFF_MS: u64 = 1000;
 const MAX_BACKOFF_MS: u64 = 30000;
 const TCP_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Minimal standard-base64 encoder (RFC 4648) for serializing host-key blobs
+/// into OpenSSH `known_hosts` lines. Avoids pulling in a base64 dependency for
+/// this single use site.
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,18 +158,39 @@ impl SSHConnectionManager {
     /// `TcpStream::connect_timeout` requires a `SocketAddr`, which only parses
     /// numeric IPs. Resolving via `ToSocketAddrs` first lets us connect to
     /// hostnames (e.g. `example.com`) as well as IPs.
+    ///
+    /// The total connect time is bounded by `TCP_CONNECT_TIMEOUT_SECS` across
+    /// ALL resolved addresses (a shared deadline), so a dual-stack host whose
+    /// IPv6 route black-holes cannot stall for `N * timeout` before falling
+    /// back to IPv4.
     fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
         let addr = format!("{}:{}", host, port);
-        let resolved = addr
+        let resolved: Vec<_> = addr
             .to_socket_addrs()
-            .map_err(|e| format!("Failed to resolve {}: {}", addr, e))?;
+            .map_err(|e| format!("Failed to resolve {}: {}", addr, e))?
+            .collect();
+
+        if resolved.is_empty() {
+            return Err(format!("Failed to resolve {}: no addresses returned", addr));
+        }
+
+        let total = Duration::from_secs(TCP_CONNECT_TIMEOUT_SECS);
+        let deadline = std::time::Instant::now() + total;
+        // Divide the budget across addresses, with a sensible floor so each
+        // address still gets a fair attempt.
+        let per_attempt = std::cmp::max(
+            total / resolved.len() as u32,
+            Duration::from_secs(2),
+        );
 
         let mut last_err: Option<String> = None;
         for socket_addr in resolved {
-            match TcpStream::connect_timeout(
-                &socket_addr,
-                Duration::from_secs(TCP_CONNECT_TIMEOUT_SECS),
-            ) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let attempt_timeout = std::cmp::min(per_attempt, remaining);
+            match TcpStream::connect_timeout(&socket_addr, attempt_timeout) {
                 Ok(stream) => return Ok(stream),
                 Err(e) => last_err = Some(e.to_string()),
             }
@@ -151,7 +199,7 @@ impl SSHConnectionManager {
         Err(format!(
             "TCP connection to {} failed: {}",
             addr,
-            last_err.unwrap_or_else(|| "no addresses resolved".to_string())
+            last_err.unwrap_or_else(|| "connection timed out".to_string())
         ))
     }
 
@@ -184,18 +232,36 @@ impl SSHConnectionManager {
         Ok(session)
     }
 
-    /// Path to the user's `~/.ssh/known_hosts` file.
-    fn known_hosts_path() -> Option<std::path::PathBuf> {
+    /// Path to the user's `~/.ssh` directory.
+    fn ssh_dir() -> Option<std::path::PathBuf> {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)?;
-        Some(home.join(".ssh").join("known_hosts"))
+        Some(home.join(".ssh"))
     }
 
-    /// Verify the server host key against the user's `known_hosts`, applying
-    /// `accept-new` behavior: unknown hosts are added and persisted, changed
-    /// keys are rejected (potential MITM). This mirrors the interactive terminal
-    /// path which uses `StrictHostKeyChecking=accept-new`.
+    /// Path to the user's `~/.ssh/known_hosts` file (read-only, for verification).
+    fn known_hosts_path() -> Option<std::path::PathBuf> {
+        Self::ssh_dir().map(|d| d.join("known_hosts"))
+    }
+
+    /// Path to the app-managed known_hosts file. New accept-new entries are
+    /// persisted here (appended) instead of rewriting the user's shared
+    /// `~/.ssh/known_hosts`, whose format (markers like `@cert-authority` /
+    /// `@revoked`, unsupported key types, comments) libssh2's writer would drop.
+    fn app_known_hosts_path() -> Option<std::path::PathBuf> {
+        Self::ssh_dir().map(|d| d.join("known_hosts_termul"))
+    }
+
+    /// Verify the server host key against the user's `known_hosts` plus the
+    /// app-managed store, applying `accept-new` behavior: unknown hosts are
+    /// recorded and persisted, changed keys are rejected (potential MITM). This
+    /// mirrors the interactive terminal path's `StrictHostKeyChecking=accept-new`.
+    ///
+    /// To avoid corrupting the user's shared `~/.ssh/known_hosts` (libssh2's
+    /// `write_file` truncates and re-serializes only what it could parse), both
+    /// files are loaded read-only for the check, and newly accepted keys are
+    /// appended to the app-managed file only.
     fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), String> {
         let (key, key_type) = session
             .host_key()
@@ -205,11 +271,21 @@ impl SSHConnectionManager {
             .known_hosts()
             .map_err(|e| format!("Failed to access known_hosts: {}", e))?;
 
-        let kh_path = Self::known_hosts_path();
-        if let Some(ref path) = kh_path {
+        // Load the user's shared known_hosts (read-only) and the app-managed
+        // file. If a file exists but cannot be read, fail closed rather than
+        // silently downgrading a populated store to accept-new.
+        for path in [Self::known_hosts_path(), Self::app_known_hosts_path()]
+            .into_iter()
+            .flatten()
+        {
             if path.exists() {
-                // A read error is non-fatal: we treat it as an empty store.
-                let _ = known_hosts.read_file(path, KnownHostFileKind::OpenSSH);
+                if let Err(e) = known_hosts.read_file(&path, KnownHostFileKind::OpenSSH) {
+                    // A genuinely empty file reads as Ok; an error here means the
+                    // file is present but unreadable/partially parseable. Treat
+                    // the user's file leniently (system ssh remains source of
+                    // truth) but log; only the app file is ours to trust.
+                    log::warn!("[SSH] Could not fully read known_hosts {:?}: {}", path, e);
+                }
             }
         }
 
@@ -220,38 +296,73 @@ impl SSHConnectionManager {
                 host, port
             )),
             CheckResult::NotFound => {
-                // accept-new: remember this host for next time.
-                let key_format = match key_type {
-                    ssh2::HostKeyType::Rsa => KnownHostKeyFormat::SshRsa,
-                    ssh2::HostKeyType::Dss => KnownHostKeyFormat::SshDss,
-                    ssh2::HostKeyType::Ecdsa256 => KnownHostKeyFormat::Ecdsa256,
-                    ssh2::HostKeyType::Ecdsa384 => KnownHostKeyFormat::Ecdsa384,
-                    ssh2::HostKeyType::Ecdsa521 => KnownHostKeyFormat::Ecdsa521,
-                    ssh2::HostKeyType::Ed25519 => KnownHostKeyFormat::Ed25519,
-                    ssh2::HostKeyType::Unknown => KnownHostKeyFormat::Unknown,
-                };
-                let host_entry = if port == 22 {
-                    host.to_string()
-                } else {
-                    format!("[{}]:{}", host, port)
-                };
-                if let Err(e) = known_hosts.add(&host_entry, key, "", key_format) {
-                    log::warn!("[SSH] Failed to record new host key for {}: {}", host_entry, e);
-                    return Ok(());
-                }
-                if let Some(ref path) = kh_path {
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if let Err(e) = known_hosts.write_file(path, KnownHostFileKind::OpenSSH) {
-                        log::warn!("[SSH] Failed to persist known_hosts at {:?}: {}", path, e);
-                    }
-                }
+                // accept-new: remember this host by appending a single OpenSSH
+                // line to the app-managed file (never rewriting the user's).
+                Self::append_known_host(host, port, key, key_type);
                 Ok(())
             }
             CheckResult::Failure => {
                 Err("Host key verification failed: unable to check known_hosts".to_string())
             }
+        }
+    }
+
+    /// Append a single OpenSSH-format known_hosts line to the app-managed file.
+    /// Best-effort: failures are logged, not fatal (the host was still accepted
+    /// for this session under TOFU).
+    fn append_known_host(host: &str, port: u16, key: &[u8], key_type: ssh2::HostKeyType) {
+        use std::io::Write;
+
+        let key_type_str = match key_type {
+            ssh2::HostKeyType::Rsa => "ssh-rsa",
+            ssh2::HostKeyType::Dss => "ssh-dss",
+            ssh2::HostKeyType::Ecdsa256 => "ecdsa-sha2-nistp256",
+            ssh2::HostKeyType::Ecdsa384 => "ecdsa-sha2-nistp384",
+            ssh2::HostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521",
+            ssh2::HostKeyType::Ed25519 => "ssh-ed25519",
+            ssh2::HostKeyType::Unknown => {
+                log::warn!("[SSH] Not persisting host key for {}: unknown key type", host);
+                return;
+            }
+        };
+
+        let host_entry = if port == 22 {
+            host.to_string()
+        } else {
+            format!("[{}]:{}", host, port)
+        };
+        // base64-encode the raw key blob (OpenSSH known_hosts format).
+        let key_b64 = base64_encode(key);
+        let line = format!("{} {} {}\n", host_entry, key_type_str, key_b64);
+
+        let path = match Self::app_known_hosts_path() {
+            Some(p) => p,
+            None => return,
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log::warn!("[SSH] Failed to create {:?}: {}", parent, e);
+                return;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(mut file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+                if let Err(e) = file.write_all(line.as_bytes()) {
+                    log::warn!("[SSH] Failed to persist host key for {}: {}", host_entry, e);
+                }
+            }
+            Err(e) => log::warn!("[SSH] Failed to open {:?}: {}", path, e),
         }
     }
 
@@ -380,13 +491,24 @@ impl SSHConnectionManager {
                     if let Ok(tcp) = tcp_result {
                         if let Ok(mut new_session) = Session::new() {
                             new_session.set_tcp_stream(tcp);
-                            if new_session.handshake().is_ok()
-                                && Self::verify_host_key(
-                                    &new_session,
-                                    &profile.host,
-                                    profile.port,
-                                )
-                                .is_ok()
+                            let handshake_ok = new_session.handshake().is_ok();
+                            let verify_result = if handshake_ok {
+                                Self::verify_host_key(&new_session, &profile.host, profile.port)
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(e) = &verify_result {
+                                // A rotated/changed host key turns a transient
+                                // reconnect into a hard failure; log the cause so
+                                // it is diagnosable rather than a generic retry.
+                                log::warn!(
+                                    "[SSH] Host key verification failed during reconnect of {}: {}",
+                                    connection_id,
+                                    e
+                                );
+                            }
+                            if handshake_ok
+                                && verify_result.is_ok()
                                 && Self::authenticate_session(
                                     &new_session,
                                     &profile,
@@ -659,15 +781,28 @@ mod tests {
     fn connect_tcp_accepts_hostname_syntax() {
         // Regression for the IP-only bug: an address must reach DNS resolution
         // (and then a connection attempt) rather than failing with "invalid
-        // socket address syntax". Localhost on a closed high port refuses
-        // immediately, so this proves the host:port was parsed/resolved.
-        let err = SSHConnectionManager::connect_tcp("localhost", 1)
+        // socket address syntax". 127.0.0.1 on a closed low port refuses
+        // immediately and avoids resolver/dual-stack dependence.
+        let err = SSHConnectionManager::connect_tcp("127.0.0.1", 1)
             .expect_err("closed port should not connect");
         assert!(
             !err.contains("invalid socket address"),
-            "hostname should resolve, got: {}",
+            "address should resolve, got: {}",
             err
         );
         assert!(err.contains("TCP connection"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn base64_encode_matches_known_vectors() {
+        // RFC 4648 test vectors, ensuring correct padding for the known_hosts
+        // serializer.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 }

@@ -37,7 +37,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             )}
           </div>
           <div className="flex items-center gap-1">
-            {conn.isConnected ? (
+            {conn.isConnected || conn.localTerminalPtyId ? (
               <button onClick={conn.handleDisconnect}
                 className="px-2 py-0.5 text-[10px] rounded border border-border hover:bg-destructive/10 hover:text-destructive flex items-center gap-1">
                 <WifiOff className="h-3 w-3" />Disconnect
@@ -64,7 +64,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
                 <Terminal className="h-3.5 w-3.5" />{conn.isConnecting ? 'Connecting...' : 'Reconnect'}
               </button>
             </div>
-          ) : conn.isConnected && conn.localTerminalPtyId ? (
+          ) : conn.localTerminalPtyId ? (
             <div className="absolute inset-0 overflow-hidden">
               <ConnectedTerminal terminalId={conn.localTerminalPtyId} autoSpawn={false} isVisible={true} onExit={conn.handleSSHProcessExit} />
             </div>

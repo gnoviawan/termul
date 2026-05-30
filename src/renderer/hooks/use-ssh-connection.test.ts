@@ -159,4 +159,72 @@ describe('useSSHConnection', () => {
     expect(conn?.status).toBe('failed')
     expect(result.current.isConnected).toBe(false)
   })
+
+  it('keeps the interactive terminal reachable after a backend connect failure (no orphan)', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    // The PTY is NOT killed on failure: the terminal stays visible (SSHWorkspace
+    // renders on localTerminalPtyId) with a Disconnect control, so the ssh
+    // process is never an unreachable orphan.
+    expect(mocks.kill).not.toHaveBeenCalled()
+    expect(result.current.localTerminalPtyId).toBe('pty-1')
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+  })
+
+  it('kills the previous PTY when retrying connect (prevents orphan leak)', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+    mocks.spawn
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-1', shell: 'ssh', cwd: '/' } })
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-2', shell: 'ssh', cwd: '/' } })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    // Retry: the first (failed) PTY must be killed before the new spawn.
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    expect(mocks.kill).toHaveBeenCalledWith('pty-1')
+    expect(result.current.localTerminalPtyId).toBe('pty-2')
+  })
+
+  it('does not blank SFTP or downgrade when the shell exits on a healthy connection', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    // Sanity: connected with SFTP ready.
+    expect(result.current.isConnected).toBe(true)
+    expect(result.current.sftpReady).toBe(true)
+
+    // User types `exit` in the interactive shell; the ssh2/SFTP backend is
+    // independent and still connected, so SFTP must stay ready and the badge
+    // must remain connected.
+    act(() => {
+      result.current.handleSSHProcessExit()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('connected')
+    expect(result.current.sftpReady).toBe(true)
+  })
 })
