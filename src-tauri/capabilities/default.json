@@ -57,6 +57,8 @@
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-image",
     "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
     "updater:allow-download-and-install",
     "process:allow-restart",
     "shell:default",
