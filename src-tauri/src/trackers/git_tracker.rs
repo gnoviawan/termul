@@ -918,9 +918,14 @@ const LOG_RECORD_SEP: char = '\u{1e}';
 ///
 /// Uses a NUL-delimited `--pretty` format with a record terminator so commit
 /// subjects containing spaces, pipes, or other punctuation cannot break parsing.
-/// `--parents` yields parent SHAs (for graph topology) and `--decorate=short`
-/// yields ref names. A non-zero exit (empty repo, not a repo) is treated as an
-/// empty history rather than an error, so the UI shows an empty state.
+/// `--parents` yields parent SHAs (for graph topology), `--decorate=short`
+/// yields ref names, and `--topo-order` emits commits child-before-parent so the
+/// renderer's lane layout never sees a parent before its child.
+///
+/// A *benign* failure (a repo with no commits yet, or a path that is not a git
+/// repository) is reported as an empty history so the UI shows an empty state.
+/// Any other non-zero exit (corrupt `.git`, unreadable objects, permission
+/// errors) is propagated as an error so real failures are surfaced.
 pub fn git_get_log(cwd: &str, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     let limit = limit
         .unwrap_or(GIT_LOG_DEFAULT_LIMIT)
@@ -930,22 +935,40 @@ pub fn git_get_log(cwd: &str, limit: Option<u32>) -> Result<Vec<GitCommit>, Stri
     let args = [
         "log",
         "--no-color",
+        "--topo-order",
         "-n",
         &limit_str,
         "--parents",
-        "--decorate=short",
+        "--decorate=full",
         "--pretty=format:%H%x00%h%x00%P%x00%D%x00%an%x00%aI%x00%s%x1e",
     ];
 
     let output = GitTracker::run_git_command(cwd, &args)
         .ok_or_else(|| "Failed to run git log".to_string())?;
 
-    // Empty repo / not a repo: surface an empty list, not an error.
     if !output.status.success() {
-        return Ok(Vec::new());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // A repo with no commits yet, or a non-repo path, is an expected empty
+        // state — not an error. Everything else (corrupt objects, permission
+        // problems) is surfaced so it is not silently swallowed.
+        if is_benign_log_failure(&stderr) {
+            return Ok(Vec::new());
+        }
+        return Err(stderr.trim().to_string());
     }
 
     Ok(parse_git_log(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Whether a failing `git log` stderr represents an expected empty-history
+/// state (no commits yet, or not a git repository) rather than a real error.
+fn is_benign_log_failure(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("does not have any commits yet")
+        || s.contains("not a git repository")
+        || s.contains("bad default revision")
+        // Fresh repo with an unborn HEAD: `ambiguous argument 'HEAD'`.
+        || (s.contains("ambiguous argument") && s.contains("head"))
 }
 
 /// Parse the NUL-delimited, record-terminated `git log` output produced by
@@ -1676,11 +1699,13 @@ mod tests {
 
     #[test]
     fn test_parse_git_log_decorations() {
+        // With --decorate=full the parser receives canonical ref names; it only
+        // splits on ", " and leaves classification to the renderer.
         let out = log_record(
             "dec00",
             "dec00",
             "p0",
-            "HEAD -> main, tag: v1.0, origin/main",
+            "HEAD -> refs/heads/main, tag: refs/tags/v1.0, refs/remotes/origin/main",
             "Ada",
             "2026-05-30T12:00:00+00:00",
             "release",
@@ -1689,9 +1714,9 @@ mod tests {
         assert_eq!(
             commits[0].refs,
             vec![
-                "HEAD -> main".to_string(),
-                "tag: v1.0".to_string(),
-                "origin/main".to_string(),
+                "HEAD -> refs/heads/main".to_string(),
+                "tag: refs/tags/v1.0".to_string(),
+                "refs/remotes/origin/main".to_string(),
             ]
         );
     }
@@ -1712,6 +1737,29 @@ mod tests {
     fn test_parse_git_log_empty_input() {
         assert!(parse_git_log("").is_empty());
         assert!(parse_git_log("\n\n").is_empty());
+    }
+
+    #[test]
+    fn test_is_benign_log_failure() {
+        // Expected empty-history states are benign.
+        assert!(is_benign_log_failure(
+            "fatal: your current branch 'main' does not have any commits yet"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: not a git repository (or any of the parent directories): .git"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: bad default revision 'HEAD'"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree."
+        ));
+        // Real failures must NOT be swallowed.
+        assert!(!is_benign_log_failure(
+            "error: object file .git/objects/ab/cd is empty"
+        ));
+        assert!(!is_benign_log_failure("fatal: unable to read tree"));
+        assert!(!is_benign_log_failure(""));
     }
 
     #[test]
@@ -1758,10 +1806,9 @@ mod tests {
     fn test_parse_git_log_subject_with_embedded_nul_is_preserved() {
         // A stray NUL in the subject would create an 8th field; re-joining the
         // trailing fields keeps the subject whole instead of truncating it.
-        let record = format!(
-            "h00\u{0}h00\u{0}p0\u{0}\u{0}Ada\u{0}2026-05-30T12:00:00+00:00\u{0}before\u{0}after\u{1e}"
-        );
-        let commits = parse_git_log(&record);
+        let record =
+            "h00\u{0}h00\u{0}p0\u{0}\u{0}Ada\u{0}2026-05-30T12:00:00+00:00\u{0}before\u{0}after\u{1e}";
+        let commits = parse_git_log(record);
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].subject, "before\u{0}after");
     }

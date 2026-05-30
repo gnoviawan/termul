@@ -126,4 +126,22 @@ describe("computeGraphLayout", () => {
     ]);
     expect(layout.laneCount).toBe(3);
   });
+
+  it("keeps a visible parent in its own lane when an earlier merge parent is out-of-window", () => {
+    // M's first parent 'Older' is beyond the fetch limit (omitted). The visible
+    // second parent 'P2' must NOT collapse onto the out-of-window parent's lane;
+    // releasing the Older lane is deferred until all parents are placed.
+    const commits = [
+      commit("M", ["Older", "P2"]), // Older is NOT in the list
+      commit("P2", ["Base"]),
+      commit("Base", []),
+    ];
+    const layout = computeGraphLayout(commits);
+    expect(layout.rows[0].parentEdges).toEqual([
+      { parentHash: "Older", toLane: 0 },
+      { parentHash: "P2", toLane: 1 },
+    ]);
+    expect(layout.rows.find((r) => r.commit.hash === "P2")?.lane).toBe(1);
+    expect(layout.laneCount).toBe(2);
+  });
 });

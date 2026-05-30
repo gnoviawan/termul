@@ -684,14 +684,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	const handleAddGitHistoryTab = useCallback((paneId?: string) => {
 		const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
-		if (resolvedPaneId && activeProject?.path) {
-			useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
-				type: "git-history",
-				id: `git-history-${crypto.randomUUID()}`,
-				cwd: activeProject.path,
-			});
-		}
-	}, [activeProject?.path]);
+		if (!resolvedPaneId) return;
+		// Resolve the worktree-aware cwd (same helper terminal creation uses) so
+		// the history reflects the active worktree, not just the project root.
+		const resolvedCwd = getDefaultCwdForProject(activeProjectId);
+		if (!resolvedCwd) return;
+		useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
+			type: "git-history",
+			id: `git-history-${crypto.randomUUID()}`,
+			cwd: resolvedCwd,
+		});
+	}, [activeProjectId]);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {

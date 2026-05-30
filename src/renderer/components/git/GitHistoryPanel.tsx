@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useGitHistoryStore } from "@/stores/git-history-store";
 import { computeGraphLayout, type GraphLayout } from "@/lib/git-graph-layout";
 import { formatRelativeTime } from "@/lib/git-time";
+import { describeRef } from "@/lib/git-ref";
 import { cn } from "@/lib/utils";
 import { GitBranch, RefreshCw, History, Tag, Search } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -44,21 +45,6 @@ function rowY(row: number): number {
 }
 
 /** Parse a raw `%D` decoration into a display label + kind for chip styling. */
-function describeRef(ref: string): { label: string; kind: "head" | "tag" | "remote" | "branch" } {
-  if (ref.startsWith("tag: ")) {
-    return { label: ref.slice(5), kind: "tag" };
-  }
-  if (ref.startsWith("HEAD -> ")) {
-    return { label: ref.slice(8), kind: "head" };
-  }
-  if (ref === "HEAD") {
-    return { label: "HEAD", kind: "head" };
-  }
-  if (ref.includes("/")) {
-    return { label: ref, kind: "remote" };
-  }
-  return { label: ref, kind: "branch" };
-}
 
 export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React.JSX.Element {
   const commits = useGitHistoryStore((state) => state.commits[cwd]);
@@ -120,6 +106,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             <input
               type="text"
               placeholder="Filter commits..."
+              aria-label="Filter commits"
               className="w-44 bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -132,6 +119,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             onClick={() => refreshLog(cwd)}
             disabled={isLoading}
             title="Refresh history"
+            aria-label="Refresh history"
           >
             <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
           </Button>

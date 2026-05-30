@@ -82,6 +82,11 @@ export function computeGraphLayout(commits: GitCommit[]): GraphLayout {
     }
 
     const parentEdges: GraphEdge[] = [];
+    // Lanes for out-of-window parents are released only after every parent of
+    // this commit has been assigned. Releasing mid-iteration would let a later
+    // parent's firstFreeLane() reclaim a lane still needed by an earlier
+    // parent, collapsing two distinct parent edges onto one lane.
+    const lanesToRelease: number[] = [];
     commit.parents.forEach((parentHash, parentIdx) => {
       let parentLane: number;
       const existing = active.indexOf(parentHash);
@@ -99,13 +104,17 @@ export function computeGraphLayout(commits: GitCommit[]): GraphLayout {
       }
       parentEdges.push({ parentHash, toLane: parentLane });
       maxLaneIndex = Math.max(maxLaneIndex, parentLane);
-      // Parent outside the fetched window: it will never be drawn, so free its
-      // lane now for reuse by older commits. The edge is still emitted (the
-      // renderer runs it to the bottom edge).
+      // Parent outside the fetched window: it will never be drawn, so its lane
+      // can be reused by older commits. The edge is still emitted (the renderer
+      // runs it to the bottom edge). Defer the actual release until all parents
+      // of this commit are placed.
       if (!known.has(parentHash)) {
-        active[parentLane] = null;
+        lanesToRelease.push(parentLane);
       }
     });
+    for (const releaseLane of lanesToRelease) {
+      active[releaseLane] = null;
+    }
 
     // Root commit (no parents): free this lane for reuse below.
     if (commit.parents.length === 0) {
