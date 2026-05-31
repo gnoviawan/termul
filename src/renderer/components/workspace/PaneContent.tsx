@@ -6,6 +6,7 @@ import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { GitPanel } from "@/components/git/GitPanel";
+import { GitHistoryPanel } from "@/components/git/GitHistoryPanel";
 import { useWorkspaceStore, getAllLeafPanes } from "@/stores/workspace-store";
 import { useTerminalStore, useTerminalActions } from "@/stores/terminal-store";
 import { useProjectStore } from "@/stores/project-store";
@@ -363,6 +364,27 @@ export function PaneContent({
 										}
 									>
 										<GitPanel cwd={tab.cwd} isVisible={isVisible} />
+									</div>
+								);
+							})}
+
+						{pane.tabs
+							.filter(
+								(t): t is WorkspaceTab & { type: "git-history" } =>
+									t.type === "git-history",
+							)
+							.map((tab) => {
+								const isVisible = activeTab?.id === tab.id;
+								return (
+									<div
+										key={tab.id}
+										className={
+											isVisible
+												? "w-full h-full"
+												: "w-full h-full absolute inset-0 invisible"
+										}
+									>
+										<GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
 									</div>
 								);
 							})}

@@ -4,7 +4,7 @@ use crate::migrations::{
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -2248,6 +2248,14 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Read commit history for the repository at `cwd` as structured rows for the
+/// history/graph view. `limit` caps the number of commits (clamped backend-side;
+/// defaults to 200). Read-only.
+#[tauri::command]
+pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
 }
 
 /// Create a commit from the staged index. `amend` rewrites HEAD instead of

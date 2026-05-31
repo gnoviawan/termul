@@ -11,6 +11,7 @@ import {
 	Minimize2,
 	GitBranch,
 	GitPullRequest,
+	History,
 } from "lucide-react";
 import { useGitStatusStore, type GitStatusState } from "@/stores/git-status-store";
 import type { GitStatusDetail } from "@shared/types/ipc.types";
@@ -533,6 +534,96 @@ function GitTabInline({
 	);
 }
 
+function GitHistoryTabInline({
+	tab: _tab,
+	isActive,
+	isDragging,
+	isDropTarget,
+	dropPosition,
+	onSelect,
+	onClose,
+	onDragStart,
+	onDragOver,
+	onDragLeave,
+	onDrop,
+}: {
+	tab: { type: "git-history"; id: string; cwd: string };
+	isActive: boolean;
+	isDragging: boolean;
+	isDropTarget: boolean;
+	dropPosition: TabReorderPosition | null;
+	onSelect: () => void;
+	onClose: () => void;
+	onDragStart: (e: React.DragEvent) => void;
+	onDragOver: (e: React.DragEvent) => void;
+	onDragLeave: () => void;
+	onDrop: (e: React.DragEvent) => void;
+}) {
+	const [contextMenu, setContextMenu] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
+
+	return (
+		<>
+			<div
+				draggable
+				onDragStart={onDragStart}
+				onDragOver={onDragOver}
+				onDragLeave={onDragLeave}
+				onDrop={onDrop}
+				onClick={onSelect}
+				onContextMenu={(e) => {
+					e.preventDefault();
+					setContextMenu({ x: e.clientX, y: e.clientY });
+				}}
+				className={cn(
+					"group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent",
+					isActive
+						? "bg-background border-b-primary text-foreground"
+						: "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+					isDragging && "opacity-50 scale-[0.98]",
+					isDropTarget &&
+						dropPosition === "before" &&
+						"border-l-2 border-l-primary",
+					isDropTarget &&
+						dropPosition === "after" &&
+						"border-r-2 border-r-primary",
+				)}
+			>
+				<History size={12} className={isActive ? "text-primary" : ""} />
+				<span className="truncate text-[11px] font-medium flex-1">
+					Git History
+				</span>
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onClose();
+					}}
+					className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
+				>
+					<XIcon size={10} />
+				</button>
+			</div>
+
+			{contextMenu && (
+				<ContextMenu
+					items={[
+						{
+							label: "Close",
+							icon: <XIcon size={12} />,
+							onClick: onClose,
+						},
+					]}
+					x={contextMenu.x}
+					y={contextMenu.y}
+					onClose={() => setContextMenu(null)}
+				/>
+			)}
+		</>
+	);
+}
+
 interface WorkspaceTabBarProps {
 	paneId: string;
 	tabs: WorkspaceTab[];
@@ -901,6 +992,25 @@ export function WorkspaceTabBar({
 									) : tab.type === "git" ? (
 										<GitTabInline
 											tab={tab as { type: "git"; id: string; cwd: string }}
+											isActive={tab.id === activeTabId}
+											isDragging={dragging}
+											isDropTarget={isTarget}
+											dropPosition={position}
+											onSelect={() => {
+												setActiveTab(paneId, tab.id);
+												setActivePane(paneId);
+											}}
+											onClose={() => {
+												useWorkspaceStore.getState().removeTab(tab.id);
+											}}
+											onDragStart={(e) => handleTabDragStart(tab.id, e)}
+											onDragOver={(e) => handleTabDragOver(tab.id, e)}
+											onDragLeave={handleTabDragLeave}
+											onDrop={(e) => handleTabDrop(tab.id, e)}
+										/>
+									) : tab.type === "git-history" ? (
+										<GitHistoryTabInline
+											tab={tab as { type: "git-history"; id: string; cwd: string }}
 											isActive={tab.id === activeTabId}
 											isDragging={dragging}
 											isDropTarget={isTarget}

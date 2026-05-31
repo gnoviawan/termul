@@ -77,6 +77,24 @@ export interface GitStatusDetail {
 	staged: boolean;
 }
 
+// A single commit row for the history/graph view.
+export interface GitCommit {
+	/** Full 40-char commit hash. */
+	hash: string;
+	/** Abbreviated commit hash. */
+	shortHash: string;
+	/** Parent full hashes, first-parent first. Empty for the root commit. */
+	parents: string[];
+	/** Ref decorations (branches, tags, HEAD) attached to this commit. */
+	refs: string[];
+	/** Author name. */
+	author: string;
+	/** Author date in ISO 8601 strict format. */
+	date: string;
+	/** Commit subject (first line of the message). */
+	subject: string;
+}
+
 // Context for the commit footer (branch, upstream, ahead/behind, last commit).
 export interface GitCommitContext {
 	branch: string | null;
@@ -95,6 +113,7 @@ export interface GitApi {
 	stage: (cwd: string, path: string) => Promise<void>;
 	unstage: (cwd: string, path: string) => Promise<void>;
 	discard: (cwd: string, path: string) => Promise<void>;
+	getLog: (cwd: string, limit?: number) => Promise<GitCommit[]>;
 	commit: (
 		cwd: string,
 		summary: string,
