@@ -5339,7 +5339,7 @@ dependencies = [
 
 [[package]]
 name = "termul-manager"
-version = "0.3.8"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
