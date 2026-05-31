@@ -1,7 +1,9 @@
+import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
+
 export function FeatureVisualProjectWorkspaces() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[90%] max-w-md bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex overflow-hidden min-h-[180px]">
+    <FeatureVisualFrameRoot>
+      <FeatureVisualFrameWindow size="md" className="flex min-h-[180px] overflow-hidden">
         <div className="w-28 shrink-0 bg-[#080808] border-r border-white/10 flex flex-col py-3">
           <div className="px-3 mb-2 text-[9px] text-gray-500 font-mono tracking-wider uppercase">
             Projects
@@ -35,7 +37,7 @@ export function FeatureVisualProjectWorkspaces() {
             </span>
           </div>
         </div>
-      </div>
-    </div>
+      </FeatureVisualFrameWindow>
+    </FeatureVisualFrameRoot>
   );
 }

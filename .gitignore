@@ -1,3 +1,7 @@
+# Local secrets (shadcn private registries, etc.)
+.env
+.env.local
+
 # Dependencies
 node_modules/
 
