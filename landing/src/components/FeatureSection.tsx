@@ -10,6 +10,7 @@ import {
 } from '../data/features';
 import { FeatureVisual } from './feature-visuals';
 import { SectionHeader } from './SectionHeader';
+import { FeatureVideo } from './FeatureVideo';
 
 const PixelBlast = lazy(() => import('./PixelBlast'));
 
@@ -134,7 +135,7 @@ const FeatureSection = () => {
             >
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden flex flex-col">
                 {/* Visual Header */}
-                <div className="aspect-[16/9] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
+                <div className="aspect-[4/3] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
                   <Suspense
                     fallback={
                       <div
@@ -158,7 +159,15 @@ const FeatureSection = () => {
                       />
                     )}
                   </Suspense>
-                  <FeatureVisual id={feature.id} />
+                  {!reducedMotion && feature.video ? (
+                    <FeatureVideo
+                      id={feature.id}
+                      video={feature.video}
+                      title={feature.title}
+                    />
+                  ) : (
+                    <FeatureVisual id={feature.id} />
+                  )}
                 </div>
 
                 {/* Text Content */}

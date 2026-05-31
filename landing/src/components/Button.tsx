@@ -54,9 +54,9 @@ const renderButton = <E extends React.ElementType = 'button'>(
             "hover:bg-white/10",
           ],
           variant === 'outline' && [
-            "bg-transparent text-slate-800",
-            "border border-slate-900/10",
-            "hover:bg-slate-900/5",
+            "bg-slate-900/5 text-slate-900",
+            "border border-slate-900/25",
+            "hover:bg-slate-900/10",
           ],
 
           // Sizes

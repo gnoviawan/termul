@@ -32,7 +32,7 @@ const Hero = () => {
           <img
             src="/termulmock.png"
             alt="Termul application with project workspaces, multiple terminals, and file explorer"
-            className="w-full h-auto rounded-2xl shadow-2xl shadow-black/10"
+            className="w-full h-auto rounded-lg shadow-2xl shadow-black/10"
             width={1024}
             height={640}
             loading="eager"

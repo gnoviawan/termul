@@ -2,13 +2,14 @@ import type { ComponentType } from 'react';
 
 import type { FeatureId } from '../../data/features';
 import { FeatureVisualTabbedInterface } from './FeatureVisualTabbedInterface';
-import { FeatureVisualSessionPersistence } from './FeatureVisualSessionPersistence';
 import { FeatureVisualMultipleShells } from './FeatureVisualMultipleShells';
-import { FeatureVisualCrossPlatform } from './FeatureVisualCrossPlatform';
 import { FeatureVisualProjectWorkspaces } from './FeatureVisualProjectWorkspaces';
 import { FeatureVisualSplitPanes } from './FeatureVisualSplitPanes';
 import { FeatureVisualCodeEditor } from './FeatureVisualCodeEditor';
 import { FeatureVisualBrowserAnnotations } from './FeatureVisualBrowserAnnotations';
+import { FeatureVisualGitPanel } from './FeatureVisualGitPanel';
+import { FeatureVisualGitWorktree } from './FeatureVisualGitWorktree';
+import { FeatureVisualCommandPalette } from './FeatureVisualCommandPalette';
 
 type FeatureVisualProps = {
   id: FeatureId;
@@ -16,13 +17,14 @@ type FeatureVisualProps = {
 
 const featureVisuals: Partial<Record<FeatureId, ComponentType>> = {
   '01': FeatureVisualTabbedInterface,
-  '02': FeatureVisualSessionPersistence,
-  '03': FeatureVisualMultipleShells,
-  '04': FeatureVisualCrossPlatform,
-  '05': FeatureVisualProjectWorkspaces,
-  '06': FeatureVisualSplitPanes,
-  '07': FeatureVisualCodeEditor,
-  '08': FeatureVisualBrowserAnnotations,
+  '02': FeatureVisualMultipleShells,
+  '03': FeatureVisualProjectWorkspaces,
+  '04': FeatureVisualSplitPanes,
+  '05': FeatureVisualCodeEditor,
+  '06': FeatureVisualBrowserAnnotations,
+  '07': FeatureVisualGitPanel,
+  '08': FeatureVisualGitWorktree,
+  '09': FeatureVisualCommandPalette,
 };
 
 export function FeatureVisual({ id }: FeatureVisualProps) {
