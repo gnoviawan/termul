@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "deploy": "wrangler pages deploy dist",
-    "verify:prerender": "bun -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
+    "pages:dev": "bun run build && wrangler pages dev dist",
+    "db:migrate": "wrangler d1 migrations apply termul-testimonials",
+    "verify:prerender": "bun -e \"import fs from 'node:fs'; const checksByFile = { 'dist/index.html': ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser'], 'dist/testimonial/submit/index.html': ['Tell developers how Termul helps you.'] }; const missing = []; for (const [file, checks] of Object.entries(checksByFile)) { const html = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''; for (const s of checks) if (!html.includes(s)) missing.push(file + ': ' + s); } if (missing.length) { console.error('Prerender check failed:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.4",
@@ -26,6 +28,7 @@
     "postprocessing": "^6.39.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-router": "^7.16.0",
     "react-use-measure": "^2.1.7",
     "tailwind-merge": "^3.6.0",
     "three": "^0.184.0",

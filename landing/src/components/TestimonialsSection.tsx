@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 
 import { ArrowUpRightIcon } from 'lucide-react';
 
@@ -10,13 +10,41 @@ import {
 import { InfiniteSlider } from '@/components/ui/infinite-slider';
 
 import { testimonials, type Testimonial } from '../data/testimonials';
+import { fetchApprovedTestimonials } from '../lib/testimonials-api';
 import { cn } from '../lib/utils';
 import { SectionHeader } from './SectionHeader';
 
-const firstRow = testimonials.slice(0, 5);
-const secondRow = testimonials.slice(5, 10);
+type DisplayTestimonial = Testimonial;
 
 export function TestimonialsSection() {
+  const [approvedTestimonials, setApprovedTestimonials] = useState<
+    DisplayTestimonial[]
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetchApprovedTestimonials()
+      .then((nextTestimonials) => {
+        if (!cancelled) setApprovedTestimonials(nextTestimonials);
+      })
+      .catch(() => {
+        if (!cancelled) setApprovedTestimonials([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const displayTestimonials = useMemo(
+    () =>
+      approvedTestimonials.length > 0
+        ? [...approvedTestimonials, ...testimonials]
+        : testimonials,
+    [approvedTestimonials],
+  );
+
   return (
     <section
       aria-labelledby="testimonials-heading"
@@ -31,13 +59,21 @@ export function TestimonialsSection() {
           className="mb-10 w-full max-w-2xl space-y-2"
           titleClassName="mb-8 text-3xl md:text-5xl"
         />
-        <TestimonialsMarquee />
+        <TestimonialsMarquee testimonials={displayTestimonials} />
       </div>
     </section>
   );
 }
 
-function TestimonialsMarquee() {
+function TestimonialsMarquee({
+  testimonials,
+}: {
+  testimonials: DisplayTestimonial[];
+}) {
+  const splitIndex = Math.ceil(testimonials.length / 2);
+  const firstRow = testimonials.slice(0, splitIndex);
+  const secondRow = testimonials.slice(splitIndex);
+
   return (
     <div className="mask-l-from-80% mask-r-from-80% relative">
       <InfiniteSlider gap={0} speed={30} speedOnHover={0.5}>
@@ -62,7 +98,7 @@ function TestimonialsCard({
   name,
   role,
   ...props
-}: ComponentProps<'a'> & Testimonial) {
+}: ComponentProps<'a'> & DisplayTestimonial) {
   return (
     <a
       className={cn(
