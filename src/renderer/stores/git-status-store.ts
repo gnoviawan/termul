@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { gitApi } from "@/lib/git-api";
-import { GitStatusDetail } from "@shared/types/ipc.types";
+import { GitCommitContext, GitStatusDetail } from "@shared/types/ipc.types";
 
 /** Build the staged-aware diff cache key so the staged and unstaged rows of the
  * same file (porcelain `MM`) do not collide. */
@@ -13,6 +13,8 @@ export interface GitStatusState {
   statuses: Record<string, GitStatusDetail[]>;
   // diffs["cwd:path:staged"] = string
   diffs: Record<string, string>;
+  // commitContexts[cwd] = GitCommitContext
+  commitContexts: Record<string, GitCommitContext>;
   selectedFile: string | null;
   isFetchingStatus: boolean;
   statusFetchCount: number;
@@ -20,14 +22,26 @@ export interface GitStatusState {
   setSelectedFile: (path: string | null) => void;
   refreshStatus: (cwd: string) => Promise<void>;
   fetchDiff: (cwd: string, path: string, staged: boolean) => Promise<void>;
+  fetchCommitContext: (cwd: string) => Promise<void>;
   stageFile: (cwd: string, path: string) => Promise<void>;
   unstageFile: (cwd: string, path: string) => Promise<void>;
   discardFile: (cwd: string, path: string) => Promise<void>;
+  stageFiles: (cwd: string, paths: string[]) => Promise<void>;
+  unstageFiles: (cwd: string, paths: string[]) => Promise<void>;
+  discardFiles: (cwd: string, paths: string[]) => Promise<void>;
+  commit: (
+    cwd: string,
+    summary: string,
+    description: string,
+    amend: boolean,
+  ) => Promise<void>;
+  push: (cwd: string) => Promise<void>;
 }
 
 export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   statuses: {},
   diffs: {},
+  commitContexts: {},
   selectedFile: null,
   isFetchingStatus: false,
   statusFetchCount: 0,
@@ -51,6 +65,31 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
           statusFetchCount,
           isFetchingStatus: statusFetchCount > 0
         };
+      });
+    }
+  },
+
+  fetchCommitContext: async (cwd) => {
+    // Guard against out-of-order responses: a slow earlier fetch must not
+    // overwrite or delete a fresher result. Mirror the fetchDiff token pattern.
+    const token = (commitContextRequests[cwd] = (commitContextRequests[cwd] ?? 0) + 1);
+    const isCurrent = () => commitContextRequests[cwd] === token;
+    try {
+      const context = await gitApi.getCommitContext(cwd);
+      if (!isCurrent()) return;
+      set((state) => ({
+        commitContexts: { ...state.commitContexts, [cwd]: context },
+      }));
+    } catch (error) {
+      console.error("Failed to fetch commit context:", error);
+      if (!isCurrent()) return;
+      // Drop any stale context so the footer disables its actions rather than
+      // acting on out-of-date ahead/staged/HEAD data.
+      set((state) => {
+        if (!(cwd in state.commitContexts)) return {};
+        const commitContexts = { ...state.commitContexts };
+        delete commitContexts[cwd];
+        return { commitContexts };
       });
     }
   },
@@ -80,29 +119,97 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
     }
   },
 
-  stageFile: async (cwd, path) => {
-    await gitApi.stage(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
+  // Single-file mutations delegate to the batch variants so the post-mutation
+  // refresh logic lives in exactly one place. The commit footer's staged count
+  // is refreshed afterwards so Commit enables/disables correctly.
+  stageFile: async (cwd, path) => get().stageFiles(cwd, [path]),
+
+  unstageFile: async (cwd, path) => get().unstageFiles(cwd, [path]),
+
+  discardFile: async (cwd, path) => get().discardFiles(cwd, [path]),
+
+  // Batch mutations apply the per-file git operation to every path, then
+  // refresh status + commit context once at the end rather than after each
+  // file. The first failing path aborts the run (subsequent files are left
+  // untouched) but a refresh still runs so the UI reflects what did change.
+  stageFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.stage(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
   },
 
-  unstageFile: async (cwd, path) => {
-    await gitApi.unstage(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
+  unstageFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.unstage(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
   },
 
-  discardFile: async (cwd, path) => {
-    await gitApi.discard(cwd, path);
-    invalidateFileDiffs(set, cwd, path);
-    await get().refreshStatus(cwd);
+  discardFiles: async (cwd, paths) => {
+    if (paths.length === 0) return;
+    try {
+      for (const path of paths) {
+        await gitApi.discard(cwd, path);
+        invalidateFileDiffs(set, cwd, path);
+      }
+    } finally {
+      await get().refreshStatus(cwd);
+      await get().fetchCommitContext(cwd);
+    }
+  },
+
+  commit: async (cwd, summary, description, amend) => {
+    await gitApi.commit(cwd, summary, description, amend);
+    // The mutation succeeded. Refresh status/context to reflect the new HEAD,
+    // but never let a refresh failure surface as a commit failure (the commit
+    // already happened) — swallow refresh errors here.
+    await refreshAfterMutation(get, cwd);
+  },
+
+  push: async (cwd) => {
+    await gitApi.push(cwd);
+    await refreshAfterMutation(get, cwd);
   },
 }));
+
+/** Refresh status + commit context after a successful mutation. Errors here are
+ * logged but never rethrown, so a transient read failure does not get reported
+ * to the user as a failed commit/push that actually succeeded. */
+async function refreshAfterMutation(
+  get: () => GitStatusState,
+  cwd: string,
+): Promise<void> {
+  try {
+    await get().refreshStatus(cwd);
+  } catch (error) {
+    console.error("Post-mutation status refresh failed:", error);
+  }
+  await get().fetchCommitContext(cwd);
+}
 
 /** Monotonic request token per diff key. Bumped whenever a key is invalidated
  * so an in-flight `fetchDiff` can detect it has been superseded. Kept outside
  * React state because it is control metadata, not render data. */
 const diffRequestVersions: Record<string, number> = {};
+
+/** Monotonic request token per cwd for `fetchCommitContext`. Lets a late
+ * response detect it has been superseded by a newer fetch, so out-of-order
+ * responses cannot overwrite or delete fresher context. Control metadata, not
+ * render data, so it lives outside React state (same rationale as above). */
+const commitContextRequests: Record<string, number> = {};
 
 function bumpDiffVersion(key: string) {
   diffRequestVersions[key] = (diffRequestVersions[key] ?? 0) + 1;

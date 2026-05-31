@@ -3,4 +3,4 @@ bun run typecheck
 echo "✅ TypeScript check passed!"
 echo ""
 echo "🔍 Running ESLint on staged files..."
-bunx lint-staged
+bun x lint-staged

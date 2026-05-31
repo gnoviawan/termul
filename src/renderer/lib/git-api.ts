@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { GitStatusDetail } from "@shared/types/ipc.types";
+import { GitCommitContext, GitStatusDetail } from "@shared/types/ipc.types";
 
 export const gitApi = {
   getStatus: (cwd: string) =>
@@ -16,4 +16,12 @@ export const gitApi = {
 
   discard: (cwd: string, path: string) =>
     invoke<void>("git_discard", { cwd, path }),
+
+  commit: (cwd: string, summary: string, description = "", amend = false) =>
+    invoke<void>("git_commit", { cwd, summary, description, amend }),
+
+  push: (cwd: string) => invoke<void>("git_push", { cwd }),
+
+  getCommitContext: (cwd: string) =>
+    invoke<GitCommitContext>("git_get_commit_context", { cwd }),
 };
