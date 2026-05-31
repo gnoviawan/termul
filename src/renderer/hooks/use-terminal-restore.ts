@@ -844,7 +844,7 @@ async function restoreFromLayout(
         spawnCount: SPAWN_TRACKER.get(terminalCallId)
       })
 
-      const newId = Date.now().toString() + crypto.randomUUID().slice(0, 3)
+      const newId = crypto.randomUUID()
       TERMINALS_PENDING_PTY_ASSIGNMENT.add(newId)
 
       try {
