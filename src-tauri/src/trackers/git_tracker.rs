@@ -176,6 +176,30 @@ pub struct GitStatusDetail {
     pub staged: bool,
 }
 
+/// A single commit row for the history/graph view.
+///
+/// `parents` holds full parent SHAs in order (first parent first); a merge has
+/// two or more. `refs` is the raw `%D` decoration list split on ", " with empty
+/// entries dropped (e.g. `HEAD -> main`, `tag: v1.0`, `origin/main`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    /// Full 40-char commit hash.
+    pub hash: String,
+    /// Abbreviated commit hash.
+    pub short_hash: String,
+    /// Parent full hashes, first-parent first. Empty for the root commit.
+    pub parents: Vec<String>,
+    /// Ref decorations attached to this commit (branches, tags, HEAD).
+    pub refs: Vec<String>,
+    /// Author name.
+    pub author: String,
+    /// Author date in ISO 8601 / strict format (`%aI`).
+    pub date: String,
+    /// Commit subject (first line of the message).
+    pub subject: String,
+}
+
 impl GitStatus {
     /// Create a new GitStatus with all zeros
     pub fn new() -> Self {
@@ -601,15 +625,54 @@ impl GitTracker {
     }
 
     pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
-        let mut child = backend_command(resolve_git_binary())
-            .args(args)
+        Self::run_git_command_with_timeout(cwd, args, GIT_COMMAND_TIMEOUT_MS)
+    }
+
+    /// Run a git command with an explicit timeout (ms). Network-bound commands
+    /// such as `git push` must use a generous timeout instead of the short
+    /// status-poll default, which would otherwise kill the process mid-transfer.
+    /// Generic over `AsRef<OsStr>` so callers can pass non-UTF-8 paths (e.g. a
+    /// commit message file path) without a lossy conversion.
+    pub fn run_git_command_with_timeout<S: AsRef<std::ffi::OsStr>>(
+        cwd: &str,
+        args: &[S],
+        timeout_ms: u64,
+    ) -> Option<std::process::Output> {
+        let mut command = backend_command(resolve_git_binary());
+        command
+            .args(args.iter().map(|a| a.as_ref()))
             .current_dir(cwd)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::piped());
+        Self::spawn_and_wait(command, args, cwd, timeout_ms)
+    }
 
-        let deadline = Instant::now() + Duration::from_millis(GIT_COMMAND_TIMEOUT_MS);
+    /// Run `git push <args>` with the network timeout and `GIT_TERMINAL_PROMPT=0`
+    /// so a remote that requires credentials fails fast ("could not read
+    /// Username") instead of blocking on a terminal prompt until the timeout.
+    pub fn run_git_push(cwd: &str, args: &[&str], timeout_ms: u64) -> Option<std::process::Output> {
+        let mut command = backend_command(resolve_git_binary());
+        command
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Self::spawn_and_wait(command, args, cwd, timeout_ms)
+    }
+
+    /// Spawn a prepared git `Command` and wait up to `timeout_ms`, killing the
+    /// child on timeout. `args`/`cwd` are used only for the timeout log line.
+    fn spawn_and_wait<S: AsRef<std::ffi::OsStr>>(
+        mut command: Command,
+        args: &[S],
+        cwd: &str,
+        timeout_ms: u64,
+    ) -> Option<std::process::Output> {
+        let mut child = command.spawn().ok()?;
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
         loop {
             match child.try_wait() {
@@ -618,9 +681,13 @@ impl GitTracker {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let rendered: Vec<String> = args
+                            .iter()
+                            .map(|a| a.as_ref().to_string_lossy().into_owned())
+                            .collect();
                         log::warn!(
                             "[GitTracker] Timed out running git {} in {}",
-                            args.join(" "),
+                            rendered.join(" "),
                             cwd
                         );
                         return None;
@@ -878,6 +945,354 @@ pub fn git_discard_file(cwd: &str, path: &str) -> Result<(), String> {
         }
         DiscardAction::Noop => Ok(()),
     }
+}
+
+/// Default number of commits to read for the history view.
+const GIT_LOG_DEFAULT_LIMIT: u32 = 200;
+/// Upper bound on the history fetch to keep render/parse cost bounded.
+const GIT_LOG_MAX_LIMIT: u32 = 1000;
+
+/// Field separator inside one `git log` record (NUL, `%x00`).
+const LOG_FIELD_SEP: char = '\u{0}';
+/// Record terminator between `git log` entries (`%x1e`, record separator).
+const LOG_RECORD_SEP: char = '\u{1e}';
+
+/// Read commit history for `cwd` as structured [`GitCommit`] rows, newest first.
+///
+/// Uses a NUL-delimited `--pretty` format with a record terminator so commit
+/// subjects containing spaces, pipes, or other punctuation cannot break parsing.
+/// `--parents` yields parent SHAs (for graph topology), `--decorate=full`
+/// yields ref names, and `--topo-order` emits commits child-before-parent so the
+/// renderer's lane layout never sees a parent before its child.
+///
+/// A *benign* failure (a repo with no commits yet, or a path that is not a git
+/// repository) is reported as an empty history so the UI shows an empty state.
+/// Any other non-zero exit (corrupt `.git`, unreadable objects, permission
+/// errors) is propagated as an error so real failures are surfaced.
+pub fn git_get_log(cwd: &str, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit
+        .unwrap_or(GIT_LOG_DEFAULT_LIMIT)
+        .clamp(1, GIT_LOG_MAX_LIMIT);
+    let limit_str = limit.to_string();
+
+    let args = [
+        "log",
+        "--no-color",
+        "--topo-order",
+        "-n",
+        &limit_str,
+        "--parents",
+        "--decorate=full",
+        "--pretty=format:%H%x00%h%x00%P%x00%D%x00%an%x00%aI%x00%s%x1e",
+    ];
+
+    let output = GitTracker::run_git_command(cwd, &args)
+        .ok_or_else(|| "Failed to run git log".to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // A repo with no commits yet, or a non-repo path, is an expected empty
+        // state — not an error. Everything else (corrupt objects, permission
+        // problems) is surfaced so it is not silently swallowed.
+        if is_benign_log_failure(&stderr) {
+            return Ok(Vec::new());
+        }
+        return Err(stderr.trim().to_string());
+    }
+
+    Ok(parse_git_log(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Whether a failing `git log` stderr represents an expected empty-history
+/// state (no commits yet, or not a git repository) rather than a real error.
+fn is_benign_log_failure(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("does not have any commits yet")
+        || s.contains("not a git repository")
+        || s.contains("bad default revision")
+        // Fresh repo with an unborn HEAD: `ambiguous argument 'HEAD'`.
+        || (s.contains("ambiguous argument") && s.contains("head"))
+}
+
+/// Parse the NUL-delimited, record-terminated `git log` output produced by
+/// [`git_get_log`] into [`GitCommit`] rows. Pure function over captured stdout
+/// so it is unit-testable without spawning git.
+fn parse_git_log(stdout: &str) -> Vec<GitCommit> {
+    let mut commits = Vec::new();
+
+    for record in stdout.split(LOG_RECORD_SEP) {
+        // Trim only leading newlines git inserts between records; the fields
+        // themselves are NUL-separated so internal whitespace is preserved.
+        let record = record.trim_start_matches(['\n', '\r']);
+        if record.is_empty() {
+            continue;
+        }
+
+        let fields: Vec<&str> = record.split(LOG_FIELD_SEP).collect();
+        // hash, shortHash, parents, refs, author, date, subject
+        if fields.len() < 7 {
+            continue;
+        }
+
+        let hash = fields[0].trim();
+        if hash.is_empty() {
+            continue;
+        }
+
+        let parents = fields[2]
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        // `%D` separates decorations with ", " (comma-space). Split on that exact
+        // separator rather than a bare comma so a ref name containing a comma is
+        // not torn into two chips.
+        let refs = fields[3]
+            .split(", ")
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        commits.push(GitCommit {
+            hash: hash.to_string(),
+            short_hash: fields[1].trim().to_string(),
+            parents,
+            refs,
+            author: fields[4].to_string(),
+            date: fields[5].trim().to_string(),
+            // Subject is the final field and may legitimately be empty. Re-join
+            // any trailing fields with the NUL separator so a stray NUL in an
+            // earlier field cannot silently truncate the subject.
+            subject: fields[6..].join("\u{0}"),
+        });
+    }
+
+    commits
+}
+
+/// Network-bound git operations (push/fetch) get a generous timeout instead of
+/// the 2s status-poll default. 120s comfortably covers most pushes.
+const GIT_NETWORK_TIMEOUT_MS: u64 = 120_000;
+
+/// Context the commit footer needs to render: current branch, whether an
+/// upstream is configured, ahead/behind counts, how many entries are staged,
+/// and the last commit's subject/body (used to prefill an amend).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitContext {
+    /// Current branch name, or `None` in a detached HEAD / no-branch state.
+    pub branch: Option<String>,
+    /// Whether the current branch has a configured upstream.
+    pub has_upstream: bool,
+    /// Commits the local branch is ahead of its upstream.
+    pub ahead: u32,
+    /// Commits the local branch is behind its upstream.
+    pub behind: u32,
+    /// Number of staged index entries (`git diff --cached --name-only`).
+    pub staged_count: u32,
+    /// Whether the repo has at least one commit (HEAD resolves).
+    pub has_head: bool,
+    /// Last commit subject (first line), empty when no HEAD.
+    pub last_subject: String,
+    /// Last commit body (everything after the subject + blank line), empty when none.
+    pub last_body: String,
+}
+
+/// Build the commit message body from a summary and optional description.
+/// Format: `summary`, a blank line, then the trimmed description. The blank
+/// line and body are omitted when the description is empty.
+fn build_commit_message(summary: &str, description: &str) -> String {
+    let summary = summary.trim();
+    let description = description.trim();
+    if description.is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary}\n\n{description}")
+    }
+}
+
+/// Number of staged entries via `git diff --cached --name-only`.
+/// Returns `None` when the git invocation itself fails, so callers can
+/// distinguish "genuinely nothing staged" (`Some(0)`) from "could not tell".
+fn staged_entry_count(cwd: &str) -> Option<u32> {
+    GitTracker::run_git_command(cwd, &["diff", "--cached", "--name-only"])
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count() as u32
+        })
+}
+
+/// Create a commit from the currently-staged index.
+///
+/// The message is written to a temp file and passed via `git commit -F <file>`
+/// so arbitrary user text is never interpolated into a shell or `-m` argument;
+/// this also preserves multi-line bodies. The temp file is created with an
+/// exclusive, uniquely-named handle (no symlink-following clobber, no collision
+/// between near-simultaneous commits) and deleted after the commit attempt.
+///
+/// `amend` rewrites HEAD instead of creating a new commit. A plain commit with
+/// nothing staged is rejected; an amend requires an existing HEAD. Uses the
+/// network-length timeout so pre-commit hooks / GPG passphrase prompts are not
+/// killed mid-run (which could leave a stale `.git/index.lock`).
+pub fn git_commit_file(
+    cwd: &str,
+    summary: &str,
+    description: &str,
+    amend: bool,
+) -> Result<(), String> {
+    if summary.trim().is_empty() {
+        return Err("Commit summary cannot be empty".to_string());
+    }
+    if amend {
+        if !repo_has_head(cwd) {
+            return Err("No commit to amend".to_string());
+        }
+    } else {
+        match staged_entry_count(cwd) {
+            Some(0) => return Err("Nothing staged to commit".to_string()),
+            None => return Err("Failed to read the staged index".to_string()),
+            Some(_) => {}
+        }
+    }
+
+    let message = build_commit_message(summary, description);
+    let msg_path = create_commit_message_file(message.as_bytes())?;
+
+    // Pass the real OS path (not a lossy String) so a non-UTF-8 temp dir still
+    // resolves to the file we actually wrote.
+    use std::ffi::OsStr;
+    let mut args: Vec<&OsStr> =
+        vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
+    if amend {
+        args.push(OsStr::new("--amend"));
+    }
+
+    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS) {
+        Some(output) if output.status.success() => Ok(()),
+        Some(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        None => Err("git commit timed out or failed to start".to_string()),
+    };
+    // Always clean up the temp message file, regardless of commit outcome.
+    let _ = std::fs::remove_file(&msg_path);
+    result
+}
+
+/// Write `bytes` to a freshly-created, uniquely-named temp file using an
+/// exclusive create (`create_new`), which fails rather than following a symlink
+/// or truncating an existing file (CWE-59/CWE-377). Returns the path on success.
+fn create_commit_message_file(bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    let pid = std::process::id();
+    for attempt in 0..8u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir()
+            .join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_EXCL: fail if the path already exists
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(bytes).and_then(|_| f.flush()).map_err(|e| {
+                    let _ = std::fs::remove_file(&path);
+                    format!("Failed to write commit message: {e}")
+                })?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create commit message file: {e}")),
+        }
+    }
+    Err("Failed to create a unique commit message file".to_string())
+}
+
+/// Push the current branch to `origin`. When the branch has no upstream, it is
+/// published with `--set-upstream origin <branch>`. Uses the network timeout.
+/// Rejects in a detached-HEAD / no-branch state.
+pub fn git_push_current(cwd: &str) -> Result<(), String> {
+    let branch = GitTracker::check_branch_internal(cwd)
+        .ok_or_else(|| "Not on a branch (detached HEAD); cannot push".to_string())?;
+
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let args: Vec<&str> = if has_upstream {
+        vec!["push"]
+    } else {
+        vec!["push", "--set-upstream", "origin", &branch]
+    };
+
+    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
+        .ok_or_else(|| {
+            "git push did not complete (it timed out, could not start, or the \
+             remote required interactive credentials)"
+                .to_string()
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Gather the commit-footer context for a repo. Tolerant of no-HEAD and
+/// no-upstream repos: missing values come back as zeros / empty / false.
+pub fn git_get_commit_context(cwd: &str) -> Result<GitCommitContext, String> {
+    let branch = GitTracker::check_branch_internal(cwd);
+    let has_head = repo_has_head(cwd);
+
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let (mut ahead, mut behind) = (0u32, 0u32);
+    if has_upstream {
+        if let Some(o) =
+            GitTracker::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
+            if o.status.success() {
+                let counts = String::from_utf8_lossy(&o.stdout);
+                let parts: Vec<&str> = counts.split_whitespace().collect();
+                if parts.len() == 2 {
+                    ahead = parts[0].parse().unwrap_or(0);
+                    behind = parts[1].parse().unwrap_or(0);
+                }
+            }
+        }
+    }
+
+    let (last_subject, last_body) = if has_head {
+        let subject = GitTracker::run_git_command(cwd, &["log", "-1", "--pretty=%s"])
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+            .unwrap_or_default();
+        let body = GitTracker::run_git_command(cwd, &["log", "-1", "--pretty=%b"])
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+            .unwrap_or_default();
+        (subject, body)
+    } else {
+        (String::new(), String::new())
+    };
+
+    Ok(GitCommitContext {
+        branch,
+        has_upstream,
+        ahead,
+        behind,
+        staged_count: staged_entry_count(cwd).unwrap_or(0),
+        has_head,
+        last_subject,
+        last_body,
+    })
 }
 
 fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
@@ -1475,6 +1890,196 @@ mod tests {
         assert!(!details[1].staged);
     }
 
+    // ========== parse_git_log unit tests ==========
+
+    /// Build one NUL-delimited, record-terminated log record matching the
+    /// `git_get_log` pretty format: hash, shortHash, parents, refs, author,
+    /// date, subject.
+    fn log_record(
+        hash: &str,
+        short: &str,
+        parents: &str,
+        refs: &str,
+        author: &str,
+        date: &str,
+        subject: &str,
+    ) -> String {
+        format!(
+            "{hash}\u{0}{short}\u{0}{parents}\u{0}{refs}\u{0}{author}\u{0}{date}\u{0}{subject}\u{1e}"
+        )
+    }
+
+    #[test]
+    fn test_parse_git_log_linear() {
+        let out = format!(
+            "{}\n{}",
+            log_record(
+                "a1b2c3d4e5f6",
+                "a1b2c3d",
+                "00ff11ee22dd",
+                "HEAD -> main",
+                "Ada",
+                "2026-05-30T10:00:00+00:00",
+                "second commit",
+            ),
+            log_record(
+                "00ff11ee22dd",
+                "00ff11e",
+                "",
+                "",
+                "Ada",
+                "2026-05-29T09:00:00+00:00",
+                "first commit",
+            ),
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, "a1b2c3d4e5f6");
+        assert_eq!(commits[0].short_hash, "a1b2c3d");
+        assert_eq!(commits[0].parents, vec!["00ff11ee22dd".to_string()]);
+        assert_eq!(commits[0].refs, vec!["HEAD -> main".to_string()]);
+        assert_eq!(commits[0].author, "Ada");
+        assert_eq!(commits[0].subject, "second commit");
+        // Root commit has no parents.
+        assert!(commits[1].parents.is_empty());
+        assert!(commits[1].refs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_git_log_merge_multiple_parents() {
+        let out = log_record(
+            "merge00",
+            "merge00",
+            "parentA1 parentB2",
+            "",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "Merge branch 'feature'",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(
+            commits[0].parents,
+            vec!["parentA1".to_string(), "parentB2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_decorations() {
+        // With --decorate=full the parser receives canonical ref names; it only
+        // splits on ", " and leaves classification to the renderer.
+        let out = log_record(
+            "dec00",
+            "dec00",
+            "p0",
+            "HEAD -> refs/heads/main, tag: refs/tags/v1.0, refs/remotes/origin/main",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "release",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(
+            commits[0].refs,
+            vec![
+                "HEAD -> refs/heads/main".to_string(),
+                "tag: refs/tags/v1.0".to_string(),
+                "refs/remotes/origin/main".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_special_char_subject() {
+        // Subject with pipes, spaces, and unicode must survive verbatim because
+        // fields are NUL-delimited, not whitespace/pipe-delimited.
+        let subject = "fix: a | b  with  spaces — café 🚀";
+        let out = log_record(
+            "sp00", "sp00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", subject,
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits[0].subject, subject);
+    }
+
+    #[test]
+    fn test_parse_git_log_empty_input() {
+        assert!(parse_git_log("").is_empty());
+        assert!(parse_git_log("\n\n").is_empty());
+    }
+
+    #[test]
+    fn test_is_benign_log_failure() {
+        // Expected empty-history states are benign.
+        assert!(is_benign_log_failure(
+            "fatal: your current branch 'main' does not have any commits yet"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: not a git repository (or any of the parent directories): .git"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: bad default revision 'HEAD'"
+        ));
+        assert!(is_benign_log_failure(
+            "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree."
+        ));
+        // Real failures must NOT be swallowed.
+        assert!(!is_benign_log_failure(
+            "error: object file .git/objects/ab/cd is empty"
+        ));
+        assert!(!is_benign_log_failure("fatal: unable to read tree"));
+        assert!(!is_benign_log_failure(""));
+    }
+
+    #[test]
+    fn test_parse_git_log_skips_malformed_record() {
+        // A record with too few fields is dropped; a valid one is kept.
+        let out = format!(
+            "not\u{0}enough\u{1e}{}",
+            log_record("ok00", "ok00", "", "", "Ada", "2026-05-30T12:00:00+00:00", "ok")
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].hash, "ok00");
+    }
+
+    #[test]
+    fn test_parse_git_log_empty_subject_is_kept() {
+        let out = log_record("es00", "es00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", "");
+        let commits = parse_git_log(&out);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "");
+    }
+
+    #[test]
+    fn test_parse_git_log_ref_name_with_comma_is_one_chip() {
+        // `%D` joins decorations with ", "; a ref whose name contains a comma
+        // must stay one chip. Splitting on ", " (not bare ',') keeps it intact.
+        let out = log_record(
+            "rc00",
+            "rc00",
+            "p0",
+            "HEAD -> main, tag: v1,2",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "x",
+        );
+        let commits = parse_git_log(&out);
+        assert_eq!(
+            commits[0].refs,
+            vec!["HEAD -> main".to_string(), "tag: v1,2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_git_log_subject_with_embedded_nul_is_preserved() {
+        // A stray NUL in the subject would create an 8th field; re-joining the
+        // trailing fields keeps the subject whole instead of truncating it.
+        let record =
+            "h00\u{0}h00\u{0}p0\u{0}\u{0}Ada\u{0}2026-05-30T12:00:00+00:00\u{0}before\u{0}after\u{1e}";
+        let commits = parse_git_log(record);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "before\u{0}after");
+    }
+
     // ========== Windows-specific tests for CWD dedupe and throttling ==========
 
     #[cfg(target_os = "windows")]
@@ -1769,6 +2374,326 @@ mod tests {
         let repo = init_repo("discard-missing");
         // No such file; classified clean -> Noop, must not error.
         git_discard_file(repo.to_str().unwrap(), "ghost.txt").unwrap();
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_empty_repo_is_empty() {
+        if git_missing() {
+            return;
+        }
+        // A freshly-init'd repo has no commits; git log exits non-zero and we
+        // must surface an empty list instead of an error.
+        let repo = init_repo("log-empty");
+        let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+        assert!(commits.is_empty());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_reads_linear_history_newest_first() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-linear");
+        std::fs::write(repo.join("a.txt"), "1\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "first commit"]);
+        std::fs::write(repo.join("a.txt"), "2\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "second | commit"]);
+
+        let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+        assert_eq!(commits.len(), 2);
+        // Newest first; subject with a pipe survives intact.
+        assert_eq!(commits[0].subject, "second | commit");
+        assert_eq!(commits[1].subject, "first commit");
+        // The newer commit's first parent is the older commit.
+        assert_eq!(commits[0].parents, vec![commits[1].hash.clone()]);
+        // Root commit has no parents.
+        assert!(commits[1].parents.is_empty());
+        // HEAD decoration is present somewhere on the tip.
+        assert!(commits[0].refs.iter().any(|r| r.contains("HEAD")));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_captures_merge_parents() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-merge");
+        let cwd = repo.to_str().unwrap();
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        // Create a feature branch with its own commit.
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(repo.join("b.txt"), "feat\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "feature work"]);
+        // Diverge main.
+        git(&repo, &["checkout", "-q", "-"]); // back to default branch
+        std::fs::write(repo.join("c.txt"), "main\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "main work"]);
+        // Force a merge commit (no fast-forward).
+        git(&repo, &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"]);
+
+        let commits = git_get_log(cwd, None).unwrap();
+        let merge = commits
+            .iter()
+            .find(|c| c.subject == "Merge feature")
+            .expect("merge commit present");
+        assert!(
+            merge.parents.len() >= 2,
+            "merge should have >= 2 parents, got {:?}",
+            merge.parents
+        );
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    // ---- commit / amend / push / context ----
+
+    fn last_subject(repo: &std::path::Path) -> String {
+        let out = git(repo, &["log", "-1", "--pretty=%s"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn last_body(repo: &std::path::Path) -> String {
+        let out = git(repo, &["log", "-1", "--pretty=%b"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn count_commits(repo: &std::path::Path) -> usize {
+        let out = git(repo, &["rev-list", "--count", "HEAD"]);
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    }
+
+    #[test]
+    fn it_build_commit_message_formats_body() {
+        assert_eq!(build_commit_message("hello", ""), "hello");
+        assert_eq!(build_commit_message("  hello  ", "  "), "hello");
+        assert_eq!(
+            build_commit_message("summary", "more detail"),
+            "summary\n\nmore detail"
+        );
+    }
+
+    #[test]
+    fn it_commit_creates_commit_and_clears_index() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-basic");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+
+        let cwd = repo.to_str().unwrap();
+        git_commit_file(cwd, "second commit", "", false).unwrap();
+
+        assert_eq!(count_commits(&repo), 2);
+        assert_eq!(last_subject(&repo), "second commit");
+        assert_eq!(staged_entry_count(cwd), Some(0), "index cleared after commit");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_git_get_log_respects_limit() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("log-limit");
+        for i in 0..5 {
+            std::fs::write(repo.join("a.txt"), format!("{i}\n")).unwrap();
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-qm", &format!("commit {i}")]);
+        }
+        let commits = git_get_log(repo.to_str().unwrap(), Some(3)).unwrap();
+        assert_eq!(commits.len(), 3);
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_writes_multiline_body() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-body");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+
+        git_commit_file(repo.to_str().unwrap(), "sum", "line one\nline two", false).unwrap();
+        assert_eq!(last_subject(&repo), "sum");
+        assert_eq!(last_body(&repo), "line one\nline two");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_rejects_empty_summary() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-emptysum");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+        let err = git_commit_file(repo.to_str().unwrap(), "   ", "", false).unwrap_err();
+        assert!(err.to_lowercase().contains("summary"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_rejects_nothing_staged() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-nostage");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        // Clean index now.
+        let err = git_commit_file(repo.to_str().unwrap(), "noop", "", false).unwrap_err();
+        assert!(err.to_lowercase().contains("nothing staged"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_rewords_subject_without_new_commit() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-reword");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "original"]);
+        assert_eq!(count_commits(&repo), 1);
+
+        git_commit_file(repo.to_str().unwrap(), "reworded", "", true).unwrap();
+        assert_eq!(count_commits(&repo), 1, "amend must not add a commit");
+        assert_eq!(last_subject(&repo), "reworded");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_folds_staged_changes() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-fold");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("b.txt"), "new\n").unwrap();
+        git(&repo, &["add", "--", "b.txt"]);
+
+        let cwd = repo.to_str().unwrap();
+        git_commit_file(cwd, "init+b", "", true).unwrap();
+        assert_eq!(count_commits(&repo), 1);
+        // b.txt is now part of HEAD; nothing left staged.
+        assert_eq!(staged_entry_count(cwd), Some(0));
+        let tree = git(&repo, &["ls-tree", "--name-only", "HEAD"]);
+        let names = String::from_utf8_lossy(&tree.stdout);
+        assert!(names.contains("b.txt"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_rejects_no_head() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-nohead");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]); // staged, but no commit yet
+        let err = git_commit_file(repo.to_str().unwrap(), "x", "", true).unwrap_err();
+        assert!(err.to_lowercase().contains("no commit to amend"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_push_sets_upstream_and_resets_ahead() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("push-upstream");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+
+        // Local bare remote -> no network.
+        let bare = unique_temp_dir("push-bare");
+        git(&bare, &["init", "--bare", "-q"]);
+        let bare_str = bare.to_str().unwrap();
+        git(&repo, &["remote", "add", "origin", bare_str]);
+
+        let cwd = repo.to_str().unwrap();
+        // No upstream yet -> push must set it.
+        git_push_current(cwd).unwrap();
+
+        let ctx = git_get_commit_context(cwd).unwrap();
+        assert!(ctx.has_upstream, "upstream should be set after publish");
+        assert_eq!(ctx.ahead, 0, "ahead resets after push");
+
+        // A further commit is ahead; push again brings it back to 0.
+        std::fs::write(repo.join("a.txt"), "y\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "second"]);
+        assert_eq!(git_get_commit_context(cwd).unwrap().ahead, 1);
+        git_push_current(cwd).unwrap();
+        assert_eq!(git_get_commit_context(cwd).unwrap().ahead, 0);
+
+        std::fs::remove_dir_all(&repo).ok();
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    #[test]
+    fn it_push_rejects_detached_head() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("push-detached");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        git(&repo, &["checkout", "-q", &sha]); // detach
+
+        let err = git_push_current(repo.to_str().unwrap()).unwrap_err();
+        assert!(err.to_lowercase().contains("branch"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_context_reports_fields() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("ctx-basic");
+        let cwd = repo.to_str().unwrap();
+
+        // No HEAD yet.
+        let empty = git_get_commit_context(cwd).unwrap();
+        assert!(!empty.has_head);
+        assert_eq!(empty.staged_count, 0);
+        assert!(empty.last_subject.is_empty());
+
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "first\n\nbody text"]);
+        std::fs::write(repo.join("b.txt"), "y\n").unwrap();
+        git(&repo, &["add", "--", "b.txt"]);
+
+        let ctx = git_get_commit_context(cwd).unwrap();
+        assert!(ctx.has_head);
+        assert!(ctx.branch.is_some());
+        assert!(!ctx.has_upstream);
+        assert_eq!(ctx.staged_count, 1);
+        assert_eq!(ctx.last_subject, "first");
+        assert_eq!(ctx.last_body, "body text");
         std::fs::remove_dir_all(&repo).ok();
     }
 }

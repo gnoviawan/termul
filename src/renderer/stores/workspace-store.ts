@@ -13,6 +13,7 @@ export type WorkspaceTab =
   | { type: 'editor'; id: string; filePath: string }
   | { type: 'browser'; id: string; browserTabId: string }
   | { type: 'git'; id: string; cwd: string }
+  | { type: 'git-history'; id: string; cwd: string }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
 // This prevents duplicate tab creation during rapid state changes

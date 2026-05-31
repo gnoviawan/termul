@@ -1,4 +1,4 @@
-import { PanelLeft, PanelRight, SlidersHorizontal, FolderKanban, GitBranch, Network } from 'lucide-react'
+import { PanelLeft, PanelRight, SlidersHorizontal, FolderKanban, GitBranch, History, Network } from 'lucide-react'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { TermulMark } from '@/components/TermulMark'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -21,6 +21,10 @@ interface ActivityRailProps {
   onOpenGitChanges?: () => void
   /** Whether a git changes tab can currently be opened (active project has a path). */
   canOpenGitChanges?: boolean
+  /** Opens a git history (commit graph) tab in the active pane. */
+  onOpenGitHistory?: () => void
+  /** Whether a git history tab can currently be opened (active project has a path). */
+  canOpenGitHistory?: boolean
 }
 
 /**
@@ -44,7 +48,9 @@ export function ActivityRail({
   onShortcutsOpenChange,
   onOpenCommandPalette,
   onOpenGitChanges,
-  canOpenGitChanges = false
+  canOpenGitChanges = false,
+  onOpenGitHistory,
+  canOpenGitHistory = false
 }: ActivityRailProps = {}): React.JSX.Element {
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
@@ -124,6 +130,22 @@ export function ActivityRail({
         <GitBranch
           size={18}
           className={canOpenGitChanges ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenGitHistory?.()
+        }}
+        className={railButtonClass}
+        title={canOpenGitHistory ? 'Git history' : 'Git history (open a project first)'}
+        aria-label="Open git history"
+        disabled={!onOpenGitHistory || !canOpenGitHistory}
+      >
+        <History
+          size={18}
+          className={canOpenGitHistory ? 'text-muted-foreground' : 'text-muted-foreground/40'}
         />
       </button>
 

@@ -53,7 +53,13 @@ interface PersistedGitTabRef {
   cwd: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef
+interface PersistedGitHistoryTabRef {
+  type: 'git-history'
+  id: string
+  cwd: string
+}
+
+type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef | PersistedGitHistoryTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -129,6 +135,10 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
 
       if (tab.type === 'git') {
         return [{ type: 'git', id: tab.id, cwd: tab.cwd }]
+      }
+
+      if (tab.type === 'git-history') {
+        return [{ type: 'git-history', id: tab.id, cwd: tab.cwd }]
       }
 
       return []
@@ -295,6 +305,10 @@ function reconcileTerminalTabs(
           return [tab]
         }
 
+        if (tab.type === 'git-history') {
+          return [tab]
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -372,6 +386,16 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
           return [
             {
               type: 'git',
+              id: tab.id,
+              cwd: tab.cwd
+            }
+          ]
+        }
+
+        if (tab.type === 'git-history') {
+          return [
+            {
+              type: 'git-history',
               id: tab.id,
               cwd: tab.cwd
             }

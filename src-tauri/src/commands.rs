@@ -4,7 +4,7 @@ use crate::migrations::{
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -2248,6 +2248,56 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Read commit history for the repository at `cwd` as structured rows for the
+/// history/graph view. `limit` caps the number of commits (clamped backend-side;
+/// defaults to 200). Read-only.
+#[tauri::command]
+pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+}
+
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
+    // for up to the network timeout), so run it on the blocking thread pool
+    // instead of the async executor.
+    let description = description.unwrap_or_default();
+    let amend = amend.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
+    })
+    .await
+    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    // git_push_current performs a network push (up to the network timeout), so
+    // run it on the blocking thread pool instead of the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_push_current(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {e}"))?
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
 /// Get available shells
