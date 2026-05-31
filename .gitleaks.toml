@@ -1,0 +1,7 @@
+# Gitleaks configuration
+# Allowlist file paths that may contain high-entropy but non-secret data.
+
+[allowlist]
+  paths = [
+    '''src/renderer/types/settings\.ts''',
+  ]

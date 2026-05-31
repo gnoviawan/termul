@@ -88,7 +88,12 @@ vi.mock('@/stores/project-store', () => ({
   useProjects: () => [activeProject],
   useActiveProject: () => activeProject,
   useActiveProjectId: () => activeProject.id,
-  useProjectActions: () => mockProjectActions
+  useProjectActions: () => mockProjectActions,
+  useProjectStore: Object.assign(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) : { projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false },
+    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) }
+  )
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
@@ -168,6 +173,10 @@ vi.mock('@/hooks/use-recent-commands', () => ({
   useRecentCommandsLoader: () => undefined
 }))
 
+vi.mock('@/hooks/use-pinned-commands', () => ({
+  usePinnedCommandsLoader: () => undefined
+}))
+
 vi.mock('@/hooks/use-command-history', () => ({
   useCommandHistoryLoader: () => undefined,
   useAddCommand: () => vi.fn(),
@@ -207,6 +216,10 @@ vi.mock('@/components/StatusBar', () => ({
 
 vi.mock('@/components/TitleBar', () => ({
   TitleBar: () => <div data-testid="title-bar" />
+}))
+
+vi.mock('@/components/ActivityRail', () => ({
+  ActivityRail: () => <div data-testid="activity-rail" />
 }))
 
 vi.mock('@/components/NewProjectModal', () => ({
@@ -269,10 +282,21 @@ vi.mock('@/lib/api', () => ({
   },
   terminalApi: {
     spawn: vi.fn(),
-    kill: vi.fn()
+    kill: vi.fn(),
+    onData: vi.fn(() => vi.fn())
   },
   persistenceApi: {
     flushPendingWrites: mockFlushPendingWrites
+  },
+  sessionApi: {
+    hasSession: vi.fn(async () => ({ success: true, data: false })),
+    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    save: vi.fn(),
+    clear: vi.fn(),
+    flush: vi.fn()
+  },
+  sshApi: {
+    onConnectionStatusChanged: vi.fn(() => vi.fn())
   }
 }))
 

@@ -28,6 +28,21 @@ const IPC_EVENTS = {
   TERMINAL_EXIT_CODE_CHANGED: 'terminal-exit-code-changed'
 } as const
 
+type EventPayloadMap = {
+  [IPC_EVENTS.TERMINAL_DATA]: { id: string; data: string }
+  [IPC_EVENTS.TERMINAL_EXIT]: { id: string; exitCode: number | null; signal: number | null }
+  [IPC_EVENTS.TERMINAL_CWD_CHANGED]: { terminalId: string; cwd: string }
+  [IPC_EVENTS.TERMINAL_GIT_BRANCH_CHANGED]: { terminalId: string; branch: string | null }
+  [IPC_EVENTS.TERMINAL_GIT_STATUS_CHANGED]: { terminalId: string; status: GitStatus | null }
+  [IPC_EVENTS.TERMINAL_EXIT_CODE_CHANGED]: { terminalId: string; exitCode: number }
+}
+
+type SharedListenerEntry<T> = {
+  callbacks: Map<number, (payload: T) => void>
+  nextCallbackId: number
+  unlisten?: Promise<UnlistenFn>
+}
+
 /**
  * IPC Command names matching Rust commands in src-tauri/src/commands/terminal.rs
  */
@@ -70,6 +85,110 @@ const IS_DEV = import.meta.env.DEV
 function devLog(...args: unknown[]): void {
   if (IS_DEV) {
     console.log(...args)
+  }
+}
+
+const sharedEventListeners = new Map<keyof EventPayloadMap, SharedListenerEntry<unknown>>()
+
+function subscribeSharedEvent<K extends keyof EventPayloadMap>(
+  eventName: K,
+  callback: (payload: EventPayloadMap[K]) => void,
+  debugLabel: string
+): () => void {
+  if (!isTauriContext()) {
+    if (IS_DEV) {
+      devLog(`[TauriTerminalAPI] Skipping ${debugLabel} listener outside Tauri runtime`)
+    }
+    return () => {}
+  }
+
+  let entry = sharedEventListeners.get(eventName) as SharedListenerEntry<EventPayloadMap[K]> | undefined
+
+  if (!entry) {
+    if (IS_DEV) {
+      devLog(`[TauriTerminalAPI] Creating shared ${debugLabel} native listener`)
+    }
+
+    entry = {
+      callbacks: new Map<number, (payload: EventPayloadMap[K]) => void>(),
+      nextCallbackId: 0
+    }
+
+    sharedEventListeners.set(eventName, entry as SharedListenerEntry<unknown>)
+
+    try {
+      entry.unlisten = listen<EventPayloadMap[K]>(eventName, ({ payload }) => {
+        const currentEntry = sharedEventListeners.get(eventName) as
+          | SharedListenerEntry<EventPayloadMap[K]>
+          | undefined
+
+        if (!currentEntry) {
+          return
+        }
+
+        for (const [subscriberId, subscriber] of currentEntry.callbacks.entries()) {
+          try {
+            subscriber(payload)
+          } catch (error) {
+            console.error(`[TauriTerminalAPI] Listener callback failed`, {
+              eventName,
+              debugLabel,
+              subscriberId,
+              subscriberCount: currentEntry.callbacks.size,
+              error
+            })
+          }
+        }
+      }).catch((error) => {
+        console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+        if (sharedEventListeners.get(eventName) === (entry as SharedListenerEntry<unknown>)) {
+          sharedEventListeners.delete(eventName)
+        }
+        return () => {}
+      })
+    } catch (error) {
+      console.error(`[TauriTerminalAPI] Failed to register ${debugLabel} listener:`, error)
+      sharedEventListeners.delete(eventName)
+      return () => {}
+    }
+  }
+
+  const subscriberId = entry.nextCallbackId++
+  entry.callbacks.set(subscriberId, callback)
+
+  if (IS_DEV) {
+    devLog(
+      `[TauriTerminalAPI] Shared ${debugLabel} subscriber added (count=${entry.callbacks.size})`
+    )
+  }
+
+  return () => {
+    const currentEntry = sharedEventListeners.get(eventName) as
+      | SharedListenerEntry<EventPayloadMap[K]>
+      | undefined
+
+    if (!currentEntry) {
+      return
+    }
+
+    currentEntry.callbacks.delete(subscriberId)
+
+    if (IS_DEV) {
+      devLog(
+        `[TauriTerminalAPI] Shared ${debugLabel} subscriber removed (count=${currentEntry.callbacks.size})`
+      )
+    }
+
+    if (currentEntry.callbacks.size > 0) {
+      return
+    }
+
+    if (IS_DEV) {
+      devLog(`[TauriTerminalAPI] Disposing shared ${debugLabel} native listener`)
+    }
+
+    sharedEventListeners.delete(eventName)
+    cleanupTauriListener(currentEntry.unlisten)
   }
 }
 
@@ -282,11 +401,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExit(callback: TerminalExitCallback): () => void {
-      if (import.meta.env.DEV) {
-        devLog('[TauriTerminalAPI] Registering terminal-exit listener')
-      }
-
-      return registerListener<{ id: string; exitCode: number | null; signal: number | null }>(
+      return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_EXIT,
         (payload) => {
           if (import.meta.env.DEV) {
@@ -305,7 +420,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onCwdChanged(callback: TerminalCwdChangedCallback): () => void {
-      return registerListener<{ terminalId: string; cwd: string }>(
+      return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_CWD_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.cwd)
@@ -326,7 +441,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitBranchChanged(callback: TerminalGitBranchChangedCallback): () => void {
-      return registerListener<{ terminalId: string; branch: string | null }>(
+      return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_GIT_BRANCH_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.branch)
@@ -347,7 +462,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onGitStatusChanged(callback: TerminalGitStatusChangedCallback): () => void {
-      return registerListener<{ terminalId: string; status: GitStatus | null }>(
+      return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_GIT_STATUS_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.status)
@@ -368,7 +483,7 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onExitCodeChanged(callback: TerminalExitCodeChangedCallback): () => void {
-      return registerListener<{ terminalId: string; exitCode: number }>(
+      return subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_EXIT_CODE_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.exitCode)

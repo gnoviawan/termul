@@ -14,6 +14,8 @@ export interface XTerminalProps {
 	className?: string;
 	/** Optional pool slot to use instead of creating a new Terminal instance. */
 	poolSlot?: PoolSlot;
+	/** Renderer preference: "auto" | "webgl" | "dom". Defaults to "webgl". */
+	renderer?: "auto" | "webgl" | "dom";
 }
 
 const TERMINAL_OPTIONS = {
@@ -28,6 +30,7 @@ function XTerminalComponent({
 	onReady,
 	className = "",
 	poolSlot,
+	renderer = "webgl",
 }: XTerminalProps): React.JSX.Element {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const terminalRef = useRef<Terminal | null>(null);
@@ -63,16 +66,18 @@ function XTerminalComponent({
 
 			terminal.open(containerRef.current);
 
-			try {
-				const webglAddon = new WebglAddon();
-				webglAddon.onContextLoss(() => {
-					webglAddon.dispose();
-				});
-				terminal.loadAddon(webglAddon);
-			} catch {
-				console.warn(
-					"WebGL addon failed to load, falling back to DOM renderer",
-				);
+			if (renderer !== "dom") {
+				try {
+					const webglAddon = new WebglAddon();
+					webglAddon.onContextLoss(() => {
+						webglAddon.dispose();
+					});
+					terminal.loadAddon(webglAddon);
+				} catch {
+					console.warn(
+						"WebGL addon failed to load, falling back to DOM renderer",
+					);
+				}
 			}
 		}
 

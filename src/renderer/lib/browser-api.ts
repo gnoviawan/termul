@@ -134,6 +134,11 @@ export async function browserTabReload(tabId: string): Promise<IpcResult<void>> 
   return invoke('browser_tab_reload', { tabId })
 }
 
+export async function browserTabOpenDevtools(tabId: string): Promise<IpcResult<void>> {
+  return invoke('browser_tab_open_devtools', { tabId })
+}
+
+
 function createBrowserEventSubscription<T>(
   eventName: string,
   callback: (payload: T) => void

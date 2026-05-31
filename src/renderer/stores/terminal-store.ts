@@ -58,14 +58,17 @@ export interface TerminalState {
   setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
+  setTerminalNeedsAttention: (id: string, value: boolean) => void
   setAppHidden: (isHidden: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalActivity: (id: string, hasActivity: boolean) => void
   /** @deprecated Use updateTerminalActivityBatch instead */
   updateTerminalLastActivityTimestamp: (id: string, timestamp: number) => void
+  restartTerminal: (id: string) => void
   updateTerminalActivityBatch: (id: string, hasActivity: boolean, timestamp: number) => void
   clearTerminalPtyId: (ptyId: string) => void
   truncateHiddenTerminalBuffers: () => void
+  cleanupProjectTerminals: (projectId: string) => void
   getTerminalCount: () => number
   isTerminalLimitReached: () => boolean
 }
@@ -410,6 +413,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  setTerminalNeedsAttention: (id: string, value: boolean): void => {
+    set((state) => {
+      const target = state.terminals.find((t) => t.id === id)
+      // No-op when the flag is already at the requested value to avoid needless re-renders.
+      if (!target || (target.needsAttention ?? false) === value) {
+        return state
+      }
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === id ? { ...t, needsAttention: value } : t
+        )
+      }
+    })
+  },
+
   setAppHidden: (isHidden: boolean): void => {
     set((state) => {
       // Avoid allocating a new array if every terminal already has the correct state
@@ -447,6 +465,28 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         t.id === id ? { ...t, lastActivityTimestamp: timestamp } : t
       )
     }))
+  },
+
+  restartTerminal: (id: string): void => {
+    set((state) => {
+      const terminal = state.terminals.find((t) => t.id === id)
+      if (!terminal) return state
+      const newPtyId = `restart-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`
+      const newIndex = new Map(state.ptyIdIndex)
+      if (terminal.ptyId) {
+        newIndex.delete(terminal.ptyId)
+      }
+      newIndex.set(newPtyId, id)
+      return {
+        terminals: state.terminals.map((t) =>
+          t.id === id
+            ? { ...t, ptyId: newPtyId, healthStatus: 'running', transcript: undefined, pendingScrollback: undefined }
+            : t
+        ),
+        ptyIdIndex: newIndex,
+        activeTerminalId: id
+      }
+    })
   },
 
   updateTerminalActivityBatch: (id: string, hasActivity: boolean, timestamp: number): void => {
@@ -523,6 +563,29 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }))
   },
 
+  cleanupProjectTerminals: (projectId: string): void => {
+    set((state) => {
+      const removedTerminals = state.terminals.filter((t) => t.projectId === projectId)
+      const remainingTerminals = state.terminals.filter((t) => t.projectId !== projectId)
+      const newIndex = new Map(state.ptyIdIndex)
+
+      for (const terminal of removedTerminals) {
+        if (terminal.ptyId) {
+          newIndex.delete(terminal.ptyId)
+        }
+      }
+
+      return {
+        terminals: remainingTerminals,
+        ptyIdIndex: newIndex,
+        activeTerminalId:
+          state.terminals.some((t) => t.id === state.activeTerminalId && t.projectId === projectId)
+            ? ''
+            : state.activeTerminalId
+      }
+    })
+  },
+
   getTerminalCount: (): number => {
     return get().terminals.length
   },
@@ -530,7 +593,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   isTerminalLimitReached: (): boolean => {
     return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
   }
-}))
+}));
+
+// Helper to cleanup project terminals from outside the store
+export function cleanupProjectTerminals(projectId: string): void {
+  useTerminalStore.getState().cleanupProjectTerminals(projectId)
+}
 
 // Selectors for performance (selective subscriptions)
 // These selectors use the project store's activeProjectId for filtering
@@ -596,5 +664,43 @@ export function useTerminalActions(): Pick<
       setTerminalPtyId: state.setTerminalPtyId,
       clearTerminalPtyId: state.clearTerminalPtyId
     }))
+  )
+}
+
+/**
+ * Optimized selector that returns a Set of project IDs with active terminal activity.
+ * Uses useShallow to prevent re-renders unless the set of active projects actually changes.
+ */
+export function useProjectsWithActivity(): string[] {
+  return useTerminalStore(
+    useShallow((state) => {
+      const activeProjectIds = new Set<string>()
+      for (const t of state.terminals) {
+        // Indikator menyala jika:
+        // 1. Ada aktivitas output (hasActivity)
+        // 2. Sedang proses awal loading/spawn (status running tapi PTY belum siap)
+        if (t.hasActivity || (t.healthStatus === 'running' && !t.ptyId)) {
+          activeProjectIds.add(t.projectId)
+        }
+      }
+      return Array.from(activeProjectIds).sort()
+    })
+  )
+}
+
+/**
+ * Returns a Set of project IDs that have at least one crashed or disconnected terminal.
+ */
+export function useProjectsWithErrors(): Set<string> {
+  return useTerminalStore(
+    useShallow((state) => {
+      const errorProjectIds = new Set<string>()
+      for (const t of state.terminals) {
+        if (t.healthStatus === 'crashed' || t.healthStatus === 'disconnected') {
+          errorProjectIds.add(t.projectId)
+        }
+      }
+      return errorProjectIds
+    })
   )
 }

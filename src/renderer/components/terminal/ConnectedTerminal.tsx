@@ -7,6 +7,10 @@ import {
 	useImperativeHandle,
 	useState,
 } from "react";
+import {
+	RefreshCcw,
+	AlertTriangle,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
@@ -24,6 +28,8 @@ import {
 	captureScrollPosition,
 	restoreScrollPosition,
 } from "../../utils/terminal-registry";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	useTerminalFontFamily,
 	useTerminalFontSize,
@@ -36,6 +42,7 @@ import {
 } from "@/stores/keyboard-shortcuts-store";
 import { isMac, isPlatformModifier } from "@/lib/platform";
 import { useTerminalStore } from "@/stores/terminal-store";
+import { useShallow } from "zustand/shallow";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -56,19 +63,16 @@ import {
 import { openTerminalUrl } from "@/lib/browser/terminal-url-navigation";
 import { addRendererRef, removeRendererRef } from "@/lib/tauri-terminal-api";
 import { isTerminalPendingPtyAssignment } from "@/hooks/use-terminal-restore";
-import { takeCachedTerminal, cacheTerminal } from "./terminal-cache";
 import {
 	getOrCreateProjectContinuityCorrelation,
 	recordTerminalContinuityEvent,
 } from "@/lib/terminal-continuity-instrumentation";
 import { useActiveProject } from "@/stores/project-store";
 
-// Common readline/shell Ctrl sequences that pass through to the PTY only when
-// no configured app shortcut claims them. Checking these LAST (after app
-// shortcuts) ensures that app bindings like commandPalette=ctrl+k,
-// commandHistory=ctrl+r, newProject=ctrl+n work from terminal focus.
-// On macOS readline Ctrl sequences are already protected by matchesShortcut's
-// isMac guard (Ctrl+key never triggers app shortcuts on macOS).
+// Common readline/shell Ctrl sequences that should always pass through to the
+// PTY regardless of platform. On macOS these are already protected by the
+// isMac guard, but on Windows/Linux they would otherwise be swallowed when a
+// matching app shortcut exists (e.g. commandPalette=ctrl+k, commandHistory=ctrl+r).
 const READLINE_PASSTHROUGH_KEYS = new Set([
 	"a", // Ctrl+A  move to beginning of line
 	"e", // Ctrl+E  move to end of line
@@ -119,13 +123,12 @@ function isAppOwnedTerminalShortcut(
 	return false;
 }
 
-// Module-level constants - defined once per module
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
-const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100; // GPU driver recovery time
-const VISIBILITY_RECOVERY_DELAY_MS = 150; // DOM reflow after tab becomes visible
-const POWER_RESUME_RECOVERY_DELAY_MS = 300; // System stabilize after wake
-const ACTIVITY_DEBOUNCE_MS = 1000; // Debounce activity updates to max 1 per second
-const CLIPBOARD_RATE_LIMIT_MS = 100; // Minimum ms between clipboard operations
+const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100;
+const VISIBILITY_RECOVERY_DELAY_MS = 150;
+const POWER_RESUME_RECOVERY_DELAY_MS = 300;
+const ACTIVITY_DEBOUNCE_MS = 1000;
+const CLIPBOARD_RATE_LIMIT_MS = 100;
 
 const shouldUseWebglRenderer = (
 	rendererPreference: "auto" | "webgl" | "dom",
@@ -150,9 +153,9 @@ export interface ConnectedTerminalProps {
 	onCommand?: (command: string) => void;
 	className?: string;
 	autoFocus?: boolean;
-	initialScrollback?: string[]; // Scrollback to restore on mount
+	initialScrollback?: string[];
 	searchRef?: React.Ref<TerminalSearchHandle>;
-	isVisible?: boolean; // Whether this terminal is currently visible (for fit triggering)
+	isVisible?: boolean;
 }
 
 const PARTIAL_RESTORE_NOTE =
@@ -181,12 +184,32 @@ function ConnectedTerminalComponent({
 	searchRef,
 	isVisible = true,
 }: ConnectedTerminalProps): React.JSX.Element {
-	// DEBUG: Unique instance ID for tracking
-	const instanceIdRef = useRef<string>(
-		`conn-${Math.random().toString(36).slice(2, 9)}`,
-	);
-	const instanceId = instanceIdRef.current;
+	// 1. STABLE ID DERIVATION
+	const targetId = storeTerminalId || externalTerminalId;
 
+	// 2. STORE HOOKS (Must be at the top)
+	const { healthStatus, ptyId, restartTerminal, setTerminalHealthStatus } = useTerminalStore(
+		useShallow((state) => {
+			const term = state.terminals.find((t) => t.id === targetId);
+			return {
+				healthStatus: term?.healthStatus || "running",
+				ptyId: term?.ptyId,
+				restartTerminal: state.restartTerminal,
+				setTerminalHealthStatus: state.setTerminalHealthStatus,
+			};
+		}),
+	);
+
+	const fontFamily = useTerminalFontFamily();
+	const fontSize = useTerminalFontSize();
+	const bufferSize = useTerminalBufferSize();
+	const rendererPreference = useTerminalRenderer();
+	const activeProject = useActiveProject();
+	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
+
+	// 3. REFS
+	const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`);
+	const instanceId = instanceIdRef.current;
 	const containerRef = useRef<HTMLDivElement>(null);
 	const terminalRef = useRef<Terminal | null>(null);
 	const fitAddonRef = useRef<FitAddon | null>(null);
@@ -194,66 +217,53 @@ function ConnectedTerminalComponent({
 	const webglAddonRef = useRef<WebglAddon | null>(null);
 	const fileLinkProviderDisposableRef = useRef<IDisposable | null>(null);
 	const webglRecoveryAttemptsRef = useRef<number>(0);
-	const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-		null,
-	);
-	const loadWebglAddonRef = useRef<
-		((term: Terminal, isRecovery?: boolean) => void) | null
-	>(null);
-	// Track WebGL context loss for recovery decisions
+	const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null);
 	const webglContextLostRef = useRef<boolean>(false);
-
-	// Get font settings from app settings store
-	const fontFamily = useTerminalFontFamily();
-	const fontSize = useTerminalFontSize();
-	const bufferSize = useTerminalBufferSize();
-	const rendererPreference = useTerminalRenderer();
+	// Single-flight guard for performTerminalRecovery. On a window restore both
+	// the visibilitychange and focus handlers (and sometimes power-resume) can
+	// fire close together; without this guard each would start its own
+	// layout-wait RAF loop and overlapping fit + visibility-flip cycles.
+	const recoveryInProgressRef = useRef<boolean>(false);
+	// Track visibility prop for recovery path guards (tab-active, not window-visible).
+	// Ref avoids stale closures in event listeners referencing isVisible directly.
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
 	const rendererPreferenceRef = useRef(rendererPreference);
 	rendererPreferenceRef.current = rendererPreference;
-
-	const activeProject = useActiveProject();
 	const activeProjectPathRef = useRef<string | undefined>(activeProject?.path);
 	activeProjectPathRef.current = activeProject?.path;
-
-	// Get keyboard shortcuts to intercept app shortcuts before xterm handles them
-	const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts);
-	// Use ref to avoid stale closure in attachCustomKeyEventHandler
 	const shortcutsRef = useRef(shortcuts);
 	shortcutsRef.current = shortcuts;
 	const cleanupDataListenerRef = useRef<(() => void) | null>(null);
 	const cleanupExitListenerRef = useRef<(() => void) | null>(null);
-	// Use ref to track current PTY ID for listener callbacks to avoid stale closures
 	const ptyIdRef = useRef<string | null>(null);
 	const spawnInFlightRef = useRef(false);
 	const didInitRef = useRef(false);
 	const initializedTerminalIdRef = useRef<string | undefined>(undefined);
-	// Use refs for callbacks to avoid dependency changes
 	const onExitRef = useRef(onExit);
 	onExitRef.current = onExit;
+	const onErrorRef = useRef(onError);
+	onErrorRef.current = onError;
+	const onSpawnedRef = useRef(onSpawned);
+	onSpawnedRef.current = onSpawned;
 	const onCommandRef = useRef(onCommand);
 	onCommandRef.current = onCommand;
 	const onBoundToStoreTerminalRef = useRef(onBoundToStoreTerminal);
 	onBoundToStoreTerminalRef.current = onBoundToStoreTerminal;
-	// Track current input line for command history
+	const spawnOptionsRef = useRef(spawnOptions);
+	spawnOptionsRef.current = spawnOptions;
+	const initialScrollbackRef = useRef(initialScrollback);
+	initialScrollbackRef.current = initialScrollback;
 	const currentLineRef = useRef<string>("");
-	const continuityProjectIdRef = useRef<string | undefined>(
-		getInstrumentationProjectId(spawnOptions),
-	);
-	// Flag: set when tab becomes visible before PTY is ready, to flush fit+resize after spawn
-	const terminalInitializedForRef = useRef<string | undefined>(undefined);
+	const continuityProjectIdRef = useRef<string | undefined>(getInstrumentationProjectId(spawnOptions));
 	const needsResizeOnReadyRef = useRef<boolean>(false);
-
 	// Track last fitted container dimensions to avoid redundant fit() calls
 	const lastContainerWidthRef = useRef<number>(0);
 	const lastContainerHeightRef = useRef<number>(0);
-
-	// Activity timeout timer ref
 	const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	// Debounced activity tracking refs
 	const lastActivityUpdateRef = useRef<number>(0);
 	const pendingActivityUpdateRef = useRef<{ id: string } | null>(null);
-
-	// Rate limiting for clipboard operations
 	const lastClipboardOpRef = useRef<number>(0);
 
 	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
@@ -278,74 +288,65 @@ function ConnectedTerminalComponent({
 		isVisible,
 	});
 
-	// State to track terminal instance for clipboard hook
 	const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
 		null,
 	);
 
+	// 5. CALLBACKS & EFFECTS
 	const disposeWebglAddon = useCallback((): void => {
 		if (webglRecoveryTimeoutRef.current) {
 			clearTimeout(webglRecoveryTimeoutRef.current);
 			webglRecoveryTimeoutRef.current = null;
 		}
-
 		if (webglAddonRef.current) {
 			webglAddonRef.current.dispose();
 			webglAddonRef.current = null;
 		}
-
 		webglContextLostRef.current = false;
 	}, []);
 
 	const performFit = (force = false): boolean => {
 		if (!fitAddonRef.current || !terminalRef.current || !containerRef.current) return false;
-
 		const rect = containerRef.current.getBoundingClientRect();
 		const width = Math.round(rect.width);
 		const height = Math.round(rect.height);
-
-		// Only skip fit when dimensions are non-zero and unchanged.
-		// Zero dimensions are common during mount/transitions; allow fit()
-		// in those cases so downstream logic (tests, recovery) sees the attempt.
 		if (!force && width > 0 && height > 0 && width === lastContainerWidthRef.current && height === lastContainerHeightRef.current) {
-			return false; // No change — skip fit to reduce churn
+			return false;
 		}
-
-		// Save scroll position before fit to preserve it across the v6 viewport rewrite.
-		// xterm 6 changed the scroll bar/viewport behavior and fit() can reset scrollTop to 0.
-		const terminal = terminalRef.current;
-		const scrollTop = terminal.buffer.active.viewportY;
-		const baseY = terminal.buffer.active.baseY;
-
 		try {
 			fitAddonRef.current.fit();
 			if (width > 0 && height > 0) {
 				lastContainerWidthRef.current = width;
 				lastContainerHeightRef.current = height;
 			}
-
-			// Restore scroll position if user was scrolled up, clamping to valid range.
-			if (scrollTop > 0 && scrollTop < baseY) {
-				terminal.scrollToLine(scrollTop);
-			}
-
 			return true;
 		} catch {
 			return false;
 		}
 	};
 
-	// Clipboard functionality
-	const { copySelection, pasteFromClipboard, hasSelection } =
-		useTerminalClipboard({
-			terminal: terminalInstance,
-		});
+	const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({
+		terminal: terminalInstance,
+		onImagePaste: async () => {
+			const ptyId = ptyIdRef.current;
+			if (!ptyId) return;
+			// Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
+			await terminalApi.write(ptyId, '\x16');
+		},
+	});
+	const copySelectionRef = useRef(copySelection);
+	copySelectionRef.current = copySelection;
+	const pasteFromClipboardRef = useRef(pasteFromClipboard);
+	pasteFromClipboardRef.current = pasteFromClipboard;
 
-	// Sync ptyIdRef with external terminal ID when provided
+	useEffect(() => { if (externalTerminalId) ptyIdRef.current = externalTerminalId; }, [externalTerminalId]);
+
+	useEffect(() => { if (continuityProjectIdRef.current) continuityProjectIdRef.current = getInstrumentationProjectId(spawnOptionsRef.current); }, [spawnOptions]);
+
 	useEffect(() => {
-		if (externalTerminalId) {
-			ptyIdRef.current = externalTerminalId;
-		}
+		if (!externalTerminalId || isTerminalPendingPtyAssignment(externalTerminalId)) return;
+		useTerminalStore.getState().setRendererAttached(externalTerminalId, true);
+		return () => { useTerminalStore.getState().setRendererAttached(externalTerminalId, false); };
 	}, [externalTerminalId]);
 
 	const instrumentationProjectId = getInstrumentationProjectId(spawnOptions);
@@ -355,24 +356,6 @@ function ConnectedTerminalComponent({
 			continuityProjectIdRef.current = instrumentationProjectId;
 		}
 	}, [instrumentationProjectId]);
-
-	useEffect(() => {
-		if (
-			!externalTerminalId ||
-			isTerminalPendingPtyAssignment(externalTerminalId)
-		) {
-			return;
-		}
-
-		const store = useTerminalStore.getState();
-		store.setRendererAttached(externalTerminalId, true);
-
-		return () => {
-			useTerminalStore
-				.getState()
-				.setRendererAttached(externalTerminalId, false);
-		};
-	}, [externalTerminalId]);
 
 	// Memoize spawn options to prevent unnecessary re-spawns
 	const memoizedSpawnOptions = useMemo(
@@ -417,70 +400,17 @@ function ConnectedTerminalComponent({
 
 			try {
 				const result = await terminalApi.write(ptyId, data);
-				if (!result.success && onError) {
-					onError(result.error);
+				if (!result.success && onErrorRef.current) {
+					onErrorRef.current(result.error);
 				}
 			} catch (err) {
-				if (onError) {
-					onError(err instanceof Error ? err.message : "Write failed");
+				if (onErrorRef.current) {
+					onErrorRef.current(err instanceof Error ? err.message : "Write failed");
 				}
 			}
 		},
-		[onError],
-	);
-
-
-
-	// Expose search methods via ref
-	useImperativeHandle(
-		searchRef,
-		() => ({
-			findNext: (term: string) => {
-				if (!searchAddonRef.current) return false;
-				return searchAddonRef.current.findNext(term, {
-					decorations: {
-						matchBackground: "#444444",
-						matchBorder: "#888888",
-						matchOverviewRuler: "#888888",
-						activeMatchBackground: "#FFFF00",
-						activeMatchBorder: "#FFFF00",
-						activeMatchColorOverviewRuler: "#FFFF00",
-					},
-				});
-			},
-			findPrevious: (term: string) => {
-				if (!searchAddonRef.current) return false;
-				return searchAddonRef.current.findPrevious(term, {
-					decorations: {
-						matchBackground: "#444444",
-						matchBorder: "#888888",
-						matchOverviewRuler: "#888888",
-						activeMatchBackground: "#FFFF00",
-						activeMatchBorder: "#FFFF00",
-						activeMatchColorOverviewRuler: "#FFFF00",
-					},
-				});
-			},
-			clearDecorations: () => {
-				if (searchAddonRef.current) {
-					searchAddonRef.current.clearDecorations();
-				}
-			},
-			writeText: (text: string) => {
-				const ptyId = ptyIdRef.current;
-				if (!ptyId) return;
-				terminalApi.write(ptyId, text);
-			},
-		}),
 		[],
 	);
-
-	const shouldDebugLog = import.meta.env.DEV;
-	const devLog = (...args: unknown[]): void => {
-		if (shouldDebugLog) {
-			console.log(...args);
-		}
-	};
 
 	// Initialize terminal, set up IPC listeners, and spawn PTY
 	useEffect(() => {
@@ -627,6 +557,17 @@ function ConnectedTerminalComponent({
 			if (containerRef.current && terminal.element) {
 				containerRef.current.appendChild(terminal.element);
 			}
+
+			// Note: the actual fix for "frozen terminal after rapid project
+			// switches" lives in terminal-cache.ts (cacheTerminal disposes any
+			// stale prior occupant before storing a new one). The fresh
+			// component instance always arrives here with webglAddonRef.current
+			// === null (the previous instance disposed its addon during cleanup),
+			// so a guarded dispose here would be a no-op. We just reset the
+			// context-lost flag so the WebGL addon load further down treats this
+			// as a clean mount.
+			webglContextLostRef.current = false;
+
 			// Force a full refresh so the renderer repaints after DOM reattachment.
 			terminal.refresh(0, terminal.rows - 1);
 		} else {
@@ -1071,7 +1012,7 @@ function ConnectedTerminalComponent({
 								result.data.id,
 							);
 							console.error("[Terminal Replay Failed]", replayError);
-							if (onError) onError(replayError);
+							if (onErrorRef.current) onErrorRef.current(replayError);
 						}
 						// Write one-time info line if project env vars were applied
 						if (
@@ -1085,8 +1026,8 @@ function ConnectedTerminalComponent({
 						}
 						// Restore scroll position if cached from previous pane
 						restoreScrollPosition(result.data.id, terminal);
-						if (onSpawned) {
-							onSpawned(result.data.id);
+						if (onSpawnedRef.current) {
+							onSpawnedRef.current(result.data.id);
 						}
 						if (onBoundToStoreTerminalRef.current) {
 							onBoundToStoreTerminalRef.current(result.data.id);
@@ -1097,7 +1038,7 @@ function ConnectedTerminalComponent({
 						terminal.write(
 							`\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`,
 						);
-						if (onError) onError(errorMsg);
+						if (onErrorRef.current) onErrorRef.current(errorMsg);
 					}
 				} catch (err) {
 					const errorMsg = err instanceof Error ? err.message : "Spawn failed";
@@ -1105,7 +1046,7 @@ function ConnectedTerminalComponent({
 					terminal.write(
 						`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`,
 					);
-					if (onError) onError(errorMsg);
+						if (onErrorRef.current) onErrorRef.current(errorMsg);
 				} finally {
 					spawnInFlightRef.current = false;
 				}
@@ -1221,7 +1162,7 @@ function ConnectedTerminalComponent({
 						externalTerminalId,
 					);
 					console.error("[Terminal Replay Failed]", replayError);
-					if (onError) onError(replayError);
+						if (onErrorRef.current) onErrorRef.current(replayError);
 				}
 				// Write one-time info line if project env vars were applied
 				// (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
@@ -1402,47 +1343,88 @@ function ConnectedTerminalComponent({
 		}
 	}, [isVisible, forceResizeFit]);
 
-	// Shared terminal recovery logic - re-fit and check WebGL health
+	// Shared terminal recovery logic - re-fit once layout is stable, then nudge
+	// the compositor to re-present the canvas layer.
 	const performTerminalRecovery = useCallback((): void => {
 		if (!fitAddonRef.current || !terminalRef.current) return;
 
-		// Only recreate WebGL addon if context was actually lost, the current preference still
-		// allows WebGL, and we're not already recovering.
-		if (
-			shouldUseWebglRenderer(rendererPreferenceRef.current) &&
-			webglContextLostRef.current &&
-			!webglAddonRef.current
-		) {
-			try {
-				// Cancel any pending auto-recovery timeout to avoid double-creation race
-				if (webglRecoveryTimeoutRef.current) {
-					clearTimeout(webglRecoveryTimeoutRef.current);
-					webglRecoveryTimeoutRef.current = null;
-				}
-				console.warn(
-					"WebGL context was lost, recreating addon during recovery",
-				);
-				// Use shared loadWebglAddon for proper recovery (addon already disposed in onContextLoss)
-				if (loadWebglAddonRef.current && terminalRef.current) {
-					loadWebglAddonRef.current(terminalRef.current, true);
-				}
-			} catch (error) {
-				console.warn("WebGL context recovery failed:", error);
+		// Single-flight: if a recovery is already running (layout-wait poll or the
+		// trailing visibility-flip RAF), skip duplicate triggers. On a window
+		// restore both visibilitychange and focus typically fire close together.
+		if (recoveryInProgressRef.current) return;
+		recoveryInProgressRef.current = true;
+
+		// Cancel any pending WebGL auto-recovery timeout to avoid double-creation
+		// race with the genuine onContextLoss path.
+		if (webglRecoveryTimeoutRef.current) {
+			clearTimeout(webglRecoveryTimeoutRef.current);
+			webglRecoveryTimeoutRef.current = null;
+		}
+
+		// Root cause (verified via live forensics + xterm.js #4841 / #5357):
+		//
+		// After minimize→restore on Windows the webview reflows over several
+		// frames. If fit() runs while the container height is still collapsed,
+		// the terminal grid shrinks to 1-2 rows (PTY redraws tiny → "1-2 lines"
+		// of text) until a later resize corrects it. The fit pipeline now guards
+		// against collapsed dimensions (use-terminal-resize-v2), so an early fit
+		// is a safe no-op rather than a destructive shrink.
+		//
+		// Additionally, the WebView2 compositor may not re-present the WebGL
+		// canvas layer after restore (xterm 6.x has no DOM-row fallback; the
+		// context itself stays healthy). A CSS visibility flip forces a
+		// re-composite — the same mechanism that makes tab-switching work.
+		//
+		// Strategy: wait for the container to report a usable size (poll across a
+		// few RAFs), then forceResizeFit + refresh, then flip visibility to
+		// guarantee the layer re-composites.
+		const termEl = terminalRef.current.element as HTMLElement | undefined;
+		const container = containerRef.current;
+
+		const MIN_USABLE = 40;
+		const MAX_LAYOUT_WAIT_FRAMES = 30; // ~0.5s at 60fps
+
+		const runRecovery = (): void => {
+			const terminal = terminalRef.current;
+			if (!terminal) {
+				recoveryInProgressRef.current = false;
+				return;
 			}
-		}
+			// Re-fit (guarded against collapsed dims) + redraw the buffer.
+			forceResizeFit();
+			terminal.refresh(0, terminal.rows - 1);
 
-		// Re-fit terminal to current dimensions
-		performFit(true);
+			// Nudge the compositor to re-present the canvas layer. Clear the
+			// single-flight guard only after the trailing refresh completes.
+			if (termEl) {
+				termEl.style.visibility = "hidden";
+				requestAnimationFrame(() => {
+					termEl.style.visibility = "";
+					const t = terminalRef.current;
+					if (t) t.refresh(0, t.rows - 1);
+					recoveryInProgressRef.current = false;
+				});
+			} else {
+				recoveryInProgressRef.current = false;
+			}
+		};
 
-		// Sync PTY dimensions
-		const terminal = terminalRef.current;
-		const ptyId = ptyIdRef.current;
-		if (terminal && ptyId) {
-			terminalApi.resize(ptyId, terminal.cols, terminal.rows).catch(() => {
-				// Ignore resize errors - terminal may have been killed
-			});
-		}
-	}, []);
+		// Wait until the container has reflowed to a usable size before fitting,
+		// so we never collapse the grid. Bail out after MAX_LAYOUT_WAIT_FRAMES.
+		let frames = 0;
+		const waitForStableLayout = (): void => {
+			const rect = container?.getBoundingClientRect();
+			const ready =
+				!!rect && rect.width >= MIN_USABLE && rect.height >= MIN_USABLE;
+			if (ready || frames >= MAX_LAYOUT_WAIT_FRAMES) {
+				runRecovery();
+				return;
+			}
+			frames += 1;
+			requestAnimationFrame(waitForStableLayout);
+		};
+		waitForStableLayout();
+	}, [forceResizeFit]);
 
 	// Recovery handler for visibility change (app regains focus after idle)
 	useEffect(() => {
@@ -1471,6 +1453,30 @@ function ConnectedTerminalComponent({
 		};
 	}, [performTerminalRecovery]);
 
+	// Recovery handler for window focus — critical for Tauri minimize/restore
+	// on Windows where document.visibilitychange is unreliable.
+	// The window 'focus' event reliably fires when the window is restored from
+	// taskbar minimize. performTerminalRecovery re-fits the terminal to its
+	// container and syncs PTY dimensions (SIGWINCH to the shell process).
+	useEffect(() => {
+		const handleWindowFocus = (): void => {
+			// Skip recovery for terminals that are not the active tab in their pane
+			// (isVisible is tab-active, not window-visible — see PaneContent.tsx).
+			// Hidden instances recover via the isVisible-change useEffect instead.
+			if (!isVisibleRef.current) return;
+			// Fire recovery immediately — the window is already visible when
+			// 'focus' fires (unlike visibilitychange which needs DOM reflow time).
+			// performTerminalRecovery internally waits for a stable layout before
+			// fitting and is single-flight guarded, so this is safe to call eagerly.
+			performTerminalRecovery();
+		};
+
+		window.addEventListener("focus", handleWindowFocus);
+		return () => {
+			window.removeEventListener("focus", handleWindowFocus);
+		};
+	}, [performTerminalRecovery]);
+
 	// Recovery handler for power resume (wake from sleep, screen unlock)
 	useEffect(() => {
 		// Track timeout to prevent firing after unmount
@@ -1494,83 +1500,225 @@ function ConnectedTerminalComponent({
 		};
 	}, [performTerminalRecovery]);
 
-	// NOTE: xterm.write() is NOT paused during minimize anymore. With xterm 6.1
-	// the scrollback limit (10,000 lines) bounds the internal character buffer,
-	// and the GH-133 retention policy bounds the app's renderer-side buffers
-	// (transcript, detachedOutput, pendingScrollback). Removing the write-skip
-	// preserves TUI alt-buffer state and scrollback history across minimize/restore.
-	// The bounded transcript in terminal-store is still used for the detached case
-	// (project switch) where no ConnectedTerminal renderer exists.
-
-	// Handle Select All
-	const handleSelectAll = useCallback((): void => {
-		if (terminalRef.current) {
-			terminalRef.current.selectAll();
-		}
-	}, []);
-
-	// Focus terminal when container is clicked (important for split panes)
 	const handleContainerClick = useCallback((): void => {
 		terminalRef.current?.focus();
 	}, []);
 
-	// Memoized context menu handlers to prevent unnecessary re-renders
-	const contextMenuHandlers = useMemo(
-		() => ({
-			copy: copySelection,
-			paste: pasteFromClipboard,
-			selectAll: handleSelectAll,
-		}),
-		[copySelection, pasteFromClipboard, handleSelectAll],
-	);
+	const handleSelectAll = useCallback((): void => {
+		terminalRef.current?.selectAll();
+	}, []);
+
+	useImperativeHandle(searchRef, () => {
+		const searchDecorations = {
+			matchBackground: "#444444",
+			activeMatchBackground: "#FFFF00",
+			matchOverviewRuler: "#444444",
+			activeMatchColorOverviewRuler: "#FFFF00",
+		};
+
+		return {
+			findNext: (term: string) => searchAddonRef.current?.findNext(term, { decorations: searchDecorations }) ?? false,
+			findPrevious: (term: string) => searchAddonRef.current?.findPrevious(term, { decorations: searchDecorations }) ?? false,
+			clearDecorations: () => searchAddonRef.current?.clearDecorations(),
+			writeText: (text: string) => { if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text); }
+		};
+	}, []);
+
+	const shouldDebugLog = import.meta.env.DEV;
+	const devLog = (...args: unknown[]): void => { if (shouldDebugLog) console.log(...args); };
+
+	useEffect(() => {
+		const debugId = `${instanceId}-${Date.now().toString().slice(-6)}`;
+		if (!containerRef.current || !targetId) return;
+		if (didInitRef.current) return;
+		didInitRef.current = true;
+		initializedTerminalIdRef.current = targetId;
+		const terminalOptions = { ...getTerminalOptions(navigator.platform), fontFamily, fontSize, scrollback: bufferSize };
+		const terminal = new Terminal(terminalOptions);
+		terminalRef.current = terminal;
+		setTerminalInstance(terminal);
+		const fitAddon = new FitAddon();
+		fitAddonRef.current = fitAddon;
+		terminal.loadAddon(fitAddon);
+		terminal.loadAddon(new WebLinksAddon());
+		const searchAddon = new SearchAddon();
+		searchAddonRef.current = searchAddon;
+		terminal.loadAddon(searchAddon);
+		terminal.open(containerRef.current);
+		terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+			if (event.type !== "keydown") return true;
+
+			const shortcuts = shortcutsRef.current;
+
+			if (isAppOwnedTerminalShortcut(event, shortcuts)) {
+				if (isMac && event.ctrlKey && !event.metaKey) {
+					return true;
+				}
+				return false;
+			}
+
+			const clipboardModifier = isPlatformModifier(event);
+
+			if (clipboardModifier) {
+				const now = Date.now();
+				if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) return false;
+				switch (event.key.toLowerCase()) {
+					case "c": if (terminal.hasSelection()) { event.preventDefault(); lastClipboardOpRef.current = now; void copySelectionRef.current(); return false; } return true;
+					case "v": event.preventDefault(); lastClipboardOpRef.current = now; void pasteFromClipboardRef.current(); return false;
+					case "a": terminal.selectAll(); return false;
+				}
+			}
+			return true;
+		});
+		const loadWebglAddon = (term: Terminal, isRecovery: boolean = false): void => {
+			if (!shouldUseWebglRenderer(rendererPreferenceRef.current) || webglAddonRef.current || webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) return;
+			try {
+				const webglAddon = new WebglAddon();
+				webglAddon.onContextLoss(() => {
+					webglAddon.dispose(); webglAddonRef.current = null; webglContextLostRef.current = true;
+					webglRecoveryAttemptsRef.current++;
+					if (webglRecoveryTimeoutRef.current) clearTimeout(webglRecoveryTimeoutRef.current);
+					webglRecoveryTimeoutRef.current = setTimeout(() => { webglRecoveryTimeoutRef.current = null; loadWebglAddon(term, true); }, WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS);
+				});
+				term.loadAddon(webglAddon);
+				webglAddonRef.current = webglAddon;
+				webglContextLostRef.current = false;
+			} catch { webglRecoveryAttemptsRef.current++; }
+		};
+		if (shouldUseWebglRenderer(rendererPreferenceRef.current)) loadWebglAddon(terminal);
+		loadWebglAddonRef.current = loadWebglAddon;
+		requestAnimationFrame(() => performFit(true));
+		if (autoFocus) terminal.focus();
+		const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => performFit()));
+		resizeObserver.observe(containerRef.current);
+		const dataDisposable = terminal.onData(handleTerminalData);
+		const resizeDisposable = terminal.onResize(({ cols, rows }) => handlePtyResize(cols, rows));
+		cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
+			if (id === ptyIdRef.current && terminalRef.current) {
+				terminalRef.current.write(data);
+				const now = Date.now();
+				const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id);
+				if (terminalRecord) {
+					if (now - lastActivityUpdateRef.current >= ACTIVITY_DEBOUNCE_MS) {
+						useTerminalStore.getState().updateTerminalActivityBatch(terminalRecord.id, true, now);
+						lastActivityUpdateRef.current = now;
+					} else { pendingActivityUpdateRef.current = { id: terminalRecord.id }; }
+					if (activityTimeoutRef.current) clearTimeout(activityTimeoutRef.current);
+					const termId = terminalRecord.id;
+					activityTimeoutRef.current = setTimeout(() => {
+						if (pendingActivityUpdateRef.current) {
+							useTerminalStore.getState().updateTerminalActivityBatch(pendingActivityUpdateRef.current.id, false, Date.now());
+							pendingActivityUpdateRef.current = null;
+						} else { useTerminalStore.getState().updateTerminalActivityBatch(termId, false, Date.now()); }
+						activityTimeoutRef.current = null; lastActivityUpdateRef.current = 0;
+					}, 2000);
+				}
+			}
+		});
+		cleanupExitListenerRef.current = terminalApi.onExit((pId: string, exitCode: number, signal?: number) => {
+			if (pId === ptyIdRef.current) {
+				if (targetId) useTerminalStore.getState().setTerminalHealthStatus(targetId, "disconnected");
+				if (onExitRef.current) onExitRef.current(exitCode, signal);
+			}
+		});
+		const spawnTerminal = async (): Promise<void> => {
+			performFit(true);
+			if (!externalTerminalId) {
+				if (!autoSpawn || spawnInFlightRef.current || ptyIdRef.current) return;
+				spawnInFlightRef.current = true;
+				try {
+					const currentSpawnOptions = spawnOptionsRef.current;
+					const result = await terminalApi.spawn({ ...currentSpawnOptions, shell: currentSpawnOptions?.shell || undefined, cols: terminal.cols || 80, rows: terminal.rows || 24 });
+					if (result.success) {
+						ptyIdRef.current = result.data.id;
+						useTerminalStore.getState().setRendererAttached(result.data.id, true);
+						void addRendererRef(result.data.id, instanceIdRef.current);
+						registerTerminal(result.data.id, terminal);
+						const transcript = useTerminalStore.getState().peekTranscript(result.data.id);
+						if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(result.data.id); }
+						else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
+						if (onSpawnedRef.current) onSpawnedRef.current(result.data.id);
+						if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(result.data.id);
+					} else if (onErrorRef.current) onErrorRef.current(result.error);
+				} catch (err) { if (onErrorRef.current) onErrorRef.current(err instanceof Error ? err.message : "Spawn failed"); } finally { spawnInFlightRef.current = false; }
+			} else {
+				void addRendererRef(externalTerminalId, instanceIdRef.current);
+				registerTerminal(externalTerminalId, terminal);
+				const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId);
+				if (transcript) { terminal.write(transcript); useTerminalStore.getState().consumeTranscript(externalTerminalId); }
+				else if (initialScrollbackRef.current?.length) restoreScrollback(terminal, initialScrollbackRef.current);
+				if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(externalTerminalId);
+			}
+		};
+		spawnTerminal();
+		return () => {
+			const tId = ptyIdRef.current || externalTerminalId;
+			if (tId && terminalRef.current) { captureScrollPosition(tId); if (!externalTerminalId) useTerminalStore.getState().setRendererAttached(tId, false); void removeRendererRef(tId, instanceId); }
+			if (ptyIdRef.current) unregisterTerminal(ptyIdRef.current);
+			else if (externalTerminalId) unregisterTerminal(externalTerminalId);
+			resizeObserver.disconnect(); dataDisposable.dispose(); resizeDisposable.dispose();
+			if (cleanupDataListenerRef.current) cleanupDataListenerRef.current();
+			if (cleanupExitListenerRef.current) cleanupExitListenerRef.current();
+
+			if (activityTimeoutRef.current) clearTimeout(activityTimeoutRef.current);
+			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
+			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
+		};
+	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handlePtyResize, setTerminalHealthStatus, disposeWebglAddon]);
+
+	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
-				<div
-					ref={containerRef}
-					className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
-					onClick={handleContainerClick}
-					onMouseDown={(e) => {
-						// Prevent event from bubbling to window/parent handlers
-						// that might steal focus back or interfere with UI
-						e.stopPropagation();
-						if (terminalRef.current) {
-							terminalRef.current.focus();
-						}
-					}}
-				/>
+				<div className="relative w-full h-full group overflow-hidden">
+					<div
+						className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
+						onClick={handleContainerClick}
+						onMouseDown={(e) => {
+							// Prevent event from bubbling to window/parent handlers
+							// that might steal focus back or interfere with UI
+							e.stopPropagation();
+							if (terminalRef.current) {
+								terminalRef.current.focus();
+							}
+						}}
+					>
+						<div ref={containerRef} className="w-full h-full" />
+					</div>
+					{isCrashed && (
+						<div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+							<div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-destructive">
+								<div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">
+									<div className="w-20 h-20 rounded-2xl bg-destructive/10 flex items-center justify-center mb-3 shadow-inner group-hover:scale-110 transition-transform duration-500">
+										<AlertTriangle className="text-destructive" size={40} />
+									</div>
+									<span className="text-[10px] uppercase tracking-[0.2em] font-black text-destructive/80 text-center">CRITICAL ERROR</span>
+								</div>
+								<div className="flex flex-col justify-center text-center md:text-left">
+									<div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider opacity-70">Terminal Pane Exception</div>
+									<h3 className="text-2xl md:text-3xl font-bold tracking-tighter mb-3">Session Interrupted</h3>
+									<p className="text-muted-foreground leading-relaxed text-sm md:text-base mb-8">The terminal process exited unexpectedly. This usually happens if the shell crashes or the PTY is killed by the OS.</p>
+									<div className="flex flex-col sm:flex-row items-center gap-4">
+										<button onClick={(e) => { e.stopPropagation(); if (targetId) restartTerminal(targetId); }} className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/20 active:scale-95 transition-all font-bold shadow-md">
+											<RefreshCcw size={20} /> Reconnect Session
+										</button>
+										<div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
+										<div className="text-[10px] text-muted-foreground/60 font-mono">REF::{targetId?.slice(0, 8)}</div>
+									</div>
+								</div>
+							</div>
+						</div>
+					)}
+				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="w-40">
-				<ContextMenuItem
-					onClick={contextMenuHandlers.copy}
-					disabled={!hasSelection}
-					className="cursor-pointer"
-					aria-label="Copy selected text"
-					aria-keyshortcuts="Ctrl+C"
-				>
-					Copy
-					<span className="ml-auto text-xs text-muted-foreground">Ctrl+C</span>
-				</ContextMenuItem>
-				<ContextMenuItem
-					onClick={contextMenuHandlers.paste}
-					className="cursor-pointer"
-					aria-label="Paste from clipboard"
-					aria-keyshortcuts="Ctrl+V"
-				>
-					Paste
-					<span className="ml-auto text-xs text-muted-foreground">Ctrl+V</span>
-				</ContextMenuItem>
+				<ContextMenuItem onClick={copySelection} disabled={!hasSelection} className="cursor-pointer">Copy <span className="ml-auto text-xs text-muted-foreground">Ctrl+C</span></ContextMenuItem>
+				<ContextMenuItem onClick={pasteFromClipboard} className="cursor-pointer">Paste <span className="ml-auto text-xs text-muted-foreground">Ctrl+V</span></ContextMenuItem>
 				<ContextMenuSeparator />
-				<ContextMenuItem
-					onClick={contextMenuHandlers.selectAll}
-					className="cursor-pointer"
-					aria-label="Select all text"
-					aria-keyshortcuts="Ctrl+A"
-				>
-					Select All
-					<span className="ml-auto text-xs text-muted-foreground">Ctrl+A</span>
-				</ContextMenuItem>
+				<ContextMenuItem onClick={handleSelectAll} className="cursor-pointer">Select All <span className="ml-auto text-xs text-muted-foreground">Ctrl+A</span></ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem onClick={() => { if (targetId) restartTerminal(targetId); }} className="cursor-pointer text-primary focus:text-primary"><RefreshCcw size={14} className="mr-2" /> Restart Terminal</ContextMenuItem>
 			</ContextMenuContent>
 		</ContextMenu>
 	);

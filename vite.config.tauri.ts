@@ -43,11 +43,10 @@ export default defineConfig({
   build: {
     outDir: 'dist-tauri',
     emptyOutDir: true,
-    rollupOptions: {
+    rolldownOptions: {
       input: path.resolve(__dirname, 'tauri-index.html')
     },
-    target: 'esnext',
-    minify: 'esbuild'
+    target: 'esnext'
   },
 
   // Env prefix for Tauri

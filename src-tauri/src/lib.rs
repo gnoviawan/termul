@@ -3,8 +3,11 @@ mod browser_tab_manager;
 mod commands;
 mod migrations;
 mod pty;
+mod secure_storage;
 mod shell_paths;
+mod ssh;
 mod trackers;
+mod worktree;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
@@ -15,10 +18,10 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
-use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    Emitter, Manager, RunEvent,
-};
+use tauri::{Emitter, Manager, RunEvent};
+
+#[cfg(not(target_os = "linux"))]
+use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
 const MENU_ID_CHECK_FOR_UPDATES: &str = "check-for-updates";
 const MENU_ID_RELOAD: &str = "view-reload";
@@ -212,7 +215,11 @@ fn get_available_shells() -> Vec<ShellInfo> {
             ("pwsh", r"C:\Program Files\PowerShell\7\pwsh.exe", None),
             ("pwsh", r"C:\Program Files\PowerShell\6\pwsh.exe", None),
             // Windows PowerShell 5 (explicit path)
-            ("powershell", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", None),
+            (
+                "powershell",
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                None,
+            ),
             // PATH-based fallbacks (checked last)
             ("pwsh", "pwsh.exe", None),
             ("powershell", "powershell.exe", None),
@@ -277,13 +284,14 @@ fn get_available_shells() -> Vec<ShellInfo> {
 #[cfg(target_os = "windows")]
 fn is_builtin_windows_shell(shell_path: &str) -> bool {
     let normalized = shell_path.to_ascii_lowercase();
-    // NOTE: pwsh is NOT a built-in - it must be resolved from PATH
     matches!(
         normalized.as_str(),
         "cmd"
             | "cmd.exe"
             | "powershell"
             | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
             | "wsl"
             | "wsl.exe"
     )
@@ -433,6 +441,7 @@ fn open_external_url(url: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
@@ -578,9 +587,23 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Native menu bar:
+    // - macOS: top OS menu (expected, native UX)
+    // - Windows: hidden behind decorations:false (custom title bar handles it)
+    // - Linux/GTK: would render as a separate widget bar inside the window,
+    //   creating a double bar with the custom title bar. Skip the native menu
+    //   on Linux and let the custom title bar / shortcuts cover those actions.
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder
         .menu(build_app_menu)
-        .on_menu_event(handle_menu_event)
+        .on_menu_event(handle_menu_event);
+
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_menu_event(handle_menu_event);
+
+    let mut builder = builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
@@ -589,7 +612,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -638,8 +662,24 @@ pub fn run() {
             app.manage(pty_manager.clone());
 
             // Create Browser Tab Manager
-            let browser_tab_manager = Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            let browser_tab_manager =
+                Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
+
+            // Create SSH Manager
+            let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
+            app.manage(ssh_manager);
+
+            // Verify the OS keychain backend actually persists secrets. If this
+            // fails, stored SSH passwords/passphrases silently vanish (mock
+            // store), so surface it loudly in logs.
+            match ssh::credential_store::self_test() {
+                Ok(()) => log::info!("[SSH] Credential keychain self-test passed"),
+                Err(e) => log::error!(
+                    "[SSH] Credential keychain self-test FAILED: {} -- stored SSH credentials will not persist",
+                    e
+                ),
+            }
 
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
@@ -719,6 +759,7 @@ pub fn run() {
             commands::browser_tab_go_back,
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
+            commands::browser_tab_open_devtools,
             commands::browser_tab_inject_annotation,
             commands::browser_tab_remove_annotation_overlay,
             commands::browser_tab_inject_annotation_markers,
@@ -730,12 +771,48 @@ pub fn run() {
             commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
             commands::browser_tab_report_annotation_marker_clicked,
+            // Worktree commands
+            commands::worktree_list,
+            commands::worktree_create,
+            commands::worktree_remove,
+            commands::worktree_branches,
+            commands::worktree_check_dirty,
+            commands::worktree_remove_all_managed,
+            commands::worktree_parse_gitignore,
+            commands::worktree_create_symlinks,
+            commands::worktree_ensure_symlinks,
+            commands::worktree_archive,
+            commands::worktree_restore,
+            commands::worktree_merge_preview,
+            commands::worktree_merge_execute,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,
             commands::search_content_stream,
             commands::search_content_cancel,
             commands::search_file_names,
+            // SSH commands
+            commands::ssh_list_profiles,
+            commands::ssh_save_profile,
+            commands::ssh_delete_profile,
+            commands::ssh_import_config,
+            commands::ssh_connect,
+            commands::ssh_disconnect,
+            commands::ssh_get_connections,
+            commands::ssh_port_forward_start,
+            commands::ssh_port_forward_stop,
+            commands::sftp_list_dir,
+            commands::sftp_download,
+            commands::sftp_upload,
+            commands::sftp_delete,
+            commands::sftp_mkdir,
+            commands::sftp_rename,
+            // SSH askpass helper
+            commands::ssh_create_askpass,
+            // SFTP file operations
+            commands::sftp_read_file,
+            commands::sftp_write_file,
+            commands::sftp_create_file,
             // Data migration commands
             commands::data_migration_get_version,
             commands::data_migration_get_history,
@@ -743,6 +820,20 @@ pub fn run() {
             commands::data_migration_get_schema_info,
             commands::data_migration_get_registered,
             commands::data_migration_rollback,
+            // Git commands
+            commands::git_get_status,
+            commands::git_get_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_discard,
+            commands::git_get_log,
+            commands::git_commit,
+            commands::git_push,
+            commands::git_get_commit_context,
+            // Secure storage commands
+            secure_storage::secure_storage_set,
+            secure_storage::secure_storage_get,
+            secure_storage::secure_storage_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -755,6 +846,9 @@ pub fn run() {
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
                 .map(|state| state.inner().clone());
+            let ssh_manager = app_handle
+                .try_state::<Arc<ssh::SSHManager>>()
+                .map(|state| state.inner().clone());
 
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
@@ -764,6 +858,9 @@ pub fn run() {
                 // (not tokio::spawn directly — the run callback may fire on
                 // a thread without a Tokio reactor, e.g. macOS WKWebView events)
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
                     pty_manager_clone.kill_all().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
@@ -772,11 +869,17 @@ pub fn run() {
                     app_handle_clone.exit(0);
                 });
             } else {
-                if let Some(browser_tab_manager) = browser_tab_manager {
-                    browser_tab_manager.destroy_all();
-                }
-                // No PTY manager, just exit
-                app_handle.exit(0);
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(ssh_manager) = ssh_manager {
+                        ssh_manager.shutdown().await;
+                    }
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
+                    // No PTY manager, just exit
+                    app_handle_clone.exit(0);
+                });
             }
         }
     });

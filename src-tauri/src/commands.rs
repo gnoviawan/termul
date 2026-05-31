@@ -3,15 +3,37 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker};
+use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
+
+/// Validate that the caller webview matches the expected tab_id.
+/// This prevents cross-tab command injection where a malicious webview
+/// could emit events for other tabs.
+fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Result<(), String> {
+    let caller_label = webview.label();
+    if caller_label != expected_tab_id {
+        log::warn!(
+            "[Security] Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label,
+            expected_tab_id
+        );
+        return Err(format!(
+            "Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label, expected_tab_id
+        ));
+    }
+    Ok(())
+}
 
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
@@ -218,6 +240,348 @@ pub async fn terminal_set_visibility(
     Ok(IpcResult::success(()))
 }
 
+// ==================== Worktree Commands ====================
+
+/// List all worktrees for a git repo at the given path.
+/// Filters out bare worktrees and detached-HEAD worktrees.
+#[tauri::command]
+pub async fn worktree_list(
+    project_path: String,
+) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
+    match WorktreeManager::list(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<WorktreeInfo> = entries
+                .into_iter()
+                .map(|e| WorktreeInfo {
+                    name: e.name,
+                    branch: e.branch,
+                    path: e.path,
+                    head_commit: e.head_commit,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create a new worktree.
+#[tauri::command]
+pub async fn worktree_create(
+    project_path: String,
+    name: String,
+    branch: String,
+    is_new_branch: bool,
+    start_ref: Option<String>,
+    target_path: Option<String>,
+) -> Result<IpcResult<WorktreeInfo>, String> {
+    match WorktreeManager::create(
+        &project_path,
+        &name,
+        &branch,
+        is_new_branch,
+        start_ref.as_deref(),
+        target_path.as_deref(),
+    ) {
+        Ok(entry) => Ok(IpcResult::success(WorktreeInfo {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        })),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove a worktree. Uses --force if requested. Runs `git worktree prune` after.
+#[tauri::command]
+pub async fn worktree_remove(
+    project_path: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::remove(&project_path, &worktree_path, force) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// List local and remote branches for a git repo.
+#[tauri::command]
+pub async fn worktree_branches(
+    project_path: String,
+) -> Result<IpcResult<Vec<BranchInfo>>, String> {
+    match WorktreeManager::branches(&project_path) {
+        Ok(entries) => {
+            let infos: Vec<BranchInfo> = entries
+                .into_iter()
+                .map(|e| BranchInfo {
+                    name: e.name,
+                    is_remote: e.is_remote,
+                    is_current: e.is_current,
+                    upstream: e.upstream,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Check dirty status for a worktree checkout.
+#[tauri::command]
+pub async fn worktree_check_dirty(
+    worktree_path: String,
+) -> Result<IpcResult<DirtyStatus>, String> {
+    match WorktreeManager::check_dirty(&worktree_path) {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Remove all Termul-managed worktrees for a project.
+/// Reports per-worktree success/failure.
+#[tauri::command]
+pub async fn worktree_remove_all_managed(
+    project_path: String,
+    worktrees_json: String,
+) -> Result<IpcResult<Vec<RemoveResult>>, String> {
+    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+        Ok(results) => Ok(IpcResult::success(results)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Parse `.gitignore` and return directory entries that could be symlinked into worktrees.
+/// Returns simple directory entries with whether they exist in the project root.
+#[tauri::command]
+pub async fn worktree_parse_gitignore(
+    project_path: String,
+) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
+    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+        Ok(dirs) => {
+            let infos: Vec<GitignoreDirInfo> = dirs
+                .into_iter()
+                .map(|d| GitignoreDirInfo {
+                    dir_name: d.dir_name,
+                    exists: d.exists,
+                })
+                .collect();
+            Ok(IpcResult::success(infos))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Create symlinks from project root directories into a worktree.
+/// `symlink_dirs` is a JSON array of directory names to symlink (e.g. ["node_modules", "dist"]).
+#[tauri::command]
+pub async fn worktree_create_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
+    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
+/// Ensure symlinks exist for all directories in symlink_dirs.
+/// Creates any missing symlinks. Does not remove or overwrite existing ones.
+#[tauri::command]
+pub async fn worktree_ensure_symlinks(
+    project_path: String,
+    worktree_path: String,
+    symlink_dirs: String,
+) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            return Ok(IpcResult::error(
+                format!("Failed to parse symlink_dirs: {}", e),
+                "PARSE_FAILED",
+            ));
+        }
+    };
+    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let infos: Vec<SymlinkResultInfo> = results
+        .into_iter()
+        .map(|r| SymlinkResultInfo {
+            path: r.path,
+            target: r.target,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect();
+    Ok(IpcResult::success(infos))
+}
+
+/// Archive a worktree by moving it to `.termul/archives/`.
+#[tauri::command]
+pub async fn worktree_archive(
+    project_path: String,
+    worktree_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::archive(&project_path, &worktree_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Restore an archived worktree back to its original location.
+#[tauri::command]
+pub async fn worktree_restore(
+    project_path: String,
+    archive_path: String,
+) -> Result<IpcResult<()>, String> {
+    match WorktreeManager::restore(&project_path, &archive_path) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Generate a merge preview for a worktree against a target branch.
+#[tauri::command]
+pub async fn worktree_merge_preview(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<MergePreviewInfo>, String> {
+    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+        Ok(preview) => {
+            let info = MergePreviewInfo {
+                direction: preview.direction,
+                source_branch: preview.source_branch,
+                target_branch: preview.target_branch,
+                conflict_files: preview.conflict_files.into_iter().map(|f| ConflictFileInfo {
+                    path: f.path,
+                    severity: f.severity,
+                    conflict_count: f.conflict_count,
+                    is_lock_file: f.is_lock_file,
+                }).collect(),
+                changed_files: preview.changed_files,
+                total_changes: preview.total_changes,
+                detection_mode: preview.detection_mode,
+            };
+            Ok(IpcResult::success(info))
+        }
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Execute a merge from the worktree's current branch to target_branch.
+#[tauri::command]
+pub async fn worktree_merge_execute(
+    worktree_path: String,
+    target_branch: String,
+) -> Result<IpcResult<String>, String> {
+    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+        Ok(result) => Ok(IpcResult::success(result)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Worktree info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub name: String,
+    pub branch: String,
+    pub path: String,
+    pub head_commit: String,
+}
+
+impl From<GitWorktreeEntry> for WorktreeInfo {
+    fn from(entry: GitWorktreeEntry) -> Self {
+        Self {
+            name: entry.name,
+            branch: entry.branch,
+            path: entry.path,
+            head_commit: entry.head_commit,
+        }
+    }
+}
+
+/// Branch info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_remote: bool,
+    pub is_current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+impl From<BranchEntry> for BranchInfo {
+    fn from(entry: BranchEntry) -> Self {
+        Self {
+            name: entry.name,
+            is_remote: entry.is_remote,
+            is_current: entry.is_current,
+            upstream: entry.upstream,
+        }
+    }
+}
+
+/// Gitignore directory info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreDirInfo {
+    pub dir_name: String,
+    pub exists: bool,
+}
+
+/// Symlink result info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymlinkResultInfo {
+    pub path: String,
+    pub target: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Merge preview info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreviewInfo {
+    pub direction: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub conflict_files: Vec<ConflictFileInfo>,
+    pub changed_files: Vec<String>,
+    pub total_changes: usize,
+    pub detection_mode: String,
+}
+
+/// Conflict file info for IPC response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileInfo {
+    pub path: String,
+    pub severity: String,
+    pub conflict_count: usize,
+    pub is_lock_file: bool,
+}
+
 // ==================== Browser Tab Commands ====================
 
 /// Create a new browser tab webview
@@ -332,6 +696,19 @@ pub async fn browser_tab_reload(
     }
 }
 
+/// Open DevTools for a browser tab
+#[tauri::command]
+pub async fn browser_tab_open_devtools(
+    tab_id: String,
+    browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    match browser_manager.open_devtools(&tab_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
+    }
+}
+
+
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
 pub async fn browser_tab_inject_annotation(
@@ -353,7 +730,10 @@ pub async fn browser_tab_remove_annotation_overlay(
 ) -> Result<IpcResult<()>, String> {
     match browser_manager.remove_annotation_overlay(&tab_id) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_REMOVE_ANNOTATION_OVERLAY_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_REMOVE_ANNOTATION_OVERLAY_FAILED",
+        )),
     }
 }
 
@@ -365,9 +745,16 @@ pub async fn browser_tab_inject_annotation_markers(
     selected_id: Option<String>,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match browser_manager.inject_annotation_markers(&tab_id, &annotations_json, selected_id.as_deref()) {
+    match browser_manager.inject_annotation_markers(
+        &tab_id,
+        &annotations_json,
+        selected_id.as_deref(),
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED",
+        )),
     }
 }
 
@@ -380,7 +767,10 @@ pub async fn browser_tab_update_annotation_marker_selection(
 ) -> Result<IpcResult<()>, String> {
     match browser_manager.update_annotation_marker_selection(&tab_id, selected_id.as_deref()) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED")),
+        Err(e) => Ok(IpcResult::error(
+            e,
+            "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED",
+        )),
     }
 }
 
@@ -393,13 +783,7 @@ pub async fn browser_tab_report_url(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report URL rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -419,13 +803,7 @@ pub async fn browser_tab_report_loaded(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report loaded rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -451,16 +829,14 @@ pub async fn browser_tab_report_region_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report region captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Region captured: tab={} x={} y={} w={} h={}",
-        tab_id, x, y, width, height
+        tab_id,
+        x,
+        y,
+        width,
+        height
     );
     app_handle
         .emit(
@@ -487,13 +863,7 @@ pub async fn browser_tab_report_title(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report title rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Title report: tab={}", tab_id);
     app_handle
         .emit(
@@ -526,22 +896,16 @@ pub async fn browser_tab_report_element_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report element captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
 
-    let attributes = attributes
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "Browser tab report element captured rejected: attributes must be an object".to_string())?;
+    let attributes = attributes.as_object().cloned().ok_or_else(|| {
+        "Browser tab report element captured rejected: attributes must be an object".to_string()
+    })?;
 
     log::debug!(
         "[BrowserTab] Element captured: tab={} tag={} selector=<redacted>",
-        tab_id, tag_name
+        tab_id,
+        tag_name
     );
     app_handle
         .emit(
@@ -578,16 +942,11 @@ pub async fn browser_tab_report_annotation_marker_clicked(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report annotation marker clicked rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
-        tab_id, annotation_id
+        tab_id,
+        annotation_id
     );
     app_handle
         .emit(
@@ -726,7 +1085,10 @@ fn rg_sidecar_name() -> &'static str {
     "rg-armv7-unknown-linux-gnueabihf"
 }
 
-#[cfg(all(target_os = "linux", not(any(target_arch = "aarch64", target_arch = "arm"))))]
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "aarch64", target_arch = "arm"))
+))]
 fn rg_sidecar_name() -> &'static str {
     "rg-x86_64-unknown-linux-musl"
 }
@@ -799,6 +1161,17 @@ fn detect_rg_path() -> String {
     let _ = RG_PATH_CACHE.set(detected.clone());
     detected
 }
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
 
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
@@ -880,12 +1253,10 @@ pub async fn search_content_stream(
     let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let mut child = match Command::new(&rg_path)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    configure_background_command(&mut rg_command);
+    let mut child = match rg_command.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = app_handle.emit(
@@ -932,7 +1303,8 @@ pub async fn search_content_stream(
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
 
-        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>, truncated: bool| {
+        let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
+                           truncated: bool| {
             if pending.is_empty() {
                 return;
             }
@@ -1162,7 +1534,10 @@ pub async fn search_content(
     let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
 
     let rg_path = detect_rg_path();
-    let output = Command::new(&rg_path).args(args).output();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(args);
+    configure_background_command(&mut rg_command);
+    let output = rg_command.output();
     let output = match output {
         Ok(o) => o,
         Err(e) => {
@@ -1304,6 +1679,625 @@ pub async fn data_migration_rollback(
     migration_manager: State<'_, Arc<MigrationManager>>,
 ) -> Result<IpcResult<()>, String> {
     Ok(migration_manager.rollback_migration(request.version))
+}
+
+// ============================================================================
+// SSH Commands
+// ============================================================================
+
+use crate::ssh::config_parser;
+use crate::ssh::profile_manager::SSHProfile;
+use crate::ssh::sftp as sftp_ops;
+use crate::ssh::SSHManager;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SSHConnectRequest {
+    pub profile_id: String,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SSHPortForwardRequest {
+    pub connection_id: String,
+    pub id: String,
+    pub forward_type: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPPathRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPTransferRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+    pub local_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPRenameRequest {
+    pub connection_id: String,
+    pub old_path: String,
+    pub new_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SFTPFileRequest {
+    pub connection_id: String,
+    pub remote_path: String,
+    pub content: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ssh_list_profiles(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<SSHProfile>>, String> {
+    match ssh_manager.profiles.list() {
+        Ok(profiles) => Ok(IpcResult::success(profiles)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_save_profile(
+    profile: SSHProfile,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.profiles.save(profile) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_delete_profile(
+    profile_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.profiles.delete(&profile_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_import_config(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<SSHProfile>>, String> {
+    let parsed = config_parser::parse_ssh_config();
+    match ssh_manager.profiles.import_from_config(parsed) {
+        Ok(imported) => Ok(IpcResult::success(imported)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_IMPORT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_connect(
+    request: SSHConnectRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<crate::ssh::connection::SSHConnectionInfo>, String> {
+    // Load profile with credentials from OS keychain
+    let profile = match ssh_manager
+        .profiles
+        .get_with_credentials(&request.profile_id)
+    {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Ok(IpcResult::error(
+                "Profile not found",
+                "SSH_PROFILE_NOT_FOUND",
+            ))
+        }
+        Err(e) => return Ok(IpcResult::error(e, "SSH_PROFILE_ERROR")),
+    };
+
+    // Use request password, or fall back to keychain-stored credential
+    let password = request
+        .password
+        .or_else(|| match profile.auth_method.as_str() {
+            "password" => profile.password.clone(),
+            "key" => profile.passphrase.clone(),
+            _ => None,
+        });
+
+    match ssh_manager
+        .connections
+        .connect(&profile, password.as_deref())
+        .await
+    {
+        Ok(info) => {
+            // Update last_connected
+            let _ = ssh_manager
+                .profiles
+                .update_last_connected(&request.profile_id);
+            Ok(IpcResult::success(info))
+        }
+        Err(e) => Ok(IpcResult::error(e, "SSH_CONNECT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_disconnect(
+    connection_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager.disconnect(&connection_id).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_DISCONNECT_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_get_connections(
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<crate::ssh::connection::SSHConnectionInfo>>, String> {
+    Ok(IpcResult::success(
+        ssh_manager.connections.list_connections().await,
+    ))
+}
+
+#[tauri::command]
+pub async fn ssh_port_forward_start(
+    request: SSHPortForwardRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<crate::ssh::port_forward::ActivePortForward>, String> {
+    if ssh_manager
+        .connections
+        .get_connection(&request.connection_id)
+        .await
+        .is_none()
+    {
+        return Ok(IpcResult::error(
+            "Connection not found",
+            "SSH_CONNECTION_NOT_FOUND",
+        ));
+    }
+
+    let session = match ssh_manager
+        .connections
+        .clone_session(&request.connection_id)
+        .await
+    {
+        Ok(session) => session,
+        Err(e) => return Ok(IpcResult::error(e, "SSH_CONNECTION_NOT_FOUND")),
+    };
+
+    let pf_request = crate::ssh::port_forward::PortForwardRequest {
+        id: request.id,
+        forward_type: request.forward_type,
+        local_port: request.local_port,
+        remote_host: request.remote_host,
+        remote_port: request.remote_port,
+        label: request.label,
+    };
+
+    match ssh_manager
+        .port_forwards
+        .start_local_forward(&request.connection_id, pf_request, session)
+        .await
+    {
+        Ok(forward) => Ok(IpcResult::success(forward)),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_port_forward_stop(
+    connection_id: String,
+    forward_id: String,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    match ssh_manager
+        .port_forwards
+        .stop_forward(&connection_id, &forward_id)
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SSH_PORT_FORWARD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_list_dir(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<Vec<crate::ssh::sftp::SFTPEntry>>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::list_dir(&sftp, &remote_path)
+        })
+        .await
+    {
+        Ok(entries) => Ok(IpcResult::success(entries)),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_download(
+    request: SFTPTransferRequest,
+    app_handle: AppHandle,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let local_path = request.local_path.clone();
+    let conn_id = request.connection_id.clone();
+    let app = app_handle.clone();
+
+    // Clone session to avoid holding the per-connection mutex during long I/O
+    let session = match ssh_manager
+        .connections
+        .clone_session(&request.connection_id)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let sftp = sftp_ops::create_sftp(&session)?;
+        sftp_ops::download_file(&sftp, &remote_path, &local_path, &app, &conn_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(IpcResult::success(())),
+        Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_DOWNLOAD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_upload(
+    request: SFTPTransferRequest,
+    app_handle: AppHandle,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let local_path = request.local_path.clone();
+    let conn_id = request.connection_id.clone();
+    let app = app_handle.clone();
+
+    // Clone session to avoid holding the per-connection mutex during long I/O
+    let session = match ssh_manager
+        .connections
+        .clone_session(&request.connection_id)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let sftp = sftp_ops::create_sftp(&session)?;
+        sftp_ops::upload_file(&sftp, &local_path, &remote_path, &app, &conn_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(IpcResult::success(())),
+        Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_UPLOAD_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_delete(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::delete_path(&sftp, &remote_path)
+        })
+        .await
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_DELETE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::mkdir(&sftp, &remote_path)
+        })
+        .await
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_MKDIR_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    request: SFTPRenameRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let old_path = request.old_path.clone();
+    let new_path = request.new_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::rename(&sftp, &old_path, &new_path)
+        })
+        .await
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_RENAME_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, String> {
+    let temp_dir = std::env::temp_dir();
+    let id = uuid::Uuid::new_v4()
+        .to_string()
+        .split('-')
+        .next()
+        .unwrap_or("tmp")
+        .to_string();
+    let password_path = temp_dir.join(format!("termul-askpass-{}.dat", id));
+
+    // Write the raw password to a separate data file to avoid shell metacharacter injection.
+    if let Err(e) = std::fs::write(&password_path, password.as_bytes()) {
+        return Ok(IpcResult::error(
+            format!("Failed to create askpass data: {}", e),
+            "SSH_ASKPASS_ERROR",
+        ));
+    }
+
+    // Restrict file permissions: owner-only on Unix, hidden attribute on Windows
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&password_path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        // Mark the data file as hidden to reduce casual exposure
+        use std::process::Command;
+        let _ = Command::new("attrib")
+            .args(["+H", &password_path.to_string_lossy()])
+            .output();
+    }
+
+    // Create platform-specific askpass script
+    #[cfg(windows)]
+    let script_path = {
+        let path = temp_dir.join(format!("termul-askpass-{}.bat", id));
+        // The batch script outputs the password file contents and cleans up both files on exit.
+        let content = format!(
+            "@echo off\r\ntype \"{}\"\r\ndel /q \"{}\" >nul 2>&1\r\n(goto) 2>nul & del /q \"%~f0\" >nul 2>&1\r\n",
+            password_path.to_string_lossy(),
+            password_path.to_string_lossy(),
+        );
+        if let Err(e) = std::fs::write(&path, &content) {
+            let _ = std::fs::remove_file(&password_path);
+            return Ok(IpcResult::error(
+                format!("Failed to create askpass: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        path
+    };
+
+    #[cfg(unix)]
+    let script_path = {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_dir.join(format!("termul-askpass-{}.sh", id));
+        // The shell script outputs the password file and cleans up both files.
+        let content = format!(
+            "#!/bin/sh\ncat \"{}\"\nrm -f \"{}\" \"$0\"\n",
+            password_path.to_string_lossy(),
+            password_path.to_string_lossy(),
+        );
+        if let Err(e) = std::fs::write(&path, &content) {
+            let _ = std::fs::remove_file(&password_path);
+            return Ok(IpcResult::error(
+                format!("Failed to create askpass: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        // Make the script executable
+        if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)) {
+            let _ = std::fs::remove_file(&password_path);
+            let _ = std::fs::remove_file(&path);
+            return Ok(IpcResult::error(
+                format!("Failed to set askpass permissions: {}", e),
+                "SSH_ASKPASS_ERROR",
+            ));
+        }
+        path
+    };
+
+    // Spawn a background cleanup task that removes both files after a timeout,
+    // ensuring secrets don't persist on disk if the helper is never invoked.
+    let cleanup_script = script_path.clone();
+    let cleanup_password = password_path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let _ = std::fs::remove_file(&cleanup_password);
+        let _ = std::fs::remove_file(&cleanup_script);
+    });
+
+    log::info!("[SSH] Created askpass helper at {:?}", script_path);
+    Ok(IpcResult::success(
+        script_path.to_string_lossy().to_string(),
+    ))
+}
+
+#[tauri::command]
+pub async fn sftp_read_file(
+    request: SFTPFileRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<String>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::read_file_to_string(&sftp, &remote_path)
+        })
+        .await
+    {
+        Ok(content) => Ok(IpcResult::success(content)),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_READ_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_write_file(
+    request: SFTPFileRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    let content = request.content.clone().unwrap_or_default();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::write_file_from_string(&sftp, &remote_path, &content)
+        })
+        .await
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_WRITE_ERROR")),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_create_file(
+    request: SFTPPathRequest,
+    ssh_manager: State<'_, Arc<SSHManager>>,
+) -> Result<IpcResult<()>, String> {
+    let remote_path = request.remote_path.clone();
+    match ssh_manager
+        .connections
+        .with_session(&request.connection_id, |session| {
+            let sftp = sftp_ops::create_sftp(session)?;
+            sftp_ops::create_file(&sftp, &remote_path)
+        })
+        .await
+    {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "SFTP_CREATE_ERROR")),
+    }
+}
+
+// ==================== Git Commands ====================
+
+/// Get git status for a repository
+#[tauri::command]
+pub async fn git_get_status(
+    cwd: String,
+) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd)
+        .map_err(|e: String| e)
+}
+
+/// Get git diff for a file. `staged` selects the index-vs-HEAD diff
+/// (`git diff --cached`) instead of the worktree-vs-index diff.
+#[tauri::command]
+pub async fn git_get_diff(
+    cwd: String,
+    path: String,
+    staged: Option<bool>,
+) -> Result<String, String> {
+    crate::trackers::git_tracker::git_get_diff(&cwd, &path, staged.unwrap_or(false))
+        .map_err(|e: String| e)
+}
+
+/// Stage a single file (`git add`).
+#[tauri::command]
+pub async fn git_stage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_stage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Unstage a single file (`git restore --staged`).
+#[tauri::command]
+pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Discard changes to a single file. Untracked files are deleted; tracked
+/// changes revert to HEAD. This is destructive and irreversible.
+#[tauri::command]
+pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Read commit history for the repository at `cwd` as structured rows for the
+/// history/graph view. `limit` caps the number of commits (clamped backend-side;
+/// defaults to 200). Read-only.
+#[tauri::command]
+pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+}
+
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
+    // for up to the network timeout), so run it on the blocking thread pool
+    // instead of the async executor.
+    let description = description.unwrap_or_default();
+    let amend = amend.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
+    })
+    .await
+    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    // git_push_current performs a network push (up to the network timeout), so
+    // run it on the blocking thread pool instead of the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_push_current(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {e}"))?
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
 /// Get available shells

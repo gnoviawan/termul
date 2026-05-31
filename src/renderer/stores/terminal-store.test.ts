@@ -792,4 +792,45 @@ describe('terminal-store', () => {
       expect(overlap).toHaveLength(0)
     })
   })
+
+  describe('setTerminalNeedsAttention', () => {
+    it('sets the needsAttention flag on the target terminal', () => {
+      useTerminalStore.getState().setTerminalNeedsAttention('t2', true)
+
+      const t2 = useTerminalStore.getState().terminals.find((t) => t.id === 't2')
+      expect(t2?.needsAttention).toBe(true)
+    })
+
+    it('clears the needsAttention flag', () => {
+      useTerminalStore.getState().setTerminalNeedsAttention('t2', true)
+      useTerminalStore.getState().setTerminalNeedsAttention('t2', false)
+
+      const t2 = useTerminalStore.getState().terminals.find((t) => t.id === 't2')
+      expect(t2?.needsAttention).toBe(false)
+    })
+
+    it('does not affect other terminals', () => {
+      useTerminalStore.getState().setTerminalNeedsAttention('t2', true)
+
+      const t1 = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      const t3 = useTerminalStore.getState().terminals.find((t) => t.id === 't3')
+      expect(t1?.needsAttention).toBeFalsy()
+      expect(t3?.needsAttention).toBeFalsy()
+    })
+
+    it('is a no-op (same state reference) when the value is unchanged', () => {
+      // Already false by default — setting false again must not produce a new array.
+      const before = useTerminalStore.getState().terminals
+      useTerminalStore.getState().setTerminalNeedsAttention('t2', false)
+      const after = useTerminalStore.getState().terminals
+      expect(after).toBe(before)
+    })
+
+    it('ignores unknown terminal ids', () => {
+      const before = useTerminalStore.getState().terminals
+      useTerminalStore.getState().setTerminalNeedsAttention('does-not-exist', true)
+      const after = useTerminalStore.getState().terminals
+      expect(after).toBe(before)
+    })
+  })
 })

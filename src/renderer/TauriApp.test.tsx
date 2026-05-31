@@ -13,6 +13,13 @@ vi.mock('@/lib/api', () => ({
   },
   terminalApi: {
     onData: vi.fn(() => vi.fn())
+  },
+  sessionApi: {
+    hasSession: vi.fn(async () => ({ success: true, data: false })),
+    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    save: vi.fn(),
+    clear: vi.fn(),
+    flush: vi.fn()
   }
 }))
 
@@ -103,6 +110,15 @@ const { mockUseVisibilityState } = vi.hoisted(() => ({
 
 vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
+}))
+
+vi.mock('./hooks/use-terminal-exit-notification', () => ({
+  useTerminalExitNotification: () => undefined
+}))
+
+vi.mock('@/lib/tauri-notification-api', () => ({
+  initNotificationPermissions: () => Promise.resolve(),
+  sendDesktopNotification: () => Promise.resolve()
 }))
 
 beforeEach(() => {

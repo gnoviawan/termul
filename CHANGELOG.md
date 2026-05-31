@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-05-31
+
+### Features
+- **Git** — Read-only Git History graph view (#202)
+- **Git** — Commit, amend, and push from the Git panel (#200)
+- **Git** — Git panel staging, unstaging, and discard (#190)
+- **Git** — Git changes tab with terminal session/crash recovery and project settings (#143)
+- **SSH** — SSH & Remote Connection Manager with full SFTP support (#146)
+- **UI** — Platform-adaptive title bar with VSCode-style activity rail (#194)
+- **Command Palette** — Project-first ordering, pinning, and condensed layout (#193)
+- **Sidebar** — Declutter project list with truncation + search (#192)
+- **Terminal** — Desktop notification + highlight for finished terminal on exit (#187)
+- **Terminal** — Default renderer to WebGL with DOM fallback + AppSettings toggle (#175)
+- **Worktree** — Git worktree as sub project (#171)
+- **Worktree** — Simplified worktree UX for non-technical users (#186)
+- **Tabs** — Middle-click close for terminal and browser tabs (#176)
+- **Project** — Per-project settings gear button and compact context menu (#159)
+- **Linux** — UI polish + HiDPI dropdown menu fixes (closes #129) (#165)
+- **Landing** — New landing page (#153) with Google Tag Manager snippet (#181)
+
+### Bug Fixes
+- **Window** — Restore window geometry in logical pixels to prevent off-screen windows (#206)
+- **Sidebar** — Only expand worktrees via chevron (#203)
+- **SSH** — Repair SSH connection status, DNS connect, keychain persistence, and host-key verification (#198)
+- **Security** — Add browser tab IPC caller validation (#196)
+- **Security** — Implement secure storage for project environment variables (#167)
+- **Security** — Redact persisted project env vars (#164)
+- **Updater** — Repair auto-update download/install flow with confirm-before-restart (#191)
+- **Git** — Align git tab height and remove panel gap (#189)
+- **Worktree** — Run git from repo dir when removing worktree (#188)
+- **Worktree** — Suppress git console window flashing on Windows (#183)
+- **Terminal** — Prevent grid collapse to 1-2 rows on minimize/restore (#185)
+- **Terminal** — Support clipboard image paste passthrough to CLI apps (#182)
+- **Terminal** — Prevent terminal spawn storm during hidden window bootstrap (#174)
+- **Terminal** — Resolve terminal skew after minimize/restore (#173)
+- **Terminal** — Move xterm container ref inside padding wrapper (#172)
+- **Browser** — Fix element selector annotation not working inside form tags (gh-127) (#140)
+- **Explorer** — Prevent search from opening console window on Windows (#157)
+- **UI** — Resolve new project modal/browser layering and require root directory (#158)
+- **Mermaid** — Prevent DOM leak on syntax error (#156)
+
+### CI & Chores
+- **CI** — Migrate landing Docker hosting to Cloudflare Pages (#179)
+- **CI** — Add macOS Intel release target (#163)
+- **CI** — Migrate package workflow to bun (#166); pin bun CI to 1.3.x and bun action to v2 (#168)
+- **Build** — Bump Vite to v8 (#169); remove obsolete vite config (#170)
+- **TSConfig** — Use bundler moduleResolution in tsconfig.node.json (#161)
+
 ## [0.3.8] - 2026-05-18
 
 ### Features

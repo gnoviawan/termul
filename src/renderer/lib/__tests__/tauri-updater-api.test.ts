@@ -55,6 +55,8 @@ function createMockUpdate(version: string, body?: string, date?: string) {
     version,
     body,
     date,
+    download: vi.fn(),
+    install: vi.fn(),
     downloadAndInstall: vi.fn()
   }
 }
@@ -192,7 +194,7 @@ describe('tauri-updater-api', () => {
       vi.mocked(check).mockResolvedValue(update as never)
       await checkForUpdates()
 
-      vi.mocked(update.downloadAndInstall).mockImplementation(
+      vi.mocked(update.download).mockImplementation(
         async (onEvent?: (event: DownloadEvent) => void) => {
           onEvent?.({ event: 'Started', data: { contentLength: 100 } })
           onEvent?.({ event: 'Progress', data: { chunkLength: 40 } })
@@ -209,11 +211,13 @@ describe('tauri-updater-api', () => {
       expect(result).toEqual({ success: true, data: undefined })
       expect(createBackup).toHaveBeenCalledTimes(1)
       expect(keepPreviousVersion).toHaveBeenCalledWith('0.2.3')
+      // Download must not install/restart the app on its own.
+      expect(update.install).not.toHaveBeenCalled()
       expect(vi.mocked(createBackup).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(update.downloadAndInstall).mock.invocationCallOrder[0]
+        vi.mocked(update.download).mock.invocationCallOrder[0]
       )
       expect(vi.mocked(keepPreviousVersion).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(update.downloadAndInstall).mock.invocationCallOrder[0]
+        vi.mocked(update.download).mock.invocationCallOrder[0]
       )
       expect(progressEvents[0]).toBe(0)
       expect(progressEvents).toContain(40)
@@ -232,7 +236,7 @@ describe('tauri-updater-api', () => {
       vi.mocked(check).mockResolvedValue(update as never)
       await checkForUpdates()
 
-      vi.mocked(update.downloadAndInstall).mockRejectedValue(new Error('download failed'))
+      vi.mocked(update.download).mockRejectedValue(new Error('download failed'))
 
       const result = await downloadUpdate()
 
@@ -256,7 +260,7 @@ describe('tauri-updater-api', () => {
 
       const result = await downloadUpdate()
 
-      expect(update.downloadAndInstall).not.toHaveBeenCalled()
+      expect(update.download).not.toHaveBeenCalled()
       expect(keepPreviousVersion).not.toHaveBeenCalled()
       expect(result).toEqual({
         success: false,
@@ -277,19 +281,44 @@ describe('tauri-updater-api', () => {
       })
     })
 
-    it('calls relaunch when update has been downloaded', async () => {
+    it('installs the downloaded package then relaunches', async () => {
       const update = createMockUpdate('2.1.0')
       vi.mocked(check).mockResolvedValue(update as never)
       await checkForUpdates()
 
-      vi.mocked(update.downloadAndInstall).mockImplementation(async () => {})
+      vi.mocked(update.download).mockImplementation(async () => {})
+      vi.mocked(update.install).mockResolvedValue(undefined)
       await downloadUpdate()
 
       vi.mocked(relaunch).mockResolvedValue(undefined)
       const result = await installAndRestart()
 
+      expect(update.install).toHaveBeenCalledTimes(1)
       expect(relaunch).toHaveBeenCalledTimes(1)
+      // install must run before relaunch.
+      expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(relaunch).mock.invocationCallOrder[0]
+      )
       expect(result).toEqual({ success: true, data: undefined })
+    })
+
+    it('returns INSTALL_FAILED when install throws', async () => {
+      const update = createMockUpdate('2.1.2')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(update.install).mockRejectedValue(new Error('install failed'))
+      const result = await installAndRestart()
+
+      expect(relaunch).not.toHaveBeenCalled()
+      expect(result).toEqual({
+        success: false,
+        error: 'install failed',
+        code: 'INSTALL_FAILED'
+      })
     })
 
     it('returns INSTALL_FAILED when relaunch throws', async () => {
@@ -297,7 +326,8 @@ describe('tauri-updater-api', () => {
       vi.mocked(check).mockResolvedValue(update as never)
       await checkForUpdates()
 
-      vi.mocked(update.downloadAndInstall).mockImplementation(async () => {})
+      vi.mocked(update.download).mockImplementation(async () => {})
+      vi.mocked(update.install).mockResolvedValue(undefined)
       await downloadUpdate()
 
       vi.mocked(relaunch).mockRejectedValue(new Error('relaunch failed'))
@@ -308,6 +338,31 @@ describe('tauri-updater-api', () => {
         error: 'relaunch failed',
         code: 'INSTALL_FAILED'
       })
+    })
+
+    it('preserves the downloaded update across a re-check of the same version', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(update.download).mockImplementation(async () => {})
+      vi.mocked(update.install).mockResolvedValue(undefined)
+      await downloadUpdate()
+
+      // A periodic re-check returns the SAME version; the already-downloaded
+      // Update handle (and its bytes) must survive so install still works.
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      vi.mocked(relaunch).mockResolvedValue(undefined)
+      const result = await installAndRestart()
+
+      expect(update.install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(relaunch).mock.invocationCallOrder[0]
+      )
+      expect(result).toEqual({ success: true, data: undefined })
     })
   })
 

@@ -1,4 +1,4 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download } from 'lucide-react'
+import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
 import type { Project } from '@/types/project'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -49,7 +49,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   return (
     <div
       className={cn(
-        'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0',
+        'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0 relative z-50',
         bgColor
       )}
     >
@@ -65,11 +65,29 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div>
-                    <StatusItem icon={<GitBranch size={14} />}>{gitBranch}</StatusItem>
+                    <StatusItem icon={<GitBranch size={14} />}>
+                      {gitBranch}
+                      {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+                        <span className="ml-2 flex items-center space-x-1.5 border-l border-white/20 pl-2">
+                          {gitStatus.ahead > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <ArrowUp size={12} />
+                              {gitStatus.ahead}
+                            </span>
+                          )}
+                          {gitStatus.behind > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <ArrowDown size={12} />
+                              {gitStatus.behind}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </StatusItem>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  {gitBranch}
+                  {gitBranch} {gitStatus?.ahead ? `(${gitStatus.ahead} ahead)` : ''} {gitStatus?.behind ? `(${gitStatus.behind} behind)` : ''}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -212,7 +230,7 @@ function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorP
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-gray-400">
+          <span className="flex items-center text-muted-foreground">
             <FileQuestion size={12} className="mr-0.5" />
             {untracked}
           </span>

@@ -169,15 +169,20 @@ export function useTerminalAutoSave(): void {
         return
       }
 
-      // Skip activity-only changes (hasActivity/lastActivityTimestamp)
+      // Skip activity-only changes (hasActivity/lastActivityTimestamp) and reorderings
       // These create new array refs but don't affect persisted layout
       if (state.activeTerminalId === prevState.activeTerminalId) {
-        const hasStructuralChange =
-          state.terminals.some((t, i) => {
-            const prev = prevState.terminals[i]
-            if (!prev) return true
+        if (state.terminals.length === prevState.terminals.length) {
+          // Build ID sets to detect true structural changes (add/remove/reorder)
+          const prevIds = new Set(prevState.terminals.map((t) => t.id))
+          const nextIds = new Set(state.terminals.map((t) => t.id))
+          const added = state.terminals.filter((t) => !prevIds.has(t.id))
+          const removed = prevState.terminals.filter((t) => !nextIds.has(t.id))
+          // Check if any existing terminal changed its persisted-relevant fields
+          const changedFields = state.terminals.some((t) => {
+            const prev = prevState.terminals.find((p) => p.id === t.id)
+            if (!prev) return false
             return (
-              t.id !== prev.id ||
               t.name !== prev.name ||
               t.shell !== prev.shell ||
               t.cwd !== prev.cwd ||
@@ -185,10 +190,10 @@ export function useTerminalAutoSave(): void {
               t.isAppHidden !== prev.isAppHidden ||
               t.appHiddenSince !== prev.appHiddenSince
             )
-          }) || state.terminals.length !== prevState.terminals.length
-
-        if (!hasStructuralChange) {
-          return
+          })
+          if (added.length === 0 && removed.length === 0 && !changedFields) {
+            return
+          }
         }
       }
 
@@ -208,10 +213,8 @@ export function useTerminalAutoSave(): void {
         state.activeTerminalId
       )
 
-      // Sync layout.terminals scrollback to the in-memory store's pendingScrollback.
-      // This ensures extractScrollback() values survive xterm disposal during project switches,
-      // preserving scrollback in memory so it can be restored when switching back.
-      syncScrollbackToStore(layout.terminals)
+      // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
+      // before writing to disk, so we skip it here to avoid double writes.
 
       // Use debounced write via API
       persistenceApi
