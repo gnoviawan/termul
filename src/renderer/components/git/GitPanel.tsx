@@ -801,7 +801,6 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
       onClick(e);
     }
   };
-  };
 
   return (
     <div
