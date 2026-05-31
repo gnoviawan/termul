@@ -15,14 +15,18 @@
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.4",
     "@hugeicons/react": "^1.1.6",
+    "@radix-ui/react-avatar": "^1.1.11",
     "@unhead/react": "^3.1.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
+    "lucide-react": "^1.17.0",
+    "motion": "^12.40.0",
     "ogl": "^1.0.11",
     "overlayscrollbars-react": "^0.5.6",
     "postprocessing": "^6.39.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-use-measure": "^2.1.7",
     "tailwind-merge": "^3.6.0",
     "three": "^0.184.0",
     "vite-plugin-react-ssg": "^0.2.0"

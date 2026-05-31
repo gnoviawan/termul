@@ -4,6 +4,7 @@ import Hero from './components/Hero';
 import FeatureSection from './components/FeatureSection';
 import Footer from './components/Footer';
 import { ScrollContainer } from './components/ScrollContainer';
+import { TestimonialsSection } from '@/components/testimonials-section';
 
 export function App() {
   const [scrollTop, setScrollTop] = useState(0);
@@ -25,6 +26,12 @@ export function App() {
           <Hero />
           <FeatureSection />
         </main>
+        <section
+          aria-labelledby="testimonials-heading"
+          className="overflow-hidden px-6 py-20"
+        >
+          <TestimonialsSection />
+        </section>
         <Footer />
       </div>
     </ScrollContainer>

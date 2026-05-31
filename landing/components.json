@@ -16,5 +16,13 @@
     "ui": "@/components/ui",
     "lib": "@/lib",
     "hooks": "@/hooks"
+  },
+  "registries": {
+    "@efferd": {
+      "url": "https://efferd.com/r/{style}/{name}.json",
+      "headers": {
+        "Authorization": "Bearer ${EFFERD_REGISTRY_TOKEN}"
+      }
+    }
   }
 }
