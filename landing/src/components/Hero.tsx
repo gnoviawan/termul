@@ -1,7 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, GithubIcon } from "@hugeicons/core-free-icons";
-import { Button } from "./Button";
-import { GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
+import { ProductCta } from './ProductCta';
 
 const Hero = () => {
   return (
@@ -27,29 +24,8 @@ const Hero = () => {
           Termul treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
         </p>
 
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full max-w-md mb-20 animate-in delay-300">
-          <Button
-            as="a"
-            href={LATEST_RELEASE_URL}
-            target="_blank"
-            rel="noreferrer"
-            size="lg"
-            className="w-full sm:w-auto"
-          >
-            Download for Free <HugeiconsIcon icon={ArrowRight01Icon} className="w-4 h-4" />
-          </Button>
-          <Button
-            as="a"
-            href={GITHUB_REPO_URL}
-            target="_blank"
-            rel="noreferrer"
-            variant="outline"
-            size="lg"
-            className="w-full sm:w-auto"
-          >
-            <HugeiconsIcon icon={GithubIcon} className="w-4 h-4" />
-            GitHub
-          </Button>
+        <div className="mb-20 animate-in delay-300">
+          <ProductCta variant="hero" />
         </div>
 
         <div className="relative w-full max-w-5xl mx-auto animate-in delay-400">

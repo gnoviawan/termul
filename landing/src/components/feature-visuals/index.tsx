@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+
 import type { FeatureId } from '../../data/features';
 import { FeatureVisualTabbedInterface } from './FeatureVisualTabbedInterface';
 import { FeatureVisualSessionPersistence } from './FeatureVisualSessionPersistence';
@@ -12,25 +14,19 @@ type FeatureVisualProps = {
   id: FeatureId;
 };
 
+const featureVisuals: Record<FeatureId, ComponentType> = {
+  '01': FeatureVisualTabbedInterface,
+  '02': FeatureVisualSessionPersistence,
+  '03': FeatureVisualMultipleShells,
+  '04': FeatureVisualCrossPlatform,
+  '05': FeatureVisualProjectWorkspaces,
+  '06': FeatureVisualSplitPanes,
+  '07': FeatureVisualCodeEditor,
+  '08': FeatureVisualBrowserAnnotations,
+};
+
 export function FeatureVisual({ id }: FeatureVisualProps) {
-  switch (id) {
-    case '01':
-      return <FeatureVisualTabbedInterface />;
-    case '02':
-      return <FeatureVisualSessionPersistence />;
-    case '03':
-      return <FeatureVisualMultipleShells />;
-    case '04':
-      return <FeatureVisualCrossPlatform />;
-    case '05':
-      return <FeatureVisualProjectWorkspaces />;
-    case '06':
-      return <FeatureVisualSplitPanes />;
-    case '07':
-      return <FeatureVisualCodeEditor />;
-    case '08':
-      return <FeatureVisualBrowserAnnotations />;
-    default:
-      return null;
-  }
+  const Visual = featureVisuals[id];
+
+  return <Visual />;
 }
