@@ -135,6 +135,8 @@ export function TestimonialSubmitPage() {
               </Button>
               {message && (
                 <p
+                  aria-atomic="true"
+                  aria-live="polite"
                   className={
                     status === 'success'
                       ? 'text-sm text-green-300'

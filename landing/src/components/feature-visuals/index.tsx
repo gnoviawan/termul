@@ -14,7 +14,7 @@ type FeatureVisualProps = {
   id: FeatureId;
 };
 
-const featureVisuals: Record<FeatureId, ComponentType> = {
+const featureVisuals: Partial<Record<FeatureId, ComponentType>> = {
   '01': FeatureVisualTabbedInterface,
   '02': FeatureVisualSessionPersistence,
   '03': FeatureVisualMultipleShells,
@@ -27,6 +27,8 @@ const featureVisuals: Record<FeatureId, ComponentType> = {
 
 export function FeatureVisual({ id }: FeatureVisualProps) {
   const Visual = featureVisuals[id];
+
+  if (!Visual) return null;
 
   return <Visual />;
 }

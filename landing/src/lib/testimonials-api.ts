@@ -27,6 +27,10 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
     );
   }
 
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Empty or invalid JSON response');
+  }
+
   return payload as T;
 }
 
@@ -74,13 +78,16 @@ export async function moderateTestimonial(
   action: ModerationAction,
   token: string,
 ): Promise<void> {
-  const response = await fetch(`/api/admin/testimonials/${id}/${action}`, {
-    method: action === 'delete' ? 'DELETE' : 'POST',
-    headers: {
-      ...jsonHeaders,
-      Authorization: `Bearer ${token}`,
+  const response = await fetch(
+    `/api/admin/testimonials/${encodeURIComponent(id)}/${action}`,
+    {
+      method: action === 'delete' ? 'DELETE' : 'POST',
+      headers: {
+        ...jsonHeaders,
+        Authorization: `Bearer ${token}`,
+      },
     },
-  });
+  );
 
   await parseJsonResponse<{ ok: true }>(response);
 }
@@ -89,11 +96,14 @@ export async function fetchAdminAvatar(
   id: string,
   token: string,
 ): Promise<Blob> {
-  const response = await fetch(`/api/admin/testimonials/${id}/avatar`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
+  const response = await fetch(
+    `/api/admin/testimonials/${encodeURIComponent(id)}/avatar`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     },
-  });
+  );
 
   if (!response.ok) {
     throw new Error('Could not load avatar.');

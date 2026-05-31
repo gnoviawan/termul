@@ -266,8 +266,9 @@ async function serveAvatar({ env }: PagesContext, key: string) {
 
   return new Response(object.body, {
     headers: {
-      'Cache-Control': 'public, max-age=86400',
+      'Cache-Control': 'no-cache, must-revalidate',
       'Content-Type': object.httpMetadata?.contentType ?? 'application/octet-stream',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -396,15 +397,23 @@ async function insertTestimonial(
 
 async function checkRateLimit(db: D1DatabaseBinding, ip: string) {
   const windowStart = new Date(Date.now() - SUBMISSION_WINDOW_MS).toISOString();
+  const ipHash = await sha256(ip);
   const row = await db.prepare(
     `SELECT COUNT(*) as count
      FROM testimonial_submission_rate_limits
      WHERE ip_hash = ? AND created_at > ?`,
   )
-    .bind(await sha256(ip), windowStart)
+    .bind(ipHash, windowStart)
     .first<{ count: number }>();
 
   if ((row?.count ?? 0) >= SUBMISSION_LIMIT) {
+    await db.prepare(
+      `DELETE FROM testimonial_submission_rate_limits
+       WHERE created_at < ?`,
+    )
+      .bind(windowStart)
+      .run();
+
     return { allowed: false };
   }
 
@@ -412,7 +421,14 @@ async function checkRateLimit(db: D1DatabaseBinding, ip: string) {
     `INSERT INTO testimonial_submission_rate_limits (id, ip_hash, created_at)
      VALUES (?, ?, ?)`,
   )
-    .bind(crypto.randomUUID(), await sha256(ip), new Date().toISOString())
+    .bind(crypto.randomUUID(), ipHash, new Date().toISOString())
+    .run();
+
+  await db.prepare(
+    `DELETE FROM testimonial_submission_rate_limits
+     WHERE created_at < ?`,
+  )
+    .bind(windowStart)
     .run();
 
   return { allowed: true };

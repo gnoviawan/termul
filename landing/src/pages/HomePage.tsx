@@ -8,8 +8,8 @@ export function HomePage() {
       <main id="main-content">
         <Hero />
         <FeatureSection />
+        <TestimonialsSection />
       </main>
-      <TestimonialsSection />
     </>
   );
 }
