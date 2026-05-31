@@ -294,6 +294,9 @@ vi.mock('@/lib/api', () => ({
     save: vi.fn(),
     clear: vi.fn(),
     flush: vi.fn()
+  },
+  sshApi: {
+    onConnectionStatusChanged: vi.fn(() => vi.fn())
   }
 }))
 

@@ -95,6 +95,18 @@ export interface GitCommit {
 	subject: string;
 }
 
+// Context for the commit footer (branch, upstream, ahead/behind, last commit).
+export interface GitCommitContext {
+	branch: string | null;
+	hasUpstream: boolean;
+	ahead: number;
+	behind: number;
+	stagedCount: number;
+	hasHead: boolean;
+	lastSubject: string;
+	lastBody: string;
+}
+
 export interface GitApi {
 	getStatus: (cwd: string) => Promise<GitStatusDetail[]>;
 	getDiff: (cwd: string, path: string, staged?: boolean) => Promise<string>;
@@ -102,6 +114,14 @@ export interface GitApi {
 	unstage: (cwd: string, path: string) => Promise<void>;
 	discard: (cwd: string, path: string) => Promise<void>;
 	getLog: (cwd: string, limit?: number) => Promise<GitCommit[]>;
+	commit: (
+		cwd: string,
+		summary: string,
+		description?: string,
+		amend?: boolean,
+	) => Promise<void>;
+	push: (cwd: string) => Promise<void>;
+	getCommitContext: (cwd: string) => Promise<GitCommitContext>;
 }
 
 // Terminal API exposed via preload

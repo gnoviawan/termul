@@ -98,3 +98,45 @@ pub fn delete_credentials(profile_id: &str) -> Result<(), String> {
         Err(format!("Failed to delete credentials: {}", errors.join("; ")))
     }
 }
+
+/// Verify that the configured keyring backend actually persists secrets.
+///
+/// `keyring` selects its backend at compile time; without an OS-backend cargo
+/// feature it silently uses an in-memory mock where `set_password` succeeds but
+/// `get_password` returns `NoEntry`. This round-trips a throwaway entry and
+/// returns an error if the store is non-functional, so misconfiguration is
+/// caught at startup instead of silently losing every credential.
+pub fn self_test() -> Result<(), String> {
+    let key = format!("__selftest-{}", uuid::Uuid::new_v4());
+    let probe = "ok";
+    let entry = Entry::new(SERVICE_NAME, &key)
+        .map_err(|e| format!("keyring unavailable: {}", e))?;
+    entry
+        .set_password(probe)
+        .map_err(|e| format!("keyring write failed: {}", e))?;
+    let read_back = match entry.get_password() {
+        Ok(v) => v,
+        Err(e) => {
+            if let Err(del_err) = entry.delete_credential() {
+                return Err(format!(
+                    "keyring read-back failed ({}) and probe cleanup also failed: {}",
+                    e, del_err
+                ));
+            }
+            return Err(format!(
+                "keyring read-back failed (likely no OS backend compiled in): {}",
+                e
+            ));
+        }
+    };
+    // Clean up the probe; a cleanup failure indicates a partially-working
+    // backend and is itself worth surfacing.
+    let delete_result = entry.delete_credential();
+    if read_back != probe {
+        return Err("keyring read-back mismatch (mock/in-memory store active)".to_string());
+    }
+    if let Err(del_err) = delete_result {
+        return Err(format!("keyring probe cleanup failed: {}", del_err));
+    }
+    Ok(())
+}

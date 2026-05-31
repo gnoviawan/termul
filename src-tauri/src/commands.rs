@@ -16,6 +16,25 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
 
+/// Validate that the caller webview matches the expected tab_id.
+/// This prevents cross-tab command injection where a malicious webview
+/// could emit events for other tabs.
+fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Result<(), String> {
+    let caller_label = webview.label();
+    if caller_label != expected_tab_id {
+        log::warn!(
+            "[Security] Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label,
+            expected_tab_id
+        );
+        return Err(format!(
+            "Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label, expected_tab_id
+        ));
+    }
+    Ok(())
+}
+
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -764,13 +783,7 @@ pub async fn browser_tab_report_url(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report URL rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -790,13 +803,7 @@ pub async fn browser_tab_report_loaded(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report loaded rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -822,13 +829,7 @@ pub async fn browser_tab_report_region_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report region captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Region captured: tab={} x={} y={} w={} h={}",
         tab_id,
@@ -862,13 +863,7 @@ pub async fn browser_tab_report_title(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report title rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Title report: tab={}", tab_id);
     app_handle
         .emit(
@@ -901,13 +896,7 @@ pub async fn browser_tab_report_element_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report element captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
 
     let attributes = attributes.as_object().cloned().ok_or_else(|| {
         "Browser tab report element captured rejected: attributes must be an object".to_string()
@@ -953,13 +942,7 @@ pub async fn browser_tab_report_annotation_marker_clicked(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report annotation marker clicked rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
         tab_id,
@@ -2273,6 +2256,48 @@ pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+}
+
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
+    // for up to the network timeout), so run it on the blocking thread pool
+    // instead of the async executor.
+    let description = description.unwrap_or_default();
+    let amend = amend.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
+    })
+    .await
+    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    // git_push_current performs a network push (up to the network timeout), so
+    // run it on the blocking thread pool instead of the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_push_current(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {e}"))?
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
 /// Get available shells

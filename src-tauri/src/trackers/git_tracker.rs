@@ -625,15 +625,54 @@ impl GitTracker {
     }
 
     pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
-        let mut child = backend_command(resolve_git_binary())
-            .args(args)
+        Self::run_git_command_with_timeout(cwd, args, GIT_COMMAND_TIMEOUT_MS)
+    }
+
+    /// Run a git command with an explicit timeout (ms). Network-bound commands
+    /// such as `git push` must use a generous timeout instead of the short
+    /// status-poll default, which would otherwise kill the process mid-transfer.
+    /// Generic over `AsRef<OsStr>` so callers can pass non-UTF-8 paths (e.g. a
+    /// commit message file path) without a lossy conversion.
+    pub fn run_git_command_with_timeout<S: AsRef<std::ffi::OsStr>>(
+        cwd: &str,
+        args: &[S],
+        timeout_ms: u64,
+    ) -> Option<std::process::Output> {
+        let mut command = backend_command(resolve_git_binary());
+        command
+            .args(args.iter().map(|a| a.as_ref()))
             .current_dir(cwd)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::piped());
+        Self::spawn_and_wait(command, args, cwd, timeout_ms)
+    }
 
-        let deadline = Instant::now() + Duration::from_millis(GIT_COMMAND_TIMEOUT_MS);
+    /// Run `git push <args>` with the network timeout and `GIT_TERMINAL_PROMPT=0`
+    /// so a remote that requires credentials fails fast ("could not read
+    /// Username") instead of blocking on a terminal prompt until the timeout.
+    pub fn run_git_push(cwd: &str, args: &[&str], timeout_ms: u64) -> Option<std::process::Output> {
+        let mut command = backend_command(resolve_git_binary());
+        command
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Self::spawn_and_wait(command, args, cwd, timeout_ms)
+    }
+
+    /// Spawn a prepared git `Command` and wait up to `timeout_ms`, killing the
+    /// child on timeout. `args`/`cwd` are used only for the timeout log line.
+    fn spawn_and_wait<S: AsRef<std::ffi::OsStr>>(
+        mut command: Command,
+        args: &[S],
+        cwd: &str,
+        timeout_ms: u64,
+    ) -> Option<std::process::Output> {
+        let mut child = command.spawn().ok()?;
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
         loop {
             match child.try_wait() {
@@ -642,9 +681,13 @@ impl GitTracker {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let rendered: Vec<String> = args
+                            .iter()
+                            .map(|a| a.as_ref().to_string_lossy().into_owned())
+                            .collect();
                         log::warn!(
                             "[GitTracker] Timed out running git {} in {}",
-                            args.join(" "),
+                            rendered.join(" "),
                             cwd
                         );
                         return None;
@@ -1026,6 +1069,230 @@ fn parse_git_log(stdout: &str) -> Vec<GitCommit> {
     }
 
     commits
+}
+
+/// Network-bound git operations (push/fetch) get a generous timeout instead of
+/// the 2s status-poll default. 120s comfortably covers most pushes.
+const GIT_NETWORK_TIMEOUT_MS: u64 = 120_000;
+
+/// Context the commit footer needs to render: current branch, whether an
+/// upstream is configured, ahead/behind counts, how many entries are staged,
+/// and the last commit's subject/body (used to prefill an amend).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitContext {
+    /// Current branch name, or `None` in a detached HEAD / no-branch state.
+    pub branch: Option<String>,
+    /// Whether the current branch has a configured upstream.
+    pub has_upstream: bool,
+    /// Commits the local branch is ahead of its upstream.
+    pub ahead: u32,
+    /// Commits the local branch is behind its upstream.
+    pub behind: u32,
+    /// Number of staged index entries (`git diff --cached --name-only`).
+    pub staged_count: u32,
+    /// Whether the repo has at least one commit (HEAD resolves).
+    pub has_head: bool,
+    /// Last commit subject (first line), empty when no HEAD.
+    pub last_subject: String,
+    /// Last commit body (everything after the subject + blank line), empty when none.
+    pub last_body: String,
+}
+
+/// Build the commit message body from a summary and optional description.
+/// Format: `summary`, a blank line, then the trimmed description. The blank
+/// line and body are omitted when the description is empty.
+fn build_commit_message(summary: &str, description: &str) -> String {
+    let summary = summary.trim();
+    let description = description.trim();
+    if description.is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary}\n\n{description}")
+    }
+}
+
+/// Number of staged entries via `git diff --cached --name-only`.
+/// Returns `None` when the git invocation itself fails, so callers can
+/// distinguish "genuinely nothing staged" (`Some(0)`) from "could not tell".
+fn staged_entry_count(cwd: &str) -> Option<u32> {
+    GitTracker::run_git_command(cwd, &["diff", "--cached", "--name-only"])
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count() as u32
+        })
+}
+
+/// Create a commit from the currently-staged index.
+///
+/// The message is written to a temp file and passed via `git commit -F <file>`
+/// so arbitrary user text is never interpolated into a shell or `-m` argument;
+/// this also preserves multi-line bodies. The temp file is created with an
+/// exclusive, uniquely-named handle (no symlink-following clobber, no collision
+/// between near-simultaneous commits) and deleted after the commit attempt.
+///
+/// `amend` rewrites HEAD instead of creating a new commit. A plain commit with
+/// nothing staged is rejected; an amend requires an existing HEAD. Uses the
+/// network-length timeout so pre-commit hooks / GPG passphrase prompts are not
+/// killed mid-run (which could leave a stale `.git/index.lock`).
+pub fn git_commit_file(
+    cwd: &str,
+    summary: &str,
+    description: &str,
+    amend: bool,
+) -> Result<(), String> {
+    if summary.trim().is_empty() {
+        return Err("Commit summary cannot be empty".to_string());
+    }
+    if amend {
+        if !repo_has_head(cwd) {
+            return Err("No commit to amend".to_string());
+        }
+    } else {
+        match staged_entry_count(cwd) {
+            Some(0) => return Err("Nothing staged to commit".to_string()),
+            None => return Err("Failed to read the staged index".to_string()),
+            Some(_) => {}
+        }
+    }
+
+    let message = build_commit_message(summary, description);
+    let msg_path = create_commit_message_file(message.as_bytes())?;
+
+    // Pass the real OS path (not a lossy String) so a non-UTF-8 temp dir still
+    // resolves to the file we actually wrote.
+    use std::ffi::OsStr;
+    let mut args: Vec<&OsStr> =
+        vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
+    if amend {
+        args.push(OsStr::new("--amend"));
+    }
+
+    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS) {
+        Some(output) if output.status.success() => Ok(()),
+        Some(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        None => Err("git commit timed out or failed to start".to_string()),
+    };
+    // Always clean up the temp message file, regardless of commit outcome.
+    let _ = std::fs::remove_file(&msg_path);
+    result
+}
+
+/// Write `bytes` to a freshly-created, uniquely-named temp file using an
+/// exclusive create (`create_new`), which fails rather than following a symlink
+/// or truncating an existing file (CWE-59/CWE-377). Returns the path on success.
+fn create_commit_message_file(bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    let pid = std::process::id();
+    for attempt in 0..8u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir()
+            .join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_EXCL: fail if the path already exists
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(bytes).and_then(|_| f.flush()).map_err(|e| {
+                    let _ = std::fs::remove_file(&path);
+                    format!("Failed to write commit message: {e}")
+                })?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create commit message file: {e}")),
+        }
+    }
+    Err("Failed to create a unique commit message file".to_string())
+}
+
+/// Push the current branch to `origin`. When the branch has no upstream, it is
+/// published with `--set-upstream origin <branch>`. Uses the network timeout.
+/// Rejects in a detached-HEAD / no-branch state.
+pub fn git_push_current(cwd: &str) -> Result<(), String> {
+    let branch = GitTracker::check_branch_internal(cwd)
+        .ok_or_else(|| "Not on a branch (detached HEAD); cannot push".to_string())?;
+
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let args: Vec<&str> = if has_upstream {
+        vec!["push"]
+    } else {
+        vec!["push", "--set-upstream", "origin", &branch]
+    };
+
+    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
+        .ok_or_else(|| {
+            "git push did not complete (it timed out, could not start, or the \
+             remote required interactive credentials)"
+                .to_string()
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Gather the commit-footer context for a repo. Tolerant of no-HEAD and
+/// no-upstream repos: missing values come back as zeros / empty / false.
+pub fn git_get_commit_context(cwd: &str) -> Result<GitCommitContext, String> {
+    let branch = GitTracker::check_branch_internal(cwd);
+    let has_head = repo_has_head(cwd);
+
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let (mut ahead, mut behind) = (0u32, 0u32);
+    if has_upstream {
+        if let Some(o) =
+            GitTracker::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
+            if o.status.success() {
+                let counts = String::from_utf8_lossy(&o.stdout);
+                let parts: Vec<&str> = counts.split_whitespace().collect();
+                if parts.len() == 2 {
+                    ahead = parts[0].parse().unwrap_or(0);
+                    behind = parts[1].parse().unwrap_or(0);
+                }
+            }
+        }
+    }
+
+    let (last_subject, last_body) = if has_head {
+        let subject = GitTracker::run_git_command(cwd, &["log", "-1", "--pretty=%s"])
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+            .unwrap_or_default();
+        let body = GitTracker::run_git_command(cwd, &["log", "-1", "--pretty=%b"])
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+            .unwrap_or_default();
+        (subject, body)
+    } else {
+        (String::new(), String::new())
+    };
+
+    Ok(GitCommitContext {
+        branch,
+        has_upstream,
+        ahead,
+        behind,
+        staged_count: staged_entry_count(cwd).unwrap_or(0),
+        has_head,
+        last_subject,
+        last_body,
+    })
 }
 
 fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
@@ -2186,6 +2453,54 @@ mod tests {
         std::fs::remove_dir_all(&repo).ok();
     }
 
+    // ---- commit / amend / push / context ----
+
+    fn last_subject(repo: &std::path::Path) -> String {
+        let out = git(repo, &["log", "-1", "--pretty=%s"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn last_body(repo: &std::path::Path) -> String {
+        let out = git(repo, &["log", "-1", "--pretty=%b"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn count_commits(repo: &std::path::Path) -> usize {
+        let out = git(repo, &["rev-list", "--count", "HEAD"]);
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    }
+
+    #[test]
+    fn it_build_commit_message_formats_body() {
+        assert_eq!(build_commit_message("hello", ""), "hello");
+        assert_eq!(build_commit_message("  hello  ", "  "), "hello");
+        assert_eq!(
+            build_commit_message("summary", "more detail"),
+            "summary\n\nmore detail"
+        );
+    }
+
+    #[test]
+    fn it_commit_creates_commit_and_clears_index() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-basic");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+
+        let cwd = repo.to_str().unwrap();
+        git_commit_file(cwd, "second commit", "", false).unwrap();
+
+        assert_eq!(count_commits(&repo), 2);
+        assert_eq!(last_subject(&repo), "second commit");
+        assert_eq!(staged_entry_count(cwd), Some(0), "index cleared after commit");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn it_git_get_log_respects_limit() {
         if git_missing() {
@@ -2199,6 +2514,186 @@ mod tests {
         }
         let commits = git_get_log(repo.to_str().unwrap(), Some(3)).unwrap();
         assert_eq!(commits.len(), 3);
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_writes_multiline_body() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-body");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+
+        git_commit_file(repo.to_str().unwrap(), "sum", "line one\nline two", false).unwrap();
+        assert_eq!(last_subject(&repo), "sum");
+        assert_eq!(last_body(&repo), "line one\nline two");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_rejects_empty_summary() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-emptysum");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]);
+        let err = git_commit_file(repo.to_str().unwrap(), "   ", "", false).unwrap_err();
+        assert!(err.to_lowercase().contains("summary"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_rejects_nothing_staged() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("commit-nostage");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        // Clean index now.
+        let err = git_commit_file(repo.to_str().unwrap(), "noop", "", false).unwrap_err();
+        assert!(err.to_lowercase().contains("nothing staged"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_rewords_subject_without_new_commit() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-reword");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "original"]);
+        assert_eq!(count_commits(&repo), 1);
+
+        git_commit_file(repo.to_str().unwrap(), "reworded", "", true).unwrap();
+        assert_eq!(count_commits(&repo), 1, "amend must not add a commit");
+        assert_eq!(last_subject(&repo), "reworded");
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_folds_staged_changes() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-fold");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("b.txt"), "new\n").unwrap();
+        git(&repo, &["add", "--", "b.txt"]);
+
+        let cwd = repo.to_str().unwrap();
+        git_commit_file(cwd, "init+b", "", true).unwrap();
+        assert_eq!(count_commits(&repo), 1);
+        // b.txt is now part of HEAD; nothing left staged.
+        assert_eq!(staged_entry_count(cwd), Some(0));
+        let tree = git(&repo, &["ls-tree", "--name-only", "HEAD"]);
+        let names = String::from_utf8_lossy(&tree.stdout);
+        assert!(names.contains("b.txt"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_amend_rejects_no_head() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("amend-nohead");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "--", "a.txt"]); // staged, but no commit yet
+        let err = git_commit_file(repo.to_str().unwrap(), "x", "", true).unwrap_err();
+        assert!(err.to_lowercase().contains("no commit to amend"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_push_sets_upstream_and_resets_ahead() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("push-upstream");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+
+        // Local bare remote -> no network.
+        let bare = unique_temp_dir("push-bare");
+        git(&bare, &["init", "--bare", "-q"]);
+        let bare_str = bare.to_str().unwrap();
+        git(&repo, &["remote", "add", "origin", bare_str]);
+
+        let cwd = repo.to_str().unwrap();
+        // No upstream yet -> push must set it.
+        git_push_current(cwd).unwrap();
+
+        let ctx = git_get_commit_context(cwd).unwrap();
+        assert!(ctx.has_upstream, "upstream should be set after publish");
+        assert_eq!(ctx.ahead, 0, "ahead resets after push");
+
+        // A further commit is ahead; push again brings it back to 0.
+        std::fs::write(repo.join("a.txt"), "y\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "second"]);
+        assert_eq!(git_get_commit_context(cwd).unwrap().ahead, 1);
+        git_push_current(cwd).unwrap();
+        assert_eq!(git_get_commit_context(cwd).unwrap().ahead, 0);
+
+        std::fs::remove_dir_all(&repo).ok();
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    #[test]
+    fn it_push_rejects_detached_head() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("push-detached");
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        git(&repo, &["checkout", "-q", &sha]); // detach
+
+        let err = git_push_current(repo.to_str().unwrap()).unwrap_err();
+        assert!(err.to_lowercase().contains("branch"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_commit_context_reports_fields() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("ctx-basic");
+        let cwd = repo.to_str().unwrap();
+
+        // No HEAD yet.
+        let empty = git_get_commit_context(cwd).unwrap();
+        assert!(!empty.has_head);
+        assert_eq!(empty.staged_count, 0);
+        assert!(empty.last_subject.is_empty());
+
+        std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "first\n\nbody text"]);
+        std::fs::write(repo.join("b.txt"), "y\n").unwrap();
+        git(&repo, &["add", "--", "b.txt"]);
+
+        let ctx = git_get_commit_context(cwd).unwrap();
+        assert!(ctx.has_head);
+        assert!(ctx.branch.is_some());
+        assert!(!ctx.has_upstream);
+        assert_eq!(ctx.staged_count, 1);
+        assert_eq!(ctx.last_subject, "first");
+        assert_eq!(ctx.last_body, "body text");
         std::fs::remove_dir_all(&repo).ok();
     }
 }
