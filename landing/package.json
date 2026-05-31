@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "bun scripts/write-headers.ts",
     "preview": "vite preview",
     "lint": "eslint .",
     "deploy": "wrangler pages deploy dist",
