@@ -4,6 +4,8 @@ import type {
   TestimonialSubmitResponse,
 } from '../types/testimonials';
 
+export type ModerationAction = 'approve' | 'reject' | 'delete';
+
 const jsonHeaders = {
   Accept: 'application/json',
 } as const;
@@ -69,7 +71,7 @@ export async function fetchAdminTestimonials(
 
 export async function moderateTestimonial(
   id: string,
-  action: 'approve' | 'reject' | 'delete',
+  action: ModerationAction,
   token: string,
 ): Promise<void> {
   const response = await fetch(`/api/admin/testimonials/${id}/${action}`, {

@@ -11,14 +11,41 @@ import { InfiniteSlider } from '@/components/ui/infinite-slider';
 
 import { testimonials, type Testimonial } from '../data/testimonials';
 import { fetchApprovedTestimonials } from '../lib/testimonials-api';
+import type { PublicTestimonial } from '../types/testimonials';
 import { cn } from '../lib/utils';
 import { SectionHeader } from './SectionHeader';
 
-type DisplayTestimonial = Testimonial;
+type DisplayTestimonial = {
+  id: string;
+  quote: string;
+  image: string;
+  name: string;
+  role: string;
+  company?: string;
+  href?: string;
+};
+
+function fromApiTestimonial(testimonial: PublicTestimonial): DisplayTestimonial {
+  return {
+    id: `api:${testimonial.id}`,
+    quote: testimonial.quote,
+    image: testimonial.avatarUrl,
+    name: testimonial.name,
+    role: testimonial.role,
+  };
+}
+
+function fromStaticTestimonial(testimonial: Testimonial): DisplayTestimonial {
+  return {
+    id: `static:${testimonial.name}`,
+    ...testimonial,
+    href: testimonial.href === '#' ? undefined : testimonial.href,
+  };
+}
 
 export function TestimonialsSection() {
   const [approvedTestimonials, setApprovedTestimonials] = useState<
-    DisplayTestimonial[]
+    PublicTestimonial[]
   >([]);
 
   useEffect(() => {
@@ -40,8 +67,11 @@ export function TestimonialsSection() {
   const displayTestimonials = useMemo(
     () =>
       approvedTestimonials.length > 0
-        ? [...approvedTestimonials, ...testimonials]
-        : testimonials,
+        ? [
+            ...approvedTestimonials.map(fromApiTestimonial),
+            ...testimonials.map(fromStaticTestimonial),
+          ]
+        : testimonials.map(fromStaticTestimonial),
     [approvedTestimonials],
   );
 
@@ -78,12 +108,12 @@ function TestimonialsMarquee({
     <div className="mask-l-from-80% mask-r-from-80% relative">
       <InfiniteSlider gap={0} speed={30} speedOnHover={0.5}>
         {firstRow.map((testimonial) => (
-          <TestimonialsCard key={testimonial.name} {...testimonial} />
+          <TestimonialsCard key={testimonial.id} {...testimonial} />
         ))}
       </InfiniteSlider>
       <InfiniteSlider gap={0} reverse speed={30} speedOnHover={0.5}>
         {secondRow.map((testimonial) => (
-          <TestimonialsCard key={testimonial.name} {...testimonial} />
+          <TestimonialsCard key={testimonial.id} {...testimonial} />
         ))}
       </InfiniteSlider>
     </div>
@@ -92,21 +122,17 @@ function TestimonialsMarquee({
 
 function TestimonialsCard({
   className,
+  id,
   quote,
   company,
+  href,
   image,
   name,
   role,
   ...props
-}: ComponentProps<'a'> & DisplayTestimonial) {
-  return (
-    <a
-      className={cn(
-        'group relative flex w-full max-w-xs flex-col justify-between *:px-4 hover:cursor-pointer *:md:px-6',
-        className,
-      )}
-      {...props}
-    >
+}: ComponentProps<'article'> & DisplayTestimonial) {
+  const content = (
+    <>
       <blockquote className="flex-1 py-4">
         <p className="text-foreground text-sm">{quote}</p>
       </blockquote>
@@ -126,19 +152,47 @@ function TestimonialsCard({
             </span>
           </div>
         </div>
-        <ArrowUpRightIcon
-          aria-hidden="true"
-          className={cn(
-            'size-4 opacity-0 group-hover:opacity-100',
-            'group-hover:translate-x-1 group-hover:-translate-y-1',
-            'transition-all duration-250 ease-out',
-          )}
-        />
+        {href && (
+          <ArrowUpRightIcon
+            aria-hidden="true"
+            className={cn(
+              'size-4 opacity-0 group-hover:opacity-100',
+              'group-hover:translate-x-1 group-hover:-translate-y-1',
+              'transition-all duration-250 ease-out',
+            )}
+          />
+        )}
       </figcaption>
       <div
         aria-hidden="true"
         className="absolute inset-5 -z-1 rounded-lg bg-accent opacity-0 transition-all duration-100 ease-out group-hover:inset-0 group-hover:opacity-100 dark:bg-muted/50 dark:group-active:bg-muted"
       />
-    </a>
+    </>
+  );
+  const classNames = cn(
+    'group relative flex w-full max-w-xs flex-col justify-between *:px-4 *:md:px-6',
+    href && 'hover:cursor-pointer',
+    className,
+  );
+
+  if (href) {
+    return (
+      <a className={classNames} data-testimonial-id={id} href={href}>
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <article
+      className={cn(
+        classNames,
+        props.onClick && 'hover:cursor-pointer',
+      )}
+      data-testimonial-id={id}
+      {...props}
+    >
+      {content}
+    </article>
   );
 }

@@ -5,8 +5,7 @@ export type PublicTestimonial = {
   quote: string;
   name: string;
   role: string;
-  image: string;
-  href: string;
+  avatarUrl: string;
 };
 
 export type AdminTestimonial = PublicTestimonial & {

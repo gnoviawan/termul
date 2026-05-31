@@ -1,6 +1,6 @@
 type TestimonialStatus = 'pending' | 'approved' | 'rejected';
 
-type TestimonialRow = {
+export type TestimonialRow = {
   id: string;
   quote: string;
   name: string;
@@ -17,7 +17,7 @@ type D1PreparedStatement = {
   bind: (...values: unknown[]) => D1PreparedStatement;
   first: <T = unknown>() => Promise<T | null>;
   all: <T = unknown>() => Promise<{ results: T[] }>;
-  run: () => Promise<unknown>;
+  run: () => Promise<{ meta?: { changes?: number } }>;
 };
 
 type D1DatabaseBinding = {
@@ -65,6 +65,29 @@ const ALLOWED_AVATAR_TYPES = new Set([
 const SUBMISSION_WINDOW_MS = 60 * 60 * 1000;
 const SUBMISSION_LIMIT = 5;
 
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+type SubmissionPayload = {
+  quote: string;
+  name: string;
+  role: string;
+  avatarUrl: string | null;
+  avatarFile: File | null;
+};
+
+type StoredAvatar = {
+  key: string | null;
+  contentType: string | null;
+};
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   try {
     const url = new URL(context.request.url);
@@ -104,12 +127,9 @@ export async function onRequest(context: PagesContext): Promise<Response> {
         return serveAdminAvatar(context, id);
       }
 
-      if (context.request.method === 'POST' && action === 'approve') {
-        return updateStatus(context, id, 'approved');
-      }
-
-      if (context.request.method === 'POST' && action === 'reject') {
-        return updateStatus(context, id, 'rejected');
+      if (context.request.method === 'POST') {
+        const status = getModerationStatus(action);
+        if (status) return updateStatus(context, id, status);
       }
 
       if (context.request.method === 'DELETE' && action === 'delete') {
@@ -119,15 +139,11 @@ export async function onRequest(context: PagesContext): Promise<Response> {
 
     return json({ error: `No API route for ${url.pathname}` }, 404);
   } catch (error) {
-    return json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected server error',
-      },
-      500,
-    );
+    if (error instanceof ApiError) {
+      return json({ error: error.message }, error.status);
+    }
+
+    return json({ error: 'Unexpected server error' }, 500);
   }
 }
 
@@ -141,66 +157,25 @@ async function createTestimonial({ request, env }: PagesContext) {
   const honeypot = String(formData.get('website') ?? '').trim();
   if (honeypot) return json({ ok: true }, 202);
 
+  const payload = parseSubmission(formData);
   const ip = getClientIp(request);
   const rateLimit = await checkRateLimit(env.DB, ip);
   if (!rateLimit.allowed) {
-    return json({ error: 'Too many submissions. Please try later.' }, 429);
+    throw new ApiError('Too many submissions. Please try later.', 429);
   }
 
-  const quote = normalizeRequiredField(formData.get('quote'), 20, 500, 'Quote');
-  const name = normalizeRequiredField(formData.get('name'), 2, 80, 'Name');
-  const role = normalizeRequiredField(formData.get('role'), 2, 120, 'Role');
-  const avatarUrl = normalizeOptionalUrl(formData.get('avatarUrl'));
-  const avatarFile = formData.get('avatar');
-
-  let avatarR2Key: string | null = null;
-  let avatarContentType: string | null = null;
-
-  if (avatarFile instanceof File && avatarFile.size > 0) {
-    if (avatarFile.size > MAX_AVATAR_BYTES) {
-      return json({ error: 'Avatar upload must be 2 MB or smaller.' }, 400);
-    }
-
-    if (!ALLOWED_AVATAR_TYPES.has(avatarFile.type)) {
-      return json({ error: 'Avatar must be PNG, JPG, GIF, or WebP.' }, 400);
-    }
-
-    avatarR2Key = `testimonials/${crypto.randomUUID()}-${safeFileName(
-      avatarFile.name,
-    )}`;
-    avatarContentType = avatarFile.type;
-    await env.TESTIMONIAL_AVATARS.put(
-      avatarR2Key,
-      await avatarFile.arrayBuffer(),
-      { httpMetadata: { contentType: avatarContentType } },
-    );
-  }
-
-  if (!avatarR2Key && !avatarUrl) {
-    return json({ error: 'Add an avatar upload or avatar URL.' }, 400);
-  }
-
+  const avatar = await storeAvatar(env.TESTIMONIAL_AVATARS, payload.avatarFile);
   const id = crypto.randomUUID();
-  const now = new Date().toISOString();
 
-  await env.DB.prepare(
-    `INSERT INTO testimonials (
-      id, quote, name, role, status, avatar_url, avatar_r2_key,
-      avatar_content_type, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      quote,
-      name,
-      role,
-      avatarUrl,
-      avatarR2Key,
-      avatarContentType,
-      now,
-      now,
-    )
-    .run();
+  try {
+    await insertTestimonial(env.DB, id, payload, avatar);
+  } catch (error) {
+    if (avatar.key) {
+      await env.TESTIMONIAL_AVATARS.delete(avatar.key).catch(() => undefined);
+    }
+
+    throw error;
+  }
 
   return json({ id, status: 'pending' }, 201);
 }
@@ -235,13 +210,17 @@ async function updateStatus(
   id: string,
   status: TestimonialStatus,
 ) {
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE testimonials
      SET status = ?, updated_at = ?
      WHERE id = ?`,
   )
     .bind(status, new Date().toISOString(), id)
     .run();
+
+  if ((result.meta?.changes ?? 0) === 0) {
+    throw new ApiError('Testimonial not found.', 404);
+  }
 
   return json({ ok: true });
 }
@@ -253,7 +232,17 @@ async function deleteTestimonial({ env }: PagesContext, id: string) {
     .bind(id)
     .first<{ avatar_r2_key: string | null }>();
 
-  await env.DB.prepare('DELETE FROM testimonials WHERE id = ?').bind(id).run();
+  if (!row) {
+    throw new ApiError('Testimonial not found.', 404);
+  }
+
+  const result = await env.DB.prepare('DELETE FROM testimonials WHERE id = ?')
+    .bind(id)
+    .run();
+
+  if ((result.meta?.changes ?? 0) === 0) {
+    throw new ApiError('Testimonial not found.', 404);
+  }
 
   if (row?.avatar_r2_key) {
     await env.TESTIMONIAL_AVATARS.delete(row.avatar_r2_key);
@@ -303,20 +292,19 @@ async function serveAdminAvatar({ env }: PagesContext, id: string) {
   });
 }
 
-function toPublicTestimonial(row: TestimonialRow) {
+export function toPublicTestimonial(row: TestimonialRow) {
   return {
     id: row.id,
     quote: row.quote,
     name: row.name,
     role: row.role,
-    image: row.avatar_r2_key
+    avatarUrl: row.avatar_r2_key
       ? `/api/testimonials/avatar/${encodeURIComponent(row.avatar_r2_key)}`
       : row.avatar_url ?? '',
-    href: '#',
   };
 }
 
-function toAdminTestimonial(row: TestimonialRow) {
+export function toAdminTestimonial(row: TestimonialRow) {
   return {
     ...toPublicTestimonial(row),
     status: row.status,
@@ -324,6 +312,86 @@ function toAdminTestimonial(row: TestimonialRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export function getModerationStatus(action: string) {
+  if (action === 'approve') return 'approved';
+  if (action === 'reject') return 'rejected';
+
+  return null;
+}
+
+export function parseSubmission(formData: FormData): SubmissionPayload {
+  const quote = normalizeRequiredField(formData.get('quote'), 20, 500, 'Quote');
+  const name = normalizeRequiredField(formData.get('name'), 2, 80, 'Name');
+  const role = normalizeRequiredField(formData.get('role'), 2, 120, 'Role');
+  const avatarUrl = normalizeOptionalUrl(formData.get('avatarUrl'));
+  const avatarFile = normalizeAvatarFile(formData.get('avatar'));
+
+  if (!avatarFile && !avatarUrl) {
+    throw new ApiError('Add an avatar upload or avatar URL.', 400);
+  }
+
+  return {
+    quote,
+    name,
+    role,
+    avatarUrl,
+    avatarFile,
+  };
+}
+
+async function storeAvatar(
+  bucket: R2BucketBinding,
+  avatarFile: File | null,
+): Promise<StoredAvatar> {
+  if (!avatarFile) {
+    return {
+      key: null,
+      contentType: null,
+    };
+  }
+
+  const key = `testimonials/${crypto.randomUUID()}-${safeFileName(
+    avatarFile.name,
+  )}`;
+  await bucket.put(key, await avatarFile.arrayBuffer(), {
+    httpMetadata: { contentType: avatarFile.type },
+  });
+
+  return {
+    key,
+    contentType: avatarFile.type,
+  };
+}
+
+async function insertTestimonial(
+  db: D1DatabaseBinding,
+  id: string,
+  payload: SubmissionPayload,
+  avatar: StoredAvatar,
+) {
+  const now = new Date().toISOString();
+
+  await db
+    .prepare(
+      `INSERT INTO testimonials (
+        id, quote, name, role, status, avatar_url, avatar_r2_key,
+        avatar_content_type, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      id,
+      payload.quote,
+      payload.name,
+      payload.role,
+      payload.avatarUrl,
+      avatar.key,
+      avatar.contentType,
+      now,
+      now,
+    )
+    .run();
 }
 
 async function checkRateLimit(db: D1DatabaseBinding, ip: string) {
@@ -372,10 +440,10 @@ function normalizeRequiredField(
 ) {
   const text = String(value ?? '').trim();
   if (text.length < minLength) {
-    throw new Error(`${label} is too short.`);
+    throw new ApiError(`${label} is too short.`, 400);
   }
   if (text.length > maxLength) {
-    throw new Error(`${label} is too long.`);
+    throw new ApiError(`${label} is too long.`, 400);
   }
 
   return text;
@@ -385,12 +453,32 @@ function normalizeOptionalUrl(value: FormDataEntryValue | null) {
   const text = String(value ?? '').trim();
   if (!text) return null;
 
-  const url = new URL(text);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new ApiError('Avatar URL must be a valid URL.', 400);
+  }
+
   if (!['https:', 'http:'].includes(url.protocol)) {
-    throw new Error('Avatar URL must use http or https.');
+    throw new ApiError('Avatar URL must use http or https.', 400);
   }
 
   return url.toString();
+}
+
+function normalizeAvatarFile(value: FormDataEntryValue | null) {
+  if (!(value instanceof File) || value.size === 0) return null;
+
+  if (value.size > MAX_AVATAR_BYTES) {
+    throw new ApiError('Avatar upload must be 2 MB or smaller.', 400);
+  }
+
+  if (!ALLOWED_AVATAR_TYPES.has(value.type)) {
+    throw new ApiError('Avatar must be PNG, JPG, GIF, or WebP.', 400);
+  }
+
+  return value;
 }
 
 function safeFileName(name: string) {

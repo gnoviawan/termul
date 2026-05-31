@@ -7,10 +7,12 @@ import {
   fetchAdminAvatar,
   fetchAdminTestimonials,
   moderateTestimonial,
+  type ModerationAction,
 } from '../lib/testimonials-api';
 import type { AdminTestimonial, TestimonialStatus } from '../types/testimonials';
 
 const SESSION_TOKEN_KEY = 'termul:testimonial-admin-token';
+type LoadStatus = 'idle' | 'loading' | 'error';
 const statusMeta: Record<
   TestimonialStatus,
   { label: string; className: string }
@@ -36,7 +38,7 @@ export function TestimonialListPage() {
       : sessionStorage.getItem(SESSION_TOKEN_KEY) ?? '';
   const [token, setToken] = useState(initialToken);
   const [testimonials, setTestimonials] = useState<AdminTestimonial[]>([]);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>(
+  const [status, setStatus] = useState<LoadStatus>(
     initialToken ? 'loading' : 'idle',
   );
   const [message, setMessage] = useState('');
@@ -47,25 +49,30 @@ export function TestimonialListPage() {
     robots: 'noindex,nofollow',
   });
 
-  const loadTestimonials = useCallback(async (activeToken: string) => {
-    if (!activeToken) return;
-
-    setStatus('loading');
-    setMessage('');
-
-    try {
-      const nextTestimonials = await fetchAdminTestimonials(activeToken);
-      setTestimonials(nextTestimonials);
-      setStatus('idle');
-    } catch (error) {
-      setStatus('error');
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Could not load testimonials.',
-      );
-    }
+  const applyLoadFailure = useCallback((error: unknown) => {
+    setStatus('error');
+    setMessage(
+      error instanceof Error ? error.message : 'Could not load testimonials.',
+    );
   }, []);
+
+  const refreshTestimonials = useCallback(
+    async (activeToken: string) => {
+      if (!activeToken) return;
+
+      setStatus('loading');
+      setMessage('');
+
+      try {
+        const nextTestimonials = await fetchAdminTestimonials(activeToken);
+        setTestimonials(nextTestimonials);
+        setStatus('idle');
+      } catch (error) {
+        applyLoadFailure(error);
+      }
+    },
+    [applyLoadFailure],
+  );
 
   useEffect(() => {
     if (!token) return;
@@ -80,18 +87,13 @@ export function TestimonialListPage() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setStatus('error');
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : 'Could not load testimonials.',
-        );
+        applyLoadFailure(error);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [applyLoadFailure, token]);
 
   const handleTokenSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -111,13 +113,13 @@ export function TestimonialListPage() {
 
   const handleModeration = async (
     id: string,
-    action: 'approve' | 'reject' | 'delete',
+    action: ModerationAction,
   ) => {
     setMessage('');
 
     try {
       await moderateTestimonial(id, action, token);
-      await loadTestimonials(token);
+      await refreshTestimonials(token);
     } catch (error) {
       setStatus('error');
       setMessage(
@@ -203,7 +205,7 @@ function TestimonialModerationCard({
   token: string;
   onModerate: (
     id: string,
-    action: 'approve' | 'reject' | 'delete',
+    action: ModerationAction,
   ) => Promise<void>;
 }) {
   const status = statusMeta[testimonial.status];
@@ -243,10 +245,10 @@ function ModerationActions({
   testimonial: AdminTestimonial;
   onModerate: (
     id: string,
-    action: 'approve' | 'reject' | 'delete',
+    action: ModerationAction,
   ) => Promise<void>;
 }) {
-  const runAction = (action: 'approve' | 'reject' | 'delete') => {
+  const runAction = (action: ModerationAction) => {
     void onModerate(testimonial.id, action);
   };
 
@@ -287,7 +289,7 @@ function AdminAvatar({
   token: string;
 }) {
   const [imageUrl, setImageUrl] = useState(() =>
-    testimonial.avatarKind === 'url' ? testimonial.image : '',
+    testimonial.avatarKind === 'url' ? testimonial.avatarUrl : '',
   );
 
   useEffect(() => {
@@ -310,7 +312,7 @@ function AdminAvatar({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [testimonial.avatarKind, testimonial.id, testimonial.image, token]);
+  }, [testimonial.avatarKind, testimonial.id, testimonial.avatarUrl, token]);
 
   if (!imageUrl) {
     return (

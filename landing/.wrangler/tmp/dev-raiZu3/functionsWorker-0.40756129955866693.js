@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/pages-pb1ZpH/functionsWorker-0.41870482354872873.mjs
+// .wrangler/tmp/pages-mWFFVC/functionsWorker-0.40756129955866693.mjs
 var __defProp2 = Object.defineProperty;
 var __name2 = /* @__PURE__ */ __name((target, value) => __defProp2(target, "name", { value, configurable: true }), "__name");
 var MAX_AVATAR_BYTES = 2 * 1024 * 1024;
@@ -13,6 +13,19 @@ var ALLOWED_AVATAR_TYPES = /* @__PURE__ */ new Set([
 ]);
 var SUBMISSION_WINDOW_MS = 60 * 60 * 1e3;
 var SUBMISSION_LIMIT = 5;
+var ApiError = class extends Error {
+  static {
+    __name(this, "ApiError");
+  }
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+  static {
+    __name2(this, "ApiError");
+  }
+};
 async function onRequest(context) {
   try {
     const url = new URL(context.request.url);
@@ -40,11 +53,9 @@ async function onRequest(context) {
       if (context.request.method === "GET" && action === "avatar") {
         return serveAdminAvatar(context, id);
       }
-      if (context.request.method === "POST" && action === "approve") {
-        return updateStatus(context, id, "approved");
-      }
-      if (context.request.method === "POST" && action === "reject") {
-        return updateStatus(context, id, "rejected");
+      if (context.request.method === "POST") {
+        const status = getModerationStatus(action);
+        if (status) return updateStatus(context, id, status);
       }
       if (context.request.method === "DELETE" && action === "delete") {
         return deleteTestimonial(context, id);
@@ -52,12 +63,10 @@ async function onRequest(context) {
     }
     return json({ error: `No API route for ${url.pathname}` }, 404);
   } catch (error) {
-    return json(
-      {
-        error: error instanceof Error ? error.message : "Unexpected server error"
-      },
-      500
-    );
+    if (error instanceof ApiError) {
+      return json({ error: error.message }, error.status);
+    }
+    return json({ error: "Unexpected server error" }, 500);
   }
 }
 __name(onRequest, "onRequest");
@@ -72,56 +81,22 @@ async function createTestimonial({ request, env }) {
   const formData = await request.formData();
   const honeypot = String(formData.get("website") ?? "").trim();
   if (honeypot) return json({ ok: true }, 202);
+  const payload = parseSubmission(formData);
   const ip = getClientIp(request);
   const rateLimit = await checkRateLimit(env.DB, ip);
   if (!rateLimit.allowed) {
-    return json({ error: "Too many submissions. Please try later." }, 429);
+    throw new ApiError("Too many submissions. Please try later.", 429);
   }
-  const quote = normalizeRequiredField(formData.get("quote"), 20, 500, "Quote");
-  const name = normalizeRequiredField(formData.get("name"), 2, 80, "Name");
-  const role = normalizeRequiredField(formData.get("role"), 2, 120, "Role");
-  const avatarUrl = normalizeOptionalUrl(formData.get("avatarUrl"));
-  const avatarFile = formData.get("avatar");
-  let avatarR2Key = null;
-  let avatarContentType = null;
-  if (avatarFile instanceof File && avatarFile.size > 0) {
-    if (avatarFile.size > MAX_AVATAR_BYTES) {
-      return json({ error: "Avatar upload must be 2 MB or smaller." }, 400);
-    }
-    if (!ALLOWED_AVATAR_TYPES.has(avatarFile.type)) {
-      return json({ error: "Avatar must be PNG, JPG, GIF, or WebP." }, 400);
-    }
-    avatarR2Key = `testimonials/${crypto.randomUUID()}-${safeFileName(
-      avatarFile.name
-    )}`;
-    avatarContentType = avatarFile.type;
-    await env.TESTIMONIAL_AVATARS.put(
-      avatarR2Key,
-      await avatarFile.arrayBuffer(),
-      { httpMetadata: { contentType: avatarContentType } }
-    );
-  }
-  if (!avatarR2Key && !avatarUrl) {
-    return json({ error: "Add an avatar upload or avatar URL." }, 400);
-  }
+  const avatar = await storeAvatar(env.TESTIMONIAL_AVATARS, payload.avatarFile);
   const id = crypto.randomUUID();
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  await env.DB.prepare(
-    `INSERT INTO testimonials (
-      id, quote, name, role, status, avatar_url, avatar_r2_key,
-      avatar_content_type, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
-  ).bind(
-    id,
-    quote,
-    name,
-    role,
-    avatarUrl,
-    avatarR2Key,
-    avatarContentType,
-    now,
-    now
-  ).run();
+  try {
+    await insertTestimonial(env.DB, id, payload, avatar);
+  } catch (error) {
+    if (avatar.key) {
+      await env.TESTIMONIAL_AVATARS.delete(avatar.key).catch(() => void 0);
+    }
+    throw error;
+  }
   return json({ id, status: "pending" }, 201);
 }
 __name(createTestimonial, "createTestimonial");
@@ -152,11 +127,14 @@ async function listAdminTestimonials({ env }) {
 __name(listAdminTestimonials, "listAdminTestimonials");
 __name2(listAdminTestimonials, "listAdminTestimonials");
 async function updateStatus({ env }, id, status) {
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE testimonials
      SET status = ?, updated_at = ?
      WHERE id = ?`
   ).bind(status, (/* @__PURE__ */ new Date()).toISOString(), id).run();
+  if ((result.meta?.changes ?? 0) === 0) {
+    throw new ApiError("Testimonial not found.", 404);
+  }
   return json({ ok: true });
 }
 __name(updateStatus, "updateStatus");
@@ -165,7 +143,13 @@ async function deleteTestimonial({ env }, id) {
   const row = await env.DB.prepare(
     "SELECT avatar_r2_key FROM testimonials WHERE id = ?"
   ).bind(id).first();
-  await env.DB.prepare("DELETE FROM testimonials WHERE id = ?").bind(id).run();
+  if (!row) {
+    throw new ApiError("Testimonial not found.", 404);
+  }
+  const result = await env.DB.prepare("DELETE FROM testimonials WHERE id = ?").bind(id).run();
+  if ((result.meta?.changes ?? 0) === 0) {
+    throw new ApiError("Testimonial not found.", 404);
+  }
   if (row?.avatar_r2_key) {
     await env.TESTIMONIAL_AVATARS.delete(row.avatar_r2_key);
   }
@@ -212,8 +196,7 @@ function toPublicTestimonial(row) {
     quote: row.quote,
     name: row.name,
     role: row.role,
-    image: row.avatar_r2_key ? `/api/testimonials/avatar/${encodeURIComponent(row.avatar_r2_key)}` : row.avatar_url ?? "",
-    href: "#"
+    avatarUrl: row.avatar_r2_key ? `/api/testimonials/avatar/${encodeURIComponent(row.avatar_r2_key)}` : row.avatar_url ?? ""
   };
 }
 __name(toPublicTestimonial, "toPublicTestimonial");
@@ -229,6 +212,73 @@ function toAdminTestimonial(row) {
 }
 __name(toAdminTestimonial, "toAdminTestimonial");
 __name2(toAdminTestimonial, "toAdminTestimonial");
+function getModerationStatus(action) {
+  if (action === "approve") return "approved";
+  if (action === "reject") return "rejected";
+  return null;
+}
+__name(getModerationStatus, "getModerationStatus");
+__name2(getModerationStatus, "getModerationStatus");
+function parseSubmission(formData) {
+  const quote = normalizeRequiredField(formData.get("quote"), 20, 500, "Quote");
+  const name = normalizeRequiredField(formData.get("name"), 2, 80, "Name");
+  const role = normalizeRequiredField(formData.get("role"), 2, 120, "Role");
+  const avatarUrl = normalizeOptionalUrl(formData.get("avatarUrl"));
+  const avatarFile = normalizeAvatarFile(formData.get("avatar"));
+  if (!avatarFile && !avatarUrl) {
+    throw new ApiError("Add an avatar upload or avatar URL.", 400);
+  }
+  return {
+    quote,
+    name,
+    role,
+    avatarUrl,
+    avatarFile
+  };
+}
+__name(parseSubmission, "parseSubmission");
+__name2(parseSubmission, "parseSubmission");
+async function storeAvatar(bucket, avatarFile) {
+  if (!avatarFile) {
+    return {
+      key: null,
+      contentType: null
+    };
+  }
+  const key = `testimonials/${crypto.randomUUID()}-${safeFileName(
+    avatarFile.name
+  )}`;
+  await bucket.put(key, await avatarFile.arrayBuffer(), {
+    httpMetadata: { contentType: avatarFile.type }
+  });
+  return {
+    key,
+    contentType: avatarFile.type
+  };
+}
+__name(storeAvatar, "storeAvatar");
+__name2(storeAvatar, "storeAvatar");
+async function insertTestimonial(db, id, payload, avatar) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  await db.prepare(
+    `INSERT INTO testimonials (
+        id, quote, name, role, status, avatar_url, avatar_r2_key,
+        avatar_content_type, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
+  ).bind(
+    id,
+    payload.quote,
+    payload.name,
+    payload.role,
+    payload.avatarUrl,
+    avatar.key,
+    avatar.contentType,
+    now,
+    now
+  ).run();
+}
+__name(insertTestimonial, "insertTestimonial");
+__name2(insertTestimonial, "insertTestimonial");
 async function checkRateLimit(db, ip) {
   const windowStart = new Date(Date.now() - SUBMISSION_WINDOW_MS).toISOString();
   const row = await db.prepare(
@@ -262,10 +312,10 @@ __name2(requireAdmin, "requireAdmin");
 function normalizeRequiredField(value, minLength, maxLength, label) {
   const text = String(value ?? "").trim();
   if (text.length < minLength) {
-    throw new Error(`${label} is too short.`);
+    throw new ApiError(`${label} is too short.`, 400);
   }
   if (text.length > maxLength) {
-    throw new Error(`${label} is too long.`);
+    throw new ApiError(`${label} is too long.`, 400);
   }
   return text;
 }
@@ -274,14 +324,31 @@ __name2(normalizeRequiredField, "normalizeRequiredField");
 function normalizeOptionalUrl(value) {
   const text = String(value ?? "").trim();
   if (!text) return null;
-  const url = new URL(text);
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new ApiError("Avatar URL must be a valid URL.", 400);
+  }
   if (!["https:", "http:"].includes(url.protocol)) {
-    throw new Error("Avatar URL must use http or https.");
+    throw new ApiError("Avatar URL must use http or https.", 400);
   }
   return url.toString();
 }
 __name(normalizeOptionalUrl, "normalizeOptionalUrl");
 __name2(normalizeOptionalUrl, "normalizeOptionalUrl");
+function normalizeAvatarFile(value) {
+  if (!(value instanceof File) || value.size === 0) return null;
+  if (value.size > MAX_AVATAR_BYTES) {
+    throw new ApiError("Avatar upload must be 2 MB or smaller.", 400);
+  }
+  if (!ALLOWED_AVATAR_TYPES.has(value.type)) {
+    throw new ApiError("Avatar must be PNG, JPG, GIF, or WebP.", 400);
+  }
+  return value;
+}
+__name(normalizeAvatarFile, "normalizeAvatarFile");
+__name2(normalizeAvatarFile, "normalizeAvatarFile");
 function safeFileName(name) {
   return name.toLowerCase().replace(/[^a-z0-9.]+/g, "-").slice(0, 80);
 }
@@ -983,7 +1050,7 @@ var jsonError2 = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default2 = jsonError2;
 
-// .wrangler/tmp/bundle-giCycT/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-zN6FnR/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__2 = [
   middleware_ensure_req_body_drained_default2,
   middleware_miniflare3_json_error_default2
@@ -1015,7 +1082,7 @@ function __facade_invoke__2(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__2, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-giCycT/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-zN6FnR/middleware-loader.entry.ts
 var __Facade_ScheduledController__2 = class ___Facade_ScheduledController__2 {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
@@ -1115,4 +1182,4 @@ export {
   __INTERNAL_WRANGLER_MIDDLEWARE__2 as __INTERNAL_WRANGLER_MIDDLEWARE__,
   middleware_loader_entry_default2 as default
 };
-//# sourceMappingURL=functionsWorker-0.41870482354872873.js.map
+//# sourceMappingURL=functionsWorker-0.40756129955866693.js.map
