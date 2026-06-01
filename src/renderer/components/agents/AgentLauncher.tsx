@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowUp, Bot, Loader2, Plus } from 'lucide-react'
+import { ArrowUp, Loader2, Plus, Terminal as TerminalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { shellApi } from '@/lib/api'
+import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { memo } from 'react'
 import {
 	Select,
@@ -20,7 +24,7 @@ import { launchAgentInPane } from '@/lib/agent-launch'
 import { persistenceApi } from '@/lib/api'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useProjectStore } from '@/stores/project-store'
-import { useMaxTerminalsPerProject } from '@/stores/app-settings-store'
+import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { CustomAgentDialog } from './CustomAgentDialog'
@@ -52,6 +56,8 @@ export function AgentLauncher({
 	const agents = agentsProp ?? loadedAgents
 	const [selectedAgentId, setSelectedAgentId] = useState<string>(agents[0]?.id ?? '')
 	const [isLaunching, setIsLaunching] = useState(false)
+	const [isSpawningTerminal, setIsSpawningTerminal] = useState(false)
+	const [shells, setShells] = useState<DetectedShells | null>(null)
 	const [showCreateDialog, setShowCreateDialog] = useState(false)
 
 	useEffect(() => {
@@ -97,6 +103,40 @@ export function AgentLauncher({
 
 	const activeProjectId = useProjectStore((s) => s.activeProjectId)
 	const maxTerminals = useMaxTerminalsPerProject()
+	const appDefaultShell = useDefaultShell()
+
+	useEffect(() => {
+		let cancelled = false
+		const fetchShells = async (): Promise<void> => {
+			try {
+				const result = await shellApi.getAvailableShells()
+				if (!cancelled && result.success) {
+					setShells(result.data)
+				}
+			} catch {
+				if (!cancelled) setShells(null)
+			}
+		}
+		void fetchShells()
+		return () => {
+			cancelled = true
+		}
+	}, [])
+
+	const projectDefaultShell = useProjectStore((s) =>
+		s.projects.find((p) => p.id === activeProjectId)?.defaultShell,
+	)
+
+	const sortedShells = useMemo(() => {
+		const preferred = projectDefaultShell || appDefaultShell
+		return shells?.available?.slice().sort((a, b) => {
+			if (preferred) {
+				if (a.name === preferred) return -1
+				if (b.name === preferred) return 1
+			}
+			return a.displayName.localeCompare(b.displayName)
+		})
+	}, [appDefaultShell, projectDefaultShell, shells])
 
 	const selectedAgent = useMemo(
 		() => agents.find((a) => a.id === selectedAgentId) ?? agents[0],
@@ -173,6 +213,39 @@ export function AgentLauncher({
 		[],
 	)
 
+	const spawnShellTerminal = useCallback(
+		async (shell?: ShellInfo) => {
+			if (!activeProjectId) {
+				toast.error('No active project')
+				return
+			}
+			if (isSpawningTerminal) return
+
+			setIsSpawningTerminal(true)
+			try {
+				const project = useProjectStore
+					.getState()
+					.projects.find((p) => p.id === activeProjectId)
+				const cwd = getDefaultCwdForProject(activeProjectId)
+				const result = await spawnTerminalInPane(paneId, activeProjectId, cwd, {
+					shell:
+						(shell?.path ?? project?.defaultShell ?? appDefaultShell) ||
+						undefined,
+					envVars: project?.envVars,
+					maxTerminalsPerProject: maxTerminals,
+				})
+				if (!result.success) {
+					toast.error(result.error || 'Failed to create terminal')
+				} else {
+					useWorkspaceStore.getState().hideAgentLauncher()
+				}
+			} finally {
+				setIsSpawningTerminal(false)
+			}
+		},
+		[activeProjectId, appDefaultShell, isSpawningTerminal, maxTerminals, paneId],
+	)
+
 	const handleAgentCreated = useCallback(
 		async (def: TerminalAgentDefinition) => {
 			try {
@@ -205,7 +278,7 @@ export function AgentLauncher({
 				className,
 			)}
 		>
-			<div className="flex w-full max-w-xl flex-col gap-2">
+			<div className="flex w-full max-w-xl flex-col gap-3">
 				{/* Chat-style input bar — grid layout for clean alignment */}
 				<div className="grid grid-cols-[auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
 					{/* Agent selector — column 1 */}
@@ -310,6 +383,46 @@ export function AgentLauncher({
 				<span className="text-center text-[11px] text-muted-foreground/50">
 					Enter to launch · Shift+Enter for newline · Esc to dismiss
 				</span>
+
+				{/* Plain terminal */}
+				<div className="flex items-center gap-3 pt-1">
+					<div className="h-px flex-1 bg-border/50" aria-hidden />
+					<span className="shrink-0 text-[11px] text-muted-foreground/50">
+						or run terminal
+					</span>
+					<div className="h-px flex-1 bg-border/50" aria-hidden />
+				</div>
+
+				<div className="flex flex-wrap items-center justify-center gap-2">
+					{sortedShells && sortedShells.length > 0 ? (
+						sortedShells.map((shell) => (
+							<Button
+								key={shell.name}
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={isSpawningTerminal}
+								className="h-8 gap-2 text-[11px]"
+								onClick={() => void spawnShellTerminal(shell)}
+							>
+								<TerminalIcon size={12} className="opacity-70" />
+								{shell.displayName}
+							</Button>
+						))
+					) : (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={isSpawningTerminal}
+							className="h-8 gap-2 text-[11px]"
+							onClick={() => void spawnShellTerminal()}
+						>
+							<TerminalIcon size={12} className="opacity-70" />
+							Default terminal
+						</Button>
+					)}
+				</div>
 			</div>
 
 			<CustomAgentDialog

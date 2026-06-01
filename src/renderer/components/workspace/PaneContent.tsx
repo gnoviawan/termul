@@ -15,10 +15,7 @@ import { useProjectStore } from "@/stores/project-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
 import type { LeafNode } from "@/types/workspace.types";
 import type { WorkspaceTab } from "@/stores/workspace-store";
-import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
-import { Button } from "@/components/ui/button";
-import { Terminal as TerminalIcon } from "lucide-react";
-import { shellApi } from "@/lib/api";
+import type { ShellInfo } from "@shared/types/ipc.types";
 
 // Import useShallow for selective re-rendering
 import { useShallow } from "zustand/shallow";
@@ -127,7 +124,7 @@ export function PaneContent({
 				);
 			}
 		}
-	});
+	}, [terminalsInPane]);
 
 	const handleFocus = useCallback(() => {
 		if (!isActivePane) {
@@ -181,32 +178,6 @@ export function PaneContent({
 					: panePreviewPosition === "bottom"
 						? "-translate-y-2"
 						: "";
-
-	const [shells, setShells] = useState<DetectedShells | null>(null);
-
-	useEffect(() => {
-		const fetchShells = async (): Promise<void> => {
-			try {
-				const result = await shellApi.getAvailableShells();
-				if (result.success) {
-					setShells(result.data);
-				}
-			} catch {
-				setShells(null);
-			}
-		};
-		void fetchShells();
-	}, []);
-
-	const sortedShells = useMemo(() => {
-		return shells?.available?.slice().sort((a, b) => {
-			if (defaultShell) {
-				if (a.name === defaultShell) return -1;
-				if (b.name === defaultShell) return 1;
-			}
-			return a.displayName.localeCompare(b.displayName);
-		});
-	}, [shells, defaultShell]);
 
 	return (
 		<div
@@ -471,30 +442,9 @@ export function PaneContent({
 							})}
 
 						{pane.tabs.length === 0 ? (
-							<div className="absolute inset-0 flex flex-col">
-								{/* ADR-004.5: agent launch surface lives in the empty-pane state. */}
-								<div className="relative flex-1">
-									<AgentLauncher paneId={pane.id} />
-								</div>
-								<div className="flex flex-col items-center gap-3 px-8 pb-8">
-									<span className="text-muted-foreground/50 text-[11px]">
-										or open a plain terminal
-									</span>
-									<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
-										{sortedShells?.map((shell) => (
-											<Button
-												key={shell.name}
-												variant="outline"
-												size="sm"
-												className="h-8 text-[11px] gap-2"
-												onClick={() => onAddTerminal?.(pane.id, shell)}
-											>
-												<TerminalIcon size={12} />
-												{shell.displayName}
-											</Button>
-										))}
-									</div>
-								</div>
+							<div className="absolute inset-0">
+								{/* ADR-004.5: agent launch + plain terminal picker */}
+								<AgentLauncher paneId={pane.id} />
 							</div>
 						) : null}
 
