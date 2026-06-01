@@ -1,6 +1,7 @@
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import type {
   IpcResult,
+  RemoteBindMode,
   RemoteProjectTree,
   RemoteServerApi,
   RemoteStatus
@@ -42,9 +43,13 @@ async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResu
 }
 
 export const remoteServerApi: RemoteServerApi = {
-  /** Start the embedded server (binds 127.0.0.1:auto-port). Returns status with url + port. */
-  async start(): Promise<IpcResult<RemoteStatus>> {
-    return invokeIpc<RemoteStatus>(IPC_COMMANDS.START)
+  /** Start the embedded server on the chosen bind mode (auto-port). */
+  async start(options?: { bindMode?: RemoteBindMode }): Promise<IpcResult<RemoteStatus>> {
+    const bindMode = options?.bindMode
+    return invokeIpc<RemoteStatus>(
+      IPC_COMMANDS.START,
+      bindMode ? { bindMode } : undefined
+    )
   },
 
   /** Stop the embedded server and disconnect all web clients. */

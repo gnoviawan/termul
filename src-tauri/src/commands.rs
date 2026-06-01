@@ -2285,9 +2285,14 @@ pub async fn remote_server_start(
     app_handle: AppHandle,
     pty_manager: State<'_, Arc<PtyManager>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    let bind_mode = bind_mode
+        .as_deref()
+        .and_then(remote::server::RemoteBindMode::parse)
+        .unwrap_or(remote::server::RemoteBindMode::Localhost);
     match remote_state
-        .start(pty_manager.inner().clone(), app_handle)
+        .start(pty_manager.inner().clone(), app_handle, bind_mode)
         .await
     {
         Ok(status) => Ok(IpcResult::success(status)),

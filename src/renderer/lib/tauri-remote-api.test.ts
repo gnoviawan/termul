@@ -20,21 +20,23 @@ describe('remoteServerApi', () => {
     const status: RemoteStatus = {
       running: true,
       url: 'http://127.0.0.1:5180',
-      port: 5180
+      port: 5180,
+      bindMode: 'localhost',
+      bindHost: '127.0.0.1'
     }
     const ipc: IpcResult<RemoteStatus> = { success: true, data: status }
     mockInvoke.mockResolvedValueOnce(ipc)
 
-    const result = await remoteServerApi.start()
+    const result = await remoteServerApi.start({ bindMode: 'localhost' })
 
-    expect(mockInvoke).toHaveBeenCalledWith('remote_server_start', undefined)
+    expect(mockInvoke).toHaveBeenCalledWith('remote_server_start', { bindMode: 'localhost' })
     expect(result).toEqual(ipc)
   })
 
   it('stop() calls the remote_server_stop command', async () => {
     const ipc: IpcResult<RemoteStatus> = {
       success: true,
-      data: { running: false, url: null, port: null }
+      data: { running: false, url: null, port: null, bindMode: null, bindHost: null }
     }
     mockInvoke.mockResolvedValueOnce(ipc)
 
@@ -47,7 +49,7 @@ describe('remoteServerApi', () => {
   it('status() calls the remote_server_status command', async () => {
     const ipc: IpcResult<RemoteStatus> = {
       success: true,
-      data: { running: false, url: null, port: null }
+      data: { running: false, url: null, port: null, bindMode: null, bindHost: null }
     }
     mockInvoke.mockResolvedValueOnce(ipc)
 

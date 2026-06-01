@@ -43,6 +43,48 @@ use tracing::{error, info};
 /// Max concurrent WebSocket clients per terminal.
 const MAX_CONNECTIONS_PER_TERMINAL: usize = 10;
 
+/// Which network interface(s) the embedded HTTP server binds to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteBindMode {
+    /// `127.0.0.1` — localhost only (default, safest).
+    Localhost,
+    /// `0.0.0.0` — all interfaces (LAN / other devices on the network).
+    All,
+}
+
+impl RemoteBindMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "localhost" | "127.0.0.1" | "loopback" => Some(Self::Localhost),
+            "all" | "0.0.0.0" | "any" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Localhost => "localhost",
+            Self::All => "all",
+        }
+    }
+
+    /// Address passed to `TcpListener::bind` (port 0 = OS-assigned).
+    pub fn bind_addr(self, port: u16) -> SocketAddr {
+        match self {
+            Self::Localhost => SocketAddr::from(([127, 0, 0, 1], port)),
+            Self::All => SocketAddr::from(([0, 0, 0, 0], port)),
+        }
+    }
+
+    /// Human-readable bind target for the UI.
+    pub fn display_host(self) -> &'static str {
+        match self {
+            Self::Localhost => "127.0.0.1",
+            Self::All => "0.0.0.0",
+        }
+    }
+}
+
 /// Event emitted to the renderer when a web client requests a new terminal.
 pub const EVENT_REMOTE_SPAWN_REQUEST: &str = "remote://spawn-request";
 
@@ -73,6 +115,7 @@ pub struct RemoteServer {
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Bound address (for display in UI)
     pub addr: SocketAddr,
+    bind_mode: RemoteBindMode,
 }
 
 impl RemoteServer {
@@ -85,9 +128,9 @@ impl RemoteServer {
         pty_manager: Arc<PtyManager>,
         registry: Arc<ProjectRegistry>,
         app_handle: AppHandle,
-        bind_addr: SocketAddr,
+        bind_mode: RemoteBindMode,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let listener = TcpListener::bind(bind_addr).await?;
+        let listener = TcpListener::bind(bind_mode.bind_addr(0)).await?;
         let addr = listener.local_addr()?;
 
         info!("Remote terminal server binding to {}", addr);
@@ -158,12 +201,25 @@ impl RemoteServer {
         Ok(Self {
             shutdown_tx: Some(shutdown_tx),
             addr,
+            bind_mode,
         })
     }
 
+    pub fn bind_mode(&self) -> RemoteBindMode {
+        self.bind_mode
+    }
+
     /// Returns the URL a user should open in a browser to access terminals.
+    ///
+    /// When bound to `0.0.0.0`, browsers still need a concrete host — loopback works
+    /// on the same machine; other devices should use this host's LAN IP + port.
     pub fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        let host = if self.addr.ip().is_unspecified() {
+            "127.0.0.1".to_string()
+        } else {
+            self.addr.ip().to_string()
+        };
+        format!("http://{}:{}", host, self.addr.port())
     }
 
     /// Gracefully shut down the server explicitly (alternative to drop).
@@ -346,6 +402,10 @@ pub struct RemoteStatus {
     pub running: bool,
     pub url: Option<String>,
     pub port: Option<u16>,
+    /// `localhost` or `all` when running; `None` when stopped.
+    pub bind_mode: Option<String>,
+    /// Bind host shown in the UI (`127.0.0.1` or `0.0.0.0`).
+    pub bind_host: Option<String>,
 }
 
 /// Tauri-managed wrapper around `RemoteServer` that tracks start/stop lifecycle.
@@ -364,11 +424,11 @@ impl RemoteServerState {
     }
 
     /// Start the remote terminal server if not already running.
-    /// Binds to `127.0.0.1:0` (auto-port) by default.
     pub async fn start(
         &self,
         pty_manager: Arc<PtyManager>,
         app_handle: AppHandle,
+        bind_mode: RemoteBindMode,
     ) -> Result<RemoteStatus, String> {
         {
             let slot = self.inner.lock().unwrap();
@@ -377,21 +437,16 @@ impl RemoteServerState {
             }
         }
 
-        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
         let server = RemoteServer::start(
             pty_manager,
             Arc::clone(&self.registry),
             app_handle,
-            bind_addr,
+            bind_mode,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
-        let status = RemoteStatus {
-            running: true,
-            url: Some(server.url()),
-            port: Some(server.addr.port()),
-        };
+        let status = Self::status_from_server(&server);
 
         let mut slot = self.inner.lock().unwrap();
         if slot.is_some() {
@@ -410,11 +465,7 @@ impl RemoteServerState {
         };
         if let Some(server) = server {
             drop(server); // triggers graceful shutdown
-            Ok(RemoteStatus {
-                running: false,
-                url: None,
-                port: None,
-            })
+            Ok(RemoteStatus::stopped())
         } else {
             Err("Remote server is not running".to_string())
         }
@@ -424,16 +475,31 @@ impl RemoteServerState {
     pub fn status(&self) -> RemoteStatus {
         let slot = self.inner.lock().unwrap();
         match slot.as_ref() {
-            Some(server) => RemoteStatus {
-                running: true,
-                url: Some(server.url()),
-                port: Some(server.addr.port()),
-            },
-            None => RemoteStatus {
-                running: false,
-                url: None,
-                port: None,
-            },
+            Some(server) => Self::status_from_server(server),
+            None => RemoteStatus::stopped(),
+        }
+    }
+
+    fn status_from_server(server: &RemoteServer) -> RemoteStatus {
+        let mode = server.bind_mode();
+        RemoteStatus {
+            running: true,
+            url: Some(server.url()),
+            port: Some(server.addr.port()),
+            bind_mode: Some(mode.as_str().to_string()),
+            bind_host: Some(mode.display_host().to_string()),
+        }
+    }
+}
+
+impl RemoteStatus {
+    fn stopped() -> Self {
+        Self {
+            running: false,
+            url: None,
+            port: None,
+            bind_mode: None,
+            bind_host: None,
         }
     }
 }
@@ -447,6 +513,27 @@ impl Default for RemoteServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn remote_bind_mode_parse_and_addrs() {
+        assert_eq!(
+            RemoteBindMode::parse("localhost"),
+            Some(RemoteBindMode::Localhost)
+        );
+        assert_eq!(RemoteBindMode::parse("all"), Some(RemoteBindMode::All));
+        assert_eq!(RemoteBindMode::parse("bogus"), None);
+
+        assert_eq!(
+            RemoteBindMode::Localhost.bind_addr(0),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+        );
+        assert_eq!(
+            RemoteBindMode::All.bind_addr(0),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        );
+    }
+
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt; // for `oneshot`

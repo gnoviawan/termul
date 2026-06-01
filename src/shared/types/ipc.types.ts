@@ -326,11 +326,18 @@ export interface VisibilityApi {
 	setVisibilityState: (isVisible: boolean) => Promise<IpcResult<void>>;
 }
 
+/** Network bind scope for the embedded remote terminal server. */
+export type RemoteBindMode = "localhost" | "all";
+
 // Remote terminal server status (mirrors Rust remote::RemoteStatus)
 export interface RemoteStatus {
 	running: boolean;
 	url: string | null;
 	port: number | null;
+	/** `localhost` or `all` while running. */
+	bindMode: RemoteBindMode | null;
+	/** `127.0.0.1` or `0.0.0.0` while running. */
+	bindHost: string | null;
 }
 
 // One terminal entry within a remote project tree (mirrors Rust RemoteTerminal)
@@ -356,7 +363,7 @@ export interface RemoteProjectTree {
 
 // Remote terminal server control API
 export interface RemoteServerApi {
-	start: () => Promise<IpcResult<RemoteStatus>>;
+	start: (options?: { bindMode?: RemoteBindMode }) => Promise<IpcResult<RemoteStatus>>;
 	stop: () => Promise<IpcResult<RemoteStatus>>;
 	status: () => Promise<IpcResult<RemoteStatus>>;
 	publishProjects: (tree: RemoteProjectTree) => Promise<IpcResult<void>>;
