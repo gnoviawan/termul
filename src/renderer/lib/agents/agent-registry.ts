@@ -18,12 +18,12 @@
  * already present here — never a remote URL.
  */
 
-import claudeCodeIcon from '@/assets/agent-icons/claude-code.svg'
-import codexIcon from '@/assets/agent-icons/codex.svg'
-import cursorIcon from '@/assets/agent-icons/cursor.svg'
-import geminiIcon from '@/assets/agent-icons/gemini-cli.svg'
-import opencodeIcon from '@/assets/agent-icons/opencode.svg'
-import piIcon from '@/assets/agent-icons/pi.svg'
+import claudeCodeIcon from '@/assets/agent-icons/claude-code.svg?raw'
+import codexIcon from '@/assets/agent-icons/codex.svg?raw'
+import cursorIcon from '@/assets/agent-icons/cursor.svg?raw'
+import geminiIcon from '@/assets/agent-icons/gemini-cli.svg?raw'
+import opencodeIcon from '@/assets/agent-icons/opencode.svg?raw'
+import piIcon from '@/assets/agent-icons/pi.svg?raw'
 
 /**
  * How the user's prompt is supplied to the agent's argv.
@@ -53,7 +53,7 @@ export interface TerminalAgentDefinition {
 	 * at launch time against the process/project env.
 	 */
 	env?: Record<string, string>
-	/** Resolved icon path (bundled asset or cached registry SVG). */
+	/** Resolved icon SVG markup (bundled inline so currentColor inherits). */
 	icon?: string
 	/** Optional link to an ACP Registry entry for identity reuse (ADR-004.6). */
 	registryId?: string
@@ -106,7 +106,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'claude-acp',
-		icon: claudeCodeIcon,
+		icon: claudeCodeIcon as string,
 		isBuiltIn: true,
 	},
 	{
@@ -116,7 +116,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'codex-acp',
-		icon: codexIcon,
+		icon: codexIcon as string,
 		isBuiltIn: true,
 	},
 	{
@@ -126,7 +126,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'cursor',
-		icon: cursorIcon,
+		icon: cursorIcon as string,
 		isBuiltIn: true,
 	},
 	{
@@ -137,7 +137,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		promptMode: 'flag',
 		promptFlag: '-i',
 		registryId: 'gemini',
-		icon: geminiIcon,
+		icon: geminiIcon as string,
 		isBuiltIn: true,
 	},
 	{
@@ -148,7 +148,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		promptMode: 'flag',
 		promptFlag: '--prompt',
 		registryId: 'opencode',
-		icon: opencodeIcon,
+		icon: opencodeIcon as string,
 		isBuiltIn: true,
 	},
 	{
@@ -161,7 +161,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		// prompt so we never pass an unsupported flag.
 		promptMode: 'none',
 		registryId: 'pi-acp',
-		icon: piIcon,
+		icon: piIcon as string,
 		isBuiltIn: true,
 	},
 ] as const

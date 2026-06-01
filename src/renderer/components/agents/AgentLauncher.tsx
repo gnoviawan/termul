@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Bot, CornerDownLeft, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { memo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { BUILT_IN_AGENTS, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
@@ -198,17 +199,34 @@ export function AgentLauncher({
 }
 
 /**
- * Small icon for an agent. Uses the bundled/registry icon when available,
- * falling back to the first letter of the agent name.
+ * Small icon for an agent. Renders the bundled SVG inline so `currentColor`
+ * inherits from the parent's CSS text color — giving us a bright icon on dark
+ * themes and a dark one on light themes, without any filter hacks.
  */
-function AgentGlyph({ agent }: { agent: TerminalAgentDefinition }): React.JSX.Element {
-	if (agent.icon) {
+const AgentGlyph = memo(function AgentGlyph({
+	agent,
+}: {
+	agent: TerminalAgentDefinition
+}): React.JSX.Element {
+	const normalized = useMemo(() => {
+		if (!agent.icon) return null
+		// Normalize the SVG source so it renders at a consistent 14×14 size:
+		// strip width/height attributes and force a 16×16 viewBox (or keep the
+		// original viewBox if present), then let CSS size it.
+		const src = agent.icon
+			.replace(/\s+width="[^"]*"/g, '')
+			.replace(/\s+height="[^"]*"/g, '')
+		// If no viewBox is present, add one for the original dimensions.
+			if (!/viewBox/i.test(src)) return null // malformed, fall back to letter
+		return src
+	}, [agent.icon])
+
+	if (normalized) {
 		return (
-			<img
-				src={agent.icon}
-				alt=""
+			<span
 				aria-hidden="true"
-				className="h-3.5 w-3.5 object-contain"
+				className="inline-flex h-3.5 w-3.5 shrink-0 [&_svg]:h-full [&_svg]:w-full"
+				dangerouslySetInnerHTML={{ __html: normalized }}
 			/>
 		)
 	}
@@ -220,4 +238,4 @@ function AgentGlyph({ agent }: { agent: TerminalAgentDefinition }): React.JSX.El
 			{agent.name.charAt(0)}
 		</span>
 	)
-}
+})
