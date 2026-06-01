@@ -212,7 +212,7 @@ export function AgentLauncher({
 	return (
 		<div
 			className={cn(
-				'absolute inset-0 flex flex-col items-center justify-end p-4 pb-8',
+				'absolute inset-0 flex flex-col items-center justify-center p-8',
 				className,
 			)}
 		>
