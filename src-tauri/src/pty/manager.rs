@@ -72,6 +72,23 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri::ipc::{Channel, Response};
+
+/// ADR-004.2: Returns true if a Windows file path points to a directly-
+/// executable image (`.exe`, `.com`, `.scr`, or no extension). Anything else
+/// (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, ...) cannot be handed to
+/// `CreateProcessW` and would surface as `os error 193`.
+#[cfg(target_os = "windows")]
+fn is_directly_executable_windows(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    // Strip a trailing quote pair if the caller supplied a quoted form.
+    let trimmed = lower.trim_end_matches('"');
+    matches!(
+        std::path::Path::new(trimmed)
+            .extension()
+            .and_then(|e| e.to_str()),
+        None | Some("exe") | Some("com") | Some("scr")
+    )
+}
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "windows")]
@@ -1205,6 +1222,15 @@ impl PtyManager {
     /// known binary name from the Agent Registry or an explicit absolute path.
     /// Returns an error when the program cannot be found rather than launching an
     /// unresolved name (defense in depth against a compromised renderer).
+    ///
+    /// On Windows, ONLY directly-executable image formats are accepted (`.exe`,
+    /// `.com`, `.scr`, or no extension). `.bat`/`.cmd`/`.ps1` are explicitly
+    /// rejected because `CreateProcessW` cannot execute them directly (would
+    /// return ERROR_BAD_EXE_FORMAT / os error 193) and ADR-004.2 forbids the
+    /// `cmd /c` workaround for security. If a user installs an agent via a
+    /// `.cmd` shim, they must point the registry entry at a directly-executable
+    /// binary (e.g. via `npx` -> the underlying node + script is a separate
+    /// problem; for now, surface a clear error).
     fn resolve_program_path(&self, program: &str) -> Result<String, String> {
         let trimmed = program.trim();
         if trimmed.is_empty() {
@@ -1214,6 +1240,16 @@ impl PtyManager {
         // Explicit path: must exist as given.
         if trimmed.contains('/') || trimmed.contains('\\') {
             if Path::new(trimmed).exists() {
+                #[cfg(target_os = "windows")]
+                {
+                    if !is_directly_executable_windows(trimmed) {
+                        return Err(format!(
+                            "Agent program '{}' is not a directly-executable image (.exe/.com/.scr); \
+                             batch scripts and PowerShell scripts are not supported (ADR-004.2)",
+                            trimmed
+                        ));
+                    }
+                }
                 return Ok(trimmed.to_string());
             }
             return Err(format!("Agent program not found: {}", trimmed));
@@ -1221,13 +1257,15 @@ impl PtyManager {
 
         #[cfg(target_os = "windows")]
         {
-            if let Some(abs_path) = self.get_absolute_shell_path(trimmed) {
-                return Ok(abs_path);
-            }
-            // Try the .exe variant explicitly for bare names.
-            let exe_name = format!("{}.exe", trimmed);
-            if let Some(abs_path) = self.get_absolute_shell_path(&exe_name) {
-                return Ok(abs_path);
+            // Restrict PATHEXT to directly-executable image extensions so we never
+            // hand CreateProcessW a .cmd / .bat / .ps1 shim (which it cannot run
+            // directly and would surface as os error 193).
+            const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
+            for ext in WIN_EXECUTABLE_EXTS {
+                let candidate = format!("{}{}", trimmed, ext);
+                if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
+                    return Ok(abs_path);
+                }
             }
         }
 
@@ -1707,6 +1745,52 @@ impl portable_pty::Child for WindowsConPtyChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn directly_executable_windows_accepts_only_image_formats() {
+        // The exact list we accept — anything else will be rejected by
+        // resolve_program_path before it can reach CreateProcessW and surface
+        // as os error 193.
+        for ok in [
+            r"C:\bin\claude.exe",
+            r"C:\bin\codex.exe",
+            r"C:/bin/cursor.com",
+            r"C:\bin\agent.scr",
+            r"C:\bin\nodot", // no-extension binary is also valid
+            r"C:\bin\sub\path\agent.exe",
+            r#"C:\bin\"quoted".exe"#, // trailing quote tolerated
+        ] {
+            assert!(
+                is_directly_executable_windows(ok),
+                "expected accepted: {}",
+                ok
+            );
+        }
+        for bad in [
+            r"C:\bin\opencode.cmd",
+            r"C:\bin\agent.bat",
+            r"C:\bin\script.ps1",
+            r"C:\bin\hello.vbs",
+            r"C:\bin\runner.js",
+            r"C:\bin\thing.exe.cmd", // .cmd wins, rejected
+        ] {
+            assert!(
+                !is_directly_executable_windows(bad),
+                "expected rejected: {}",
+                bad
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn directly_executable_windows_composite_suffix_does_not_match() {
+        // A file like `agent.cmd.exe` is a .exe, so it IS accepted — but
+        // `agent.cmd.txt` is not. Make sure we look at the last extension only.
+        assert!(is_directly_executable_windows(r"C:\bin\agent.cmd.exe"));
+        assert!(!is_directly_executable_windows(r"C:\bin\agent.exe.cmd"));
+    }
 
     #[test]
     fn test_spawn_options_default() {

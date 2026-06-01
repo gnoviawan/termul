@@ -11,7 +11,19 @@
  * identity reuse (icon, display name, description); it is NEVER used to derive
  * the launch command. The `command`/`baseArgs`/`promptMode` fields here are
  * authoritative for the TUI route.
+ *
+ * Icons are bundled from the ACP Registry CDN at build time (16x16 monochrome
+ * `currentColor` per the registry FORMAT spec) so the default experience is
+ * fully offline. `acp-registry-catalog.ts` will only ever borrow an icon
+ * already present here — never a remote URL.
  */
+
+import claudeCodeIcon from '@/assets/agent-icons/claude-code.svg'
+import codexIcon from '@/assets/agent-icons/codex.svg'
+import cursorIcon from '@/assets/agent-icons/cursor.svg'
+import geminiIcon from '@/assets/agent-icons/gemini-cli.svg'
+import opencodeIcon from '@/assets/agent-icons/opencode.svg'
+import piIcon from '@/assets/agent-icons/pi.svg'
 
 /**
  * How the user's prompt is supplied to the agent's argv.
@@ -94,6 +106,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'claude-acp',
+		icon: claudeCodeIcon,
 		isBuiltIn: true,
 	},
 	{
@@ -103,6 +116,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'codex-acp',
+		icon: codexIcon,
 		isBuiltIn: true,
 	},
 	{
@@ -112,6 +126,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		baseArgs: [],
 		promptMode: 'positional',
 		registryId: 'cursor',
+		icon: cursorIcon,
 		isBuiltIn: true,
 	},
 	{
@@ -122,6 +137,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		promptMode: 'flag',
 		promptFlag: '-i',
 		registryId: 'gemini',
+		icon: geminiIcon,
 		isBuiltIn: true,
 	},
 	{
@@ -132,6 +148,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		promptMode: 'flag',
 		promptFlag: '--prompt',
 		registryId: 'opencode',
+		icon: opencodeIcon,
 		isBuiltIn: true,
 	},
 	{
@@ -144,6 +161,7 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		// prompt so we never pass an unsupported flag.
 		promptMode: 'none',
 		registryId: 'pi-acp',
+		icon: piIcon,
 		isBuiltIn: true,
 	},
 ] as const

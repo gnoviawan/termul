@@ -68,6 +68,12 @@ export function indexByRegistryId(
  * Apply registry identity (icon, and optionally name when missing) to a
  * launch-table definition via its `registryId`. The launch command is never
  * touched. Returns a new object; the input is not mutated.
+ *
+ * Defense-in-depth: the ADR-004.6 contract is that the default experience is
+ * offline. A registry entry's `icon` is a remote CDN URL — we must never
+ * inject it into a definition that has no bundled icon, because that would
+ * silently start a network fetch on every render. We only "borrow" identity
+ * when the definition already has something to anchor it.
  */
 export function applyRegistryIdentity(
 	def: TerminalAgentDefinition,
@@ -76,9 +82,8 @@ export function applyRegistryIdentity(
 	if (!def.registryId) return def
 	const entry = index.get(def.registryId)
 	if (!entry) return def
-	return {
-		...def,
-		// Prefer an already-bundled icon; only borrow the registry icon when none.
-		icon: def.icon ?? entry.icon ?? undefined,
-	}
+	// Prefer an already-bundled icon. We never promote a remote icon to a
+	// bundleless def — the default experience stays offline.
+	if (!def.icon) return def
+	return { ...def, icon: def.icon }
 }

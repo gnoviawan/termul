@@ -43,6 +43,7 @@ const claudeDef: TerminalAgentDefinition = {
 	baseArgs: [],
 	promptMode: 'positional',
 	registryId: 'claude-acp',
+	icon: 'bundled/claude-code.svg',
 	isBuiltIn: true,
 }
 
@@ -82,37 +83,49 @@ describe('fetchAcpRegistry', () => {
 })
 
 describe('applyRegistryIdentity', () => {
-	it('borrows the registry icon when the def has none', () => {
+	it('keeps an existing bundled icon (does not overwrite from remote registry)', () => {
 		const index = indexByRegistryId(catalog)
-		const out = applyRegistryIdentity(claudeDef, index)
-		expect(out.icon).toBe('https://cdn/claude.svg')
-		// Launch command is untouched.
-		expect(out.command).toBe('claude')
-		expect(out.promptMode).toBe('positional')
-	})
-
-	it('keeps an existing bundled icon over the registry icon', () => {
-		const index = indexByRegistryId(catalog)
-		const out = applyRegistryIdentity({ ...claudeDef, icon: 'bundled.svg' }, index)
+		const withIcon = { ...claudeDef, icon: 'bundled.svg' }
+		const out = applyRegistryIdentity(withIcon, index)
 		expect(out.icon).toBe('bundled.svg')
+		// We never silently swap a bundled icon for a remote URL.
+		const entry = index.get(withIcon.registryId!)
+		expect(out.icon).not.toBe(entry?.icon)
 	})
 
 	it('returns the def unchanged when registryId is absent or unmatched', () => {
 		const index = indexByRegistryId(catalog)
-		const noReg = { ...claudeDef, registryId: undefined }
+		const noReg = { ...claudeDef, registryId: undefined, icon: 'x' }
 		expect(applyRegistryIdentity(noReg, index)).toBe(noReg)
-		const unmatched = { ...claudeDef, registryId: 'does-not-exist' }
+		const unmatched = { ...claudeDef, registryId: 'does-not-exist', icon: 'x' }
 		expect(applyRegistryIdentity(unmatched, index)).toBe(unmatched)
 	})
 
 	it('never injects a launch command from registry data', () => {
 		const index = indexByRegistryId(catalog)
-		const out = applyRegistryIdentity(claudeDef, index)
+		const out = applyRegistryIdentity({ ...claudeDef, icon: 'x' }, index)
 		// Identity application only touches the icon; command/args/mode are intact.
 		expect(out.command).toBe('claude')
 		expect(out.baseArgs).toEqual([])
 		expect(out.promptMode).toBe('positional')
 		// No `distribution` (the ACP invocation) leaks into the definition shape.
 		expect(out).not.toHaveProperty('distribution')
+	})
+
+	it('refuses to inject a remote icon into a def with no bundled icon (offline by default)', () => {
+		const index = indexByRegistryId(catalog)
+		const bundleless: TerminalAgentDefinition = {
+			id: 'claude-code',
+			name: 'Claude Code',
+			command: 'claude',
+			baseArgs: [],
+			promptMode: 'positional',
+			registryId: 'claude-acp',
+			isBuiltIn: true,
+		}
+		const out = applyRegistryIdentity(bundleless, index)
+		// Critically: the registry's remote icon URL is NOT used. The default
+		// experience stays offline — no silent network fetch on every render.
+		expect(out.icon).toBeUndefined()
 	})
 })
