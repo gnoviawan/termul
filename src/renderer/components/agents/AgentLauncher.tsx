@@ -28,15 +28,12 @@ import { CustomAgentDialog } from './CustomAgentDialog'
 /**
  * ADR-004.5: The "blank tab" agent launch surface.
  *
- * Chat-style input bar: agent selector on the left, prompt textarea fills
- * the middle, launch button on the right — all inside a single container.
- * "New custom agent" in the dropdown opens a creation dialog.
- * Selected agent persists across sessions.
+ * Chat-style input bar: agent selector | textarea | launch button.
+ * Grid layout ensures clean alignment without overlapping.
  */
 
 interface AgentLauncherProps {
 	paneId: string
-	/** Override the agent list (mainly for tests). Defaults to built-ins + custom. */
 	agents?: readonly TerminalAgentDefinition[]
 	className?: string
 }
@@ -57,7 +54,6 @@ export function AgentLauncher({
 	const [isLaunching, setIsLaunching] = useState(false)
 	const [showCreateDialog, setShowCreateDialog] = useState(false)
 
-	// Load built-in + custom agents once (skipped when an explicit list is passed).
 	useEffect(() => {
 		if (agentsProp) return
 		let cancelled = false
@@ -67,15 +63,12 @@ export function AgentLauncher({
 					setLoadedAgents(all)
 				}
 			})
-			.catch(() => {
-				/* fall back to built-ins already in state */
-			})
+			.catch(() => {})
 		return () => {
 			cancelled = true
 		}
 	}, [agentsProp])
 
-	// Persist last-selected agent.
 	useEffect(() => {
 		if (!selectedAgentId) return
 		void persistenceApi.write(PersistenceKeys.lastSelectedAgent, {
@@ -83,7 +76,6 @@ export function AgentLauncher({
 		})
 	}, [selectedAgentId])
 
-	// Restore last-selected agent on mount.
 	useEffect(() => {
 		if (agentsProp) return
 		let cancelled = false
@@ -101,7 +93,7 @@ export function AgentLauncher({
 		return () => {
 			cancelled = true
 		}
-	}, [agentsProp]) // intentionally NOT `agents` — only run once on mount
+	}, [agentsProp])
 
 	const activeProjectId = useProjectStore((s) => s.activeProjectId)
 	const maxTerminals = useMaxTerminalsPerProject()
@@ -155,17 +147,14 @@ export function AgentLauncher({
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-			// Cmd/Ctrl+Enter launches the selected agent.
 			if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
 				e.preventDefault()
 				void launch(selectedAgent)
 			}
-			// Enter without modifier submits; Shift+Enter for newline.
 			if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
 				e.preventDefault()
 				void launch(selectedAgent)
 			}
-			// Escape dismisses the overlay.
 			if (e.key === 'Escape') {
 				useWorkspaceStore.getState().hideAgentLauncher()
 			}
@@ -217,64 +206,67 @@ export function AgentLauncher({
 			)}
 		>
 			<div className="flex w-full max-w-xl flex-col gap-2">
-				{/* Chat-style input bar */}
-				<div className="flex items-end gap-0 rounded-xl border border-border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
-					{/* Agent selector — left side */}
-					<div className="flex shrink-0 items-end border-r border-border/50">
-						<Select
-							value={selectedAgentId}
-							onValueChange={handleSelectChange}
-						>
-							<SelectTrigger className="h-auto min-h-[44px] gap-1.5 border-0 bg-transparent px-3 py-2 shadow-none hover:bg-secondary/50 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+				{/* Chat-style input bar — grid layout for clean alignment */}
+				<div className="grid grid-cols-[auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
+					{/* Agent selector — column 1 */}
+					<Select
+						value={selectedAgentId}
+						onValueChange={handleSelectChange}
+					>
+						<SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-secondary/50 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+							<SelectValue>
 								<span className="flex items-center gap-1.5">
 									<AgentGlyph agent={selectedAgent} />
 									<span className="max-w-[100px] truncate text-xs font-medium">
 										{selectedAgent?.name ?? 'Agent'}
 									</span>
 								</span>
-							</SelectTrigger>
-							<SelectContent>
-								{agents.filter((a) => a.isBuiltIn).length > 0 && (
-									<>
-										{agents
-											.filter((a) => a.isBuiltIn)
-											.map((agent) => (
-												<SelectItem key={agent.id} value={agent.id}>
-													<span className="flex items-center gap-2">
-														<AgentGlyph agent={agent} />
-														{agent.name}
-													</span>
-												</SelectItem>
-											))}
-									</>
-								)}
-								{agents.filter((a) => !a.isBuiltIn).length > 0 && (
-									<>
-										<SelectSeparator />
-										{agents
-											.filter((a) => !a.isBuiltIn)
-											.map((agent) => (
-												<SelectItem key={agent.id} value={agent.id}>
-													<span className="flex items-center gap-2">
-														<AgentGlyph agent={agent} />
-														{agent.name}
-													</span>
-												</SelectItem>
-											))}
-									</>
-								)}
-								<SelectSeparator />
-								<SelectItem value={AGENT_SELECT_NEW}>
-									<span className="flex items-center gap-2 text-primary">
-										<Plus size={12} />
-										New custom agent…
-									</span>
-								</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
+							</SelectValue>
+						</SelectTrigger>
+						<SelectContent>
+							{agents.filter((a) => a.isBuiltIn).length > 0 && (
+								<>
+									{agents
+										.filter((a) => a.isBuiltIn)
+										.map((agent) => (
+											<SelectItem key={agent.id} value={agent.id}>
+												<span className="flex items-center gap-2">
+													<AgentGlyph agent={agent} />
+													{agent.name}
+												</span>
+											</SelectItem>
+										))}
+								</>
+							)}
+							{agents.filter((a) => !a.isBuiltIn).length > 0 && (
+								<>
+									<SelectSeparator />
+									{agents
+										.filter((a) => !a.isBuiltIn)
+										.map((agent) => (
+											<SelectItem key={agent.id} value={agent.id}>
+												<span className="flex items-center gap-2">
+													<AgentGlyph agent={agent} />
+													{agent.name}
+												</span>
+											</SelectItem>
+										))}
+								</>
+							)}
+							<SelectSeparator />
+							<SelectItem value={AGENT_SELECT_NEW}>
+								<span className="flex items-center gap-2 text-primary">
+									<Plus size={12} />
+									New custom agent…
+								</span>
+							</SelectItem>
+						</SelectContent>
+					</Select>
 
-					{/* Textarea — fills remaining width */}
+					{/* Divider */}
+					<div className="h-6 w-px bg-border/50 justify-self-center" />
+
+					{/* Textarea — column 2 (flex-1 via 1fr) */}
 					<textarea
 						value={prompt}
 						onChange={(e) => setPrompt(e.target.value)}
@@ -283,7 +275,7 @@ export function AgentLauncher({
 						rows={1}
 						aria-label="Agent prompt"
 						autoFocus
-						className="flex-1 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
+						className="min-w-0 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
 						style={{ minHeight: '44px', maxHeight: '120px' }}
 						onInput={(e) => {
 							const el = e.currentTarget
@@ -292,13 +284,13 @@ export function AgentLauncher({
 						}}
 					/>
 
-					{/* Launch button — right side */}
+					{/* Launch button — column 3 */}
 					<button
 						type="button"
 						onClick={handleSubmit}
 						disabled={!canLaunch}
 						className={cn(
-							'flex shrink-0 items-center justify-center rounded-e-xl px-3 py-2 transition-colors',
+							'mr-1.5 mb-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
 							canLaunch
 								? 'bg-primary text-primary-foreground hover:bg-primary/90'
 								: 'bg-muted text-muted-foreground',
@@ -307,9 +299,9 @@ export function AgentLauncher({
 						title={isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
 					>
 						{isLaunching ? (
-							<Loader2 size={18} className="animate-spin" />
+							<Loader2 size={16} className="animate-spin" />
 						) : (
-							<ArrowUp size={18} />
+							<ArrowUp size={16} />
 						)}
 					</button>
 				</div>
@@ -329,10 +321,6 @@ export function AgentLauncher({
 	)
 }
 
-/**
- * Small icon for an agent. Renders the bundled SVG inline so `currentColor`
- * inherits from the parent's CSS text color.
- */
 const AgentGlyph = memo(function AgentGlyph({
 	agent,
 }: {

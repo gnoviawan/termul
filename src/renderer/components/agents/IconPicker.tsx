@@ -5,7 +5,6 @@ import {
 	BUNDLED_ICON_CATALOG,
 	findBundledIconBySvg,
 	normalizeIconSvg,
-	type BundledIconEntry,
 } from '@/lib/agents/agent-icon-catalog'
 import {
 	Dialog,
@@ -19,28 +18,25 @@ interface IconPickerProps {
 	onChange: (svg: string) => void
 }
 
-function InlineBundledIcon({
-	entry,
+/** Render an SVG icon string inline with white color. */
+function InlineIcon({
+	svg,
 	className,
 }: {
-	entry: BundledIconEntry
+	svg: string
 	className?: string
 }): React.JSX.Element {
 	return (
 		<span
-			className={cn(
-				'inline-flex [&_svg]:h-full [&_svg]:w-full',
-				entry.pickerColor,
-				className,
-			)}
-			dangerouslySetInnerHTML={{ __html: normalizeIconSvg(entry.svg) }}
+			className={cn('inline-flex text-white [&_svg]:h-full [&_svg]:w-full', className)}
+			dangerouslySetInnerHTML={{ __html: normalizeIconSvg(svg) }}
 		/>
 	)
 }
 
 /**
  * Modal icon picker — compact trigger button, full grid in a dialog.
- * All icons are bundled offline; each has a distinct tint in the grid.
+ * All icons render as white on muted/secondary backgrounds.
  */
 export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Element {
 	const [open, setOpen] = useState(false)
@@ -53,8 +49,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 	}
 
 	const triggerIcon = selectedEntry ? (
-		<div className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-secondary/40 p-1.5 hover:bg-secondary transition-colors">
-			<InlineBundledIcon entry={selectedEntry} className="h-5 w-5" />
+		<div className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-secondary p-1.5 hover:bg-secondary/80 transition-colors">
+			<InlineIcon svg={selectedEntry.svg} className="h-5 w-5 text-foreground" />
 		</div>
 	) : (
 		<div className="flex h-9 w-9 items-center justify-center rounded-md border border-dashed border-muted-foreground/40 text-muted-foreground hover:bg-secondary/60 transition-colors">
@@ -74,52 +70,54 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 			</button>
 
 			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="sm:max-w-[380px]">
+				<DialogContent className="sm:max-w-[400px] max-h-[70vh]">
 					<DialogHeader>
 						<DialogTitle className="text-sm">Choose icon</DialogTitle>
 					</DialogHeader>
 
-					<div className="grid grid-cols-6 gap-2 py-2">
-						{/* "No icon" option */}
-						<button
-							type="button"
-							onClick={() => handleSelect('')}
-							className={cn(
-								'flex h-9 w-9 items-center justify-center rounded-md border text-xs text-muted-foreground transition-colors',
-								!value
-									? 'border-primary/60 bg-primary/10 text-foreground ring-2 ring-primary/30'
-									: 'border-border hover:bg-secondary',
-							)}
-							title="No icon"
-						>
-							—
-						</button>
+					<div className="overflow-y-auto max-h-[50vh] -mx-2 px-2">
+						<div className="grid grid-cols-6 gap-2 py-2">
+							{/* "No icon" option */}
+							<button
+								type="button"
+								onClick={() => handleSelect('')}
+								className={cn(
+									'flex h-9 w-9 items-center justify-center rounded-md border text-xs text-muted-foreground transition-colors',
+									!value
+										? 'border-primary/60 bg-primary/10 text-foreground ring-2 ring-primary/30'
+										: 'border-border hover:bg-secondary',
+								)}
+								title="No icon"
+							>
+								—
+							</button>
 
-						{BUNDLED_ICON_CATALOG.map((entry) => {
-							const isSelected = selectedEntry?.key === entry.key
-							return (
-								<button
-									key={entry.key}
-									type="button"
-									onClick={() => handleSelect(entry.svg)}
-									className={cn(
-										'relative flex h-9 w-9 items-center justify-center rounded-md border p-1.5 transition-colors',
-										isSelected
-											? 'border-primary/60 bg-primary/10 ring-2 ring-primary/30'
-											: 'border-border hover:bg-secondary',
-									)}
-									title={entry.label}
-								>
-									<InlineBundledIcon entry={entry} className="h-5 w-5" />
-									{isSelected && (
-										<Check
-											size={10}
-											className="absolute -right-0.5 -top-0.5 text-primary"
-										/>
-									)}
-								</button>
-							)
-						})}
+							{BUNDLED_ICON_CATALOG.map((entry) => {
+								const isSelected = selectedEntry?.key === entry.key
+								return (
+									<button
+										key={entry.key}
+										type="button"
+										onClick={() => handleSelect(entry.svg)}
+										className={cn(
+											'relative flex h-9 w-9 items-center justify-center rounded-md border p-1.5 transition-colors',
+											isSelected
+												? 'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-white'
+												: 'border-border bg-muted hover:bg-muted/80 text-white',
+										)}
+										title={entry.label}
+									>
+										<InlineIcon svg={entry.svg} className="h-5 w-5" />
+										{isSelected && (
+											<Check
+												size={10}
+												className="absolute -right-0.5 -top-0.5 text-primary"
+											/>
+										)}
+									</button>
+								)
+							})}
+						</div>
 					</div>
 				</DialogContent>
 			</Dialog>

@@ -1,16 +1,16 @@
 /**
  * Bundled icon catalog for the custom-agent icon picker.
  *
- * All icons are offline SVG with `currentColor` so the picker can tint them
- * via CSS. Includes built-in agent logos plus generic category icons.
+ * All icons are offline SVG using `currentColor`, sourced from:
+ * 1. ACP Registry (acp/*.svg, managed by scripts/sync-acp-icons.mjs)
+ * 2. Generic category icons (terminal, dev, robot, sparkles, code, brain, zap)
+ *
+ * All picker icons render as white via `text-white` on `bg-muted` cells.
  */
 
-import claudeCodeIcon from '@/assets/agent-icons/claude-code.svg?raw'
-import codexIcon from '@/assets/agent-icons/codex.svg?raw'
-import cursorIcon from '@/assets/agent-icons/cursor.svg?raw'
-import geminiIcon from '@/assets/agent-icons/gemini-cli.svg?raw'
-import opencodeIcon from '@/assets/agent-icons/opencode.svg?raw'
-import piIcon from '@/assets/agent-icons/pi.svg?raw'
+import acpManifest from '@/assets/agent-icons/acp/manifest.json'
+
+// Generic icons — hand-bundled category symbols
 import terminalIcon from '@/assets/agent-icons/terminal.svg?raw'
 import devIcon from '@/assets/agent-icons/dev.svg?raw'
 import robotIcon from '@/assets/agent-icons/robot.svg?raw'
@@ -19,37 +19,64 @@ import codeIcon from '@/assets/agent-icons/code.svg?raw'
 import brainIcon from '@/assets/agent-icons/brain.svg?raw'
 import zapIcon from '@/assets/agent-icons/zap.svg?raw'
 
+// ACP icons — loaded via Vite's import.meta.glob
+const acpSvgModules = import.meta.glob<string>('@/assets/agent-icons/acp/*.svg', {
+	eager: true,
+	query: '?raw',
+	import: 'default',
+})
+
 export interface BundledIconEntry {
 	key: string
 	label: string
 	svg: string
-	/** Tailwind text-color class applied in the picker grid. */
-	pickerColor: string
 }
 
 /** Normalize SVG for inline rendering: strip fixed width/height. */
 export function normalizeIconSvg(svg: string): string {
-	return svg.replace(/\s+width="[^"]*"/g, '').replace(/\s+height="[^"]*"/g, '')
+	return svg
+		.replace(/\s+width="[^"]*"/g, '')
+		.replace(/\s+height="[^"]*"/g, '')
 }
 
 /**
+ * Build ACP icon entries from manifest + glob-loaded SVG modules.
+ * The manifest provides id + name; the glob provides the raw SVG content.
+ */
+function buildAcpEntries(): BundledIconEntry[] {
+	const entries: BundledIconEntry[] = []
+	for (const entry of acpManifest as Array<{ id: string; name: string; file: string }>) {
+		// Match the glob key pattern to find the loaded SVG module.
+		// import.meta.glob keys are like /src/renderer/assets/agent-icons/acp/claude-acp.svg
+		const moduleKey = Object.keys(acpSvgModules).find((k) => k.endsWith(`/acp/${entry.file}`))
+		if (moduleKey) {
+			const svg = acpSvgModules[moduleKey] as string
+			if (svg) {
+				entries.push({ key: `acp:${entry.id}`, label: entry.name, svg })
+			}
+		}
+	}
+	return entries
+}
+
+const GENERIC_ICONS: readonly BundledIconEntry[] = [
+	{ key: 'generic:terminal', label: 'Terminal', svg: terminalIcon as string },
+	{ key: 'generic:dev', label: 'Developer', svg: devIcon as string },
+	{ key: 'generic:robot', label: 'Robot', svg: robotIcon as string },
+	{ key: 'generic:sparkles', label: 'Sparkles', svg: sparklesIcon as string },
+	{ key: 'generic:code', label: 'Code', svg: codeIcon as string },
+	{ key: 'generic:brain', label: 'Brain', svg: brainIcon as string },
+	{ key: 'generic:zap', label: 'Zap', svg: zapIcon as string },
+] as const
+
+/**
  * All bundled icons available in the picker — fully offline, no network fetch.
+ * ACP registry icons first, then generic category icons.
  */
 export const BUNDLED_ICON_CATALOG: readonly BundledIconEntry[] = [
-	{ key: 'claude-code', label: 'Claude Code', svg: claudeCodeIcon as string, pickerColor: 'text-orange-400' },
-	{ key: 'codex', label: 'Codex', svg: codexIcon as string, pickerColor: 'text-emerald-400' },
-	{ key: 'cursor', label: 'Cursor', svg: cursorIcon as string, pickerColor: 'text-sky-400' },
-	{ key: 'gemini-cli', label: 'Gemini', svg: geminiIcon as string, pickerColor: 'text-blue-400' },
-	{ key: 'opencode', label: 'OpenCode', svg: opencodeIcon as string, pickerColor: 'text-violet-400' },
-	{ key: 'pi', label: 'pi', svg: piIcon as string, pickerColor: 'text-amber-400' },
-	{ key: 'terminal', label: 'Terminal', svg: terminalIcon as string, pickerColor: 'text-green-400' },
-	{ key: 'dev', label: 'Developer', svg: devIcon as string, pickerColor: 'text-cyan-400' },
-	{ key: 'robot', label: 'Robot', svg: robotIcon as string, pickerColor: 'text-indigo-400' },
-	{ key: 'sparkles', label: 'Sparkles', svg: sparklesIcon as string, pickerColor: 'text-yellow-400' },
-	{ key: 'code', label: 'Code', svg: codeIcon as string, pickerColor: 'text-teal-400' },
-	{ key: 'brain', label: 'Brain', svg: brainIcon as string, pickerColor: 'text-pink-400' },
-	{ key: 'zap', label: 'Zap', svg: zapIcon as string, pickerColor: 'text-amber-300' },
-] as const
+	...buildAcpEntries(),
+	...GENERIC_ICONS,
+]
 
 /** Look up a bundled icon entry by its stored SVG content. */
 export function findBundledIconBySvg(svg: string): BundledIconEntry | undefined {

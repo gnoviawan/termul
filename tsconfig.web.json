@@ -17,6 +17,7 @@
     "noUnusedParameters": false,
     "noImplicitAny": true,
     "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
       "@renderer/*": ["./src/renderer/*"],
