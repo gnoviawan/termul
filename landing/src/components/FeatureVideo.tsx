@@ -20,6 +20,7 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [shouldLoad, setShouldLoad] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -29,13 +30,10 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          const el = videoRef.current;
           if (entry.isIntersecting) {
             setShouldLoad(true);
-            if (el) el.play().catch(() => {});
-          } else if (el) {
-            el.pause();
           }
+          setIsVisible(entry.isIntersecting);
         });
       },
       { rootMargin: '200px 0px', threshold: 0.1 }
@@ -44,6 +42,23 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  // Load the clip once shouldLoad flips true and the <source> nodes are mounted.
+  useEffect(() => {
+    if (!shouldLoad) return;
+    videoRef.current?.load();
+  }, [shouldLoad]);
+
+  // Play while visible, pause when scrolled away. Runs after sources exist.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !shouldLoad) return;
+    if (isVisible) {
+      el.play().catch(() => {});
+    } else {
+      el.pause();
+    }
+  }, [shouldLoad, isVisible]);
 
   if (failed) {
     return <FeatureVisual id={id} />;

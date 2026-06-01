@@ -5,7 +5,7 @@ compatibility_date = "2026-05-31"
 [[d1_databases]]
 binding = "DB"
 database_name = "termul"
-database_id = "ee92f4d8-1498-45dd-acd3-99b1fe25f35b"
+database_id = "57a94b51-1fb7-4338-9566-c5cadeccb0f9"
 preview_database_id = "DB"
 
 [[r2_buckets]]
