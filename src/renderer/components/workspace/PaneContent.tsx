@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -92,6 +92,42 @@ export function PaneContent({
 		previewTarget?.paneId === pane.id && !isFullscreenPane
 			? previewTarget.position
 			: null;
+
+	// Agent loading: show pulsing icon for a minimum duration after the terminal
+	// is first seen. The xterm renderer attaches almost instantly (same frame),
+	// so rendererAttachmentCount alone isn't enough for a visible loading state.
+	const [agentLoadingIds, setAgentLoadingIds] = useState<Set<string>>(new Set());
+	const agentLoadingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+	const prevAgentTerminalIdsRef = useRef<string[]>([]);
+	const AGENT_LOADING_MS = 1500;
+
+	// Detect newly appeared agent terminals and start loading timers.
+	// This runs after every render where terminalsInPane changes (useShallow).
+	useEffect(() => {
+		const currentIds = terminalsInPane
+			.filter((t) => t.kind === 'agent' && t.agentId && t.ptyId)
+			.map((t) => t.id);
+		const prevIds = prevAgentTerminalIdsRef.current;
+		prevAgentTerminalIdsRef.current = currentIds;
+
+		for (const id of currentIds) {
+			if (!prevIds.includes(id) && !agentLoadingTimers.current.has(id)) {
+				// New agent terminal â€” add to loading set with a minimum duration.
+				setAgentLoadingIds((prev) => new Set(prev).add(id));
+				agentLoadingTimers.current.set(
+					id,
+					setTimeout(() => {
+						setAgentLoadingIds((prev) => {
+							const next = new Set(prev);
+							next.delete(id);
+							return next;
+						});
+						agentLoadingTimers.current.delete(id);
+					}, AGENT_LOADING_MS),
+				);
+			}
+		}
+	});
 
 	const handleFocus = useCallback(() => {
 		if (!isActivePane) {
@@ -288,7 +324,7 @@ export function PaneContent({
 								const isAgentLoading =
 									terminal.kind === 'agent' &&
 									!!terminal.agentId &&
-									(terminal.rendererAttachmentCount ?? 0) === 0;
+									agentLoadingIds.has(terminal.id);
 								const connectedTerminalSpawnOptions = {
 									projectId: terminal.projectId,
 									shell: terminal.shell,
@@ -336,7 +372,7 @@ export function PaneContent({
 													/>
 												</span>
 												<span className="text-sm text-muted-foreground">
-													Starting {terminal.agentName ?? terminal.name}…
+													Starting {terminal.agentName ?? terminal.name}ï¿½
 												</span>
 											</div>
 										)}
