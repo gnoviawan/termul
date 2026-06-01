@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
+Disallow: /testimonial/list
 
 Sitemap: https://termul.dev/sitemap.xml

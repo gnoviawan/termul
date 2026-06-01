@@ -69,7 +69,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
         className={cn(
           "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between md:grid md:grid-cols-[1fr_auto_1fr] border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
           isScrolled
-            ? "bg-black/50 backdrop-blur-md border-white/10"
+            ? "bg-black/80 backdrop-blur-md border-white/10"
             : "bg-black/0 border-white/0",
         )}
       >

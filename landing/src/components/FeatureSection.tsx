@@ -9,6 +9,8 @@ import {
   featurePixelBlastProps,
 } from '../data/features';
 import { FeatureVisual } from './feature-visuals';
+import { SectionHeader } from './SectionHeader';
+import { FeatureVideo } from './FeatureVideo';
 
 const PixelBlast = lazy(() => import('./PixelBlast'));
 
@@ -50,18 +52,11 @@ const FeatureSection = () => {
       <div className="flex flex-col lg:flex-row gap-16 lg:gap-24 relative items-start">
         {/* Left Sticky Sidebar */}
         <div className="lg:w-1/3 lg:sticky lg:top-32 flex flex-col gap-12 w-full">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-mono tracking-wider text-gray-500 mb-6 uppercase">
-              <div className="w-1.5 h-1.5 rounded-sm bg-white/30"></div>
-              Termul Features
-            </div>
-            <h2 className="text-4xl md:text-5xl font-medium tracking-tight mb-4 text-balance">
-              Everything in one workspace.
-            </h2>
-            <p className="text-gray-400 text-lg leading-relaxed">
-              Terminals, editors, browsers, and annotations — organized by project.
-            </p>
-          </div>
+          <SectionHeader
+            eyebrow="Termul Features"
+            title="Everything in one workspace."
+            description="Terminals, editors, browsers, and annotations — organized by project."
+          />
 
           {/* Mobile feature nav */}
           <div className="lg:hidden -mx-2 overflow-x-auto pb-1 scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -164,7 +159,15 @@ const FeatureSection = () => {
                       />
                     )}
                   </Suspense>
-                  <FeatureVisual id={feature.id} />
+                  {!reducedMotion && feature.video ? (
+                    <FeatureVideo
+                      id={feature.id}
+                      video={feature.video}
+                      title={feature.title}
+                    />
+                  ) : (
+                    <FeatureVisual id={feature.id} />
+                  )}
                 </div>
 
                 {/* Text Content */}
