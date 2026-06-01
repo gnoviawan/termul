@@ -578,4 +578,28 @@ mod tests {
             "overlay sub should be set via textContent"
         );
     }
+
+    #[test]
+    fn index_html_guards_reconnect_scrollback_and_mobile_layout() {
+        let html = include_str!("static/index.html");
+        // Reconnect must clear xterm before server replays scrollback (no duplicate output).
+        assert!(
+            html.contains("if (opened) term.reset();")
+                && html.contains("// Server replays scrollback on every new WebSocket"),
+            "openSocket should reset terminal before replaying scrollback"
+        );
+        // Mobile: 2-up stacks vertically; topbar name stays visible in single-view.
+        assert!(
+            html.contains("#gallery[data-view=\"2\"] { grid-template-columns: 1fr;"),
+            "2-up view should stack on narrow screens"
+        );
+        assert!(
+            html.contains("#active-name { display: flex; max-width: 38vw"),
+            "single-view mobile should show terminal name in topbar"
+        );
+        assert!(
+            html.contains("const MOBILE_MAX_VIEW = 4"),
+            "dense gallery modes should be clamped on mobile"
+        );
+    }
 }

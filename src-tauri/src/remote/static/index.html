@@ -127,7 +127,7 @@
     .gh-count.loading { opacity: .35; }
 
     /* ── Layout ──────────────────────────────────────────────────────── */
-    #main { flex: 1; display: flex; min-height: 0; }
+    #main { flex: 1; display: flex; min-height: 0; min-width: 0; }
 
     #sidebar {
       width: 264px; flex-shrink: 0; background: var(--panel);
@@ -382,7 +382,8 @@
       .brand { font-size: 0; gap: 0; }              /* keep just the logo mark */
       .brand .logo { width: 26px; height: 26px; }
       .brand .logo svg { width: 15px; height: 15px; }
-      #active-name { display: none; }               /* freed space; name is on the pane head */
+      /* Single-view hides pane-head, so keep the topbar name visible on mobile. */
+      #active-name { display: flex; max-width: 38vw; padding-left: 10px; }
       .gh .gh-star { display: none; }               /* star count is desktop-only nicety */
       .gh { padding: 0 9px; height: 30px; }
       #status .stxt { display: none; }              /* keep just the colored dot */
@@ -408,13 +409,17 @@
       /* Neutralise the desktop collapse rule on mobile (drawer model instead). */
       #main.sidebar-collapsed #sidebar { width: 80vw; max-width: 320px; opacity: 1; padding: 12px 10px calc(12px + env(safe-area-inset-bottom)); border-right: 1px solid var(--border-soft); }
 
-      #gallery { padding: 8px; gap: 8px; }
-      /* A phone can't render 4/8/16 columns legibly — reflow to 1–2 columns. */
-      #gallery[data-view="4"] { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(0, 1fr)); }
-      #gallery[data-view="8"] { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(4, minmax(0, 1fr)); }
-      #gallery[data-view="16"] { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(8, minmax(0, 1fr)); }
+      #gallery { padding: 8px; gap: 8px; min-width: 0; }
+      /* Dense desktop grids reflow: 2-up stacks vertically; 4/8/16 cap at 1–2 cols. */
+      #gallery[data-view="2"] { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+      #gallery[data-view="4"] { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(160px, auto)); }
+      #gallery[data-view="8"] { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(4, minmax(160px, auto)); }
+      #gallery[data-view="16"] { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(8, minmax(160px, auto)); }
       /* Multi-view gallery scrolls vertically when cells exceed the viewport. */
-      #gallery:not([data-view="1"]) { overflow-y: auto; grid-auto-rows: minmax(160px, 1fr); -webkit-overflow-scrolling: touch; }
+      #gallery:not([data-view="1"]) { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+      /* 8/16-up is unusable on a phone — hide those layout options. */
+      .view-switch button[data-view="8"],
+      .view-switch button[data-view="16"] { display: none; }
       .pane-head { height: 34px; }                  /* roomier touch target */
       .pane-close { width: 26px; height: 26px; opacity: 1; } /* always visible (no hover on touch) */
       .pane-empty .pe-title { font-size: 13px; }
@@ -540,7 +545,7 @@
         let opened = false;
         let ptyId = null;
         let socket = null, dataDisp = null;
-        let reconnectTimer = null, reconnectAttempts = 0, manualClose = false;
+        let reconnectTimer = null, attachTimer = null, reconnectAttempts = 0, manualClose = false;
         let unblurTimer = null;
 
         const ro = new ResizeObserver(() => { scheduleFit(); });
@@ -631,6 +636,9 @@
 
         function openSocket() {
           if (!ptyId) return;
+          // Server replays scrollback on every new WebSocket; clear local buffer first
+          // so reconnects don't append the same history twice.
+          if (opened) term.reset();
           manualClose = false;
           setPaneStatus("connecting");
           showOverlayConnecting(reconnectAttempts > 0 ? "Reconnecting…" : "Connecting…");
@@ -693,7 +701,9 @@
           renderTitle(id);
           // Blur-out, then swap content under the blur (masks the reset flash).
           body.classList.add("swapping");
-          setTimeout(() => {
+          if (attachTimer) { clearTimeout(attachTimer); attachTimer = null; }
+          attachTimer = setTimeout(() => {
+            attachTimer = null;
             teardownSocket();
             ptyId = id;
             reconnectAttempts = 0;
@@ -756,8 +766,18 @@
       // ── Gallery controller ──────────────────────────────────────────────
       const VIEW_KEY = "termul-view-mode";
       const VIEWS = [1, 2, 4, 8, 16];
+      const MOBILE_MAX_VIEW = 4;
+      const mqMobile = window.matchMedia("(max-width: 720px)");
+      const isMobile = () => mqMobile.matches;
+      function clampViewForViewport(n) {
+        if (isMobile() && n > MOBILE_MAX_VIEW) return MOBILE_MAX_VIEW;
+        return n;
+      }
       let viewMode = 1;
-      try { const v = parseInt(localStorage.getItem(VIEW_KEY), 10); if (VIEWS.includes(v)) viewMode = v; } catch (_) {}
+      try {
+        const v = parseInt(localStorage.getItem(VIEW_KEY), 10);
+        if (VIEWS.includes(v)) viewMode = clampViewForViewport(v);
+      } catch (_) {}
       let panes = [];
       let activeIndex = 0;
 
@@ -811,7 +831,7 @@
 
       function setView(n) {
         if (!VIEWS.includes(n)) return;
-        viewMode = n;
+        viewMode = clampViewForViewport(n);
         gallery.dataset.view = String(n);
         while (panes.length < n) addPane();
         while (panes.length > n) panes.pop().dispose();
@@ -1022,8 +1042,6 @@
       const sidebarToggle = document.getElementById("sidebar-toggle");
       const scrim = document.getElementById("scrim");
       const SIDEBAR_KEY = "termul-sidebar-collapsed";
-      const mqMobile = window.matchMedia("(max-width: 720px)");
-      const isMobile = () => mqMobile.matches;
 
       // Desktop: persistent collapse to zero width.
       let sidebarCollapsed = false;
@@ -1065,6 +1083,7 @@
           // Drawer model: clear desktop collapse, start closed.
           mainEl.classList.remove("sidebar-collapsed");
           setDrawer(false);
+          if (viewMode > MOBILE_MAX_VIEW) setView(MOBILE_MAX_VIEW);
         } else {
           // Desktop model: clear drawer, restore persisted collapse.
           setDrawer(false);
