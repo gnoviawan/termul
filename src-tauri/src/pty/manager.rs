@@ -1493,7 +1493,7 @@ impl PtyManager {
 #[derive(Debug)]
 struct WindowsConPtyChild {
     pid: u32,
-    process_handle: *mut std::ffi::c_void,
+    process_handle: *mut winapi::ctypes::c_void,
 }
 
 #[cfg(target_os = "windows")]
@@ -1574,7 +1574,7 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
     }
 
     fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync + 'static> {
-        let mut dup: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut dup: *mut winapi::ctypes::c_void = std::ptr::null_mut();
         unsafe {
             let ok = winapi::um::handleapi::DuplicateHandle(
                 winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -1661,7 +1661,7 @@ impl portable_pty::Child for WindowsConPtyChild {
     }
 
     fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
-        Some(self.process_handle)
+        Some(self.process_handle as *mut std::ffi::c_void)
     }
 }
 
