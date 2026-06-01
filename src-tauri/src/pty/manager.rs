@@ -73,12 +73,40 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri::ipc::{Channel, Response};
 
+/// ADR-004.2: Result of resolving a program path, possibly with leading argv
+/// entries that must be prepended before the user-supplied args (e.g. when a
+/// `.cmd` npm shim is rewritten to `node.exe <script>`).
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedProgram {
+    /// Absolute path to the executable (always a PE image on Windows).
+    pub program: String,
+    /// Extra argv entries to insert before the user's args.
+    /// E.g. `["C:\...\node_modules\opencode\bin\opencode"]` when the
+    /// binary is `node.exe` and the script is the npm shim target.
+    pub prepend_args: Vec<String>,
+}
+
+impl ResolvedProgram {
+    pub fn new(program: String) -> Self {
+        Self {
+            program,
+            prepend_args: Vec::new(),
+        }
+    }
+    pub fn with_args(program: String, args: Vec<String>) -> Self {
+        Self {
+            program,
+            prepend_args: args,
+        }
+    }
+}
+
 /// ADR-004.2: Returns true if a Windows file path points to a directly-
 /// executable image (`.exe`, `.com`, `.scr`, or no extension). Anything else
 /// (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, ...) cannot be handed to
 /// `CreateProcessW` and would surface as `os error 193`.
 #[cfg(target_os = "windows")]
-fn is_directly_executable_windows(path: &str) -> bool {
+pub(super) fn is_directly_executable_windows(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     // Strip a trailing quote pair if the caller supplied a quoted form.
     let trimmed = lower.trim_end_matches('"');
@@ -88,6 +116,92 @@ fn is_directly_executable_windows(path: &str) -> bool {
             .and_then(|e| e.to_str()),
         None | Some("exe") | Some("com") | Some("scr")
     )
+}
+
+/// ADR-004.2, Windows-only: Parse an npm `.cmd` shim and extract the
+/// underlying `node.exe` + script path so the spawn can run the PE image
+/// directly instead of handing the non-executable `.cmd` to CreateProcessW.
+///
+/// npm on Windows installs CLI tools as thin batch wrappers whose last line is:
+///   "<node.exe>" "<script>" %*
+/// We extract both paths, resolve `%dp0%` / `%~dp0` to the shim's directory,
+/// and return `ResolvedProgram { program: "node.exe", prepend_args: ["<script>"] }`.
+#[cfg(target_os = "windows")]
+pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    let content = std::fs::read_to_string(shim_path).ok()?;
+    let shim_dir = std::path::Path::new(shim_path).parent()?;
+
+    // Find the last line that contains a command invocation pattern:
+    //   "<executable>" "<script>" %*
+    // or equivalently with %_prog% resolved.
+    // We look for lines containing both `"%dp0%` (or `")` and `%*`.
+    for line in content.lines().rev() {
+        let line = line.trim();
+        if !line.contains("%*") {
+            continue;
+        }
+        if !line.contains("\"") {
+            continue;
+        }
+        // Extract quoted strings: "..."
+        let quotes: Vec<&str> = line.split('"').collect();
+        // The invocation pattern uses two quoted paths:
+        //   index 1 = executable (node.exe path)
+        //   index 3 = script path
+        if quotes.len() < 5 {
+            continue;
+        }
+        let raw_exe = quotes[1].trim();
+        let raw_script = quotes[3].trim();
+        if raw_exe.is_empty() || raw_script.is_empty() {
+            continue;
+        }
+
+        // Resolve %dp0% / %~dp0 / %~dp0% to the shim's directory,
+        // and %_prog% to node.exe (either <dir>/node.exe or bare "node"
+        // when the node executable is on PATH).
+        let resolve_dp0 = |val: &str| -> String {
+            let resolved = val.replace("%dp0%", shim_dir.to_str().unwrap_or("."));
+            let resolved = resolved.replace("%~dp0", shim_dir.to_str().unwrap_or("."));
+            let resolved = resolved.replace("%~dp0%", shim_dir.to_str().unwrap_or("."));
+            resolved.replace('"', "")
+        };
+
+        let exe_path_str = resolve_dp0(raw_exe);
+        // Handle %_prog%: check for node.exe in the shim directory first.
+        let exe_path_str = if exe_path_str == "%_prog%" {
+            let local_node = shim_dir.join("node.exe");
+            if local_node.exists() {
+                local_node.to_string_lossy().to_string()
+            } else {
+                // Fall back to bare "node" — the Rust spawn code or the
+                // OS PATH resolution will find it.
+                "node.exe".to_string()
+            }
+        } else {
+            exe_path_str
+        };
+        let script_path_str = resolve_dp0(raw_script);
+
+        let exe_path = std::path::Path::new(&exe_path_str);
+        let script_path = std::path::Path::new(&script_path_str);
+
+        // The executable must exist and be a directly-executable image.
+        if !exe_path.exists() || !is_directly_executable_windows(&exe_path_str) {
+            continue;
+        }
+        // The script should exist (not strictly required but a good check).
+        if !script_path.exists() {
+            continue;
+        }
+
+        return Some(ResolvedProgram::with_args(
+            exe_path_str,
+            vec![script_path_str],
+        ));
+    }
+
+    None
 }
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -508,14 +622,20 @@ impl PtyManager {
         // that executable directly (terminal-native agent launch); otherwise we
         // resolve a login shell exactly as before. `program == None` keeps the
         // shell path byte-for-byte identical to prior behavior.
-        let shell_path = if let Some(program) = &options.program {
+        let resolved = if let Some(program) = &options.program {
             self.resolve_program_path(program)?
         } else if let Some(shell) = &options.shell {
-            self.resolve_shell_path(shell)?
+            ResolvedProgram::new(self.resolve_shell_path(shell)?)
         } else {
-            self.get_default_shell()?
+            ResolvedProgram::new(self.get_default_shell()?)
         };
-        let program_args: Vec<String> = options.args.clone().unwrap_or_default();
+        // Merge prepend_args (from npm .cmd shim rewriting) with user args.
+        let program_args: Vec<String> = resolved
+            .prepend_args
+            .into_iter()
+            .chain(options.args.clone().unwrap_or_default())
+            .collect();
+        let shell_path = resolved.program;
 
         // Resolve working directory
         let cwd = if let Some(cwd) = &options.cwd {
@@ -1217,21 +1337,14 @@ impl PtyManager {
 
     /// ADR-004.2: Resolve a program (agent binary) to an absolute, existing
     /// path. Reuses the same PATH/`which` resolution as shell lookup so agents
-    /// like `claude`, `codex`, or `gemini` resolve off the user's PATH. Unlike
-    /// shell resolution there is no alias handling — the renderer passes either a
-    /// known binary name from the Agent Registry or an explicit absolute path.
-    /// Returns an error when the program cannot be found rather than launching an
-    /// unresolved name (defense in depth against a compromised renderer).
+    /// like `claude`, `codex`, or `gemini` resolve off the user's PATH.
     ///
-    /// On Windows, ONLY directly-executable image formats are accepted (`.exe`,
-    /// `.com`, `.scr`, or no extension). `.bat`/`.cmd`/`.ps1` are explicitly
-    /// rejected because `CreateProcessW` cannot execute them directly (would
-    /// return ERROR_BAD_EXE_FORMAT / os error 193) and ADR-004.2 forbids the
-    /// `cmd /c` workaround for security. If a user installs an agent via a
-    /// `.cmd` shim, they must point the registry entry at a directly-executable
-    /// binary (e.g. via `npx` -> the underlying node + script is a separate
-    /// problem; for now, surface a clear error).
-    fn resolve_program_path(&self, program: &str) -> Result<String, String> {
+    /// On Windows, npm installs CLI tools as `.cmd` batch wrappers around
+    /// `node.exe`. Since `CreateProcessW` cannot execute `.cmd` directly (os
+    /// error 193), we detect this pattern, parse the `.cmd` shim, and rewrite
+    /// the spawn to `node.exe <script>`. If no rewriting is possible, returns an
+    /// error rather than launching an unresolved name (defense in depth).
+    fn resolve_program_path(&self, program: &str) -> Result<ResolvedProgram, String> {
         let trimmed = program.trim();
         if trimmed.is_empty() {
             return Err("Agent program is empty".to_string());
@@ -1243,6 +1356,10 @@ impl PtyManager {
                 #[cfg(target_os = "windows")]
                 {
                     if !is_directly_executable_windows(trimmed) {
+                        // Try to parse a .cmd/.bat shim at this path
+                        if let Some(resolved) = parse_npm_cmd_shim(trimmed) {
+                            return Ok(resolved);
+                        }
                         return Err(format!(
                             "Agent program '{}' is not a directly-executable image (.exe/.com/.scr); \
                              batch scripts and PowerShell scripts are not supported (ADR-004.2)",
@@ -1250,21 +1367,31 @@ impl PtyManager {
                         ));
                     }
                 }
-                return Ok(trimmed.to_string());
+                return Ok(ResolvedProgram::new(trimmed.to_string()));
             }
             return Err(format!("Agent program not found: {}", trimmed));
         }
 
         #[cfg(target_os = "windows")]
         {
-            // Restrict PATHEXT to directly-executable image extensions so we never
-            // hand CreateProcessW a .cmd / .bat / .ps1 shim (which it cannot run
-            // directly and would surface as os error 193).
+            // 1. Try directly-executable image extensions (PE images that
+            //    CreateProcessW can launch).
             const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
             for ext in WIN_EXECUTABLE_EXTS {
                 let candidate = format!("{}{}", trimmed, ext);
                 if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
-                    return Ok(abs_path);
+                    return Ok(ResolvedProgram::new(abs_path));
+                }
+            }
+
+            // 2. No PE image found. Try .cmd/.bat npm shim parsing to extract
+            //    `node.exe <script>` and rewrite the invocation accordingly.
+            for shim_ext in [".cmd", ".bat"] {
+                let candidate = format!("{}{}", trimmed, shim_ext);
+                if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
+                    if let Some(resolved) = parse_npm_cmd_shim(&abs_path) {
+                        return Ok(resolved);
+                    }
                 }
             }
         }
@@ -1276,14 +1403,14 @@ impl PtyManager {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let first_line = stdout.lines().next().unwrap_or("").trim();
                     if !first_line.is_empty() {
-                        return Ok(first_line.to_string());
+                        return Ok(ResolvedProgram::new(first_line.to_string()));
                     }
                 }
             }
             for prefix in ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"] {
                 let candidate = format!("{}/{}", prefix, trimmed);
                 if Path::new(&candidate).exists() {
-                    return Ok(candidate);
+                    return Ok(ResolvedProgram::new(candidate));
                 }
             }
         }
@@ -1790,6 +1917,59 @@ mod tests {
         // `agent.cmd.txt` is not. Make sure we look at the last extension only.
         assert!(is_directly_executable_windows(r"C:\bin\agent.cmd.exe"));
         assert!(!is_directly_executable_windows(r"C:\bin\agent.exe.cmd"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_npm_cmd_shim_rewrites_to_node_script() {
+        // Write a simulated npm .cmd shim matching the real opencode.cmd format
+        // that nvm-windows generates.
+        let dir = std::env::temp_dir().join("termul-test-cmd-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a fake node.exe (just a marker — parser only checks existence
+        // + extension via is_directly_executable_windows).
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        // Create the target script file.
+        std::fs::create_dir_all(dir.join("node_modules\\opencode-ai\\bin"))
+            .unwrap();
+        std::fs::write(dir.join("node_modules\\opencode-ai\\bin\\opencode"), b"")
+            .unwrap();
+
+        let shim_path = dir.join("opencode.cmd");
+        let shim_content = "@ECHO off\r\n".to_owned()
+            + "GOTO start\r\n"
+            + ":find_dp0\r\n"
+            + "SET dp0=%~dp0\r\n"
+            + "EXIT /b\r\n"
+            + ":start\r\n"
+            + "SETLOCAL\r\n"
+            + "CALL :find_dp0\r\n"
+            + "\r\n"
+            + "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\opencode-ai\\bin\\opencode\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_npm_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse the shim");
+        let resolved = resolved.unwrap();
+
+        // The executable should be node.exe in the same directory as the shim.
+        assert!(
+            resolved.program.ends_with("node.exe"),
+            "expected node.exe, got: {}",
+            resolved.program
+        );
+        // The script path should be the opencode-ai bin entry.
+        assert_eq!(resolved.prepend_args.len(), 1);
+        assert!(
+            resolved.prepend_args[0].contains("opencode-ai\\bin\\opencode"),
+            "expected script path containing opencode-ai bin, got: {}",
+            resolved.prepend_args[0]
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

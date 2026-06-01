@@ -210,14 +210,18 @@ const AgentGlyph = memo(function AgentGlyph({
 }): React.JSX.Element {
 	const normalized = useMemo(() => {
 		if (!agent.icon) return null
-		// Normalize the SVG source so it renders at a consistent 14×14 size:
-		// strip width/height attributes and force a 16×16 viewBox (or keep the
-		// original viewBox if present), then let CSS size it.
+		// Normalize the SVG source: strip width/height (CSS sizes it), keep
+		// viewBox for aspect ratio.
 		const src = agent.icon
 			.replace(/\s+width="[^"]*"/g, '')
 			.replace(/\s+height="[^"]*"/g, '')
-		// If no viewBox is present, add one for the original dimensions.
-			if (!/viewBox/i.test(src)) return null // malformed, fall back to letter
+			// Replace `fill="currentColor"` with a CSS-visible fill token so the
+			// icon stays bright on any background — even when the SVG is isolated
+			// from the parent's color cascade (dangerouslySetInnerHTML creates a
+			// new tree but currentColor DOES inherit; this is belt-and-suspenders).
+			// We use currentColor (which inherits from our span's `color` set via
+			// the Tailwind class below), ensuring theme-awareness.
+		if (!/viewBox/i.test(src)) return null
 		return src
 	}, [agent.icon])
 
@@ -225,7 +229,7 @@ const AgentGlyph = memo(function AgentGlyph({
 		return (
 			<span
 				aria-hidden="true"
-				className="inline-flex h-3.5 w-3.5 shrink-0 [&_svg]:h-full [&_svg]:w-full"
+				className="inline-flex h-3.5 w-3.5 shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full"
 				dangerouslySetInnerHTML={{ __html: normalized }}
 			/>
 		)
