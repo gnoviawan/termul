@@ -56,7 +56,6 @@ runs:
         INPUT_VERSION: ${{ inputs.cora-version }}
       run: |
         if [ "$INPUT_VERSION" = "latest" ]; then
-          # Try up to 3 times with delay
           for i in 1 2 3; do
             VERSION=$(curl -sfL --connect-timeout 10 \
               https://api.github.com/repos/ajianaz/cora-cli/releases/latest \
@@ -67,7 +66,6 @@ runs:
             echo "Attempt $i failed, retrying..."
             sleep 5
           done
-          # Fallback to a known good version if all retries fail
           if [ -z "$VERSION" ]; then
             echo "::warning::Failed to resolve latest cora-cli version from GitHub API, using fallback"
             VERSION="v0.1.7"
@@ -92,7 +90,6 @@ runs:
           echo "Unsupported architecture: $ARCH"
           exit 1
         fi
-        # Download and verify checksums before extraction
         curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${CORA_VERSION}/${ASSET}-${CORA_VERSION}.tar.gz" \
           -o /tmp/cora.tar.gz
         curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${CORA_VERSION}/checksums-sha256.txt" \
@@ -139,14 +136,14 @@ runs:
     - name: Upload SARIF to GitHub Code Scanning
       if: inputs.upload-sarif == 'true'
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@4c50b6f6fd9dc6fe03111c2d045c8be2a724cce1 # v3.28.11
+      uses: github/codeql-action/upload-sarif@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
       with:
         sarif_file: cora-results.sarif
         category: cora-review
 
     - name: Post PR comment
       if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       with:
@@ -160,13 +157,11 @@ runs:
             sarifContent = null;
           }
 
-          // Check for empty/invalid SARIF — cora may have failed silently
           if (!sarifContent || !sarifContent.runs || sarifContent.runs.length === 0) {
             let fileSize = 0;
             try {
               fileSize = fs.statSync('cora-results.sarif').size;
             } catch (e) {
-              // SARIF file doesn't exist (install or review step failed)
               fileSize = 0;
             }
             if (fileSize < 10) {
@@ -212,7 +207,6 @@ runs:
             }
           }
 
-          // Find existing cora comment and update it, or create new
           const { data: comments } = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
