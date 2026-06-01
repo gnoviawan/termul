@@ -95,14 +95,16 @@ runs:
           -o /tmp/cora.tar.gz
         curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${CORA_VERSION}/checksums-sha256.txt" \
           -o /tmp/cora-checksums.txt || true
-        if [ -f /tmp/cora-checksums.txt ]; then
-          EXPECTED=$(grep "${ASSET}-${CORA_VERSION}.tar.gz" /tmp/cora-checksums.txt | awk '{print $1}')
+        if [ -f /tmp/cora-checksums.txt ] && [ -s /tmp/cora-checksums.txt ]; then
+          EXPECTED=$(grep "${ASSET}-${CORA_VERSION}.tar.gz" /tmp/cora-checksums.txt | awk '{print $1}' || true)
           ACTUAL=$(sha256sum /tmp/cora.tar.gz | awk '{print $1}')
           if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "::error::Checksum verification failed for ${ASSET}-${CORA_VERSION}.tar.gz"
             echo "Expected: $EXPECTED"
             echo "Actual:   $ACTUAL"
             exit 1
+          elif [ -z "$EXPECTED" ]; then
+            echo "::warning::No checksum found for ${ASSET}-${CORA_VERSION}.tar.gz in checksums file"
           fi
           rm -f /tmp/cora-checksums.txt
         else
@@ -158,6 +160,7 @@ runs:
             sarifContent = null;
           }
 
+          let body;
           if (!sarifContent || !sarifContent.runs || sarifContent.runs.length === 0) {
             let fileSize = 0;
             try {
@@ -166,7 +169,7 @@ runs:
               fileSize = 0;
             }
             if (fileSize < 10) {
-              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result or the review step failed. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
             } else {
               body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
             }
