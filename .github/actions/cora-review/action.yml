@@ -1,0 +1,233 @@
+name: 'Cora AI Code Review'
+description: 'Run cora AI code review on a PR diff — posts a PR comment. Uses Infisical OIDC for LLM secrets (zero keys in GitHub). SARIF upload is optional.'
+
+inputs:
+  base-branch:
+    description: 'Base branch to compare against (default: origin/dev)'
+    required: false
+    default: 'origin/dev'
+  severity:
+    description: 'Minimum severity to report (info, minor, major, critical)'
+    required: false
+    default: 'major'
+  cora-version:
+    description: 'cora-cli version tag (default: latest release)'
+    required: false
+    default: 'latest'
+  upload-sarif:
+    description: 'Upload SARIF to GitHub Code Scanning (default: false)'
+    required: false
+    default: 'false'
+  infisical-identity-id:
+    description: 'Infisical OIDC identity ID (from secret INFISICAL_IDENTITY_ID)'
+    required: true
+  infisical-project:
+    description: 'Infisical project slug'
+    required: false
+    default: 'termul-review'
+  infisical-env:
+    description: 'Infisical environment slug'
+    required: false
+    default: 'prod'
+  infisical-domain:
+    description: 'Infisical domain URL'
+    required: false
+    default: 'https://infisical.ajianaz.dev'
+  github-token:
+    description: 'GitHub token for PR comments and SARIF upload'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Fetch LLM secrets from Infisical
+      uses: Infisical/secrets-action@v1.0.9
+      with:
+        method: 'oidc'
+        identity-id: ${{ inputs.infisical-identity-id }}
+        project-slug: ${{ inputs.infisical-project }}
+        env-slug: ${{ inputs.infisical-env }}
+        domain: ${{ inputs.infisical-domain }}
+
+    - name: Resolve cora-cli version
+      id: resolve
+      shell: bash
+      run: |
+        if [ "${{ inputs.cora-version }}" = "latest" ]; then
+          # Try up to 3 times with delay
+          for i in 1 2 3; do
+            VERSION=$(curl -sfL --connect-timeout 10 \
+              https://api.github.com/repos/ajianaz/cora-cli/releases/latest \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name', ''))" 2>/dev/null)
+            if [ -n "$VERSION" ]; then
+              break
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          # Fallback to a known good version if all retries fail
+          if [ -z "$VERSION" ]; then
+            echo "::warning::Failed to resolve latest cora-cli version from GitHub API, using fallback"
+            VERSION="v0.1.7"
+          fi
+        else
+          VERSION="${{ inputs.cora-version }}"
+        fi
+        echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Resolved cora-cli version: $VERSION"
+
+    - name: Install cora-cli
+      shell: bash
+      run: |
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+          ASSET="cora-x86_64-unknown-linux-gnu"
+        elif [ "$ARCH" = "aarch64" ]; then
+          ASSET="cora-aarch64-unknown-linux-gnu"
+        else
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+        fi
+        curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${{ steps.resolve.outputs.VERSION }}/${ASSET}-${{ steps.resolve.outputs.VERSION }}.tar.gz" | tar xz -C /usr/local/bin cora
+        chmod +x /usr/local/bin/cora
+        cora --version
+
+    - name: Run cora review
+      id: review
+      shell: bash
+      env:
+        CORA_API_KEY: ${{ env.CORA_API_KEY }}
+        CORA_BASE_URL: ${{ env.CORA_BASE_URL }}
+        CORA_MODEL: ${{ env.CORA_MODEL }}
+      run: |
+        cora review \
+          --base ${{ inputs.base-branch }} \
+          --format sarif \
+          --severity ${{ inputs.severity }} \
+          --quiet \
+          > cora-results.sarif 2>cora-stderr.log || true
+        echo "Cora review complete ($(wc -c < cora-results.sarif) bytes)"
+        if [ -s cora-stderr.log ]; then
+          echo "::warning::Cora stderr: $(cat cora-stderr.log)"
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: inputs.upload-sarif == 'true'
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: cora-results.sarif
+        category: cora-review
+
+    - name: Post PR comment
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      with:
+        script: |
+          const fs = require('fs');
+
+          let sarifContent;
+          try {
+            sarifContent = JSON.parse(fs.readFileSync('cora-results.sarif', 'utf8'));
+          } catch (e) {
+            sarifContent = null;
+          }
+
+          // Check for empty/invalid SARIF — cora may have failed silently
+          if (!sarifContent || !sarifContent.runs || sarifContent.runs.length === 0) {
+            const fileSize = fs.statSync('cora-results.sarif').size;
+            if (fileSize < 10) {
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+            } else {
+              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+            }
+          } else {
+            const results = sarifContent.runs[0].results || [];
+            if (results.length === 0) {
+              body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+            } else {
+              const grouped = {};
+              for (const r of results) {
+                const sev = (r.level || 'note').charAt(0).toUpperCase() + (r.level || 'note').slice(1);
+                if (!grouped[sev]) grouped[sev] = [];
+                grouped[sev].push(r);
+              }
+
+              const severityOrder = ['Error', 'Warning', 'Note'];
+              let table = '';
+
+              for (const sev of severityOrder) {
+                if (!grouped[sev]) continue;
+                const icon = sev === 'Error' ? '🔴' : sev === 'Warning' ? '🟡' : '🔵';
+                table += `\n### ${icon} ${sev} (${grouped[sev].length})\n\n`;
+                for (const r of grouped[sev]) {
+                  const loc = r.locations?.[0]?.physicalLocation;
+                  const file = loc?.artifactLocation?.uri || 'unknown';
+                  const line = loc?.region?.startLine || '?';
+                  const msg = r.message?.text || r.message?.markdown || 'No message';
+                  table += `- \`${file}:${line}\` — ${msg}\n`;
+                }
+              }
+
+              const hasErrors = (grouped['Error'] || []).length > 0;
+              const hasWarnings = (grouped['Warning'] || []).length > 0;
+              const status = hasErrors ? '❌ **Blocked** — critical issues found.' :
+                            hasWarnings ? '⚠️ **Review recommended** — warnings found.' :
+                            '✅ **Passed** — only informational notes.';
+
+              body = `## 🔍 Cora AI Code Review\n\n${status}\n${table}\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+            }
+          }
+
+          // Find existing cora comment and update it, or create new
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c =>
+            c.user.login === 'github-actions[bot]' &&
+            c.body.startsWith('## 🔍 Cora AI Code Review')
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Check for blocking issues
+      if: always()
+      shell: bash
+      run: |
+        if [ -f cora-results.sarif ]; then
+          ERRORS=$(python3 -c "
+          import json, sys
+          try:
+            data = json.load(open('cora-results.sarif'))
+            results = data.get('runs', [{}])[0].get('results', [])
+            errors = [r for r in results if r.get('level') == 'error']
+            print(len(errors))
+          except:
+            print(0)
+          " 2>/dev/null || echo "0")
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::Cora found $ERRORS blocking issue(s)."
+            exit 1
+          fi
+        fi
+        echo "No blocking issues."

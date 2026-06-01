@@ -1,0 +1,40 @@
+name: Cora AI Code Review
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: cora-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+  security-events: write
+
+jobs:
+  cora-review:
+    name: Cora AI Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c8c69e740b # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Cora AI Code Review
+        uses: ./.github/actions/cora-review
+        with:
+          infisical-identity-id: ${{ secrets.INFISICAL_IDENTITY_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
