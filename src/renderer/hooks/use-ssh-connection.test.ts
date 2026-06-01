@@ -21,7 +21,7 @@ vi.mock('@/lib/api', () => ({
   },
   sshApi: {
     connect: mocks.connect,
-    sftpListDir: vi.fn(),
+    sftpListDir: vi.fn().mockResolvedValue({ success: true, data: [] }),
   },
   createAskpassScript: mocks.createAskpassScript,
 }))
@@ -96,13 +96,165 @@ describe('useSSHConnection', () => {
       await vi.advanceTimersByTimeAsync(500)
     })
 
+    // Args are individually quoted for the shell. On non-Windows (jsdom test
+    // env) that means single-quote wrapping, so the option appears quoted.
     expect(mocks.write).toHaveBeenCalledWith(
       'pty-1',
-      expect.stringContaining('-o StrictHostKeyChecking=accept-new')
+      expect.stringContaining("'StrictHostKeyChecking=accept-new'")
     )
     expect(mocks.write).toHaveBeenCalledWith(
       'pty-1',
       expect.not.stringContaining('UserKnownHostsFile')
     )
+  })
+
+  it('neutralizes shell metacharacters and backslashes in profile fields (no injection)', async () => {
+    // A key path with a shell-injection payload and backslashes must be fully
+    // quoted so the shell cannot execute the payload. (jsdom => POSIX quoting.)
+    const malicious: SSHProfile = {
+      ...baseProfile,
+      authMethod: 'key',
+      privateKeyPath: "/tmp/key'; rm -rf $HOME #",
+    }
+    const { result } = renderHook(() => useSSHConnection(malicious))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    const written = mocks.write.mock.calls.find((c) => c[0] === 'pty-1')?.[1] as string
+    expect(written).toBeDefined()
+    // The payload is fully contained in a single-quoted span: the inner single
+    // quote is closed/escaped/reopened ('\''), so the shell sees the whole
+    // thing as one literal -i argument and cannot execute `rm`.
+    expect(written).toContain("'/tmp/key'\\''; rm -rf $HOME #'")
+    // The command must remain a single `ssh` invocation: there is no unquoted
+    // command separator that would start a second command.
+    expect(written.startsWith("'ssh' ")).toBe(true)
+  })
+
+  it('marks connected and readies SFTP only after the backend connect succeeds', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('connected')
+    expect(conn?.id).toBe('conn-1') // swapped to the backend id
+    expect(result.current.sftpReady).toBe(true)
+  })
+
+  it('does NOT report connected when the backend SSH connect fails', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'Password authentication failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+    expect(conn?.error).toBe('Password authentication failed')
+    expect(result.current.isConnected).toBe(false)
+    expect(result.current.sftpReady).toBe(false)
+  })
+
+  it('downgrades to failed when the interactive ssh process exits before connecting', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'timed out',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    act(() => {
+      result.current.handleSSHProcessExit()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+    expect(result.current.isConnected).toBe(false)
+  })
+
+  it('keeps the interactive terminal reachable after a backend connect failure (no orphan)', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    // The PTY is NOT killed on failure: the terminal stays visible (SSHWorkspace
+    // renders on localTerminalPtyId) with a Disconnect control, so the ssh
+    // process is never an unreachable orphan.
+    expect(mocks.kill).not.toHaveBeenCalled()
+    expect(result.current.localTerminalPtyId).toBe('pty-1')
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('failed')
+  })
+
+  it('kills the previous PTY when retrying connect (prevents orphan leak)', async () => {
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR',
+    })
+    mocks.spawn
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-1', shell: 'ssh', cwd: '/' } })
+      .mockResolvedValueOnce({ success: true, data: { id: 'pty-2', shell: 'ssh', cwd: '/' } })
+
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    // Retry: the first (failed) PTY must be killed before the new spawn.
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    expect(mocks.kill).toHaveBeenCalledWith('pty-1')
+    expect(result.current.localTerminalPtyId).toBe('pty-2')
+  })
+
+  it('does not blank SFTP or downgrade when the shell exits on a healthy connection', async () => {
+    const { result } = renderHook(() => useSSHConnection(baseProfile))
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+    // Sanity: connected with SFTP ready.
+    expect(result.current.isConnected).toBe(true)
+    expect(result.current.sftpReady).toBe(true)
+
+    // User types `exit` in the interactive shell; the ssh2/SFTP backend is
+    // independent and still connected, so SFTP must stay ready and the badge
+    // must remain connected.
+    act(() => {
+      result.current.handleSSHProcessExit()
+    })
+
+    const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
+    expect(conn?.status).toBe('connected')
+    expect(result.current.sftpReady).toBe(true)
   })
 })

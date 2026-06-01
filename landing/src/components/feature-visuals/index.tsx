@@ -1,36 +1,36 @@
+import type { ComponentType } from 'react';
+
 import type { FeatureId } from '../../data/features';
 import { FeatureVisualTabbedInterface } from './FeatureVisualTabbedInterface';
-import { FeatureVisualSessionPersistence } from './FeatureVisualSessionPersistence';
 import { FeatureVisualMultipleShells } from './FeatureVisualMultipleShells';
-import { FeatureVisualCrossPlatform } from './FeatureVisualCrossPlatform';
 import { FeatureVisualProjectWorkspaces } from './FeatureVisualProjectWorkspaces';
 import { FeatureVisualSplitPanes } from './FeatureVisualSplitPanes';
 import { FeatureVisualCodeEditor } from './FeatureVisualCodeEditor';
 import { FeatureVisualBrowserAnnotations } from './FeatureVisualBrowserAnnotations';
+import { FeatureVisualGitPanel } from './FeatureVisualGitPanel';
+import { FeatureVisualGitWorktree } from './FeatureVisualGitWorktree';
+import { FeatureVisualCommandPalette } from './FeatureVisualCommandPalette';
 
 type FeatureVisualProps = {
   id: FeatureId;
 };
 
+const featureVisuals: Partial<Record<FeatureId, ComponentType>> = {
+  '01': FeatureVisualTabbedInterface,
+  '02': FeatureVisualMultipleShells,
+  '03': FeatureVisualProjectWorkspaces,
+  '04': FeatureVisualSplitPanes,
+  '05': FeatureVisualCodeEditor,
+  '06': FeatureVisualBrowserAnnotations,
+  '07': FeatureVisualGitPanel,
+  '08': FeatureVisualGitWorktree,
+  '09': FeatureVisualCommandPalette,
+};
+
 export function FeatureVisual({ id }: FeatureVisualProps) {
-  switch (id) {
-    case '01':
-      return <FeatureVisualTabbedInterface />;
-    case '02':
-      return <FeatureVisualSessionPersistence />;
-    case '03':
-      return <FeatureVisualMultipleShells />;
-    case '04':
-      return <FeatureVisualCrossPlatform />;
-    case '05':
-      return <FeatureVisualProjectWorkspaces />;
-    case '06':
-      return <FeatureVisualSplitPanes />;
-    case '07':
-      return <FeatureVisualCodeEditor />;
-    case '08':
-      return <FeatureVisualBrowserAnnotations />;
-    default:
-      return null;
-  }
+  const Visual = featureVisuals[id];
+
+  if (!Visual) return null;
+
+  return <Visual />;
 }

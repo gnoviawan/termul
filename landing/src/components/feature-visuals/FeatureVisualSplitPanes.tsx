@@ -1,7 +1,9 @@
+import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
+
 export function FeatureVisualSplitPanes() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[90%] max-w-md bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden min-h-[180px]">
+    <FeatureVisualFrameRoot>
+      <FeatureVisualFrameWindow size="md" className="flex min-h-[180px] flex-col overflow-hidden">
         <div className="h-7 bg-[#161616] border-b border-white/10 flex items-center px-3 gap-2">
           <div className="text-[9px] text-gray-500 font-mono">SPLIT LAYOUT</div>
         </div>
@@ -32,7 +34,7 @@ export function FeatureVisualSplitPanes() {
             <div className="text-gray-400">{'}'}</div>
           </div>
         </div>
-      </div>
-    </div>
+      </FeatureVisualFrameWindow>
+    </FeatureVisualFrameRoot>
   );
 }

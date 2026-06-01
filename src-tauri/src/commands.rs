@@ -5,7 +5,7 @@ use crate::migrations::{
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::remote;
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -16,6 +16,57 @@ use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
+
+/// Validate that the caller webview matches the expected tab_id.
+/// This prevents cross-tab command injection where a malicious webview
+/// could emit events for other tabs.
+fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Result<(), String> {
+    let caller_label = webview.label();
+    if caller_label != expected_tab_id {
+        log::warn!(
+            "[Security] Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label,
+            expected_tab_id
+        );
+        return Err(format!(
+            "Browser tab command rejected: caller '{}' does not match expected '{}'",
+            caller_label, expected_tab_id
+        ));
+    }
+    Ok(())
+}
+
+/// Validate and canonicalize a project path to prevent path traversal attacks.
+/// Returns the canonicalized path or an error if the path is invalid or inaccessible.
+fn validate_project_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+    
+    // Canonicalize to resolve symlinks and relative paths
+    let canonical = path_buf.canonicalize().map_err(|e| {
+        log::warn!(
+            "[Security] Path validation failed for '{}': {}",
+            path,
+            e
+        );
+        format!("Invalid or inaccessible path: {}", e)
+    })?;
+    
+    log::debug!("[Security] Path validated: {} -> {:?}", path, canonical);
+    Ok(canonical)
+}
+
+/// Macro to validate a path and convert it to a String, returning early with an IpcResult error if validation fails.
+macro_rules! validate_and_stringify {
+    ($path:expr) => {
+        match validate_project_path($path) {
+            Ok(validated) => match validated.to_str() {
+                Some(s) => s.to_string(),
+                None => return Ok(IpcResult::error("Path contains invalid UTF-8", "INVALID_PATH_ENCODING")),
+            },
+            Err(e) => return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED")),
+        }
+    };
+}
 
 /// IPC Result pattern
 #[derive(Debug, Clone, Serialize)]
@@ -230,7 +281,8 @@ pub async fn terminal_set_visibility(
 pub async fn worktree_list(
     project_path: String,
 ) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
-    match WorktreeManager::list(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::list(&validated_path) {
         Ok(entries) => {
             let infos: Vec<WorktreeInfo> = entries
                 .into_iter()
@@ -257,8 +309,9 @@ pub async fn worktree_create(
     start_ref: Option<String>,
     target_path: Option<String>,
 ) -> Result<IpcResult<WorktreeInfo>, String> {
+    let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::create(
-        &project_path,
+        &validated_path,
         &name,
         &branch,
         is_new_branch,
@@ -282,7 +335,13 @@ pub async fn worktree_remove(
     worktree_path: String,
     force: bool,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::remove(&project_path, &worktree_path, force) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::remove(
+        &validated_project,
+        &validated_worktree,
+        force,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -293,7 +352,8 @@ pub async fn worktree_remove(
 pub async fn worktree_branches(
     project_path: String,
 ) -> Result<IpcResult<Vec<BranchInfo>>, String> {
-    match WorktreeManager::branches(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::branches(&validated_path) {
         Ok(entries) => {
             let infos: Vec<BranchInfo> = entries
                 .into_iter()
@@ -315,7 +375,8 @@ pub async fn worktree_branches(
 pub async fn worktree_check_dirty(
     worktree_path: String,
 ) -> Result<IpcResult<DirtyStatus>, String> {
-    match WorktreeManager::check_dirty(&worktree_path) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::check_dirty(&validated_path) {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -328,7 +389,8 @@ pub async fn worktree_remove_all_managed(
     project_path: String,
     worktrees_json: String,
 ) -> Result<IpcResult<Vec<RemoveResult>>, String> {
-    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::remove_all_managed(&validated_path, &worktrees_json) {
         Ok(results) => Ok(IpcResult::success(results)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -340,7 +402,8 @@ pub async fn worktree_remove_all_managed(
 pub async fn worktree_parse_gitignore(
     project_path: String,
 ) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
-    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::parse_gitignore_dirs(&validated_path) {
         Ok(dirs) => {
             let infos: Vec<GitignoreDirInfo> = dirs
                 .into_iter()
@@ -363,6 +426,8 @@ pub async fn worktree_create_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
     let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -372,7 +437,11 @@ pub async fn worktree_create_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let results = WorktreeManager::create_symlinks(
+        &validated_project,
+        &validated_worktree,
+        &dirs,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -393,6 +462,8 @@ pub async fn worktree_ensure_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
     let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -402,7 +473,11 @@ pub async fn worktree_ensure_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let results = WorktreeManager::ensure_symlinks(
+        &validated_project,
+        &validated_worktree,
+        &dirs2,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -421,7 +496,12 @@ pub async fn worktree_archive(
     project_path: String,
     worktree_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::archive(&project_path, &worktree_path) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::archive(
+        &validated_project,
+        &validated_worktree,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -433,7 +513,12 @@ pub async fn worktree_restore(
     project_path: String,
     archive_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::restore(&project_path, &archive_path) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_archive = validate_and_stringify!(&archive_path);
+    match WorktreeManager::restore(
+        &validated_project,
+        &validated_archive,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -445,7 +530,8 @@ pub async fn worktree_merge_preview(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<MergePreviewInfo>, String> {
-    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::merge_preview(&validated_path, &target_branch) {
         Ok(preview) => {
             let info = MergePreviewInfo {
                 direction: preview.direction,
@@ -473,7 +559,8 @@ pub async fn worktree_merge_execute(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<String>, String> {
-    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::merge_execute(&validated_path, &target_branch) {
         Ok(result) => Ok(IpcResult::success(result)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -765,13 +852,7 @@ pub async fn browser_tab_report_url(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report URL rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -791,13 +872,7 @@ pub async fn browser_tab_report_loaded(
     webview: Webview,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report loaded rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
     browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
@@ -823,13 +898,7 @@ pub async fn browser_tab_report_region_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report region captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Region captured: tab={} x={} y={} w={} h={}",
         tab_id,
@@ -863,13 +932,7 @@ pub async fn browser_tab_report_title(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report title rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] Title report: tab={}", tab_id);
     app_handle
         .emit(
@@ -902,13 +965,7 @@ pub async fn browser_tab_report_element_captured(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report element captured rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
 
     let attributes = attributes.as_object().cloned().ok_or_else(|| {
         "Browser tab report element captured rejected: attributes must be an object".to_string()
@@ -954,13 +1011,7 @@ pub async fn browser_tab_report_annotation_marker_clicked(
     app_handle: AppHandle,
     webview: Webview,
 ) -> Result<(), String> {
-    let caller_label = webview.label().to_string();
-    if caller_label != tab_id {
-        return Err(format!(
-            "Browser tab report annotation marker clicked rejected: caller '{}' does not match payload '{}'",
-            caller_label, tab_id
-        ));
-    }
+    validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!(
         "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
         tab_id,
@@ -2316,6 +2367,56 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Read commit history for the repository at `cwd` as structured rows for the
+/// history/graph view. `limit` caps the number of commits (clamped backend-side;
+/// defaults to 200). Read-only.
+#[tauri::command]
+pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+}
+
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
+    // for up to the network timeout), so run it on the blocking thread pool
+    // instead of the async executor.
+    let description = description.unwrap_or_default();
+    let amend = amend.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
+    })
+    .await
+    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    // git_push_current performs a network push (up to the network timeout), so
+    // run it on the blocking thread pool instead of the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_push_current(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {e}"))?
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
 /// Get available shells
