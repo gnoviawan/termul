@@ -20,7 +20,8 @@ inputs:
     default: 'false'
   infisical-identity-id:
     description: 'Infisical OIDC identity ID (from secret INFISICAL_IDENTITY_ID)'
-    required: true
+    required: false
+    default: 'ecbb5649-982a-49f2-b721-bcbcb4f91300'
   infisical-project:
     description: 'Infisical project slug'
     required: false

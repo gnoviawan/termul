@@ -36,5 +36,5 @@ jobs:
       - name: Run Cora AI Code Review
         uses: ./.github/actions/cora-review
         with:
-          infisical-identity-id: ${{ secrets.INFISICAL_IDENTITY_ID }}
+          infisical-identity-id: ${{ secrets.INFISICAL_IDENTITY_ID || 'ecbb5649-982a-49f2-b721-bcbcb4f91300' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
