@@ -54,13 +54,6 @@ import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
 import { filterWorktrees } from "@/lib/worktree-filter";
 import { filterProjects, shouldShowProjectSearch } from "@/lib/project-filter";
 
-function getFirstLetter(name: string): string {
-	if (!name) return "?";
-	const match = name.match(/[a-zA-Z]/);
-	const first = Array.from(name)[0];
-	return match ? match[0].toUpperCase() : first ? first.toUpperCase() : "?";
-}
-
 interface ContextMenuState {
 	isOpen: boolean;
 	x: number;
@@ -1237,7 +1230,6 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	const firstLetter = getFirstLetter(project.name);
 	const hasWorktrees = (project.worktrees?.length ?? 0) > 0 || project.isGitRepo;
 	const worktrees = project.worktrees ?? [];
 
@@ -1288,21 +1280,6 @@ const ProjectItem = memo(function ProjectItem({
 					<div className="w-5 flex-shrink-0" />
 				)}
 
-				{/* Circular avatar with first letter */}
-				<div
-					className={cn(
-						"w-4 h-4 rounded-full flex items-center justify-center ml-1 mr-2 flex-shrink-0",
-						colors.bg,
-					)}
-					aria-hidden="true"
-				>
-					<span
-						className="text-[10px] leading-none text-white"
-						data-testid="project-avatar-letter"
-					>
-						{firstLetter}
-					</span>
-				</div>
 				{isEditing ? (
 					<input
 						ref={inputRef}
@@ -1311,13 +1288,13 @@ const ProjectItem = memo(function ProjectItem({
 						onChange={(e) => onEditNameChange(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onBlur={onSaveRename}
-						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
 						onClick={(e) => e.stopPropagation()}
 					/>
 				) : (
 					<span
 						className={cn(
-							"text-sm transition-colors flex-1 min-w-0 truncate mr-2",
+							"text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2",
 							// flex-1 min-w-0 is required for truncate to clip inside a flex row
 							isActive
 								? "text-foreground"
@@ -1615,7 +1592,6 @@ function ArchivedProjectItem({
 	onContextMenu,
 }: ArchivedProjectItemProps): React.JSX.Element {
 	const colors = getColorClasses(project.color);
-	const firstLetter = getFirstLetter(project.name);
 
 	return (
 		<button
@@ -1628,23 +1604,8 @@ function ArchivedProjectItem({
 			aria-label={`Archived project: ${project.name}`}
 			data-testid={`archived-project-item-${project.id}`}
 		>
-			{/* Circular avatar with first letter */}
-			<div
-				className={cn(
-					"w-4 h-4 rounded-full flex items-center justify-center ml-2 mr-2 flex-shrink-0",
-					colors.bg,
-				)}
-				aria-hidden="true"
-			>
-				<span
-					className="text-[10px] leading-none text-white"
-					data-testid="project-avatar-letter"
-				>
-					{firstLetter}
-				</span>
-			</div>
 			<span
-				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
+				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
 				title={project.name}
 			>
 				{project.name}
