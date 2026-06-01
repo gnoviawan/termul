@@ -247,7 +247,16 @@ export function PaneContent({
 								}
 								// CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
 								// This prevents spawn loops when workspace tabs aren't fully synced
-								if (!terminal.ptyId) {
+								// For agent terminals, also wait until the renderer attaches — the
+								// batched setTerminals() now sets ptyId immediately, so we'd skip
+								// the loading state and show a blank xterm div if we only checked
+								// ptyId. rendererAttachmentCount is 0 before ConnectedTerminal
+								// calls setRendererAttached(true) on mount.
+								if (
+									!terminal.ptyId ||
+									(terminal.kind === 'agent' &&
+										(terminal.rendererAttachmentCount ?? 0) === 0)
+								) {
 									const isVisible = activeTab?.id === tab.id;
 									const isAgent = terminal.kind === 'agent' && !!terminal.agentId;
 									return (
