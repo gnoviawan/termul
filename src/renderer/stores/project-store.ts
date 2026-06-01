@@ -185,7 +185,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   removeGroup: (id: string, deleteProjects: boolean): void => {
-    const { groups, projects } = get()
+    const { groups, projects, activeProjectId } = get()
     const groupToRemove = groups.find(g => g.id === id)
     if (!groupToRemove) return
 
@@ -194,9 +194,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedProjects = projects.filter(p => !groupToRemove.projectIds.includes(p.id))
     }
 
+    const nextActiveProjectId =
+      deleteProjects && !updatedProjects.some((p) => p.id === activeProjectId)
+        ? updatedProjects[0]?.id ?? ''
+        : activeProjectId
+
     set({
       groups: groups.filter(g => g.id !== id),
-      projects: updatedProjects
+      projects: updatedProjects,
+      activeProjectId: nextActiveProjectId
     })
   },
 
