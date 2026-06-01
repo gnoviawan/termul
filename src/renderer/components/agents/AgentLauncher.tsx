@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bot, CornerDownLeft, Loader2, Plus } from 'lucide-react'
+import { ArrowUp, Bot, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { memo } from 'react'
-import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 import {
 	Select,
 	SelectContent,
@@ -30,10 +28,10 @@ import { CustomAgentDialog } from './CustomAgentDialog'
 /**
  * ADR-004.5: The "blank tab" agent launch surface.
  *
- * Rendered inside the existing empty-pane state (PaneContent) or as an overlay.
- * Presents a prompt textarea with an agent dropdown in the top-left, plus a
- * "New custom agent" option that opens a creation dialog. The selected agent
- * persists across sessions via persistenceApi.
+ * Chat-style input bar: agent selector on the left, prompt textarea fills
+ * the middle, launch button on the right — all inside a single container.
+ * "New custom agent" in the dropdown opens a creation dialog.
+ * Selected agent persists across sessions.
  */
 
 interface AgentLauncherProps {
@@ -43,7 +41,6 @@ interface AgentLauncherProps {
 	className?: string
 }
 
-const AGENT_SELECT_NONE = '__none__'
 const AGENT_SELECT_NEW = '__new__'
 
 export function AgentLauncher({
@@ -80,7 +77,7 @@ export function AgentLauncher({
 
 	// Persist last-selected agent.
 	useEffect(() => {
-		if (!selectedAgentId || selectedAgentId === AGENT_SELECT_NONE) return
+		if (!selectedAgentId) return
 		void persistenceApi.write(PersistenceKeys.lastSelectedAgent, {
 			agentId: selectedAgentId,
 		})
@@ -95,7 +92,6 @@ export function AgentLauncher({
 				if (cancelled) return
 				if (result.success && result.data?.agentId) {
 					const id = result.data.agentId
-					// Only restore if the agent still exists in the current list.
 					if (agents.some((a) => a.id === id)) {
 						setSelectedAgentId(id)
 					}
@@ -144,8 +140,6 @@ export function AgentLauncher({
 				if (!result.success) {
 					toast.error(result.error || 'Failed to launch agent')
 				} else {
-					// Hide the agent launcher overlay — the launched agent terminal tab
-					// has been added to the pane alongside any existing tabs.
 					useWorkspaceStore.getState().hideAgentLauncher()
 				}
 			} finally {
@@ -155,10 +149,19 @@ export function AgentLauncher({
 		[activeProjectId, isLaunching, maxTerminals, paneId, prompt],
 	)
 
+	const handleSubmit = useCallback(() => {
+		void launch(selectedAgent)
+	}, [launch, selectedAgent])
+
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 			// Cmd/Ctrl+Enter launches the selected agent.
 			if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+				e.preventDefault()
+				void launch(selectedAgent)
+			}
+			// Enter without modifier submits; Shift+Enter for newline.
+			if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
 				e.preventDefault()
 				void launch(selectedAgent)
 			}
@@ -174,7 +177,6 @@ export function AgentLauncher({
 		(value: string) => {
 			if (value === AGENT_SELECT_NEW) {
 				setShowCreateDialog(true)
-				// Keep current selection — don't change to __new__
 				return
 			}
 			setSelectedAgentId(value)
@@ -194,7 +196,6 @@ export function AgentLauncher({
 					icon: def.icon,
 					registryId: def.registryId,
 				})
-				// Reload agents and select the new one.
 				const all = await loadAllAgents()
 				setLoadedAgents(all)
 				setSelectedAgentId(def.id)
@@ -206,34 +207,33 @@ export function AgentLauncher({
 		[],
 	)
 
+	const canLaunch = selectedAgent && !isLaunching
+
 	return (
 		<div
 			className={cn(
-				'absolute inset-0 flex flex-col items-center justify-center gap-5 p-8',
+				'absolute inset-0 flex flex-col items-center justify-end p-4 pb-8',
 				className,
 			)}
 		>
-			<div className="flex flex-col items-center gap-1.5 text-center">
-				<Bot aria-hidden="true" className="text-muted-foreground" size={22} />
-				<span className="text-sm font-medium text-foreground">Launch a CLI agent</span>
-				<span className="text-xs text-muted-foreground/70">
-					Describe what you want, pick an agent, and it opens in this pane.
-				</span>
-			</div>
-
-			<div className="flex w-full max-w-lg flex-col gap-3">
-				<div className="relative">
-					{/* Agent selector — positioned top-left of the textarea */}
-					<div className="absolute left-2 top-2 z-10">
+			<div className="flex w-full max-w-xl flex-col gap-2">
+				{/* Chat-style input bar */}
+				<div className="flex items-end gap-0 rounded-xl border border-border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
+					{/* Agent selector — left side */}
+					<div className="flex shrink-0 items-end border-r border-border/50">
 						<Select
 							value={selectedAgentId}
 							onValueChange={handleSelectChange}
 						>
-							<SelectTrigger className="h-7 gap-1 border-0 bg-secondary/60 px-2 text-xs font-medium shadow-none hover:bg-secondary focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-70">
-								<SelectValue />
+							<SelectTrigger className="h-auto min-h-[44px] gap-1.5 border-0 bg-transparent px-3 py-2 shadow-none hover:bg-secondary/50 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+								<span className="flex items-center gap-1.5">
+									<AgentGlyph agent={selectedAgent} />
+									<span className="max-w-[100px] truncate text-xs font-medium">
+										{selectedAgent?.name ?? 'Agent'}
+									</span>
+								</span>
 							</SelectTrigger>
 							<SelectContent>
-								{/* Agent groups — built-ins then custom */}
 								{agents.filter((a) => a.isBuiltIn).length > 0 && (
 									<>
 										{agents
@@ -274,37 +274,50 @@ export function AgentLauncher({
 						</Select>
 					</div>
 
-					<Textarea
+					{/* Textarea — fills remaining width */}
+					<textarea
 						value={prompt}
 						onChange={(e) => setPrompt(e.target.value)}
 						onKeyDown={handleKeyDown}
-						placeholder="e.g. explain this project and suggest a refactor"
-						rows={3}
+						placeholder="Describe what you want…"
+						rows={1}
 						aria-label="Agent prompt"
-						className="resize-none pb-2 pl-2 pr-10 pt-10 text-sm"
 						autoFocus
+						className="flex-1 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
+						style={{ minHeight: '44px', maxHeight: '120px' }}
+						onInput={(e) => {
+							const el = e.currentTarget
+							el.style.height = 'auto'
+							el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+						}}
 					/>
 
-					<span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 text-[10px] text-muted-foreground/60">
-						<kbd className="rounded bg-secondary px-1">⌘</kbd>
-						<CornerDownLeft size={11} aria-hidden="true" />
-					</span>
+					{/* Launch button — right side */}
+					<button
+						type="button"
+						onClick={handleSubmit}
+						disabled={!canLaunch}
+						className={cn(
+							'flex shrink-0 items-center justify-center rounded-e-xl px-3 py-2 transition-colors',
+							canLaunch
+								? 'bg-primary text-primary-foreground hover:bg-primary/90'
+								: 'bg-muted text-muted-foreground',
+						)}
+						aria-label={`Launch ${selectedAgent?.name ?? 'agent'}`}
+						title={isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
+					>
+						{isLaunching ? (
+							<Loader2 size={18} className="animate-spin" />
+						) : (
+							<ArrowUp size={18} />
+						)}
+					</button>
 				</div>
 
-				<Button
-					type="button"
-					size="sm"
-					className="h-9 gap-2"
-					disabled={isLaunching || !selectedAgent}
-					onClick={() => void launch(selectedAgent)}
-				>
-					{isLaunching ? (
-						<Loader2 size={14} className="animate-spin" aria-hidden="true" />
-					) : (
-						<Bot size={14} aria-hidden="true" />
-					)}
-					{isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
-				</Button>
+				{/* Hint */}
+				<span className="text-center text-[11px] text-muted-foreground/50">
+					Enter to launch · Shift+Enter for newline · Esc to dismiss
+				</span>
 			</div>
 
 			<CustomAgentDialog
@@ -315,7 +328,6 @@ export function AgentLauncher({
 		</div>
 	)
 }
-
 
 /**
  * Small icon for an agent. Renders the bundled SVG inline so `currentColor`
@@ -339,7 +351,7 @@ const AgentGlyph = memo(function AgentGlyph({
 		return (
 			<span
 				aria-hidden="true"
-				className="inline-flex h-3.5 w-3.5 shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full"
+				className="inline-flex h-4 w-4 shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full"
 				dangerouslySetInnerHTML={{ __html: normalized }}
 			/>
 		)
@@ -347,7 +359,7 @@ const AgentGlyph = memo(function AgentGlyph({
 	return (
 		<span
 			aria-hidden="true"
-			className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-foreground/10 text-[8px] font-semibold uppercase"
+			className="flex h-4 w-4 items-center justify-center rounded-sm bg-foreground/10 text-[9px] font-semibold uppercase"
 		>
 			{agent.name.charAt(0)}
 		</span>
