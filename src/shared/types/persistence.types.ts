@@ -62,7 +62,9 @@ export const PersistenceKeys = {
   settings: 'settings',
   windowState: 'window-state',
   // ADR-004.3 / ADR-004.6: user-defined terminal-native agent definitions.
-  customAgents: 'agents/custom'
+  customAgents: 'agents/custom',
+  // Last-selected agent in the launcher (persisted across sessions).
+  lastSelectedAgent: 'agents/last-selected'
 } as const
 
 // Persisted project data (stored at projects.json)

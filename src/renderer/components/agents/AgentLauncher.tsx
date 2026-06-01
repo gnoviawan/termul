@@ -1,26 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bot, CornerDownLeft, Loader2 } from 'lucide-react'
+import { Bot, CornerDownLeft, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { memo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { BUILT_IN_AGENTS, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
-import { loadAllAgents } from '@/lib/agents/custom-agents'
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectSeparator,
+	SelectTrigger,
+	SelectValue,
+} from '@/components/ui/select'
+import {
+	BUILT_IN_AGENTS,
+	type TerminalAgentDefinition,
+} from '@/lib/agents/agent-registry'
+import { loadAllAgents, upsertCustomAgent } from '@/lib/agents/custom-agents'
 import { launchAgentInPane } from '@/lib/agent-launch'
+import { persistenceApi } from '@/lib/api'
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useProjectStore } from '@/stores/project-store'
 import { useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { CustomAgentDialog } from './CustomAgentDialog'
 
 /**
  * ADR-004.5: The "blank tab" agent launch surface.
  *
- * Rendered inside the existing empty-pane state (PaneContent) rather than as a
- * new pane type. Presents a prompt textarea + an agent picker. Submitting
- * launches the selected agent's TUI in this pane via `launchAgentInPane`, which
- * replaces the launcher by adding the agent terminal tab — "the blank page
- * becomes the agent terminal".
+ * Rendered inside the existing empty-pane state (PaneContent) or as an overlay.
+ * Presents a prompt textarea with an agent dropdown in the top-left, plus a
+ * "New custom agent" option that opens a creation dialog. The selected agent
+ * persists across sessions via persistenceApi.
  */
 
 interface AgentLauncherProps {
@@ -29,6 +42,9 @@ interface AgentLauncherProps {
 	agents?: readonly TerminalAgentDefinition[]
 	className?: string
 }
+
+const AGENT_SELECT_NONE = '__none__'
+const AGENT_SELECT_NEW = '__new__'
 
 export function AgentLauncher({
 	paneId,
@@ -42,6 +58,7 @@ export function AgentLauncher({
 	const agents = agentsProp ?? loadedAgents
 	const [selectedAgentId, setSelectedAgentId] = useState<string>(agents[0]?.id ?? '')
 	const [isLaunching, setIsLaunching] = useState(false)
+	const [showCreateDialog, setShowCreateDialog] = useState(false)
 
 	// Load built-in + custom agents once (skipped when an explicit list is passed).
 	useEffect(() => {
@@ -60,6 +77,35 @@ export function AgentLauncher({
 			cancelled = true
 		}
 	}, [agentsProp])
+
+	// Persist last-selected agent.
+	useEffect(() => {
+		if (!selectedAgentId || selectedAgentId === AGENT_SELECT_NONE) return
+		void persistenceApi.write(PersistenceKeys.lastSelectedAgent, {
+			agentId: selectedAgentId,
+		})
+	}, [selectedAgentId])
+
+	// Restore last-selected agent on mount.
+	useEffect(() => {
+		if (agentsProp) return
+		let cancelled = false
+		void persistenceApi.read<{ agentId: string }>(PersistenceKeys.lastSelectedAgent).then(
+			(result) => {
+				if (cancelled) return
+				if (result.success && result.data?.agentId) {
+					const id = result.data.agentId
+					// Only restore if the agent still exists in the current list.
+					if (agents.some((a) => a.id === id)) {
+						setSelectedAgentId(id)
+					}
+				}
+			},
+		)
+		return () => {
+			cancelled = true
+		}
+	}, [agentsProp]) // intentionally NOT `agents` — only run once on mount
 
 	const activeProjectId = useProjectStore((s) => s.activeProjectId)
 	const maxTerminals = useMaxTerminalsPerProject()
@@ -111,14 +157,12 @@ export function AgentLauncher({
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-			// Cmd/Ctrl+Enter launches the selected agent. Plain Enter inserts a
-			// newline so multi-line prompts are easy to compose.
+			// Cmd/Ctrl+Enter launches the selected agent.
 			if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
 				e.preventDefault()
 				void launch(selectedAgent)
 			}
-			// Escape dismisses the overlay (only when the overlay is active, i.e.
-			// when there are existing tabs underneath).
+			// Escape dismisses the overlay.
 			if (e.key === 'Escape') {
 				useWorkspaceStore.getState().hideAgentLauncher()
 			}
@@ -126,10 +170,37 @@ export function AgentLauncher({
 		[launch, selectedAgent],
 	)
 
-	const handleOverlayKeyDown = useCallback(
-		(e: React.KeyboardEvent<HTMLDivElement>) => {
-			if (e.key === 'Escape') {
-				useWorkspaceStore.getState().hideAgentLauncher()
+	const handleSelectChange = useCallback(
+		(value: string) => {
+			if (value === AGENT_SELECT_NEW) {
+				setShowCreateDialog(true)
+				// Keep current selection — don't change to __new__
+				return
+			}
+			setSelectedAgentId(value)
+		},
+		[],
+	)
+
+	const handleAgentCreated = useCallback(
+		async (def: TerminalAgentDefinition) => {
+			try {
+				await upsertCustomAgent({
+					name: def.name,
+					command: def.command,
+					baseArgs: def.baseArgs,
+					promptMode: def.promptMode,
+					promptFlag: def.promptFlag,
+					icon: def.icon,
+					registryId: def.registryId,
+				})
+				// Reload agents and select the new one.
+				const all = await loadAllAgents()
+				setLoadedAgents(all)
+				setSelectedAgentId(def.id)
+				toast.success(`Added "${def.name}" to your agents`)
+			} catch (err) {
+				toast.error(err instanceof Error ? err.message : 'Failed to save agent')
 			}
 		},
 		[],
@@ -141,7 +212,6 @@ export function AgentLauncher({
 				'absolute inset-0 flex flex-col items-center justify-center gap-5 p-8',
 				className,
 			)}
-			onKeyDown={handleOverlayKeyDown}
 		>
 			<div className="flex flex-col items-center gap-1.5 text-center">
 				<Bot aria-hidden="true" className="text-muted-foreground" size={22} />
@@ -151,8 +221,59 @@ export function AgentLauncher({
 				</span>
 			</div>
 
-			<div className="flex w-full max-w-md flex-col gap-3">
+			<div className="flex w-full max-w-lg flex-col gap-3">
 				<div className="relative">
+					{/* Agent selector — positioned top-left of the textarea */}
+					<div className="absolute left-2 top-2 z-10">
+						<Select
+							value={selectedAgentId}
+							onValueChange={handleSelectChange}
+						>
+							<SelectTrigger className="h-7 gap-1 border-0 bg-secondary/60 px-2 text-xs font-medium shadow-none hover:bg-secondary focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-70">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								{/* Agent groups — built-ins then custom */}
+								{agents.filter((a) => a.isBuiltIn).length > 0 && (
+									<>
+										{agents
+											.filter((a) => a.isBuiltIn)
+											.map((agent) => (
+												<SelectItem key={agent.id} value={agent.id}>
+													<span className="flex items-center gap-2">
+														<AgentGlyph agent={agent} />
+														{agent.name}
+													</span>
+												</SelectItem>
+											))}
+									</>
+								)}
+								{agents.filter((a) => !a.isBuiltIn).length > 0 && (
+									<>
+										<SelectSeparator />
+										{agents
+											.filter((a) => !a.isBuiltIn)
+											.map((agent) => (
+												<SelectItem key={agent.id} value={agent.id}>
+													<span className="flex items-center gap-2">
+														<AgentGlyph agent={agent} />
+														{agent.name}
+													</span>
+												</SelectItem>
+											))}
+									</>
+								)}
+								<SelectSeparator />
+								<SelectItem value={AGENT_SELECT_NEW}>
+									<span className="flex items-center gap-2 text-primary">
+										<Plus size={12} />
+										New custom agent…
+									</span>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
 					<Textarea
 						value={prompt}
 						onChange={(e) => setPrompt(e.target.value)}
@@ -160,43 +281,14 @@ export function AgentLauncher({
 						placeholder="e.g. explain this project and suggest a refactor"
 						rows={3}
 						aria-label="Agent prompt"
-						className="resize-none pr-10 text-sm"
+						className="resize-none pb-2 pl-2 pr-10 pt-10 text-sm"
 						autoFocus
 					/>
+
 					<span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 text-[10px] text-muted-foreground/60">
 						<kbd className="rounded bg-secondary px-1">⌘</kbd>
 						<CornerDownLeft size={11} aria-hidden="true" />
 					</span>
-				</div>
-
-				<div
-					className="flex flex-wrap items-center justify-center gap-2"
-					role="radiogroup"
-					aria-label="Select a CLI agent"
-				>
-					{agents.map((agent) => {
-						const isSelected = agent.id === selectedAgent?.id
-						return (
-							<button
-								key={agent.id}
-								type="button"
-								role="radio"
-								aria-checked={isSelected}
-								disabled={isLaunching}
-								onClick={() => setSelectedAgentId(agent.id)}
-								onDoubleClick={() => void launch(agent)}
-								className={cn(
-									'flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-medium transition-colors',
-									isSelected
-										? 'border-primary/60 bg-primary/10 text-foreground'
-										: 'border-border bg-secondary/40 text-muted-foreground hover:bg-secondary',
-								)}
-							>
-								<AgentGlyph agent={agent} />
-								{agent.name}
-							</button>
-						)
-					})}
 				</div>
 
 				<Button
@@ -214,14 +306,20 @@ export function AgentLauncher({
 					{isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
 				</Button>
 			</div>
+
+			<CustomAgentDialog
+				open={showCreateDialog}
+				onOpenChange={setShowCreateDialog}
+				onAgentCreated={handleAgentCreated}
+			/>
 		</div>
 	)
 }
 
+
 /**
  * Small icon for an agent. Renders the bundled SVG inline so `currentColor`
- * inherits from the parent's CSS text color — giving us a bright icon on dark
- * themes and a dark one on light themes, without any filter hacks.
+ * inherits from the parent's CSS text color.
  */
 const AgentGlyph = memo(function AgentGlyph({
 	agent,
@@ -230,17 +328,9 @@ const AgentGlyph = memo(function AgentGlyph({
 }): React.JSX.Element {
 	const normalized = useMemo(() => {
 		if (!agent.icon) return null
-		// Normalize the SVG source: strip width/height (CSS sizes it), keep
-		// viewBox for aspect ratio.
 		const src = agent.icon
 			.replace(/\s+width="[^"]*"/g, '')
 			.replace(/\s+height="[^"]*"/g, '')
-			// Replace `fill="currentColor"` with a CSS-visible fill token so the
-			// icon stays bright on any background — even when the SVG is isolated
-			// from the parent's color cascade (dangerouslySetInnerHTML creates a
-			// new tree but currentColor DOES inherit; this is belt-and-suspenders).
-			// We use currentColor (which inherits from our span's `color` set via
-			// the Tailwind class below), ensuring theme-awareness.
 		if (!/viewBox/i.test(src)) return null
 		return src
 	}, [agent.icon])
