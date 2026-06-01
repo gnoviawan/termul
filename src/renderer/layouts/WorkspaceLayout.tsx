@@ -413,12 +413,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// Ensure tabs exist for currently visible project terminals.
 	// Project workspace loading/removal is owned by persistence + restore flows.
+	// Debounce: rapid terminal store mutations (addTerminal → setTerminalPtyId →
+	// addTabToPane) settle before syncTerminalTabs runs, preventing the MOUNT/UNMOUNT
+	// cascade where intermediate states look like "orphaned" tabs.
 	const ensureCallCountRef = useRef(0);
 	const lastEnsuredTerminalIdsRef = useRef<string[]>([]);
 	const lastEnsuredProjectIdRef = useRef<string>("");
+	const syncDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
 		const terminalIds = terminals.map((terminal) => terminal.id);
+
+		// Clear any pending debounce — only the latest mutation triggers a sync.
+		if (syncDebounceTimerRef.current) {
+			clearTimeout(syncDebounceTimerRef.current);
+			syncDebounceTimerRef.current = null;
+		}
 
 		// If we switched projects, we should wait for the persistence layer (useEditorPersistence)
 		// to finish its job of replacing the entire workspace tree.
@@ -438,19 +448,32 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			return;
 		}
 
-		const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
-
-		console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${ensureId}]`, {
-			projectId: activeProjectId,
-			terminalCount: terminalIds.length,
-			terminalIds,
-			prevCount: prevIds.length,
-			callCount: ensureCallCountRef.current,
-		});
-
+		// Debounce: wait for store mutations to settle before syncing tabs.
+		// This prevents the cascade where syncTerminalTabs runs between addTerminal
+		// and addTabToPane, sees a tab as orphaned, removes it, triggering
+		// ConnectedTerminal unmount and a restore re-trigger.
 		lastEnsuredTerminalIdsRef.current = terminalIds;
-		const workspaceStore = useWorkspaceStore.getState();
-		workspaceStore.syncTerminalTabs(terminalIds);
+		syncDebounceTimerRef.current = setTimeout(() => {
+			const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
+
+			console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${ensureId}]`, {
+				projectId: activeProjectId,
+				terminalCount: terminalIds.length,
+				terminalIds,
+				prevCount: prevIds.length,
+				callCount: ensureCallCountRef.current,
+			});
+
+			const workspaceStore = useWorkspaceStore.getState();
+			workspaceStore.syncTerminalTabs(terminalIds);
+		}, 100);
+
+		return () => {
+			if (syncDebounceTimerRef.current) {
+				clearTimeout(syncDebounceTimerRef.current);
+				syncDebounceTimerRef.current = null;
+			}
+		};
 	}, [terminals, activeProjectId]);
 
 	// Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree

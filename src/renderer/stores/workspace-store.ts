@@ -7,6 +7,7 @@ import type {
   PaneDirection,
   DropPosition
 } from '@/types/workspace.types'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 export type WorkspaceTab =
   | { type: 'terminal'; id: string; terminalId: string }
@@ -796,21 +797,45 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       try {
         const { root } = get()
         const terminalTabIds = new Set(terminalIds.map(terminalTabId))
+
+        // Collect terminal IDs whose ConnectedTerminal may not have a ptyId yet.
+        // These "pending" terminals have a store record but no PTY — they're still
+        // initializing (agent launch creates the store record before the PTY is
+        // fully bound).  PaneContent already renders a "Connecting..." placeholder
+        // for such terminals.  We must NOT remove their workspace tabs or the
+        // component unmounts, killing the PTY that was just spawned.
+        const terminalStore = useTerminalStore.getState()
+
         const allLeaves = getAllLeafPanes(root)
 
         let newRoot = root
         let didChange = false
 
-        // Remove orphaned terminal tabs from all panes
+        // Remove orphaned terminal tabs from all panes.
+        // A tab is orphaned only when its terminalId is NOT in the store at all.
+        // Tabs whose terminal exists but lacks a ptyId are "pending" and must
+        // be preserved to avoid the MOUNT/UNMOUNT cascade described in the
+        // agent-launcher-spawn-issue investigation.
         for (const leaf of allLeaves) {
           const hasOrphans = leaf.tabs.some(
-            (t) => t.type === 'terminal' && !terminalTabIds.has(t.id)
+            (t) =>
+              t.type === 'terminal' &&
+              !terminalTabIds.has(t.id) &&
+              // Preserve tabs for terminals that exist in the store (even without
+              // a ptyId). These are pending initialization and will sync once
+              // the PTY is assigned.
+              (t.terminalId ? !terminalStore.terminals.some((term) => term.id === t.terminalId) : true)
           )
           if (hasOrphans) {
             didChange = true
             newRoot = updateLeaf(newRoot, leaf.id, (l) => {
               const newTabs = l.tabs.filter(
-                (t) => t.type !== 'terminal' || terminalTabIds.has(t.id)
+                (t) =>
+                  t.type !== 'terminal' ||
+                  terminalTabIds.has(t.id) ||
+                  // Keep pending terminals whose store record exists but ptyId
+                  // hasn't been assigned yet.
+                  (t.terminalId ? terminalStore.terminals.some((term) => term.id === t.terminalId) : false)
               )
               let newActive = l.activeTabId
               if (newActive && !newTabs.some((t) => t.id === newActive)) {

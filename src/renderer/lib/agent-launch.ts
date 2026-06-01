@@ -113,29 +113,49 @@ export async function launchAgentInPane(
 
 		// Create the terminal record. Name defaults to the agent name so the tab
 		// reads e.g. "Claude Code" instead of "Terminal 3".
-		const terminal = terminalStore.addTerminal(def.name, projectId, program, cwd)
+		//
+		// CRITICAL: Batch all terminal store mutations into a single set() call to
+		// prevent intermediate Zustand subscriptions from firing syncTerminalTabs
+		// before the terminal has a ptyId or the tab has been added to the pane.
+		// The old approach (addTerminal → setTerminalAgentMetadata → setTerminalPtyId)
+		// triggered 3+ separate re-renders, each one making the terminal look
+		// "orphaned" to syncTerminalTabs, which removed the tab and cascaded into
+		// a MOUNT/UNMOUNT storm.
+		const terminalId = Date.now().toString()
+		const agentArgsCopy = [...def.baseArgs]
 
-		// Tag descriptive-only agent metadata. We persist program + baseArgs (NOT
-		// the seed prompt) so restore can re-spawn the TUI without re-submitting a
-		// stale task (ADR-004.4 restore caveat, enforced in use-terminal-restore).
-		terminalStore.setTerminalAgentMetadata(terminal.id, {
-			agentId: def.id,
-			agentName: def.name,
-			agentProgram: program,
-			agentArgs: [...def.baseArgs],
-		})
+		terminalStore.setTerminals([
+			...terminalStore.terminals,
+			{
+				id: terminalId,
+				name: def.name,
+				projectId,
+				shell: program,
+				cwd,
+				output: [],
+				healthStatus: 'running',
+				isHidden: false,
+				ptyId: spawnResult.data.id,
+				// ADR-004.4: descriptive-only agent metadata
+				kind: 'agent',
+				agentId: def.id,
+				agentName: def.name,
+				agentProgram: program,
+				agentArgs: agentArgsCopy,
+			},
+		])
 
-		// Link PTY id to terminal record.
-		terminalStore.setTerminalPtyId(terminal.id, spawnResult.data.id)
+		// Select the new terminal.
+		terminalStore.selectTerminal(terminalId)
 
 		// Add terminal tab to the workspace pane.
 		workspaceStore.addTabToPane(paneId, {
 			type: 'terminal',
-			id: `term-${terminal.id}`,
-			terminalId: terminal.id,
+			id: `term-${terminalId}`,
+			terminalId,
 		})
 
-		return { success: true, terminalId: terminal.id }
+		return { success: true, terminalId }
 	} catch (err) {
 		return {
 			success: false,

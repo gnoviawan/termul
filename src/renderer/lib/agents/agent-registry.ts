@@ -95,8 +95,8 @@ export function buildAgentArgv(
  *  - Gemini uses `-i/--prompt-interactive` (NOT `-p`, which is non-interactive).
  *  - OpenCode's positional arg is a PROJECT PATH, so the prompt must use
  *    `--prompt`.
- *  - pi ships `promptMode: 'none'` until its interactive seed-prompt flag is
- *    verified; it boots the TUI and the user types the prompt after.
+ *  - pi also uses a positional prompt (the first non-flag argument seeds the
+ *    TUI with a starting prompt).
  */
 export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 	{
@@ -156,10 +156,10 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
 		name: 'pi',
 		command: 'pi',
 		baseArgs: [],
-		// TODO(ADR-004.3): confirm pi's interactive seed-prompt invocation, then
-		// flip to the correct mode. Until verified, launch the TUI without a seed
-		// prompt so we never pass an unsupported flag.
-		promptMode: 'none',
+		// pi accepts a positional seed prompt (the first non-flag argument is
+		// loaded as the initial prompt in the TUI). Confirmed via pi --help:
+		// "<prompt>" optional — seed the conversation with a starting prompt.
+		promptMode: 'positional',
 		registryId: 'pi-acp',
 		icon: piIcon as string,
 		isBuiltIn: true,
