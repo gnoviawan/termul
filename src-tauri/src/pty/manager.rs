@@ -203,6 +203,88 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
 
     None
 }
+
+/// Windows-only: parse a `.cmd`/`.bat` shim that delegates to PowerShell, e.g.
+/// Cursor Agent's `cursor-agent.cmd` which runs `powershell.exe -File script.ps1`.
+#[cfg(target_os = "windows")]
+pub(super) fn parse_powershell_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    let content = std::fs::read_to_string(shim_path).ok()?;
+    let shim_dir = std::path::Path::new(shim_path).parent()?;
+
+    let resolve_batch_token = |raw: &str| -> String {
+        let shim_dir_str = shim_dir.to_str().unwrap_or(".");
+        let system_root =
+            env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        raw.replace("%SystemRoot%", &system_root)
+            .replace("%SYSTEMROOT%", &system_root)
+            .replace("%SCRIPT_DIR%", shim_dir_str)
+            .replace("%~dp0", shim_dir_str)
+            .replace("%~dp0%", shim_dir_str)
+            .replace("%dp0%", shim_dir_str)
+            .trim_matches('"')
+            .to_string()
+    };
+
+    for line in content.lines().rev() {
+        let line = line.trim();
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("powershell") || !lower.contains("-file") {
+            continue;
+        }
+
+        let ps_exe_token = line
+            .split_whitespace()
+            .find(|t| t.to_ascii_lowercase().contains("powershell.exe"))?;
+        let ps_exe = resolve_batch_token(ps_exe_token);
+        if !std::path::Path::new(&ps_exe).exists()
+            || !is_directly_executable_windows(&ps_exe)
+        {
+            continue;
+        }
+
+        let file_flag = "-file";
+        let file_idx = lower.find(file_flag)?;
+        let after_file = line[file_idx + file_flag.len()..].trim();
+        let script_raw = if let Some(start) = after_file.find('"') {
+            let rest = &after_file[start + 1..];
+            let end = rest.find('"')?;
+            &rest[..end]
+        } else {
+            after_file.split_whitespace().next()?
+        };
+        let script_path = resolve_batch_token(script_raw);
+        if !std::path::Path::new(&script_path).exists() {
+            continue;
+        }
+
+        let mut prepend_args: Vec<String> = Vec::new();
+        for token in line.split_whitespace() {
+            let token_clean = token.trim_matches('"');
+            if token_clean.eq_ignore_ascii_case("-file") {
+                prepend_args.push("-File".to_string());
+                prepend_args.push(script_path.clone());
+                break;
+            }
+            if token_clean.to_ascii_lowercase().contains("powershell.exe") {
+                continue;
+            }
+            if !token_clean.is_empty() {
+                prepend_args.push(resolve_batch_token(token_clean));
+            }
+        }
+
+        return Some(ResolvedProgram::with_args(ps_exe, prepend_args));
+    }
+
+    None
+}
+
+/// Try npm-node shim parsing first, then PowerShell-wrapper shims.
+#[cfg(target_os = "windows")]
+fn try_parse_windows_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    parse_npm_cmd_shim(shim_path).or_else(|| parse_powershell_cmd_shim(shim_path))
+}
+
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "windows")]
@@ -1356,9 +1438,18 @@ impl PtyManager {
                 #[cfg(target_os = "windows")]
                 {
                     if !is_directly_executable_windows(trimmed) {
-                        // Try to parse a .cmd/.bat shim at this path
-                        if let Some(resolved) = parse_npm_cmd_shim(trimmed) {
+                        if let Some(resolved) = try_parse_windows_cmd_shim(trimmed) {
                             return Ok(resolved);
+                        }
+                        let shim_ext = Path::new(trimmed)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_ascii_lowercase());
+                        if shim_ext.as_deref() == Some("cmd") || shim_ext.as_deref() == Some("bat") {
+                            return Err(format!(
+                                "Agent program '{}' is a batch shim that could not be parsed (ADR-004.2)",
+                                trimmed
+                            ));
                         }
                         return Err(format!(
                             "Agent program '{}' is not a directly-executable image (.exe/.com/.scr); \
@@ -1380,16 +1471,18 @@ impl PtyManager {
             for ext in WIN_EXECUTABLE_EXTS {
                 let candidate = format!("{}{}", trimmed, ext);
                 if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
-                    return Ok(ResolvedProgram::new(abs_path));
+                    if is_directly_executable_windows(&abs_path) {
+                        return Ok(ResolvedProgram::new(abs_path));
+                    }
                 }
             }
 
-            // 2. No PE image found. Try .cmd/.bat npm shim parsing to extract
-            //    `node.exe <script>` and rewrite the invocation accordingly.
+            // 2. No PE image found. Try .cmd/.bat shim parsing (npm node or
+            //    PowerShell wrappers) and rewrite to a directly-executable image.
             for shim_ext in [".cmd", ".bat"] {
                 let candidate = format!("{}{}", trimmed, shim_ext);
                 if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
-                    if let Some(resolved) = parse_npm_cmd_shim(&abs_path) {
+                    if let Some(resolved) = try_parse_windows_cmd_shim(&abs_path) {
                         return Ok(resolved);
                     }
                 }
@@ -1969,6 +2062,115 @@ mod tests {
         );
 
         // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_powershell_cmd_shim_rewrites_cursor_agent_style() {
+        let dir = std::env::temp_dir().join("termul-test-ps-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ps_exe = dir.join("powershell.exe");
+        std::fs::write(&ps_exe, b"MZ").unwrap();
+        let script = dir.join("cursor-agent.ps1");
+        std::fs::write(&script, b"# stub").unwrap();
+
+        let ps_exe_str = ps_exe.to_string_lossy();
+        let script_str = script.to_string_lossy();
+        let shim_path = dir.join("cursor-agent.cmd");
+        let shim_content = format!(
+            "@echo off\r\n{ps} -NoProfile -ExecutionPolicy Bypass -File \"{script}\" %*\r\n",
+            ps = ps_exe_str,
+            script = script_str,
+        );
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_powershell_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse PowerShell shim");
+        let resolved = resolved.unwrap();
+        assert!(
+            resolved.program.ends_with("powershell.exe"),
+            "expected powershell.exe, got: {}",
+            resolved.program
+        );
+        assert!(
+            resolved.prepend_args.iter().any(|a| a.ends_with("cursor-agent.ps1")),
+            "expected -File script in prepend_args: {:?}",
+            resolved.prepend_args
+        );
+        assert!(
+            resolved.prepend_args.iter().any(|a| a == "-NoProfile"),
+            "expected -NoProfile flag: {:?}",
+            resolved.prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn win_agent_resolution_skips_extensionless_before_pe() {
+        let dir = std::env::temp_dir().join("termul-test-pe-resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join("claude"), b"not a pe image").unwrap();
+        std::fs::write(dir.join("claude.exe"), b"MZ").unwrap();
+
+        let trimmed = "claude";
+        const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
+        let mut resolved_path: Option<String> = None;
+        for ext in WIN_EXECUTABLE_EXTS {
+            let candidate = dir.join(format!("{}{}", trimmed, ext));
+            if !candidate.exists() {
+                continue;
+            }
+            let abs_path = candidate.to_string_lossy().to_string();
+            if is_directly_executable_windows(&abs_path) {
+                resolved_path = Some(abs_path);
+                break;
+            }
+        }
+
+        let resolved_path =
+            resolved_path.expect("should resolve to claude.exe after skipping extensionless shim");
+        assert!(
+            resolved_path.ends_with("claude.exe"),
+            "expected claude.exe, got: {}",
+            resolved_path
+        );
+        assert!(
+            !is_directly_executable_windows(&dir.join("claude").to_string_lossy()),
+            "extensionless claude must not be treated as PE"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn try_parse_windows_cmd_shim_prefers_npm_over_powershell() {
+        let dir = std::env::temp_dir().join("termul-test-shim-priority");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\pkg\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\pkg\\bin\\tool"), b"").unwrap();
+
+        let shim_path = dir.join("tool.cmd");
+        let shim_content = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            endLocal & goto #_undefined_# 2>NUL || \"%_prog%\" \"%dp0%\\node_modules\\pkg\\bin\\tool\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = try_parse_windows_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some());
+        assert!(
+            resolved.unwrap().program.ends_with("node.exe"),
+            "npm shim should resolve to node.exe"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

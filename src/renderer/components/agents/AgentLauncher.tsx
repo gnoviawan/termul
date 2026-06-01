@@ -93,7 +93,7 @@ export function AgentLauncher({
 		return () => {
 			cancelled = true
 		}
-	}, [agentsProp])
+	}, [agents, agentsProp])
 
 	const activeProjectId = useProjectStore((s) => s.activeProjectId)
 	const maxTerminals = useMaxTerminalsPerProject()
@@ -207,13 +207,13 @@ export function AgentLauncher({
 		>
 			<div className="flex w-full max-w-xl flex-col gap-2">
 				{/* Chat-style input bar — grid layout for clean alignment */}
-				<div className="grid grid-cols-[auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
+				<div className="grid grid-cols-[auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
 					{/* Agent selector — column 1 */}
 					<Select
 						value={selectedAgentId}
 						onValueChange={handleSelectChange}
 					>
-						<SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-secondary/50 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+						<SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
 							<SelectValue>
 								<span className="flex items-center gap-1.5">
 									<AgentGlyph agent={selectedAgent} />
@@ -290,10 +290,10 @@ export function AgentLauncher({
 						onClick={handleSubmit}
 						disabled={!canLaunch}
 						className={cn(
-							'mr-1.5 mb-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
+							'mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-transparent transition-colors',
 							canLaunch
-								? 'bg-primary text-primary-foreground hover:bg-primary/90'
-								: 'bg-muted text-muted-foreground',
+								? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+								: 'text-muted-foreground/35',
 						)}
 						aria-label={`Launch ${selectedAgent?.name ?? 'agent'}`}
 						title={isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
