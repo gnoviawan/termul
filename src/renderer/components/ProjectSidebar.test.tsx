@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
+import { useProjectStore } from '@/stores/project-store'
 
 const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
@@ -787,5 +788,51 @@ describe('ProjectSidebar Worktree Search', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
 
     expect(input.value).toBe('')
+  })
+})
+
+describe('ProjectSidebar Folder Grouping', () => {
+  beforeEach(() => {
+    // Reset groups in the store before each test
+    useProjectStore.setState({ groups: [] })
+  })
+
+  it('should render active projects grouped under folder section when groups are configured', () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: false
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    // Folder header should be visible
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Project One (id: 1) should be nested inside the folder
+    expect(screen.getByText('Project One')).toBeInTheDocument()
+  })
+
+  it('should hide folder contents when group is collapsed', async () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: true
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Since it is collapsed, Project One should NOT be rendered
+    expect(screen.queryByText('Project One')).not.toBeInTheDocument()
   })
 })

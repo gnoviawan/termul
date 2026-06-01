@@ -5,9 +5,10 @@ import { PersistenceKeys } from '../../shared/types/persistence.types'
 import type {
   PersistedProjectData,
   PersistedProject,
-  PersistedWorktree
+  PersistedWorktree,
+  PersistedProjectGroup
 } from '../../shared/types/persistence.types'
-import type { Project, ProjectColor, EnvVariable, Worktree } from '@/types/project'
+import type { Project, ProjectColor, EnvVariable, Worktree, ProjectGroup } from '@/types/project'
 
 const REDACTED_VALUE = '[REDACTED]'
 type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
@@ -243,7 +244,8 @@ async function persistProjectsSnapshot(
   projects: Project[],
   activeProjectId: string,
   writeProjects: (key: string, data: PersistedProjectData) => Promise<unknown>,
-  previousProjects?: ProjectSnapshot[]
+  previousProjects?: ProjectSnapshot[],
+  groups?: ProjectGroup[]
 ): Promise<void> {
   const previousProjectsSnapshot = previousProjects ?? (await getPersistedProjectsSnapshot())
   await cleanupRemovedProjects(previousProjectsSnapshot, projects)
@@ -258,6 +260,7 @@ async function persistProjectsSnapshot(
   )
   const data: PersistedProjectData = {
     projects: persistedProjects,
+    groups: groups as PersistedProjectGroup[],
     activeProjectId,
     updatedAt: new Date().toISOString()
   }
@@ -419,7 +422,7 @@ export function useProjectsLoader(): void {
           : projects.length > 0
             ? projects[0].id
             : ''
-        setProjects(projects, validActiveId)
+        setProjects(projects, validActiveId, result.data.groups as ProjectGroup[])
 
         // Reconcile all projects against git in parallel after loading
         for (const project of projects) {
@@ -454,9 +457,10 @@ export function useProjectsAutoSave(): void {
         return
       }
 
-      // Only save if projects or activeProjectId changed
+      // Only save if projects, groups or activeProjectId changed
       if (
         state.projects === prevState.projects &&
+        state.groups === prevState.groups &&
         state.activeProjectId === prevState.activeProjectId
       ) {
         return
@@ -467,7 +471,8 @@ export function useProjectsAutoSave(): void {
         state.projects,
         state.activeProjectId,
         persistenceApi.writeDebounced,
-        prevState.projects
+        prevState.projects,
+        state.groups
       )
         .catch((err: unknown) => {
           console.error('Failed to auto-save projects:', err)
@@ -482,15 +487,15 @@ export function useProjectsAutoSave(): void {
 
 export function usePersistProjects(): () => Promise<void> {
   return useCallback(async () => {
-    const { projects, activeProjectId } = useProjectStore.getState()
-    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.writeDebounced)
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.writeDebounced, undefined, groups)
   }, [])
 }
 
 export function usePersistProjectsImmediate(): () => Promise<void> {
   return useCallback(async () => {
-    const { projects, activeProjectId } = useProjectStore.getState()
-    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.write)
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.write, undefined, groups)
   }, [])
 }
 
@@ -514,12 +519,13 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     ])
 
     // Persist the updated projects list
-    const { projects, activeProjectId } = useProjectStore.getState()
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
     const persistedProjects = await Promise.all(
       projects.map((project) => toPersistedProject(project))
     )
     const data: PersistedProjectData = {
       projects: persistedProjects,
+      groups: groups as PersistedProjectGroup[],
       activeProjectId,
       updatedAt: new Date().toISOString()
     }
