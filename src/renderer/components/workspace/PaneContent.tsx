@@ -4,6 +4,7 @@ import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
 import { AgentLauncher } from "@/components/agents/AgentLauncher";
+import { AgentIcon } from "@/components/agents/AgentIcon";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { GitPanel } from "@/components/git/GitPanel";
@@ -247,16 +248,33 @@ export function PaneContent({
 								// This prevents spawn loops when workspace tabs aren't fully synced
 								if (!terminal.ptyId) {
 									const isVisible = activeTab?.id === tab.id;
+									const isAgent = terminal.kind === 'agent' && !!terminal.agentId;
 									return (
 										<div
 											key={tab.id}
 											className={
 												isVisible
-													? "w-full h-full flex items-center justify-center text-muted-foreground text-sm"
+													? "w-full h-full flex flex-col items-center justify-center gap-3"
 													: "hidden"
 											}
 										>
-											Connecting...
+											{isAgent ? (
+												<>
+													<span className="animate-pulse motion-reduce:animate-none">
+														<AgentIcon
+															agentId={terminal.agentId!}
+															className="h-16 w-16"
+														/>
+													</span>
+													<span className="text-sm text-muted-foreground">
+														Starting {terminal.agentName ?? terminal.name}…
+													</span>
+												</>
+											) : (
+												<span className="text-sm text-muted-foreground">
+													Connecting…
+												</span>
+											)}
 										</div>
 									);
 								}
