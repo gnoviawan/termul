@@ -161,6 +161,16 @@ pub struct SpawnOptions {
     pub env: Option<HashMap<String, String>>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    // ADR-004.2: terminal-native agent launch.
+    // When `program` is Some, the PTY runs that executable directly with `args`
+    // as discrete argv entries, bypassing shell resolution and shell quoting of
+    // the prompt. When `program` is None, spawn behavior is unchanged.
+    #[serde(default)]
+    pub program: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl Default for SpawnOptions {
@@ -171,6 +181,9 @@ impl Default for SpawnOptions {
             env: None,
             cols: Some(80),
             rows: Some(24),
+            program: None,
+            args: None,
+            kind: None,
         }
     }
 }
@@ -474,12 +487,18 @@ impl PtyManager {
 
         let id = self.generate_id();
 
-        // Resolve shell path
-        let shell_path = if let Some(shell) = &options.shell {
+        // ADR-004.2: Resolve the program to run. When `program` is set we run
+        // that executable directly (terminal-native agent launch); otherwise we
+        // resolve a login shell exactly as before. `program == None` keeps the
+        // shell path byte-for-byte identical to prior behavior.
+        let shell_path = if let Some(program) = &options.program {
+            self.resolve_program_path(program)?
+        } else if let Some(shell) = &options.shell {
             self.resolve_shell_path(shell)?
         } else {
             self.get_default_shell()?
         };
+        let program_args: Vec<String> = options.args.clone().unwrap_or_default();
 
         // Resolve working directory
         let cwd = if let Some(cwd) = &options.cwd {
@@ -501,8 +520,13 @@ impl PtyManager {
         // On Windows, use our custom ConPTY implementation to avoid console window
         #[cfg(target_os = "windows")]
         {
-            // Quote the shell path if it contains spaces
-            let shell_escaped = if shell_path.contains(' ') {
+            // ADR-004.2: In agent mode, build the command line from a discrete
+            // argv array via the audited quoting helper — the prompt is passed as
+            // a single argument and is never shell-interpolated. In shell mode,
+            // preserve the existing shell-escaping behavior verbatim.
+            let shell_escaped = if options.program.is_some() {
+                crate::pty::windows::build_windows_command_line(&shell_path, &program_args)
+            } else if shell_path.contains(' ') {
                 format!(
                     "\"{}\" {}",
                     shell_path,
@@ -626,6 +650,13 @@ impl PtyManager {
                 .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
             let mut cmd = CommandBuilder::new(&shell_path);
+            // ADR-004.2: In agent mode, append the argv tail as discrete
+            // arguments. portable-pty passes argv without a shell, so the prompt
+            // is delivered verbatim with no shell interpolation. In shell mode
+            // `program_args` is empty and this loop is a no-op.
+            for arg in &program_args {
+                cmd.arg(arg);
+            }
             for (key, value) in &env {
                 cmd.env(key, value);
             }
@@ -1165,6 +1196,61 @@ impl PtyManager {
         {
             Ok(env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()))
         }
+    }
+
+    /// ADR-004.2: Resolve a program (agent binary) to an absolute, existing
+    /// path. Reuses the same PATH/`which` resolution as shell lookup so agents
+    /// like `claude`, `codex`, or `gemini` resolve off the user's PATH. Unlike
+    /// shell resolution there is no alias handling — the renderer passes either a
+    /// known binary name from the Agent Registry or an explicit absolute path.
+    /// Returns an error when the program cannot be found rather than launching an
+    /// unresolved name (defense in depth against a compromised renderer).
+    fn resolve_program_path(&self, program: &str) -> Result<String, String> {
+        let trimmed = program.trim();
+        if trimmed.is_empty() {
+            return Err("Agent program is empty".to_string());
+        }
+
+        // Explicit path: must exist as given.
+        if trimmed.contains('/') || trimmed.contains('\\') {
+            if Path::new(trimmed).exists() {
+                return Ok(trimmed.to_string());
+            }
+            return Err(format!("Agent program not found: {}", trimmed));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(abs_path) = self.get_absolute_shell_path(trimmed) {
+                return Ok(abs_path);
+            }
+            // Try the .exe variant explicitly for bare names.
+            let exe_name = format!("{}.exe", trimmed);
+            if let Some(abs_path) = self.get_absolute_shell_path(&exe_name) {
+                return Ok(abs_path);
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(output) = std::process::Command::new("which").arg(trimmed).output() {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let first_line = stdout.lines().next().unwrap_or("").trim();
+                    if !first_line.is_empty() {
+                        return Ok(first_line.to_string());
+                    }
+                }
+            }
+            for prefix in ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"] {
+                let candidate = format!("{}/{}", prefix, trimmed);
+                if Path::new(&candidate).exists() {
+                    return Ok(candidate);
+                }
+            }
+        }
+
+        Err(format!("Agent program not found on PATH: {}", trimmed))
     }
 
     /// Resolve a shell name to its full path

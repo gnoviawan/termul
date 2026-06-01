@@ -821,6 +821,12 @@ async function restoreFromLayout(
       pendingScrollback?: string[]
       transcript?: string
       ptyId?: string
+      // ADR-004.4: restored agent metadata (re-applied after store insert)
+      kind?: 'shell' | 'agent'
+      agentId?: string
+      agentName?: string
+      agentProgram?: string
+      agentArgs?: string[]
     }> = []
 
     // Map old IDs to new IDs for active terminal selection and pane remapping
@@ -856,17 +862,38 @@ async function restoreFromLayout(
         }
 
         const normalizedShell = normalizeShellForStartup(resolvedShell)
+        // ADR-004.4: agent terminals restore by re-spawning the agent program
+        // with its baseArgs but WITHOUT the seed prompt, so the TUI boots fresh
+        // rather than re-submitting a stale task. The transcript replay still
+        // shows the prior conversation visually.
+        const isAgentTerminal =
+          persistedTerminal.kind === 'agent' && !!persistedTerminal.agentProgram
+        const agentSpawnOptions = isAgentTerminal
+          ? {
+              program: persistedTerminal.agentProgram,
+              args: persistedTerminal.agentArgs ?? [],
+              kind: 'agent' as const
+            }
+          : null
         // FIX #1: Wrap spawn in timeout to prevent indefinite lock blocking
         // FIX #1b: Kill orphan PTY if timeout fires after spawn resolves
         let spawnPtyId: string | null = null
         let timedOut = false
         const spawnResult = await Promise.race([
           (async () => {
-            const result = await terminalApi.spawn({
-              shell: normalizedShell,
-              cwd: persistedTerminal.cwd,
-              ...(hasProjectEnv ? { env } : {})
-            })
+            const result = await terminalApi.spawn(
+              agentSpawnOptions
+                ? {
+                    cwd: persistedTerminal.cwd,
+                    ...agentSpawnOptions,
+                    ...(hasProjectEnv ? { env } : {})
+                  }
+                : {
+                    shell: normalizedShell,
+                    cwd: persistedTerminal.cwd,
+                    ...(hasProjectEnv ? { env } : {})
+                  }
+            )
             if (spawnTimeout) {
               clearTimeout(spawnTimeout)
               spawnTimeout = null
@@ -934,7 +961,18 @@ async function restoreFromLayout(
           output: [],
           pendingScrollback: persistedTerminal.scrollback,
           transcript: persistedTerminal.transcript,
-          ptyId: spawnData.id
+          ptyId: spawnData.id,
+          // ADR-004.4: carry restored agent metadata so the tab labels as the
+          // agent and re-persists correctly. Seed prompt stays dropped.
+          ...(isAgentTerminal
+            ? {
+                kind: 'agent' as const,
+                agentId: persistedTerminal.agentId,
+                agentName: persistedTerminal.agentName,
+                agentProgram: persistedTerminal.agentProgram,
+                agentArgs: persistedTerminal.agentArgs
+              }
+            : {})
         })
       } finally {
         if (spawnTimeout) clearTimeout(spawnTimeout)

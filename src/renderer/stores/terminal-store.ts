@@ -9,6 +9,14 @@ export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000
 const LINE_BREAK_PATTERN = /\r\n|\r|\n/
 
+// ADR-004.4: descriptive-only agent metadata applied to a Terminal record.
+export interface TerminalAgentMetadata {
+  agentId: string
+  agentName: string
+  agentProgram: string
+  agentArgs: string[]
+}
+
 function trimTranscriptToMaxChars(transcript: string): string {
   if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
     return transcript
@@ -45,6 +53,7 @@ export interface TerminalState {
   setTerminals: (terminals: Terminal[]) => void
   setTerminalPtyId: (id: string, ptyId: string) => boolean
   findTerminalByPtyId: (ptyId: string) => Terminal | undefined
+  setTerminalAgentMetadata: (id: string, meta: TerminalAgentMetadata) => void
   updateTerminalCwd: (id: string, cwd: string) => void
   updateTerminalGitBranch: (id: string, gitBranch: string | null) => void
   updateTerminalGitStatus: (id: string, gitStatus: GitStatus | null) => void
@@ -206,6 +215,23 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
     // Fallback to linear scan (for terminals set before index existed)
     return state.terminals.find((t) => t.ptyId === ptyId)
+  },
+
+  setTerminalAgentMetadata: (id: string, meta: TerminalAgentMetadata): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              kind: 'agent',
+              agentId: meta.agentId,
+              agentName: meta.agentName,
+              agentProgram: meta.agentProgram,
+              agentArgs: meta.agentArgs
+            }
+          : t
+      )
+    }))
   },
 
   updateTerminalCwd: (id: string, cwd: string): void => {

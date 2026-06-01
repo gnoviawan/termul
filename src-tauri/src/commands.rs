@@ -272,6 +272,24 @@ pub async fn terminal_set_visibility(
     Ok(IpcResult::success(()))
 }
 
+// ==================== Agent Registry Commands ====================
+
+/// ADR-004.6: Fetch the ACP Registry catalog for agent IDENTITY & DISCOVERY
+/// only (id, name, description, website, icon). Opt-in and read-only; runs from
+/// the Rust side, caches on disk, and degrades to cache/empty on failure. The
+/// returned entries deliberately omit `distribution` so they can never be used
+/// to derive a terminal-native launch command.
+#[tauri::command]
+pub async fn agent_registry_fetch(
+    app: AppHandle,
+    force_refresh: Option<bool>,
+) -> Result<IpcResult<crate::agent_registry::AcpRegistryCatalog>, String> {
+    match crate::agent_registry::fetch_acp_registry(&app, force_refresh.unwrap_or(false)).await {
+        Ok(catalog) => Ok(IpcResult::success(catalog)),
+        Err(e) => Ok(IpcResult::error(e, "AGENT_REGISTRY_FETCH_FAILED")),
+    }
+}
+
 // ==================== Worktree Commands ====================
 
 /// List all worktrees for a git repo at the given path.

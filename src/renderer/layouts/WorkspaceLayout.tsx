@@ -100,6 +100,8 @@ import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
 import { spawnTerminalInPane } from "@/lib/terminal-spawn";
+import { launchAgentInPane } from "@/lib/agent-launch";
+import { BUILT_IN_AGENTS } from "@/lib/agents/agent-registry";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 import type { SFTPEntry } from "@shared/types/ssh.types";
 import { SSHFileExplorer } from "@/components/ssh/SSHFileExplorer";
@@ -666,6 +668,29 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		const paneId = useWorkspaceStore.getState().activePaneId;
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
+
+	// ADR-004.5: command-bar "Launch Agent" entry. Launches the default agent's
+	// TUI in the active pane with no seed prompt so the user composes inside the
+	// agent UI; the empty-pane launcher offers the full prompt+picker flow.
+	const handleLaunchAgent = useCallback(async () => {
+		const paneId = useWorkspaceStore.getState().activePaneId;
+		if (!paneId || !activeProjectId) return;
+		const cwd = getDefaultCwdForProject(activeProjectId);
+		const result = await launchAgentInPane(
+			paneId,
+			activeProjectId,
+			cwd,
+			BUILT_IN_AGENTS[0],
+			undefined,
+			{
+				envVars: activeProject?.envVars,
+				maxTerminalsPerProject: maxTerminals,
+			},
+		);
+		if (!result.success) {
+			toast.error(result.error || "Failed to launch agent");
+		}
+	}, [activeProjectId, activeProject?.envVars, maxTerminals]);
 
 	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
 		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
@@ -1418,6 +1443,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				projects={projects}
 				onSwitchProject={selectProject}
 				onAddTerminal={() => handleAddTerminal(undefined)}
+				onLaunchAgent={handleLaunchAgent}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 				onOpenProjectSettings={handleOpenProjectSettings}

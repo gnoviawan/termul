@@ -9,7 +9,8 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Terminal
+  Terminal,
+  Bot
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -35,6 +36,7 @@ interface CommandPaletteProps {
   projects: Project[]
   onSwitchProject: (id: string) => void
   onAddTerminal?: () => void
+  onLaunchAgent?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
   onOpenProjectSettings?: () => void
@@ -93,6 +95,7 @@ export function CommandPalette({
   projects,
   onSwitchProject,
   onAddTerminal,
+  onLaunchAgent,
   onSaveSnapshot,
   onNewBrowserTab,
   onOpenProjectSettings,
@@ -123,6 +126,19 @@ export function CommandPalette({
               keywords: ['shell', 'console', 'pty', 'workspace'],
               shortcut: getShortcutLabel?.('newTerminal'),
               execute: onAddTerminal
+            }
+          ]
+        : []),
+      ...(onLaunchAgent
+        ? [
+            {
+              id: 'launch-agent',
+              category: 'workspace' as const,
+              icon: <Bot aria-hidden="true" size={16} />,
+              label: 'Launch Agent',
+              description: "Open a CLI agent's TUI in the active pane",
+              keywords: ['agent', 'ai', 'claude', 'codex', 'gemini', 'cursor', 'opencode', 'cli'],
+              execute: onLaunchAgent
             }
           ]
         : []),
@@ -241,6 +257,7 @@ export function CommandPalette({
       projects,
       onSwitchProject,
       onAddTerminal,
+      onLaunchAgent,
       onSaveSnapshot,
       onNewBrowserTab,
       onOpenProjectSettings,

@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
+import { AgentLauncher } from "@/components/agents/AgentLauncher";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { GitPanel } from "@/components/git/GitPanel";
@@ -390,29 +391,29 @@ export function PaneContent({
 							})}
 
 						{pane.tabs.length === 0 ? (
-							<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8">
-								<div className="flex flex-col items-center gap-2 text-center">
-									<span className="text-muted-foreground text-sm font-medium">
-										Drag a tab or file here
-									</span>
-									<span className="text-muted-foreground/50 text-xs">
-										or open a new terminal or tab
-									</span>
+							<div className="absolute inset-0 flex flex-col">
+								{/* ADR-004.5: agent launch surface lives in the empty-pane state. */}
+								<div className="relative flex-1">
+									<AgentLauncher paneId={pane.id} />
 								</div>
-
-								<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
-									{sortedShells?.map((shell) => (
-										<Button
-											key={shell.name}
-											variant="outline"
-											size="sm"
-											className="h-8 text-[11px] gap-2"
-											onClick={() => onAddTerminal?.(pane.id, shell)}
-										>
-											<TerminalIcon size={12} />
-											{shell.displayName}
-										</Button>
-									))}
+								<div className="flex flex-col items-center gap-3 px-8 pb-8">
+									<span className="text-muted-foreground/50 text-[11px]">
+										or open a plain terminal
+									</span>
+									<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
+										{sortedShells?.map((shell) => (
+											<Button
+												key={shell.name}
+												variant="outline"
+												size="sm"
+												className="h-8 text-[11px] gap-2"
+												onClick={() => onAddTerminal?.(pane.id, shell)}
+											>
+												<TerminalIcon size={12} />
+												{shell.displayName}
+											</Button>
+										))}
+									</div>
 								</div>
 							</div>
 						) : null}
