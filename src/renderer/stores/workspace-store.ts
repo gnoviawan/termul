@@ -165,6 +165,7 @@ export interface WorkspaceState {
   getActivePaneLeaf: () => LeafNode | null
   syncTerminalTabs: (terminalIds: string[]) => void
   clearEditorTabs: () => void
+  clearPane: (paneId: string) => void
   resetLayout: () => void
   loadProjectWorkspace: (root: PaneNode, activePaneId?: string | null) => void
   syncEditorTabs: (filePaths: string[], activeTabId?: string | null) => void
@@ -904,6 +905,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({ root: newRoot })
     },
 
+    clearPane: (paneId: string): void => {
+      const { root } = get()
+      const allLeaves = getAllLeafPanes(root)
+      const leaf = allLeaves.find((l) => l.id === paneId)
+      if (!leaf || leaf.tabs.length === 0) return
+
+      const newRoot = updateLeaf(root, paneId, (l) => ({
+        ...l,
+        tabs: [],
+        activeTabId: null
+      }))
+      set({ root: newRoot })
+    },
+
     resetLayout: (): void => {
       const leaf = createLeaf()
       set({ root: leaf, activePaneId: leaf.id, fullscreenPaneId: null })
@@ -1121,6 +1136,7 @@ export function useWorkspaceActions(): Pick<
   | 'reorderTabsInPane'
   | 'syncTerminalTabs'
   | 'clearEditorTabs'
+  | 'clearPane'
   | 'syncEditorTabs'
   | 'getNextTabId'
   | 'splitPane'
@@ -1144,6 +1160,7 @@ export function useWorkspaceActions(): Pick<
       reorderTabsInPane: state.reorderTabsInPane,
       syncTerminalTabs: state.syncTerminalTabs,
       clearEditorTabs: state.clearEditorTabs,
+      clearPane: state.clearPane,
       syncEditorTabs: state.syncEditorTabs,
       getNextTabId: state.getNextTabId,
       splitPane: state.splitPane,

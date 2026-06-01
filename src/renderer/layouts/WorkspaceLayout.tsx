@@ -884,17 +884,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// New terminal (Ctrl+T) - workspace only
+			// Ctrl+T: show the agent launcher prompt textbox in the active pane
+			// instead of creating a new shell terminal. Clearing all tabs from the
+			// pane triggers PaneContent to render AgentLauncher with its prompt
+			// textarea (auto-focused).
 			if (matchesShortcut(e, getActiveKey("newTerminal"))) {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
 				e.stopPropagation();
-				if (terminals.length >= maxTerminals) {
-					toast.error(`Maximum ${maxTerminals} terminals per project`);
-					return;
-				}
 				const paneId = useWorkspaceStore.getState().activePaneId;
-				handleCreateTerminalInPane(paneId);
+				if (paneId) {
+					useWorkspaceStore.getState().clearPane(paneId);
+				}
 				return;
 			}
 

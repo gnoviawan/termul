@@ -121,9 +121,9 @@ export function CommandPalette({
               id: 'new-terminal',
               category: 'workspace' as const,
               icon: <Terminal aria-hidden="true" size={16} />,
-              label: 'New Terminal',
-              description: 'Open a terminal in the active pane',
-              keywords: ['shell', 'console', 'pty', 'workspace'],
+              label: 'Agent Launcher',
+              description: 'Show the agent launcher prompt in the active pane',
+              keywords: ['shell', 'console', 'pty', 'workspace', 'agent', 'prompt'],
               shortcut: getShortcutLabel?.('newTerminal'),
               execute: onAddTerminal
             }

@@ -176,8 +176,8 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
 	},
 	newTerminal: {
 		id: "newTerminal",
-		label: "New Terminal",
-		description: "Create a new terminal",
+		label: "Agent Launcher",
+		description: "Show the agent launcher prompt in the active pane",
 		defaultKey: "ctrl+t",
 	},
 	newBrowserTab: {
