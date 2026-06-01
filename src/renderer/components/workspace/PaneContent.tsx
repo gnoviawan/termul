@@ -67,10 +67,11 @@ export function PaneContent({
 	);
 
 	// FIX: Batch workspace store subscriptions with useShallow to prevent cascading re-renders
-	const { activePaneId, fullscreenPaneId, setActivePane } = useWorkspaceStore(
+	const { activePaneId, fullscreenPaneId, agentLauncherPaneId, setActivePane } = useWorkspaceStore(
 		useShallow((state) => ({
 			activePaneId: state.activePaneId,
 			fullscreenPaneId: state.fullscreenPaneId,
+			agentLauncherPaneId: state.agentLauncherPaneId,
 			setActivePane: state.setActivePane,
 		})),
 	);
@@ -432,6 +433,22 @@ export function PaneContent({
 											</Button>
 										))}
 									</div>
+								</div>
+							</div>
+						) : null}
+
+						{/* ADR-004.5 overlay: agent launcher prompt on top of existing tabs.
+							 Activated by Ctrl+T (or other shortcuts). Does NOT clear existing
+							 tabs — the launched agent terminal joins them in the same pane. */}
+						{agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
+							<div
+								className="absolute inset-0 z-10 bg-background/95 backdrop-blur-sm flex flex-col"
+								onKeyDown={(e) => {
+								if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
+								}}
+							>
+								<div className="relative flex-1">
+									<AgentLauncher paneId={pane.id} />
 								</div>
 							</div>
 						) : null}

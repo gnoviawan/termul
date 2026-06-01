@@ -10,6 +10,7 @@ import { loadAllAgents } from '@/lib/agents/custom-agents'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { useProjectStore } from '@/stores/project-store'
 import { useMaxTerminalsPerProject } from '@/stores/app-settings-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 
 /**
@@ -96,6 +97,10 @@ export function AgentLauncher({
 				)
 				if (!result.success) {
 					toast.error(result.error || 'Failed to launch agent')
+				} else {
+					// Hide the agent launcher overlay — the launched agent terminal tab
+					// has been added to the pane alongside any existing tabs.
+					useWorkspaceStore.getState().hideAgentLauncher()
 				}
 			} finally {
 				setIsLaunching(false)
@@ -112,8 +117,22 @@ export function AgentLauncher({
 				e.preventDefault()
 				void launch(selectedAgent)
 			}
+			// Escape dismisses the overlay (only when the overlay is active, i.e.
+			// when there are existing tabs underneath).
+			if (e.key === 'Escape') {
+				useWorkspaceStore.getState().hideAgentLauncher()
+			}
 		},
 		[launch, selectedAgent],
+	)
+
+	const handleOverlayKeyDown = useCallback(
+		(e: React.KeyboardEvent<HTMLDivElement>) => {
+			if (e.key === 'Escape') {
+				useWorkspaceStore.getState().hideAgentLauncher()
+			}
+		},
+		[],
 	)
 
 	return (
@@ -122,6 +141,7 @@ export function AgentLauncher({
 				'absolute inset-0 flex flex-col items-center justify-center gap-5 p-8',
 				className,
 			)}
+			onKeyDown={handleOverlayKeyDown}
 		>
 			<div className="flex flex-col items-center gap-1.5 text-center">
 				<Bot aria-hidden="true" className="text-muted-foreground" size={22} />

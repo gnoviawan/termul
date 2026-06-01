@@ -884,17 +884,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// Ctrl+T: show the agent launcher prompt textbox in the active pane
-			// instead of creating a new shell terminal. Clearing all tabs from the
-			// pane triggers PaneContent to render AgentLauncher with its prompt
-			// textarea (auto-focused).
+			// Ctrl+T: show the agent launcher prompt overlay in the active pane.
+			// The launcher is an overlay — existing tabs are preserved underneath.
+			// When the agent is launched, a new tab is added to the same pane.
 			if (matchesShortcut(e, getActiveKey("newTerminal"))) {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
 				e.stopPropagation();
 				const paneId = useWorkspaceStore.getState().activePaneId;
 				if (paneId) {
-					useWorkspaceStore.getState().clearPane(paneId);
+					const current = useWorkspaceStore.getState().agentLauncherPaneId;
+					// Toggle: if already showing on this pane, hide it; otherwise show it.
+					if (current === paneId) {
+						useWorkspaceStore.getState().hideAgentLauncher();
+					} else {
+						useWorkspaceStore.getState().showAgentLauncher(paneId);
+					}
 				}
 				return;
 			}

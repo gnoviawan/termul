@@ -135,6 +135,10 @@ export interface WorkspaceState {
   root: PaneNode
   activePaneId: string
   fullscreenPaneId: string | null
+  /** Pane id where the agent launcher overlay is shown, or null to hide it. */
+  agentLauncherPaneId: string | null
+  showAgentLauncher: (paneId: string) => void
+  hideAgentLauncher: () => void
 
   // Pane tree actions
   splitPane: (
@@ -299,6 +303,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     root: initialLeaf,
     activePaneId: initialLeaf.id,
     fullscreenPaneId: null,
+    agentLauncherPaneId: null,
+
+    showAgentLauncher: (paneId: string): void => {
+      set({ agentLauncherPaneId: paneId })
+    },
+
+    hideAgentLauncher: (): void => {
+      set({ agentLauncherPaneId: null })
+    },
 
     splitPane: (
       paneId: string,
@@ -1137,6 +1150,8 @@ export function useWorkspaceActions(): Pick<
   | 'syncTerminalTabs'
   | 'clearEditorTabs'
   | 'clearPane'
+  | 'showAgentLauncher'
+  | 'hideAgentLauncher'
   | 'syncEditorTabs'
   | 'getNextTabId'
   | 'splitPane'
@@ -1161,6 +1176,8 @@ export function useWorkspaceActions(): Pick<
       syncTerminalTabs: state.syncTerminalTabs,
       clearEditorTabs: state.clearEditorTabs,
       clearPane: state.clearPane,
+      showAgentLauncher: state.showAgentLauncher,
+      hideAgentLauncher: state.hideAgentLauncher,
       syncEditorTabs: state.syncEditorTabs,
       getNextTabId: state.getNextTabId,
       splitPane: state.splitPane,
