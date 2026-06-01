@@ -41,7 +41,7 @@ runs:
   using: 'composite'
   steps:
     - name: Fetch LLM secrets from Infisical
-      uses: Infisical/secrets-action@v1.0.9
+      uses: Infisical/secrets-action@d6d33681d4a2c4b57a4849d4bb052562beea81aa # v1.0.9
       with:
         method: 'oidc'
         identity-id: ${{ inputs.infisical-identity-id }}
@@ -52,8 +52,10 @@ runs:
     - name: Resolve cora-cli version
       id: resolve
       shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.cora-version }}
       run: |
-        if [ "${{ inputs.cora-version }}" = "latest" ]; then
+        if [ "$INPUT_VERSION" = "latest" ]; then
           # Try up to 3 times with delay
           for i in 1 2 3; do
             VERSION=$(curl -sfL --connect-timeout 10 \
@@ -71,13 +73,15 @@ runs:
             VERSION="v0.1.7"
           fi
         else
-          VERSION="${{ inputs.cora-version }}"
+          VERSION="$INPUT_VERSION"
         fi
         echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
         echo "Resolved cora-cli version: $VERSION"
 
     - name: Install cora-cli
       shell: bash
+      env:
+        CORA_VERSION: ${{ steps.resolve.outputs.VERSION }}
       run: |
         ARCH=$(uname -m)
         if [ "$ARCH" = "x86_64" ]; then
@@ -88,7 +92,26 @@ runs:
           echo "Unsupported architecture: $ARCH"
           exit 1
         fi
-        curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${{ steps.resolve.outputs.VERSION }}/${ASSET}-${{ steps.resolve.outputs.VERSION }}.tar.gz" | tar xz -C /usr/local/bin cora
+        # Download and verify checksums before extraction
+        curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${CORA_VERSION}/${ASSET}-${CORA_VERSION}.tar.gz" \
+          -o /tmp/cora.tar.gz
+        curl -sL "https://github.com/ajianaz/cora-cli/releases/download/${CORA_VERSION}/checksums-sha256.txt" \
+          -o /tmp/cora-checksums.txt || true
+        if [ -f /tmp/cora-checksums.txt ]; then
+          EXPECTED=$(grep "${ASSET}-${CORA_VERSION}.tar.gz" /tmp/cora-checksums.txt | awk '{print $1}')
+          ACTUAL=$(sha256sum /tmp/cora.tar.gz | awk '{print $1}')
+          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Checksum verification failed for ${ASSET}-${CORA_VERSION}.tar.gz"
+            echo "Expected: $EXPECTED"
+            echo "Actual:   $ACTUAL"
+            exit 1
+          fi
+          rm -f /tmp/cora-checksums.txt
+        else
+          echo "::warning::No checksums file found, skipping verification"
+        fi
+        tar xzf /tmp/cora.tar.gz -C /usr/local/bin cora
+        rm -f /tmp/cora.tar.gz
         chmod +x /usr/local/bin/cora
         cora --version
 
@@ -99,11 +122,13 @@ runs:
         CORA_API_KEY: ${{ env.CORA_API_KEY }}
         CORA_BASE_URL: ${{ env.CORA_BASE_URL }}
         CORA_MODEL: ${{ env.CORA_MODEL }}
+        INPUT_BASE: ${{ inputs.base-branch }}
+        INPUT_SEVERITY: ${{ inputs.severity }}
       run: |
         cora review \
-          --base ${{ inputs.base-branch }} \
+          --base "$INPUT_BASE" \
           --format sarif \
-          --severity ${{ inputs.severity }} \
+          --severity "$INPUT_SEVERITY" \
           --quiet \
           > cora-results.sarif 2>cora-stderr.log || true
         echo "Cora review complete ($(wc -c < cora-results.sarif) bytes)"
@@ -114,14 +139,14 @@ runs:
     - name: Upload SARIF to GitHub Code Scanning
       if: inputs.upload-sarif == 'true'
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v4
+      uses: github/codeql-action/upload-sarif@v3.28.11
       with:
         sarif_file: cora-results.sarif
         category: cora-review
 
     - name: Post PR comment
       if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@v7.0.1
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       with:
@@ -137,9 +162,15 @@ runs:
 
           // Check for empty/invalid SARIF — cora may have failed silently
           if (!sarifContent || !sarifContent.runs || sarifContent.runs.length === 0) {
-            const fileSize = fs.statSync('cora-results.sarif').size;
+            let fileSize = 0;
+            try {
+              fileSize = fs.statSync('cora-results.sarif').size;
+            } catch (e) {
+              // SARIF file doesn't exist (install or review step failed)
+              fileSize = 0;
+            }
             if (fileSize < 10) {
-              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
+              body = `## 🔍 Cora AI Code Review\n\n⚠️ **Review could not complete.** Cora produced an empty result or the review step failed. Check the workflow logs for errors.\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
             } else {
               body = `## 🔍 Cora AI Code Review\n\n✅ **No issues found.** Code looks good!\n\n---\n_Review powered by [cora-cli](https://github.com/ajianaz/cora-cli) · BYOK · MIT_`;
             }
