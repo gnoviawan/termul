@@ -11,8 +11,9 @@
     "lint": "eslint .",
     "test": "bun test",
     "deploy": "wrangler pages deploy dist",
-    "pages:dev": "bun run build && wrangler pages dev dist",
-    "db:migrate": "wrangler d1 migrations apply termul",
+    "pages:dev": "bun run build && wrangler pages dev",
+    "db:migrate": "wrangler d1 migrations apply termul --remote",
+    "db:migrate:local": "wrangler d1 migrations apply termul --local",
     "verify:prerender": "bun -e \"import fs from 'node:fs'; const checksByFile = { 'dist/index.html': ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser'], 'dist/testimonial/submit/index.html': ['Tell developers how Termul helps you.'] }; const missing = []; for (const [file, checks] of Object.entries(checksByFile)) { const html = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''; for (const s of checks) if (!html.includes(s)) missing.push(file + ': ' + s); } if (missing.length) { console.error('Prerender check failed:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
   "dependencies": {
