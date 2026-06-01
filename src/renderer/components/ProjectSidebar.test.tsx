@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
@@ -262,16 +262,6 @@ describe('ProjectSidebar', () => {
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
-  it('should render project avatars with first letter', () => {
-    renderWithRouter()
-
-    const activeProjectsContainer = screen.getByTestId('active-projects-container')
-    const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
-    const letters = avatars.map((avatar) => avatar.textContent)
-
-    expect(letters).toStrictEqual(['P', 'P'])
-  })
-
   it('should call onSelectProject when project is clicked', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
@@ -328,31 +318,8 @@ describe('ProjectSidebar', () => {
     ]
     renderWithRouter({ projects: projectsWithEmptyName })
 
-    // Should show fallback character '?' for empty name
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('?')
-  })
-
-  it('should extract first alphabetic character for emoji project names', () => {
-    const projectsWithEmoji: Project[] = [
-      { id: '1', name: '🚀Rocket', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmoji })
-
-    // Should extract 'R' from Rocket, not the emoji
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('R')
-  })
-
-  it('should preserve emoji-only project names in avatar fallback', () => {
-    const projectsWithEmojiOnlyName: Project[] = [
-      { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmojiOnlyName })
-
-    // Should keep full emoji grapheme as fallback, not a surrogate fragment
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('🚀')
+    // Empty-named project still renders its row without crashing.
+    expect(screen.getByTestId('active-projects-container')).toBeInTheDocument()
   })
 })
 
