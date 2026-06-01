@@ -57,8 +57,16 @@ export const PersistenceKeys = {
 // Persisted project data (stored at projects.json)
 export interface PersistedProjectData {
   projects: PersistedProject[]
+  groups?: PersistedProjectGroup[]
   activeProjectId: string
   updatedAt: string // ISO timestamp
+}
+
+export interface PersistedProjectGroup {
+  id: string
+  name: string
+  projectIds: string[]
+  isCollapsed?: boolean
 }
 
 export interface PersistedEnvVariable {

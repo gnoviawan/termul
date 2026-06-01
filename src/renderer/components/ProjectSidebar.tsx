@@ -16,6 +16,7 @@ import {
 	Settings,
 	Folder,
 	FolderOpen,
+	FolderPlus,
 	X,
 	GitBranch,
 	Copy,
@@ -27,7 +28,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { Project, ProjectColor, Worktree } from "@/types/project";
+import type { Project, ProjectColor, Worktree, ProjectGroup } from "@/types/project";
 import type { DetectedShells } from "@shared/types/ipc.types";
 import { isWorktreeTermulManaged } from "@/types/project";
 import { getColorClasses, availableColors } from "@/lib/colors";
@@ -40,6 +41,7 @@ import { NewWorktreeModal } from "./NewWorktreeModal";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { SSHPanel } from "./ssh/SSHPanel";
 import { useSSHPanelVisible } from "@/stores/ssh-panel-store";
+import { NewGroupModal } from "./NewGroupModal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { shellApi, dialogApi, worktreeApi, clipboardApi } from "@/lib/api";
 import { useProjectsWithActivity, useProjectsWithErrors } from "@/stores/terminal-store";
@@ -53,13 +55,6 @@ import { useWorktreeReconciler } from "@/hooks/use-worktree-reconciler";
 import { groupWorktrees, type WorktreeGroup } from "@/lib/worktree-grouping";
 import { filterWorktrees } from "@/lib/worktree-filter";
 import { filterProjects, shouldShowProjectSearch } from "@/lib/project-filter";
-
-function getFirstLetter(name: string): string {
-	if (!name) return "?";
-	const match = name.match(/[a-zA-Z]/);
-	const first = Array.from(name)[0];
-	return match ? match[0].toUpperCase() : first ? first.toUpperCase() : "?";
-}
 
 interface ContextMenuState {
 	isOpen: boolean;
@@ -135,8 +130,21 @@ export function ProjectSidebar({
 	activeSSHProfileId,
 }: ProjectSidebarProps): React.JSX.Element {
 	const navigate = useNavigate();
-	const { selectProject, setActiveWorktree, setWorktreeOperationLock } = useProjectActions();
+	const {
+		selectProject,
+		setActiveWorktree,
+		setWorktreeOperationLock,
+		addGroup,
+		removeGroup,
+		renameGroup,
+		toggleGroupCollapse,
+		moveProjectToGroup,
+		reorderGroups,
+		reorderProjectInGroup,
+	} = useProjectActions();
 	const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked);
+	const storeGroups = useProjectStore((state) => state.groups);
+	const groups = useMemo(() => storeGroups ?? [], [storeGroups]);
 
 	// Poll worktree status for the active project (populates shared cache for sidebar badges)
 	useWorktreeStatus(activeProjectId);
@@ -146,6 +154,26 @@ export function ProjectSidebar({
 
 	// Show archived toggle state
 	const [showArchived, setShowArchived] = useState(false);
+
+	// Group management states
+	const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+	const [editGroupName, setEditGroupName] = useState("");
+	const [newGroupModal, setNewGroupModal] = useState<{
+		isOpen: boolean;
+		projectIdToMove?: string;
+	}>({ isOpen: false });
+	const [groupDeleteConfirm, setGroupDeleteConfirm] = useState({
+		isOpen: false,
+		groupId: "",
+		groupName: "",
+		deleteProjects: false,
+	});
+	const [groupContextMenu, setGroupContextMenu] = useState({
+		isOpen: false,
+		x: 0,
+		y: 0,
+		groupId: "",
+	});
 
 	// Project search/filter query
 	const [searchQuery, setSearchQuery] = useState("");
@@ -254,6 +282,94 @@ export function ProjectSidebar({
 			return next;
 		});
 	}, []);
+
+	const handleCreateGroup = useCallback((): void => {
+		setNewGroupModal({ isOpen: true });
+	}, []);
+
+	const handleCreateGroupSubmit = useCallback((name: string) => {
+		const newGroupId = addGroup(name);
+		if (newGroupModal.projectIdToMove) {
+			moveProjectToGroup(newGroupModal.projectIdToMove, newGroupId);
+		}
+	}, [addGroup, moveProjectToGroup, newGroupModal.projectIdToMove]);
+
+	const handleGroupContextMenu = useCallback(
+		(e: React.MouseEvent, groupId: string): void => {
+			e.preventDefault();
+			const group = groups.find((g) => g.id === groupId);
+			if (group) {
+				setGroupContextMenu({
+					isOpen: true,
+					x: e.clientX,
+					y: e.clientY,
+					groupId,
+				});
+			}
+		},
+		[groups],
+	);
+
+	const closeGroupContextMenu = useCallback((): void => {
+		setGroupContextMenu((prev) => ({ ...prev, isOpen: false }));
+	}, []);
+
+	const handleStartRenameGroup = useCallback(
+		(groupId: string): void => {
+			const group = groups.find((g) => g.id === groupId);
+			if (group) {
+				setEditingGroupId(groupId);
+				setEditGroupName(group.name);
+			}
+		},
+		[groups],
+	);
+
+	const handleConfirmDeleteGroup = useCallback(
+		(groupId: string, deleteProjects: boolean): void => {
+			const group = groups.find((g) => g.id === groupId);
+			if (group) {
+				setGroupDeleteConfirm({
+					isOpen: true,
+					groupId,
+					groupName: group.name,
+					deleteProjects,
+				});
+			}
+		},
+		[groups],
+	);
+
+	const handleDeleteGroup = useCallback((): void => {
+		if (groupDeleteConfirm.groupId) {
+			removeGroup(groupDeleteConfirm.groupId, groupDeleteConfirm.deleteProjects);
+		}
+		setGroupDeleteConfirm({ isOpen: false, groupId: "", groupName: "", deleteProjects: false });
+	}, [groupDeleteConfirm.groupId, groupDeleteConfirm.deleteProjects, removeGroup]);
+
+	const getGroupMenuItems = useCallback(
+		(groupId: string): ContextMenuItem[] => {
+			return [
+				{
+					label: "Rename Group",
+					icon: <Edit2 size={14} />,
+					onClick: () => handleStartRenameGroup(groupId),
+				},
+				{
+					label: "Delete Group (Keep Projects)",
+					icon: <Trash2 size={14} />,
+					onClick: () => handleConfirmDeleteGroup(groupId, false),
+				},
+				{
+					label: "Delete Group & All Projects",
+					icon: <Trash2 size={14} />,
+					onClick: () => handleConfirmDeleteGroup(groupId, true),
+					variant: "danger",
+				},
+			];
+		},
+		[handleStartRenameGroup, handleConfirmDeleteGroup],
+	);
 
 	const handleWorktreeSelect = useCallback(
 		(projectId: string, worktreeId: string | null): void => {
@@ -590,6 +706,40 @@ export function ProjectSidebar({
 				});
 			}
 
+			const currentGroup = groups.find((g) => g.projectIds.includes(projectId));
+			const groupSubmenu: ContextMenuSubItem[] = [
+				{
+					label: "No Group (Root)",
+					value: "root",
+					isSelected: !currentGroup,
+				},
+				...groups.map((g) => ({
+					label: g.name,
+					value: g.id,
+					isSelected: currentGroup?.id === g.id,
+				})),
+				{
+					label: "+ Create New Group...",
+					value: "new-group",
+					isSelected: false,
+				}
+			];
+
+			items.push({
+				label: "Move to Group",
+				icon: <Folder size={14} />,
+				submenu: groupSubmenu,
+				onSubmenuSelect: (targetGroupId: string) => {
+					if (targetGroupId === "root") {
+						moveProjectToGroup(projectId, null);
+					} else if (targetGroupId === "new-group") {
+						setNewGroupModal({ isOpen: true, projectIdToMove: projectId });
+					} else {
+						moveProjectToGroup(projectId, targetGroupId);
+					}
+				},
+			});
+
 			items.push(
 				{
 					label: isGitRepo ? "New Worktree" : "New Worktree (no git repo)",
@@ -627,6 +777,9 @@ export function ProjectSidebar({
 			handleConfirmDelete,
 			selectProject,
 			navigate,
+			groups,
+			moveProjectToGroup,
+			setNewGroupModal,
 		],
 	);
 
@@ -727,6 +880,35 @@ export function ProjectSidebar({
 		return map;
 	}, [activeProjects]);
 
+	// Group mapping for rendering
+	const groupedProjectIds = useMemo(() => {
+		const ids = new Set<string>();
+		groups.forEach((g) => {
+			g.projectIds.forEach((pid) => ids.add(pid));
+		});
+		return ids;
+	}, [groups]);
+
+	const groupProjectsMap = useMemo(() => {
+		return groups.map((g) => {
+			const projectsInGroup = g.projectIds
+				.map((pid) => filteredActiveProjects.find((p) => p.id === pid))
+				.filter((p): p is Project => p !== undefined);
+			return {
+				group: g,
+				projects: projectsInGroup,
+			};
+		});
+	}, [groups, filteredActiveProjects]);
+
+	const ungroupedActiveProjects = useMemo(() => {
+		return filteredActiveProjects.filter((p) => !groupedProjectIds.has(p.id));
+	}, [filteredActiveProjects, groupedProjectIds]);
+
+	const visibleGroups = useMemo(() => {
+		return groupProjectsMap.filter((gp) => gp.projects.length > 0 || !isSearching);
+	}, [groupProjectsMap, isSearching]);
+
 	// Reset a lingering query if the search box is no longer shown.
 	useEffect(() => {
 		if (!showSearch && searchQuery) setSearchQuery("");
@@ -769,18 +951,31 @@ export function ProjectSidebar({
 				<span className="text-xs tracking-wider text-sidebar-foreground uppercase">
 					Projects
 				</span>
-				<button
-					onClick={onNewProject}
-					className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-					title="New Project"
-					aria-label="Create new project from header"
-					data-testid="header-new-project"
-				>
-					<Plus
-						size={14}
-						className="text-muted-foreground group-hover:text-foreground"
-					/>
-				</button>
+				<div className="flex items-center gap-1">
+					<button
+						onClick={handleCreateGroup}
+						className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+						title="New Group Folder"
+						aria-label="Create new group folder"
+					>
+						<FolderPlus
+							size={14}
+							className="text-muted-foreground group-hover:text-foreground"
+						/>
+					</button>
+					<button
+						onClick={onNewProject}
+						className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+						title="New Project"
+						aria-label="Create new project from header"
+						data-testid="header-new-project"
+					>
+						<Plus
+							size={14}
+							className="text-muted-foreground group-hover:text-foreground"
+						/>
+					</button>
+				</div>
 			</div>
 
 			{/* Project search — flat style matching the file explorer search */}
@@ -850,78 +1045,222 @@ export function ProjectSidebar({
 						</p>
 					</div>
 				) : (
-					<>
+					<div data-testid="active-projects-container">
 						{/* LayoutGroup keeps Reorder layout measurements in sync when an item's
 						    own height changes (e.g. expanding/collapsing worktrees via the
 						    chevron). Without it, the group caches stale item boxes after a
 						    height change and drag-to-reorder stops working. */}
 						<LayoutGroup>
+						{/* Grouped Projects */}
 						<Reorder.Group
 							axis="y"
-							values={filteredActiveProjects}
+							values={visibleGroups}
 							onReorder={(reordered) => {
-								// Reordering a filtered subset would drop the hidden projects,
-								// so only persist a new order when the full list is visible.
 								if (isSearching) return;
-								onReorderProjects(reordered.map((p) => p.id));
+								reorderGroups(reordered.map((gp) => gp.group.id));
 							}}
-							className="flex flex-col"
-							data-testid="active-projects-container"
+							className="flex flex-col gap-1"
+							data-testid="grouped-projects-container"
 						>
-							{filteredActiveProjects.map((project) => {
-								const hasActivity = projectActivityIds.includes(project.id);
-								// Shortcut badge reflects the project's position in the UNFILTERED
-								// active list to stay in sync with the global Ctrl+1..9 handler.
-								const shortcutIndex = activeIndexById.get(project.id) ?? -1;
+							{visibleGroups.map(({ group, projects: gpProjects }) => {
+								const isCollapsed = group.isCollapsed;
 								return (
 									<Reorder.Item
-										key={project.id}
-										value={project}
+										key={group.id}
+										value={{ group, projects: gpProjects }}
 										drag={isSearching ? false : undefined}
-										// layout="position" lets framer-motion remeasure the item when
-										// its height changes (worktree expand/collapse) so the group's
-										// order calculations stay accurate and drag keeps working.
 										layout="position"
 										className="list-none"
-										whileDrag={{
-											scale: 1.02,
-											boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-										}}
 									>
-										<ProjectItem
-											project={project}
-											isActive={project.id === activeProjectId}
-											isExpanded={expandedProjects.has(project.id)}
-											onToggleExpand={() => toggleProjectExpanded(project.id)}
-											isEditing={editingId === project.id}
-											editName={editName}
-											shortcut={shortcutIndex >= 0 && shortcutIndex < 9 ? `Ctrl+${shortcutIndex + 1}` : undefined}
-											hasActivity={hasActivity}
-											hasError={projectErrorIds.has(project.id)}
-											onClick={() => {
-												onSelectProject(project.id);
-												navigate("/");
-											}}
-											onContextMenu={(e) => handleContextMenu(e, project.id)}
-											onEditNameChange={setEditName}
-											onSaveRename={() => handleSaveRename(project.id)}
-											onCancelRename={handleCancelRename}
-											onSettingsClick={() => {
-												selectProject(project.id);
-												navigate("/settings");
-											}}
-											onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
-											onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
-											onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
-												void handleOpenTerminalInWorktree(project.id, worktreeId, worktreePath, worktreeName)
-											}
-											isWorktreeOperationLocked={isWorktreeOperationLocked}
-											onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
-										/>
+										<div className="flex flex-col">
+											{/* Folder Header */}
+											<div
+												onClick={() => toggleGroupCollapse(group.id)}
+												onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
+												role="button"
+												tabIndex={0}
+												onKeyDown={(e) => {
+													if (e.key === 'Enter' || e.key === ' ') {
+														e.preventDefault();
+														toggleGroupCollapse(group.id);
+													}
+												}}
+												className="w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none"
+											>
+												<span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
+													{isCollapsed ? (
+														<ChevronRight size={12} className="text-muted-foreground" />
+													) : (
+														<ChevronDown size={12} className="text-muted-foreground" />
+													)}
+												</span>
+												<span className="mr-1.5 flex-shrink-0 inline-flex items-center text-primary/80">
+													{isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
+												</span>
+												{editingGroupId === group.id ? (
+													<input
+														type="text"
+														value={editGroupName}
+														onChange={(e) => setEditGroupName(e.target.value)}
+														onKeyDown={(e) => {
+															if (e.key === "Enter") {
+																if (editGroupName.trim()) {
+																	renameGroup(group.id, editGroupName.trim());
+																}
+																setEditingGroupId(null);
+															} else if (e.key === "Escape") {
+																setEditingGroupId(null);
+															}
+														}}
+														onBlur={() => {
+															if (editGroupName.trim()) {
+																renameGroup(group.id, editGroupName.trim());
+															}
+															setEditingGroupId(null);
+														}}
+														className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+														autoFocus
+														onClick={(e) => e.stopPropagation()}
+													/>
+												) : (
+													<span className="text-xs font-semibold text-muted-foreground truncate flex-1">
+														{group.name}
+													</span>
+												)}
+												<span className="text-[10px] text-muted-foreground/40 px-2 font-normal">
+													{gpProjects.length}
+												</span>
+											</div>
+
+											{/* Projects in Group */}
+											{!isCollapsed && gpProjects.length > 0 && (
+												<Reorder.Group
+													axis="y"
+													values={gpProjects}
+													onReorder={(reordered) => {
+														if (isSearching) return;
+														reorderProjectInGroup(group.id, reordered.map((p) => p.id));
+													}}
+													className="pl-4 flex flex-col"
+												>
+													{gpProjects.map((project) => {
+														const hasActivity = projectActivityIds.includes(project.id);
+														const shortcutIndex = activeIndexById.get(project.id) ?? -1;
+														return (
+															<Reorder.Item
+																key={project.id}
+																value={project}
+																drag={isSearching ? false : undefined}
+																layout="position"
+																className="list-none"
+																whileDrag={{
+																	scale: 1.02,
+																	boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+																}}
+															>
+																<ProjectItem
+																	project={project}
+																	isActive={project.id === activeProjectId}
+																	isExpanded={expandedProjects.has(project.id)}
+																	onToggleExpand={() => toggleProjectExpanded(project.id)}
+																	isEditing={editingId === project.id}
+																	editName={editName}
+																	shortcut={shortcutIndex >= 0 && shortcutIndex < 9 ? `Ctrl+${shortcutIndex + 1}` : undefined}
+																	hasActivity={hasActivity}
+																	hasError={projectErrorIds.has(project.id)}
+																	onClick={() => {
+																		onSelectProject(project.id);
+																		navigate("/");
+																	}}
+																	onContextMenu={(e) => handleContextMenu(e, project.id)}
+																	onEditNameChange={setEditName}
+																	onSaveRename={() => handleSaveRename(project.id)}
+																	onCancelRename={handleCancelRename}
+																	onSettingsClick={() => {
+																		selectProject(project.id);
+																		navigate("/settings");
+																	}}
+																	onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
+																	onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
+																	onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
+																		void handleOpenTerminalInWorktree(project.id, worktreeId, worktreePath, worktreeName)
+																	}
+																	isWorktreeOperationLocked={isWorktreeOperationLocked}
+																	onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
+																/>
+															</Reorder.Item>
+														);
+													})}
+												</Reorder.Group>
+											)}
+										</div>
 									</Reorder.Item>
 								);
 							})}
 						</Reorder.Group>
+
+						{/* Ungrouped Projects */}
+						{ungroupedActiveProjects.length > 0 && (
+							<Reorder.Group
+								axis="y"
+								values={ungroupedActiveProjects}
+								onReorder={(reordered) => {
+									if (isSearching) return;
+									onReorderProjects(reordered.map((p) => p.id));
+								}}
+								className="flex flex-col mt-1"
+								data-testid="ungrouped-projects-container"
+							>
+								{ungroupedActiveProjects.map((project) => {
+									const hasActivity = projectActivityIds.includes(project.id);
+									const shortcutIndex = activeIndexById.get(project.id) ?? -1;
+									return (
+										<Reorder.Item
+											key={project.id}
+											value={project}
+											drag={isSearching ? false : undefined}
+											layout="position"
+											className="list-none"
+											whileDrag={{
+												scale: 1.02,
+												boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+											}}
+										>
+											<ProjectItem
+												project={project}
+												isActive={project.id === activeProjectId}
+												isExpanded={expandedProjects.has(project.id)}
+												onToggleExpand={() => toggleProjectExpanded(project.id)}
+												isEditing={editingId === project.id}
+												editName={editName}
+												shortcut={shortcutIndex >= 0 && shortcutIndex < 9 ? `Ctrl+${shortcutIndex + 1}` : undefined}
+												hasActivity={hasActivity}
+												hasError={projectErrorIds.has(project.id)}
+												onClick={() => {
+													onSelectProject(project.id);
+													navigate("/");
+												}}
+												onContextMenu={(e) => handleContextMenu(e, project.id)}
+												onEditNameChange={setEditName}
+												onSaveRename={() => handleSaveRename(project.id)}
+												onCancelRename={handleCancelRename}
+												onSettingsClick={() => {
+													selectProject(project.id);
+													navigate("/settings");
+												}}
+												onWorktreeSelect={(worktreeId) => handleWorktreeSelect(project.id, worktreeId)}
+												onWorktreeContextMenu={(e, worktree) => handleWorktreeContextMenu(e, project.id, worktree)}
+												onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
+													void handleOpenTerminalInWorktree(project.id, worktreeId, worktreePath, worktreeName)
+												}
+												isWorktreeOperationLocked={isWorktreeOperationLocked}
+												onNewWorktree={(pId) => setNewWorktreeModal({ isOpen: true, projectId: pId })}
+											/>
+										</Reorder.Item>
+									);
+								})}
+							</Reorder.Group>
+						)}
 						</LayoutGroup>
 
 						{/* Archived Projects Section */}
@@ -960,7 +1299,7 @@ export function ProjectSidebar({
 									})}
 							</div>
 						)}
-					</>
+					</div>
 				)}
 			</div>
 
@@ -970,7 +1309,7 @@ export function ProjectSidebar({
 			{/* Version - pinned bottom */}
 			<div className="p-2 rounded-b-xl">
 				<div className="w-full h-6 inline-flex items-center justify-center">
-					<span className="text-xs text-muted-foreground">Termul v0.4.0</span>
+					<span className="text-xs text-muted-foreground">Termul v0.4.1</span>
 				</div>
 			</div>
 
@@ -983,6 +1322,32 @@ export function ProjectSidebar({
 					onClose={closeContextMenu}
 				/>
 			)}
+
+			{/* Group Context Menu */}
+			{groupContextMenu.isOpen && (
+				<ContextMenu
+					items={getGroupMenuItems(groupContextMenu.groupId)}
+					x={groupContextMenu.x}
+					y={groupContextMenu.y}
+					onClose={closeGroupContextMenu}
+				/>
+			)}
+
+			{/* Group Delete Confirmation Dialog */}
+			<ConfirmDialog
+				isOpen={groupDeleteConfirm.isOpen}
+				title="Delete Group Folder"
+				message={
+					groupDeleteConfirm.deleteProjects
+						? `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}" and all projects inside it? This action cannot be undone.`
+						: `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}"? Projects inside this group will be moved to the root folder list.`
+				}
+				confirmLabel="Delete"
+				cancelLabel="Cancel"
+				variant="danger"
+				onConfirm={handleDeleteGroup}
+				onCancel={() => setGroupDeleteConfirm({ isOpen: false, groupId: "", groupName: "", deleteProjects: false })}
+			/>
 
 			{/* Worktree Context Menu */}
 			{worktreeContextMenu.isOpen && worktreeContextMenu.worktree && (
@@ -1167,6 +1532,13 @@ export function ProjectSidebar({
 				onClose={() => setNewWorktreeModal({ isOpen: false, projectId: "" })}
 				projectId={newWorktreeModal.projectId}
 			/>
+
+			{/* New Group Modal */}
+			<NewGroupModal
+				isOpen={newGroupModal.isOpen}
+				onClose={() => setNewGroupModal({ isOpen: false })}
+				onSubmit={handleCreateGroupSubmit}
+			/>
 		</aside>
 	);
 }
@@ -1237,7 +1609,6 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	const firstLetter = getFirstLetter(project.name);
 	const hasWorktrees = (project.worktrees?.length ?? 0) > 0 || project.isGitRepo;
 	const worktrees = project.worktrees ?? [];
 
@@ -1288,21 +1659,6 @@ const ProjectItem = memo(function ProjectItem({
 					<div className="w-5 flex-shrink-0" />
 				)}
 
-				{/* Circular avatar with first letter */}
-				<div
-					className={cn(
-						"w-4 h-4 rounded-full flex items-center justify-center ml-1 mr-2 flex-shrink-0",
-						colors.bg,
-					)}
-					aria-hidden="true"
-				>
-					<span
-						className="text-[10px] leading-none text-white"
-						data-testid="project-avatar-letter"
-					>
-						{firstLetter}
-					</span>
-				</div>
 				{isEditing ? (
 					<input
 						ref={inputRef}
@@ -1311,13 +1667,13 @@ const ProjectItem = memo(function ProjectItem({
 						onChange={(e) => onEditNameChange(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onBlur={onSaveRename}
-						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+						className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
 						onClick={(e) => e.stopPropagation()}
 					/>
 				) : (
 					<span
 						className={cn(
-							"text-sm transition-colors flex-1 min-w-0 truncate mr-2",
+							"text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2",
 							// flex-1 min-w-0 is required for truncate to clip inside a flex row
 							isActive
 								? "text-foreground"
@@ -1615,7 +1971,6 @@ function ArchivedProjectItem({
 	onContextMenu,
 }: ArchivedProjectItemProps): React.JSX.Element {
 	const colors = getColorClasses(project.color);
-	const firstLetter = getFirstLetter(project.name);
 
 	return (
 		<button
@@ -1628,23 +1983,8 @@ function ArchivedProjectItem({
 			aria-label={`Archived project: ${project.name}`}
 			data-testid={`archived-project-item-${project.id}`}
 		>
-			{/* Circular avatar with first letter */}
-			<div
-				className={cn(
-					"w-4 h-4 rounded-full flex items-center justify-center ml-2 mr-2 flex-shrink-0",
-					colors.bg,
-				)}
-				aria-hidden="true"
-			>
-				<span
-					className="text-[10px] leading-none text-white"
-					data-testid="project-avatar-letter"
-				>
-					{firstLetter}
-				</span>
-			</div>
 			<span
-				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
+				className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
 				title={project.name}
 			>
 				{project.name}
