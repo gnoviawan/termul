@@ -245,18 +245,14 @@ export function PaneContent({
 								if (!terminal) {
 									return null;
 								}
-								// CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
-								// This prevents spawn loops when workspace tabs aren't fully synced
-								// For agent terminals, also wait until the renderer attaches — the
-								// batched setTerminals() now sets ptyId immediately, so we'd skip
-								// the loading state and show a blank xterm div if we only checked
-								// ptyId. rendererAttachmentCount is 0 before ConnectedTerminal
-								// calls setRendererAttached(true) on mount.
-								if (
-									!terminal.ptyId ||
-									(terminal.kind === 'agent' &&
-										(terminal.rendererAttachmentCount ?? 0) === 0)
-								) {
+								// CRITICAL: Only skip rendering if terminal doesn't have a PTY
+								// ID yet — this prevents spawn loops when workspace tabs aren't
+								// fully synced. For agent terminals with a ptyId, ConnectedTerminal
+								// MUST mount so it can attach the renderer (which sets
+								// rendererAttachmentCount to 1). Instead of blocking the mount,
+								// we overlay the agent loading icon on top until the renderer
+								// attaches — see the overlay div after ConnectedTerminal.
+								if (!terminal.ptyId) {
 									const isVisible = activeTab?.id === tab.id;
 									const isAgent = terminal.kind === 'agent' && !!terminal.agentId;
 									return (
@@ -289,6 +285,10 @@ export function PaneContent({
 									);
 								}
 								const isVisible = activeTab?.id === tab.id;
+								const isAgentLoading =
+									terminal.kind === 'agent' &&
+									!!terminal.agentId &&
+									(terminal.rendererAttachmentCount ?? 0) === 0;
 								const connectedTerminalSpawnOptions = {
 									projectId: terminal.projectId,
 									shell: terminal.shell,
@@ -299,7 +299,7 @@ export function PaneContent({
 										key={tab.id}
 										className={cn(
 											isVisible
-												? "w-full h-full"
+												? "w-full h-full relative"
 												: "w-full h-full absolute inset-0 invisible",
 											// In-app highlight: ring the whole terminal content when its
 											// process finished while unfocused. Distinct amber accent,
@@ -324,6 +324,22 @@ export function PaneContent({
 											className="w-full h-full"
 											isVisible={isVisible}
 										/>
+										{/* Agent loading overlay: shown until ConnectedTerminal attaches
+											the renderer (rendererAttachmentCount flips to 1). Covers the
+											xterm div with a centered pulsing icon so the user sees feedback. */}
+										{isAgentLoading && (
+											<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/95">
+												<span className="animate-pulse motion-reduce:animate-none">
+													<AgentIcon
+														agentId={terminal.agentId!}
+														className="h-16 w-16"
+													/>
+												</span>
+												<span className="text-sm text-muted-foreground">
+													Starting {terminal.agentName ?? terminal.name}�
+												</span>
+											</div>
+										)}
 									</div>
 								);
 							})}
