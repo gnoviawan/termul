@@ -93,6 +93,7 @@ impl ResolvedProgram {
             prepend_args: Vec::new(),
         }
     }
+    #[cfg(target_os = "windows")]
     pub fn with_args(program: String, args: Vec<String>) -> Self {
         Self {
             program,
