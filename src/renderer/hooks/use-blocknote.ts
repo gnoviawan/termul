@@ -78,7 +78,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
 	const saveShortcutExtension = useMemo(
 		() =>
-			createExtension({
+			createExtension(() => ({
 				key: "termulSaveShortcut",
 				keyboardShortcuts: {
 					"Mod-s": () => {
@@ -86,7 +86,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 						return true;
 					},
 				},
-			})(),
+			}))(),
 		[],
 	);
 
