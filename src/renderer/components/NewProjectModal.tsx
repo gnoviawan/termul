@@ -1,13 +1,13 @@
-import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
-import { X, ChevronDown } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
-import type { ProjectColor } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
+import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronDown, X } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { Skeleton } from '@/components/ui/skeleton'
+import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
-import { Skeleton } from '@/components/ui/skeleton'
-import { dialogApi, shellApi } from '@/lib/api'
+import type { ProjectColor } from '@/types/project'
 
 interface NewProjectModalProps {
   isOpen: boolean
@@ -149,7 +149,6 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   onChange={(e) => setName(e.target.value)}
                   placeholder="My Project"
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
-                  autoFocus
                 />
               </div>
 

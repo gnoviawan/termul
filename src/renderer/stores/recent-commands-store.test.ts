@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { useRecentCommandsStore } from './recent-commands-store'
 
 describe('recent-commands-store', () => {
@@ -24,7 +24,11 @@ describe('recent-commands-store', () => {
       setRecentCommands(['cmd-1', 'cmd-2', 'cmd-3'])
       addRecentCommand('cmd-2')
 
-      expect(useRecentCommandsStore.getState().recentCommandIds).toEqual(['cmd-2', 'cmd-1', 'cmd-3'])
+      expect(useRecentCommandsStore.getState().recentCommandIds).toEqual([
+        'cmd-2',
+        'cmd-1',
+        'cmd-3'
+      ])
     })
 
     it('should enforce MAX_RECENT_COMMANDS limit of 5', () => {

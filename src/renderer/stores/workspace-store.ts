@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type {
-  PaneNode,
+  DropPosition,
   LeafNode,
-  SplitNode,
   PaneDirection,
-  DropPosition
+  PaneNode,
+  SplitNode
 } from '@/types/workspace.types'
 
 export type WorkspaceTab =
@@ -179,15 +179,15 @@ export interface WorkspaceState {
 }
 
 function makeBrowserTabId(browserTabId: string): string {
-  return 'browser-' + browserTabId
+  return `browser-${browserTabId}`
 }
 
 function terminalTabId(terminalId: string): string {
-  return 'term-' + terminalId
+  return `term-${terminalId}`
 }
 
 function editorTabId(filePath: string): string {
-  return 'edit-' + filePath
+  return `edit-${filePath}`
 }
 
 function resolveFullscreenPaneId(root: PaneNode, fullscreenPaneId: string | null): string | null {
@@ -196,10 +196,7 @@ function resolveFullscreenPaneId(root: PaneNode, fullscreenPaneId: string | null
   return pane && pane.type === 'leaf' ? fullscreenPaneId : null
 }
 
-function resolveActivePaneId(
-  fullscreenPaneId: string | null,
-  requestedPaneId: string
-): string {
+function resolveActivePaneId(fullscreenPaneId: string | null, requestedPaneId: string): string {
   return fullscreenPaneId && fullscreenPaneId !== requestedPaneId
     ? fullscreenPaneId
     : requestedPaneId
@@ -306,7 +303,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     ): void => {
       const { root } = get()
       const target = findPaneById(root, paneId)
-      if (!target || target.type !== 'leaf') return
+      if (target?.type !== 'leaf') return
 
       const newLeaf = createLeaf([newTab], newTab.id)
       const isLeading = position === 'left' || position === 'top'
@@ -354,7 +351,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     addTabToPane: (paneId: string, tab: WorkspaceTab): void => {
       const { root } = get()
       const pane = findPaneById(root, paneId)
-      if (!pane || pane.type !== 'leaf') return
+      if (pane?.type !== 'leaf') return
 
       // Prevent duplicate in same pane
       if (pane.tabs.some((t) => t.id === tab.id)) {
@@ -378,7 +375,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const { root } = get()
 
       const sourcePane = findPaneById(root, sourcePaneId)
-      if (!sourcePane || sourcePane.type !== 'leaf') return
+      if (sourcePane?.type !== 'leaf') return
 
       const tab = sourcePane.tabs.find((t) => t.id === tabId)
       if (!tab) return
@@ -386,9 +383,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       // Remove from source
       let newRoot = updateLeaf(root, sourcePaneId, (leaf) => {
         const newTabs = leaf.tabs.filter((t) => t.id !== tabId)
-        const newActive = leaf.activeTabId === tabId
-          ? (newTabs.length > 0 ? newTabs[Math.min(leaf.tabs.indexOf(tab), newTabs.length - 1)].id : null)
-          : leaf.activeTabId
+        const newActive =
+          leaf.activeTabId === tabId
+            ? newTabs.length > 0
+              ? newTabs[Math.min(leaf.tabs.indexOf(tab), newTabs.length - 1)].id
+              : null
+            : leaf.activeTabId
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
 
@@ -426,7 +426,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       const { root } = get()
       const sourcePane = findPaneById(root, sourcePaneId)
-      if (!sourcePane || sourcePane.type !== 'leaf') return
+      if (sourcePane?.type !== 'leaf') return
 
       const tab = sourcePane.tabs.find((t) => t.id === tabId)
       if (!tab) return
@@ -435,9 +435,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       let newRoot = updateLeaf(root, sourcePaneId, (leaf) => {
         const newTabs = leaf.tabs.filter((t) => t.id !== tabId)
         const idx = leaf.tabs.indexOf(tab)
-        const newActive = leaf.activeTabId === tabId
-          ? (newTabs.length > 0 ? newTabs[Math.min(idx, newTabs.length - 1)].id : null)
-          : leaf.activeTabId
+        const newActive =
+          leaf.activeTabId === tabId
+            ? newTabs.length > 0
+              ? newTabs[Math.min(idx, newTabs.length - 1)].id
+              : null
+            : leaf.activeTabId
         return { ...leaf, tabs: newTabs, activeTabId: newActive }
       })
 
@@ -449,7 +452,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       // Split at target
       const target = findPaneById(newRoot, targetPaneId)
-      if (!target || target.type !== 'leaf') {
+      if (target?.type !== 'leaf') {
         // If target was the same pane that got removed, just create a single leaf
         const newLeaf = createLeaf([tab], tab.id)
         set({ root: newLeaf, activePaneId: newLeaf.id, fullscreenPaneId: null })
@@ -499,9 +502,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       // Default: create nested split
       const children =
-        position === 'left' || position === 'top'
-          ? [newLeaf, target]
-          : [target, newLeaf]
+        position === 'left' || position === 'top' ? [newLeaf, target] : [target, newLeaf]
 
       const split: SplitNode = {
         type: 'split',
@@ -594,7 +595,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     togglePaneFullscreen: (paneId: string): void => {
       const { root, fullscreenPaneId } = get()
       const pane = findPaneById(root, paneId)
-      if (!pane || pane.type !== 'leaf') return
+      if (pane?.type !== 'leaf') return
 
       // If only one leaf pane exists, toggling fullscreen is a no-op
       if (getAllLeafPanes(root).length <= 1 && fullscreenPaneId !== paneId) return
@@ -612,7 +613,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     updatePaneSizes: (splitId: string, sizes: number[]): void => {
       const { root } = get()
       const node = findPaneById(root, splitId)
-      if (!node || node.type !== 'split') return
+      if (node?.type !== 'split') return
 
       // Skip update if sizes haven't changed to avoid re-render loops
       if (
@@ -657,7 +658,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const { root } = get()
       const newRoot = updateLeaf(root, paneId, (leaf) => {
         const tabMap = new Map<string, WorkspaceTab>()
-        leaf.tabs.forEach((t) => tabMap.set(t.id, t))
+        leaf.tabs.forEach((t) => {
+          tabMap.set(t.id, t)
+        })
 
         const orderedSet = new Set(orderedIds)
         const reordered = orderedIds
@@ -675,14 +678,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     getActiveTab: (): WorkspaceTab | undefined => {
       const { root, activePaneId } = get()
       const pane = findPaneById(root, activePaneId)
-      if (!pane || pane.type !== 'leaf') return undefined
+      if (pane?.type !== 'leaf') return undefined
       return pane.tabs.find((t) => t.id === pane.activeTabId)
     },
 
     getActivePaneLeaf: (): LeafNode | null => {
       const { root, activePaneId } = get()
       const pane = findPaneById(root, activePaneId)
-      if (!pane || pane.type !== 'leaf') return null
+      if (pane?.type !== 'leaf') return null
       return pane
     },
 
@@ -707,7 +710,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
-    ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive: boolean = false): void => {
+    ensureTerminalTab: (
+      terminalId: string,
+      targetPaneId?: string,
+      makeActive: boolean = false
+    ): void => {
       const id = terminalTabId(terminalId)
       const { root, activePaneId } = get()
       const paneId = targetPaneId ?? activePaneId
@@ -724,7 +731,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       const pane = findPaneById(root, paneId)
-      if (!pane || pane.type !== 'leaf') {
+      if (pane?.type !== 'leaf') {
         return
       }
 
@@ -786,7 +793,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     syncTerminalTabs: (terminalIds: string[]): void => {
       // CRITICAL: Skip if sync is already in progress to prevent duplicate tab creation
       if (SYNC_TERMINAL_TABS_LOCK) {
-        console.warn('[syncTerminalTabs] SKIPPED: sync already in progress', { callCount: ++SYNC_CALL_COUNT })
+        console.warn('[syncTerminalTabs] SKIPPED: sync already in progress', {
+          callCount: ++SYNC_CALL_COUNT
+        })
         return
       }
 
@@ -890,7 +899,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const resolvedActivePaneId =
         activePaneId && leaves.some((leaf) => leaf.id === activePaneId)
           ? activePaneId
-          : leaves[0]?.id ?? normalizedRoot.id
+          : (leaves[0]?.id ?? normalizedRoot.id)
 
       set((state) => ({
         root: normalizedRoot,
@@ -911,9 +920,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           newRoot = updateLeaf(newRoot, leaf.id, (l) => ({
             ...l,
             tabs: l.tabs.filter((t) => t.type !== 'editor'),
-            activeTabId: l.activeTabId && l.tabs.find((t) => t.id === l.activeTabId)?.type === 'editor'
-              ? null
-              : l.activeTabId
+            activeTabId:
+              l.activeTabId && l.tabs.find((t) => t.id === l.activeTabId)?.type === 'editor'
+                ? null
+                : l.activeTabId
           }))
         }
       }
@@ -956,7 +966,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       const byOldId = new Map(mappedEntries)
-      const byOldTabId = new Map(mappedEntries.map(([oldId, newId]) => [terminalTabId(oldId), terminalTabId(newId)]))
+      const byOldTabId = new Map(
+        mappedEntries.map(([oldId, newId]) => [terminalTabId(oldId), terminalTabId(newId)])
+      )
 
       const remapNode = (node: PaneNode): PaneNode => {
         if (node.type === 'leaf') {
@@ -1018,7 +1030,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const leaves = getAllLeafPanes(remappedRoot)
       const nextActivePaneId = leaves.some((leaf) => leaf.id === activePaneId)
         ? activePaneId
-        : leaves[0]?.id ?? remappedRoot.id
+        : (leaves[0]?.id ?? remappedRoot.id)
 
       set((state) => ({
         root: remappedRoot,
@@ -1030,7 +1042,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     getNextTabId: (direction: 1 | -1): string | null => {
       const { root, activePaneId } = get()
       const pane = findPaneById(root, activePaneId)
-      if (!pane || pane.type !== 'leaf' || pane.tabs.length === 0) return null
+      if (pane?.type !== 'leaf' || pane.tabs.length === 0) return null
       if (!pane.activeTabId) return pane.tabs[0].id
 
       const currentIndex = pane.tabs.findIndex((t) => t.id === pane.activeTabId)
@@ -1048,7 +1060,7 @@ export function useWorkspaceTabs(): WorkspaceTab[] {
   return useWorkspaceStore(
     useShallow((state) => {
       const pane = findPaneById(state.root, state.activePaneId)
-      if (!pane || pane.type !== 'leaf') return []
+      if (pane?.type !== 'leaf') return []
       return pane.tabs
     })
   )
@@ -1057,7 +1069,7 @@ export function useWorkspaceTabs(): WorkspaceTab[] {
 export function useActiveTab(): WorkspaceTab | undefined {
   return useWorkspaceStore((state) => {
     const pane = findPaneById(state.root, state.activePaneId)
-    if (!pane || pane.type !== 'leaf') return undefined
+    if (pane?.type !== 'leaf') return undefined
     return pane.tabs.find((t) => t.id === pane.activeTabId)
   })
 }
@@ -1065,7 +1077,7 @@ export function useActiveTab(): WorkspaceTab | undefined {
 export function useActiveTabId(): string | null {
   return useWorkspaceStore((state) => {
     const pane = findPaneById(state.root, state.activePaneId)
-    if (!pane || pane.type !== 'leaf') return null
+    if (pane?.type !== 'leaf') return null
     return pane.activeTabId
   })
 }
@@ -1079,7 +1091,7 @@ export function useFullscreenPaneId(): string | null {
 }
 
 export function useLeafCount(): number {
-	return useWorkspaceStore((state) => getAllLeafPanes(state.root).length)
+  return useWorkspaceStore((state) => getAllLeafPanes(state.root).length)
 }
 
 export function usePaneRoot(): PaneNode {
@@ -1135,12 +1147,12 @@ export function useWorkspaceActions(): Pick<
   )
 }
 
-export { terminalTabId, editorTabId, makeBrowserTabId as browserTabId }
+export { editorTabId, makeBrowserTabId as browserTabId, terminalTabId }
 
 // Derive active terminal/editor from pane tree (source of truth)
 export function getActiveTerminalIdFromTree(state: WorkspaceState): string | null {
   const pane = findPaneById(state.root, state.activePaneId)
-  if (!pane || pane.type !== 'leaf') return null
+  if (pane?.type !== 'leaf') return null
   const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId)
   if (activeTab?.type === 'terminal') return activeTab.terminalId
   return null
@@ -1148,7 +1160,7 @@ export function getActiveTerminalIdFromTree(state: WorkspaceState): string | nul
 
 export function getActiveFilePathFromTree(state: WorkspaceState): string | null {
   const pane = findPaneById(state.root, state.activePaneId)
-  if (!pane || pane.type !== 'leaf') return null
+  if (pane?.type !== 'leaf') return null
   const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId)
   if (activeTab?.type === 'editor') return activeTab.filePath
   return null

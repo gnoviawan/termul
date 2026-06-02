@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 
 interface NewGroupModalProps {
   isOpen: boolean
@@ -108,7 +108,6 @@ export function NewGroupModal({
                   onChange={(e) => setName(e.target.value)}
                   placeholder={placeholder}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
-                  autoFocus
                 />
               </div>
             </div>

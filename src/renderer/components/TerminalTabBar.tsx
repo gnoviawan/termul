@@ -1,22 +1,30 @@
-import {
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  KeyboardEvent,
-  FocusEvent,
-  MouseEvent,
-  WheelEvent
-} from 'react'
-import { X, Plus, Terminal as TerminalIcon, Edit2, Skull, ChevronDown, GitBranch } from 'lucide-react'
+import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { Reorder } from 'framer-motion'
-import type { Terminal } from '@/types/project'
-import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
-import { cn } from '@/lib/utils'
-import { ContextMenu, ContextMenuItem } from './ContextMenu'
-import { Skeleton } from './ui/skeleton'
+import {
+  ChevronDown,
+  Edit2,
+  GitBranch,
+  Plus,
+  Skull,
+  Terminal as TerminalIcon,
+  X
+} from 'lucide-react'
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type WheelEvent
+} from 'react'
 import { shellApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
+import type { Terminal } from '@/types/project'
+import { ContextMenu, type ContextMenuItem } from './ContextMenu'
+import { Skeleton } from './ui/skeleton'
 
 interface TerminalTabBarProps {
   terminals: Terminal[]
@@ -91,7 +99,7 @@ export function TerminalTabBar({
     checkOverflow()
     window.addEventListener('resize', checkOverflow)
     return () => window.removeEventListener('resize', checkOverflow)
-  }, [terminals.length])
+  }, [])
 
   const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
     if (tabsContainerRef.current) {
@@ -346,7 +354,10 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
           <>
             <span
               onDoubleClick={handleDoubleClick}
-              className={cn('text-[11px] font-medium truncate max-w-[80px]', isActive && 'text-foreground')}
+              className={cn(
+                'text-[11px] font-medium truncate max-w-[80px]',
+                isActive && 'text-foreground'
+              )}
             >
               {terminal.name}
             </span>

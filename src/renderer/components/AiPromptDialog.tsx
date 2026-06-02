@@ -8,13 +8,13 @@
  * - Per-tool labeling ("Paste this into [Tool]")
  */
 
-import { useState, useCallback } from 'react'
-import { Copy, Check, MessageSquare, Terminal, Bot } from 'lucide-react'
+import { Bot, Check, Copy, MessageSquare, Terminal } from 'lucide-react'
+import { useCallback, useState } from 'react'
 import {
-  BUILT_IN_TEMPLATES,
-  interpolateTemplate,
-  buildTemplateVariables,
   type AiPromptTemplate,
+  BUILT_IN_TEMPLATES,
+  buildTemplateVariables,
+  interpolateTemplate
 } from '@/lib/ai-prompt-templates'
 import { cn } from '@/lib/utils'
 
@@ -34,13 +34,11 @@ interface AiPromptDialogProps {
 const TOOL_ICONS: Record<string, typeof Bot> = {
   Cursor: MessageSquare,
   Aider: Terminal,
-  'Claude Code': Bot,
+  'Claude Code': Bot
 }
 
 export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps) {
-  const [selectedTemplate, setSelectedTemplate] = useState<AiPromptTemplate>(
-    BUILT_IN_TEMPLATES[0]
-  )
+  const [selectedTemplate, setSelectedTemplate] = useState<AiPromptTemplate>(BUILT_IN_TEMPLATES[0])
   const [copied, setCopied] = useState(false)
 
   const generatedPrompt = context
@@ -51,7 +49,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
           targetBranch: context.targetBranch,
           conflictFiles: context.conflictFiles,
           worktreePath: context.worktreePath,
-          projectName: context.projectName,
+          projectName: context.projectName
         })
       )
     : ''
@@ -76,7 +74,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
   if (!isOpen) return null
 
-  const Icon = TOOL_ICONS[selectedTemplate.toolName] ?? MessageSquare
+  const _Icon = TOOL_ICONS[selectedTemplate.toolName] ?? MessageSquare
 
   return (
     <div
@@ -84,12 +82,16 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-prompt-dialog-title"
-      onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose()
+      }}
     >
       <div className="w-[600px] max-w-[90vw] max-h-[80vh] bg-popover border border-border rounded-lg shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="ai-prompt-dialog-title" className="text-sm font-semibold text-foreground">AI Conflict Resolution Prompts</h2>
+          <h2 id="ai-prompt-dialog-title" className="text-sm font-semibold text-foreground">
+            AI Conflict Resolution Prompts
+          </h2>
           <button
             onClick={onClose}
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground"
@@ -101,7 +103,9 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
         {/* Template selector */}
         <div className="px-4 py-2 border-b border-border">
-          <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Tool</label>
+          <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            Tool
+          </label>
           <div className="flex gap-2 mt-1">
             {BUILT_IN_TEMPLATES.map((tpl) => {
               const TplIcon = TOOL_ICONS[tpl.toolName] ?? MessageSquare
@@ -153,9 +157,13 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
             )}
           >
             {copied ? (
-              <><Check size={12} /> Copied!</>
+              <>
+                <Check size={12} /> Copied!
+              </>
             ) : (
-              <><Copy size={12} /> Copy Prompt</>
+              <>
+                <Copy size={12} /> Copy Prompt
+              </>
             )}
           </button>
         </div>

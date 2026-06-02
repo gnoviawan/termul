@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSessionRecovery } from './use-session-recovery'
 
 const mocks = vi.hoisted(() => ({
@@ -40,7 +40,11 @@ describe('useSessionRecovery', () => {
     mocks.save.mockReset()
     mocks.restore.mockReset()
     mocks.save.mockResolvedValue({ success: true, data: undefined })
-    mocks.restore.mockResolvedValue({ success: false, error: 'No saved session found', code: 'SESSION_NOT_FOUND' })
+    mocks.restore.mockResolvedValue({
+      success: false,
+      error: 'No saved session found',
+      code: 'SESSION_NOT_FOUND'
+    })
   })
 
   it('saves a crash-recovery session immediately on mount', async () => {

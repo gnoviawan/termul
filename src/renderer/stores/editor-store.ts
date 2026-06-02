@@ -1,6 +1,6 @@
+import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
 
 const EDITOR_TAB_LIMIT = 15
@@ -388,9 +388,7 @@ export function useOpenFiles(): Map<string, EditorFileState> {
 }
 
 export function useOpenFilePaths(): string[] {
-  return useEditorStore(
-    useShallow((state) => Array.from(state.openFiles.keys()))
-  )
+  return useEditorStore(useShallow((state) => Array.from(state.openFiles.keys())))
 }
 
 export function useOpenFile(filePath: string): EditorFileState | undefined {

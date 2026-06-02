@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Plus, Download, Wifi, WifiOff, Loader2, Pencil, Eye, EyeOff } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { useSSHProfiles, useSSHConnections, useSSHActions } from '@/stores/ssh-store'
-import { SSHProfileForm } from './SSHProfileForm'
 import type { SSHProfile } from '@shared/types/ssh.types'
+import { Download, Eye, EyeOff, Loader2, Pencil, Plus, Wifi, WifiOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
+import { SSHProfileForm } from './SSHProfileForm'
 
 interface SSHPanelProps {
   onConnect?: (profileId: string) => void
@@ -12,7 +12,11 @@ interface SSHPanelProps {
   activeProfileId?: string | null
 }
 
-export function SSHPanel({ onConnect, onSelectProfile, activeProfileId }: SSHPanelProps): React.JSX.Element {
+export function SSHPanel({
+  onConnect,
+  onSelectProfile,
+  activeProfileId
+}: SSHPanelProps): React.JSX.Element {
   const profiles = useSSHProfiles()
   const connections = useSSHConnections()
   const { loadProfiles, disconnect, importConfig } = useSSHActions()
@@ -84,7 +88,10 @@ export function SSHPanel({ onConnect, onSelectProfile, activeProfileId }: SSHPan
             <Download className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground" />
           </button>
           <button
-            onClick={() => { setEditingProfile(null); setShowForm(true) }}
+            onClick={() => {
+              setEditingProfile(null)
+              setShowForm(true)
+            }}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors"
             title="New SSH Profile"
           >
@@ -112,7 +119,8 @@ export function SSHPanel({ onConnect, onSelectProfile, activeProfileId }: SSHPan
                   className={cn(
                     'flex items-center gap-2 px-3 py-1.5 hover:bg-sidebar-accent/50 cursor-pointer group transition-colors',
                     isConnected && 'bg-sidebar-accent/30',
-                    activeProfileId === profile.id && 'bg-sidebar-accent/60 border-l-2 border-primary'
+                    activeProfileId === profile.id &&
+                      'bg-sidebar-accent/60 border-l-2 border-primary'
                   )}
                   onClick={() => onSelectProfile?.(profile.id)}
                   onDoubleClick={() => {

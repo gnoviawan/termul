@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
+import { useEffect, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 
@@ -7,9 +7,7 @@ export interface ActivityIndicatorProps {
   className?: string
 }
 
-export function ActivityIndicator({
-  className
-}: ActivityIndicatorProps): React.JSX.Element {
+export function ActivityIndicator({ className }: ActivityIndicatorProps): React.JSX.Element {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
 
   useEffect(() => {

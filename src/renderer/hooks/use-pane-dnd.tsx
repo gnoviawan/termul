@@ -1,9 +1,8 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { useWorkspaceStore, findPaneById } from '@/stores/workspace-store'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { useEditorStore } from '@/stores/editor-store'
-import { editorTabId } from '@/stores/workspace-store'
-import type { DragPayload, DropPosition, TabReorderPosition } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import { editorTabId, findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
+import type { DragPayload, DropPosition, TabReorderPosition } from '@/types/workspace.types'
 
 interface DropPreviewTarget {
   paneId: string
@@ -28,12 +27,15 @@ interface PaneDndContextValue {
   startTabDrag: (tabId: string, paneId: string, event: React.DragEvent) => void
   startFileDrag: (filePath: string, event: React.DragEvent) => void
   handleDrop: (targetPaneId: string, position: DropPosition, event: React.DragEvent) => void
-  handleTabReorder: (sourcePaneId: string, targetTabId: string, position: TabReorderPosition) => void
+  handleTabReorder: (
+    sourcePaneId: string,
+    targetTabId: string,
+    position: TabReorderPosition
+  ) => void
 }
 
 const PaneDndContext = createContext<PaneDndContextValue | null>(null)
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function usePaneDnd(): PaneDndContextValue {
   const ctx = useContext(PaneDndContext)
   if (!ctx) {
@@ -233,7 +235,7 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
 
   const handleTabReorder = useCallback(
     (sourcePaneId: string, targetTabId: string, position: TabReorderPosition) => {
-      if (!dragPayload || dragPayload.type !== 'tab' || !dragPayload.tabId) {
+      if (dragPayload?.type !== 'tab' || !dragPayload.tabId) {
         return
       }
 
@@ -247,7 +249,7 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
       const store = useWorkspaceStore.getState()
       const pane = findPaneById(store.root, sourcePaneId)
 
-      if (!pane || pane.type !== 'leaf') {
+      if (pane?.type !== 'leaf') {
         return
       }
 
@@ -276,7 +278,10 @@ export function PaneDndProvider({ children }: PaneDndProviderProps): React.JSX.E
 
       newTabs.splice(insertIndex, 0, movedTab)
 
-      store.reorderTabsInPane(sourcePaneId, newTabs.map((t: WorkspaceTab) => t.id))
+      store.reorderTabsInPane(
+        sourcePaneId,
+        newTabs.map((t: WorkspaceTab) => t.id)
+      )
       clearReorderPreview()
     },
     [dragPayload, clearReorderPreview]

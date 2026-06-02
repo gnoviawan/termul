@@ -1,10 +1,13 @@
-import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
 import type { AppCloseRequestedCallback, IpcResult, WindowApi } from '@shared/types/ipc.types'
+import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
 
 /**
  * Wrap window operations in IpcResult<T> pattern with try/catch
  */
-async function wrapWindowOperation<T>(fn: () => Promise<T>, errorCode: string): Promise<IpcResult<T>> {
+async function wrapWindowOperation<T>(
+  fn: () => Promise<T>,
+  errorCode: string
+): Promise<IpcResult<T>> {
   try {
     const data = await fn()
     return { success: true, data }
@@ -20,7 +23,10 @@ async function wrapWindowOperation<T>(fn: () => Promise<T>, errorCode: string): 
 /**
  * Wrap void window operations in IpcResult<void> pattern
  */
-async function wrapVoidOperation(fn: () => Promise<void>, errorCode: string): Promise<IpcResult<void>> {
+async function wrapVoidOperation(
+  fn: () => Promise<void>,
+  errorCode: string
+): Promise<IpcResult<void>> {
   try {
     await fn()
     return { success: true, data: undefined }
@@ -38,7 +44,10 @@ async function wrapVoidOperation(fn: () => Promise<void>, errorCode: string): Pr
  * Tauri injects window.__TAURI_INTERNALS__ before any page script runs.
  */
 function isTauriContext(): boolean {
-  return typeof window !== 'undefined' && typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
+  return (
+    typeof window !== 'undefined' &&
+    typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
+  )
 }
 
 /**
@@ -55,7 +64,8 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     async toggleMaximize(): Promise<IpcResult<boolean>> {
-      if (!isTauriContext()) return { success: false, error: 'Not in Tauri context', code: 'NO_TAURI' }
+      if (!isTauriContext())
+        return { success: false, error: 'Not in Tauri context', code: 'NO_TAURI' }
       return wrapWindowOperation(async () => {
         const window = getCurrentWindow()
         if (await window.isMaximized()) {
@@ -74,7 +84,10 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     onMaximizeChange(callback: (isMaximized: boolean) => void): () => void {
-      if (!isTauriContext()) return () => { /* noop in browser */ }
+      if (!isTauriContext())
+        return () => {
+          /* noop in browser */
+        }
       const window = getCurrentWindow()
       const unlisten = window.onResized(async () => {
         const maximized = await window.isMaximized()
@@ -87,7 +100,10 @@ export function createTauriWindowApi(): WindowApi {
     },
 
     onCloseRequested(callback: AppCloseRequestedCallback): () => void {
-      if (!isTauriContext()) return () => { /* noop in browser */ }
+      if (!isTauriContext())
+        return () => {
+          /* noop in browser */
+        }
       const window = getCurrentWindow()
       const unlisten = window.onCloseRequested(async (event) => {
         const shouldClose = await callback()

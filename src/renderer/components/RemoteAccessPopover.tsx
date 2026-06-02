@@ -1,14 +1,14 @@
-import { useState } from 'react'
 import { AlertCircle, Check, Copy, ExternalLink, Monitor, ShieldAlert } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
-import { remoteServerApi, openerApi } from '@/lib/api'
-import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
+import { openerApi, remoteServerApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 import { REMOTE_BIND_MODE_OPTIONS, type RemoteBindMode } from '@/types/settings'
-import { toast } from 'sonner'
 
 const statusBarTriggerClass =
   'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors'
@@ -75,10 +75,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor
-            size={14}
-            className={cn('mr-0', isRunning ? 'text-green-300' : undefined)}
-          />
+          <Monitor size={14} className={cn('mr-0', isRunning ? 'text-green-300' : undefined)} />
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>
@@ -97,9 +94,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
             </label>
             <select
               value={remoteBindMode}
-              onChange={(e) =>
-                updateSetting('remoteBindMode', e.target.value as RemoteBindMode)
-              }
+              onChange={(e) => updateSetting('remoteBindMode', e.target.value as RemoteBindMode)}
               disabled={isRunning}
               className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -148,8 +143,8 @@ export function RemoteAccessPopover(): React.JSX.Element {
                   auth token — only same-origin browser checks apply.{' '}
                   {remoteStatus?.bindMode === 'all' ? (
                     <>
-                      The server listens on <strong>all interfaces</strong>; devices on your LAN
-                      can connect using this machine&apos;s IP and the port below.
+                      The server listens on <strong>all interfaces</strong>; devices on your LAN can
+                      connect using this machine&apos;s IP and the port below.
                     </>
                   ) : (
                     <>

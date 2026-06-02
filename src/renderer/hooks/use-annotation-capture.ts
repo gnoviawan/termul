@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 import {
-  onBrowserTabRegionCaptured,
-  onBrowserTabElementCaptured,
-  type RegionCapturedPayload,
   type ElementCapturedPayload,
+  onBrowserTabElementCaptured,
+  onBrowserTabRegionCaptured,
+  type RegionCapturedPayload
 } from '@/lib/browser-api'
-import { useAnnotationStore, normalizeUrl } from '@/stores/annotation-store'
+import { normalizeUrl, useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 export function useAnnotationCapture(browserTabId: string) {
@@ -16,8 +16,10 @@ export function useAnnotationCapture(browserTabId: string) {
       const tab = useBrowserSessionStore.getState().getTab(browserTabId)
       if (!tab) return
 
-      const viewportWidth = payload.viewportWidth || (typeof window !== 'undefined' ? window.innerWidth : 1920)
-      const viewportHeight = payload.viewportHeight || (typeof window !== 'undefined' ? window.innerHeight : 1080)
+      const viewportWidth =
+        payload.viewportWidth || (typeof window !== 'undefined' ? window.innerWidth : 1920)
+      const viewportHeight =
+        payload.viewportHeight || (typeof window !== 'undefined' ? window.innerHeight : 1080)
       const normalizedUrl = normalizeUrl(tab.url)
 
       useAnnotationStore.getState().addAnnotation({
@@ -31,13 +33,13 @@ export function useAnnotationCapture(browserTabId: string) {
           x: payload.x,
           y: payload.y,
           width: payload.width,
-          height: payload.height,
+          height: payload.height
         },
         intent: 'question',
         severity: 'suggestion',
         description: '',
         viewportWidth,
-        viewportHeight,
+        viewportHeight
       })
     })
 
@@ -64,14 +66,14 @@ export function useAnnotationCapture(browserTabId: string) {
             x: payload.boundingBox.x,
             y: payload.boundingBox.y,
             width: payload.boundingBox.width,
-            height: payload.boundingBox.height,
-          },
+            height: payload.boundingBox.height
+          }
         },
         intent: 'question',
         severity: 'suggestion',
         description: '',
         viewportWidth: payload.viewportWidth,
-        viewportHeight: payload.viewportHeight,
+        viewportHeight: payload.viewportHeight
       })
     })
 

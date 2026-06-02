@@ -1,10 +1,10 @@
+import type { FileChangeEvent } from '@shared/types/filesystem.types'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useEditorStore } from '@/stores/editor-store'
-import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
-import type { FileChangeEvent } from '@shared/types/filesystem.types'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
 function getDirname(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')

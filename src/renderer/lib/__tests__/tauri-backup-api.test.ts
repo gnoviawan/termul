@@ -7,8 +7,8 @@
  * cannot silently fail/block the updater download path.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { DirEntry } from '@tauri-apps/plugin-fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/path', () => ({
   appDataDir: vi.fn(async () => '/appdata')
@@ -37,8 +37,8 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   stat: vi.fn(async () => ({ size: 0 }))
 }))
 
-import { readDir, copyFile, mkdir } from '@tauri-apps/plugin-fs'
-import { createBackup, _resetBackupStateForTesting } from '../tauri-backup-api'
+import { copyFile, mkdir, readDir } from '@tauri-apps/plugin-fs'
+import { _resetBackupStateForTesting, createBackup } from '../tauri-backup-api'
 
 function dir(name: string): DirEntry {
   return { name, isDirectory: true, isFile: false, isSymlink: false } as DirEntry

@@ -1,13 +1,11 @@
-import { useEffect, useCallback } from 'react'
-import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
 import { DEFAULT_KEYBOARD_SHORTCUTS, KEYBOARD_SHORTCUTS_KEY } from '@/types/settings'
 
 // Deep clone defaults preserving customKey from loaded data
-function mergeWithDefaults(
-  loaded: Partial<KeyboardShortcutsConfig>
-): KeyboardShortcutsConfig {
+function mergeWithDefaults(loaded: Partial<KeyboardShortcutsConfig>): KeyboardShortcutsConfig {
   const result: KeyboardShortcutsConfig = {}
 
   for (const [key, defaultShortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
@@ -26,8 +24,7 @@ export function useKeyboardShortcutsLoader(): void {
 
   useEffect(() => {
     async function load(): Promise<void> {
-      const result =
-        await persistenceApi.read<KeyboardShortcutsConfig>(KEYBOARD_SHORTCUTS_KEY)
+      const result = await persistenceApi.read<KeyboardShortcutsConfig>(KEYBOARD_SHORTCUTS_KEY)
       if (result.success && result.data) {
         // Merge with defaults to handle new shortcuts added in updates
         setShortcuts(mergeWithDefaults(result.data))

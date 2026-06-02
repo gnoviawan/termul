@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, cleanup, act } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalResize } from './use-terminal-resize'
 
 describe('useTerminalResize', () => {

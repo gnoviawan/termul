@@ -1,13 +1,13 @@
-import { create } from 'zustand'
-import { useShallow } from 'zustand/shallow'
 import type {
-  SSHProfile,
+  ActivePortForward,
+  PortForwardConfig,
+  SFTPTransferProgress,
   SSHConnection,
   SSHConnectionStatus,
-  ActivePortForward,
-  SFTPTransferProgress,
-  PortForwardConfig,
+  SSHProfile
 } from '@shared/types/ssh.types'
+import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
 import { sshApi } from '@/lib/api'
 
 export interface SSHState {
@@ -27,7 +27,11 @@ export interface SSHState {
   // Connection actions
   connect: (profileId: string, password?: string) => Promise<SSHConnection | null>
   disconnect: (connectionId: string) => Promise<boolean>
-  updateConnectionStatus: (connectionId: string, status: SSHConnectionStatus, error?: string) => void
+  updateConnectionStatus: (
+    connectionId: string,
+    status: SSHConnectionStatus,
+    error?: string
+  ) => void
 
   // Selection
   selectProfile: (profileId: string | null) => void
@@ -35,14 +39,20 @@ export interface SSHState {
   // Persisted editor state (survives workspace switch)
   editingFile: { path: string; name: string; content: string; originalContent: string } | null
   editingContent: string
-  setEditingFile: (file: { path: string; name: string; content: string; originalContent: string } | null) => void
+  setEditingFile: (
+    file: { path: string; name: string; content: string; originalContent: string } | null
+  ) => void
   setEditingContent: (content: string) => void
 
   // Manual connection tracking (for terminal-based SSH)
   markConnecting: (profileId: string, terminalId: string) => void
   markDisconnected: (profileId: string) => void
   updateConnectionId: (profileId: string, backendConnectionId: string) => void
-  updateConnectionStatusByProfile: (profileId: string, status: SSHConnectionStatus, error?: string) => void
+  updateConnectionStatusByProfile: (
+    profileId: string,
+    status: SSHConnectionStatus,
+    error?: string
+  ) => void
 
   // Port forward actions
   startPortForward: (connectionId: string, config: PortForwardConfig) => Promise<boolean>
@@ -54,7 +64,7 @@ export interface SSHState {
   clearCompletedTransfers: () => void
 }
 
-export const useSSHStore = create<SSHState>((set, get) => ({
+export const useSSHStore = create<SSHState>((set, _get) => ({
   profiles: [],
   connections: [],
   transfers: [],
@@ -83,7 +93,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
       const sanitized: SSHProfile = {
         ...profile,
         password: undefined,
-        passphrase: undefined,
+        passphrase: undefined
       }
       set((state) => {
         const existing = state.profiles.findIndex((p) => p.id === profile.id)
@@ -102,7 +112,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     const result = await sshApi.deleteProfile(profileId)
     if (result.success) {
       set((state) => ({
-        profiles: state.profiles.filter((p) => p.id !== profileId),
+        profiles: state.profiles.filter((p) => p.id !== profileId)
       }))
       return true
     }
@@ -135,10 +145,10 @@ export const useSSHStore = create<SSHState>((set, get) => ({
         activeForwards: result.data.activeForwards ?? [],
         error: result.data.error,
         reconnectAttempts: result.data.reconnectAttempts,
-        connectedAt: result.data.connectedAt,
+        connectedAt: result.data.connectedAt
       }
       set((state) => ({
-        connections: [...state.connections, connection],
+        connections: [...state.connections, connection]
       }))
       return connection
     }
@@ -154,7 +164,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     const result = isLocalOnly ? { success: true as const } : await sshApi.disconnect(connectionId)
     if (result.success) {
       set((state) => ({
-        connections: state.connections.filter((c) => c.id !== connectionId),
+        connections: state.connections.filter((c) => c.id !== connectionId)
       }))
       return true
     }
@@ -165,7 +175,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     set((state) => ({
       connections: state.connections.map((c) =>
         c.id === connectionId ? { ...c, status, error } : c
-      ),
+      )
     }))
   },
 
@@ -186,7 +196,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
         status: 'connecting',
         terminalId,
         activeForwards: [],
-        reconnectAttempts: 0,
+        reconnectAttempts: 0
       }
       return { connections: [...filtered, newConn] }
     })
@@ -194,7 +204,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
 
   markDisconnected: (profileId: string) => {
     set((state) => ({
-      connections: state.connections.filter((c) => c.profileId !== profileId),
+      connections: state.connections.filter((c) => c.profileId !== profileId)
     }))
   },
 
@@ -202,11 +212,15 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     set((state) => ({
       connections: state.connections.map((c) =>
         c.profileId === profileId ? { ...c, id: backendConnectionId } : c
-      ),
+      )
     }))
   },
 
-  updateConnectionStatusByProfile: (profileId: string, status: SSHConnectionStatus, error?: string) => {
+  updateConnectionStatusByProfile: (
+    profileId: string,
+    status: SSHConnectionStatus,
+    error?: string
+  ) => {
     set((state) => ({
       connections: state.connections.map((c) =>
         c.profileId === profileId
@@ -215,12 +229,10 @@ export const useSSHStore = create<SSHState>((set, get) => ({
               status,
               error,
               connectedAt:
-                status === 'connected' && !c.connectedAt
-                  ? new Date().toISOString()
-                  : c.connectedAt,
+                status === 'connected' && !c.connectedAt ? new Date().toISOString() : c.connectedAt
             }
           : c
-      ),
+      )
     }))
   },
 
@@ -229,10 +241,8 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     if (result.success) {
       set((state) => ({
         connections: state.connections.map((c) =>
-          c.id === connectionId
-            ? { ...c, activeForwards: [...c.activeForwards, result.data] }
-            : c
-        ),
+          c.id === connectionId ? { ...c, activeForwards: [...c.activeForwards, result.data] } : c
+        )
       }))
       return true
     }
@@ -247,7 +257,7 @@ export const useSSHStore = create<SSHState>((set, get) => ({
           c.id === connectionId
             ? { ...c, activeForwards: c.activeForwards.filter((f) => f.id !== forwardId) }
             : c
-        ),
+        )
       }))
       return true
     }
@@ -259,11 +269,12 @@ export const useSSHStore = create<SSHState>((set, get) => ({
       connections: state.connections.map((c) => {
         if (c.id !== connectionId) return c
         const existingIndex = c.activeForwards.findIndex((f) => f.id === forward.id)
-        const activeForwards = existingIndex >= 0
-          ? c.activeForwards.map((f) => (f.id === forward.id ? forward : f))
-          : [...c.activeForwards, forward]
+        const activeForwards =
+          existingIndex >= 0
+            ? c.activeForwards.map((f) => (f.id === forward.id ? forward : f))
+            : [...c.activeForwards, forward]
         return { ...c, activeForwards }
-      }),
+      })
     }))
   },
 
@@ -286,11 +297,9 @@ export const useSSHStore = create<SSHState>((set, get) => ({
 
   clearCompletedTransfers: () => {
     set((state) => ({
-      transfers: state.transfers.filter(
-        (t) => t.status === 'in-progress'
-      ),
+      transfers: state.transfers.filter((t) => t.status === 'in-progress')
     }))
-  },
+  }
 }))
 
 // Selectors
@@ -299,9 +308,12 @@ export const useSSHConnections = () => useSSHStore((state) => state.connections)
 export const useSSHTransfers = () => useSSHStore((state) => state.transfers)
 export const useSSHLoaded = () => useSSHStore((state) => state.isLoaded)
 export const useActiveSSHProfileId = () => useSSHStore((state) => state.activeProfileId)
-export const useActiveSSHProfile = () => useSSHStore((state) => 
-  state.activeProfileId ? state.profiles.find((p) => p.id === state.activeProfileId) ?? null : null
-)
+export const useActiveSSHProfile = () =>
+  useSSHStore((state) =>
+    state.activeProfileId
+      ? (state.profiles.find((p) => p.id === state.activeProfileId) ?? null)
+      : null
+  )
 export const useSSHEditorFile = () => useSSHStore((state) => state.editingFile)
 export const useSSHEditorContent = () => useSSHStore((state) => state.editingContent)
 
@@ -323,7 +335,7 @@ export const useSSHActions = () =>
       updateConnectionId: state.updateConnectionId,
       updateConnectionStatusByProfile: state.updateConnectionStatusByProfile,
       setEditingFile: state.setEditingFile,
-      setEditingContent: state.setEditingContent,
+      setEditingContent: state.setEditingContent
     }))
   )
 

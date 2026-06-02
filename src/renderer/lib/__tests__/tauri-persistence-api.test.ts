@@ -3,7 +3,7 @@
  * Tests the tauriPersistenceApi implementation using Tauri plugin-store
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock @tauri-apps/plugin-store BEFORE importing the module under test
 vi.mock('@tauri-apps/plugin-store', () => {
@@ -11,26 +11,37 @@ vi.mock('@tauri-apps/plugin-store', () => {
 
   return {
     Store: {
-      load: vi.fn(async (_path: string, _options?: { autoSave: boolean; defaults: Record<string, unknown> }) => {
-        return {
-          get: vi.fn(<T>(key: string) => Promise.resolve<T | null>((mockData.get(key) as T) ?? null)),
-          set: vi.fn(async (key: string, value: unknown) => {
-            mockData.set(key, value)
-          }),
-          delete: vi.fn(async (key: string) => {
-            mockData.delete(key)
-          }),
-          save: vi.fn(async () => {
-            // Mock save
-          })
+      load: vi.fn(
+        async (
+          _path: string,
+          _options?: { autoSave: boolean; defaults: Record<string, unknown> }
+        ) => {
+          return {
+            get: vi.fn(<T>(key: string) =>
+              Promise.resolve<T | null>((mockData.get(key) as T) ?? null)
+            ),
+            set: vi.fn(async (key: string, value: unknown) => {
+              mockData.set(key, value)
+            }),
+            delete: vi.fn(async (key: string) => {
+              mockData.delete(key)
+            }),
+            save: vi.fn(async () => {
+              // Mock save
+            })
+          }
         }
-      })
+      )
     }
   }
 })
 
 import { Store } from '@tauri-apps/plugin-store'
-import { tauriPersistenceApi, createTauriPersistenceApi, _resetStoreInstanceForTesting } from '../tauri-persistence-api'
+import {
+  _resetStoreInstanceForTesting,
+  createTauriPersistenceApi,
+  tauriPersistenceApi
+} from '../tauri-persistence-api'
 
 type MockStore = {
   get: ReturnType<typeof vi.fn>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Globe,
   History,
@@ -11,21 +11,21 @@ import {
   SlidersHorizontal,
   Terminal
 } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Command,
-  CommandInput,
-  CommandList,
   CommandEmpty,
   CommandGroup,
+  CommandInput,
   CommandItem,
+  CommandList,
   CommandShortcut
 } from '@/components/ui/command'
-import type { Project, ProjectColor } from '@/types/project'
+import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
+import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
-import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
-import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
+import type { Project, ProjectColor } from '@/types/project'
 
 type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory'
 
@@ -56,12 +56,7 @@ const COMMAND_CATEGORY_LABELS: Record<CommandCategory, string> = {
   tools: 'Tools'
 }
 
-const COMMAND_CATEGORY_ORDER: CommandCategory[] = [
-  'projects',
-  'workspace',
-  'navigation',
-  'tools'
-]
+const COMMAND_CATEGORY_ORDER: CommandCategory[] = ['projects', 'workspace', 'navigation', 'tools']
 
 interface CommandDef {
   id: string
@@ -183,11 +178,7 @@ export function CommandPalette({
         id: `project-${project.id}`,
         category: 'projects' as const,
         icon: (
-          <Layers
-            aria-hidden="true"
-            size={16}
-            className={getColorClasses(project.color).text}
-          />
+          <Layers aria-hidden="true" size={16} className={getColorClasses(project.color).text} />
         ),
         label: project.name,
         description: project.path ?? 'Switch active workspace project',
@@ -274,9 +265,7 @@ export function CommandPalette({
       }
     }
 
-    recent.sort(
-      (a, b) => recentCommandIds.indexOf(a.id) - recentCommandIds.indexOf(b.id)
-    )
+    recent.sort((a, b) => recentCommandIds.indexOf(a.id) - recentCommandIds.indexOf(b.id))
 
     const grouped = COMMAND_CATEGORY_ORDER.map((category) => ({
       category,
@@ -347,10 +336,7 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
   }, [isOpen, onClose])
 
-  const renderCommandItem = (
-    cmd: CommandDef,
-    keyPrefix?: string
-  ): React.JSX.Element => {
+  const renderCommandItem = (cmd: CommandDef, keyPrefix?: string): React.JSX.Element => {
     const isPinned = pinnedIdSet.has(cmd.id)
     return (
       <CommandItem
@@ -404,11 +390,7 @@ export function CommandPalette({
                 : 'opacity-0 group-data-[selected=true]:opacity-100 group-hover:opacity-100'
             )}
           >
-            <Pin
-              aria-hidden="true"
-              size={13}
-              className={cn(isPinned && 'fill-current')}
-            />
+            <Pin aria-hidden="true" size={13} className={cn(isPinned && 'fill-current')} />
           </button>
         </div>
       </CommandItem>
@@ -460,10 +442,7 @@ export function CommandPalette({
                 )}
 
                 {commandsByCategory.map(({ category, commands: categoryCommands }) => (
-                  <CommandGroup
-                    key={category}
-                    heading={COMMAND_CATEGORY_LABELS[category]}
-                  >
+                  <CommandGroup key={category} heading={COMMAND_CATEGORY_LABELS[category]}>
                     {categoryCommands.map((cmd) => renderCommandItem(cmd))}
                   </CommandGroup>
                 ))}

@@ -7,7 +7,11 @@
  * Permission is requested eagerly at import time (when the app loads).
  * If the user denies permission, the denial is cached so we don't re-prompt.
  */
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification
+} from '@tauri-apps/plugin-notification'
 import { isTauriContext } from './tauri-runtime'
 
 /** Cached permission state to avoid repeated OS prompts */

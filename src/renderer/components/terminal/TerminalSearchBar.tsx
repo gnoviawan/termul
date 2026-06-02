@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { X, ChevronUp, ChevronDown } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronDown, ChevronUp, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface TerminalSearchBarProps {
   isOpen: boolean
@@ -102,9 +102,7 @@ export function TerminalSearchBar({
           />
 
           {matchInfo && (
-            <span className="text-xs text-muted-foreground px-1 min-w-[70px]">
-              {matchInfo}
-            </span>
+            <span className="text-xs text-muted-foreground px-1 min-w-[70px]">{matchInfo}</span>
           )}
 
           <button

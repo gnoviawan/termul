@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import { useTocSettingsStore } from './toc-settings-store'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_TOC_SETTINGS } from '@/types/settings'
+import { useTocSettingsStore } from './toc-settings-store'
 
 describe('toc-settings-store', () => {
   beforeEach(() => {

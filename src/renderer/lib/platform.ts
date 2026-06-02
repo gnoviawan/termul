@@ -6,17 +6,16 @@
  */
 
 /** Cached platform string (lower-cased). */
-const _platform: string =
-	typeof navigator !== "undefined" ? navigator.platform.toLowerCase() : "";
+const _platform: string = typeof navigator !== 'undefined' ? navigator.platform.toLowerCase() : ''
 
 /** True when running on macOS / Darwin. */
-export const isMac: boolean = _platform.includes("mac");
+export const isMac: boolean = _platform.includes('mac')
 
 /** True when running on Windows. */
-export const isWindows: boolean = _platform.includes("win");
+export const isWindows: boolean = _platform.includes('win')
 
 /** True when running on Linux / other Unix. */
-export const isLinux: boolean = !_platform.includes("mac") && !_platform.includes("win");
+export const isLinux: boolean = !_platform.includes('mac') && !_platform.includes('win')
 
 /**
  * The *primary* modifier key used for app shortcuts on the current OS.
@@ -24,8 +23,8 @@ export const isLinux: boolean = !_platform.includes("mac") && !_platform.include
  * - macOS → `"cmd"`  (⌘ / metaKey)
  * - Windows / Linux → `"ctrl"` (ctrlKey)
  */
-export function getPlatformModifier(): "cmd" | "ctrl" {
-	return isMac ? "cmd" : "ctrl";
+export function getPlatformModifier(): 'cmd' | 'ctrl' {
+  return isMac ? 'cmd' : 'ctrl'
 }
 
 /**
@@ -34,7 +33,7 @@ export function getPlatformModifier(): "cmd" | "ctrl" {
  * On macOS this checks `metaKey` (⌘), everywhere else `ctrlKey`.
  */
 export function isPlatformModifier(e: KeyboardEvent | MouseEvent): boolean {
-	return isMac ? e.metaKey : e.ctrlKey;
+  return isMac ? e.metaKey : e.ctrlKey
 }
 
 /**
@@ -44,5 +43,5 @@ export function isPlatformModifier(e: KeyboardEvent | MouseEvent): boolean {
  * Useful for shortcuts that intentionally differ per OS.
  */
 export function isSecondaryModifier(e: KeyboardEvent | MouseEvent): boolean {
-	return isMac ? e.ctrlKey : e.metaKey;
+  return isMac ? e.ctrlKey : e.metaKey
 }

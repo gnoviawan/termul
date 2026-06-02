@@ -8,7 +8,7 @@
  * future release. No new code should import from this module.
  */
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 export interface UseTerminalResizeOptions {
   onResize: (cols: number, rows: number) => void

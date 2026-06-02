@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import * as appSettingsStore from '@/stores/app-settings-store'
-import { render, cleanup } from '@testing-library/react'
+import { cleanup, render } from '@testing-library/react'
 import { toast } from 'sonner'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as appSettingsStore from '@/stores/app-settings-store'
 
 // Mock Tauri APIs BEFORE importing the component
 vi.mock('@tauri-apps/api/event', () => ({
@@ -25,10 +25,6 @@ vi.mock('sonner', () => ({
   }
 }))
 
-// Import the mocked modules
-import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
-
 // Create mocks before vi.mock calls
 const mockTerminalConstructor = vi.fn()
 const mockTerminalInstance = {
@@ -44,7 +40,7 @@ const mockTerminalInstance = {
   }),
   onResize: vi.fn<(_cb: (dims: { cols: number; rows: number }) => void) => { dispose: () => void }>(
     (cb) => {
-      capturedResizeCallback = cb
+      _capturedResizeCallback = cb
       return { dispose: vi.fn() }
     }
   ),
@@ -66,23 +62,24 @@ const mockTerminalInstance = {
   buffer: {
     active: {
       getLine: vi.fn((index: number) => ({
-        translateToString: () =>
-          index === 0 ? 'missing.ts src/renderer/App.tsx' : ''
+        translateToString: () => (index === 0 ? 'missing.ts src/renderer/App.tsx' : '')
       }))
     }
   },
   // Real DOM element so recovery's CSS visibility re-composite can be tested.
-  element: (typeof document !== 'undefined' ? document.createElement('div') : undefined) as HTMLDivElement | undefined
+  element: (typeof document !== 'undefined' ? document.createElement('div') : undefined) as
+    | HTMLDivElement
+    | undefined
 }
 
-let capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
+let _capturedResizeCallback: ((dims: { cols: number; rows: number }) => void) | null = null
 
 const mockFitAddonInstance = {
   fit: vi.fn(),
   dispose: vi.fn()
 }
 
-const mockWebglAddonInstance = {
+const _mockWebglAddonInstance = {
   onContextLoss: vi.fn(),
   dispose: vi.fn()
 }
@@ -99,7 +96,12 @@ let lastCreatedWebglInstance: {
 const capturedLinkProviders: Array<{
   provideLinks: (
     y: number,
-    callback: (links: Array<{ activate: (event: MouseEvent, text: string) => void | Promise<void>; text: string }>) => void
+    callback: (
+      links: Array<{
+        activate: (event: MouseEvent, text: string) => void | Promise<void>
+        text: string
+      }>
+    ) => void
   ) => void
 }> = []
 
@@ -158,7 +160,6 @@ vi.mock('@xterm/addon-webgl', () => ({
   }
 }))
 
-
 vi.mock('@/lib/file-path-links', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/file-path-links')>()
   return {
@@ -175,7 +176,7 @@ vi.mock('@/stores/project-store', () => ({
 
 // Mock window.api with proper typing for mocks
 let capturedDataCallback: ((id: string, data: Uint8Array) => void) | null = null
-let capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
+let _capturedExitCallback: ((id: string, exitCode: number, signal?: number) => void) | null = null
 let capturedPowerResumeCallback: (() => void) | null = null
 
 const mockTerminalApi = {
@@ -189,7 +190,7 @@ const mockTerminalApi = {
   }),
   onExit: vi.fn<(cb: (id: string, exitCode: number, signal?: number) => void) => () => void>(
     (cb) => {
-      capturedExitCallback = cb
+      _capturedExitCallback = cb
       return vi.fn()
     }
   )
@@ -225,18 +226,16 @@ Object.defineProperty(window, 'api', {
   configurable: true
 })
 
-import { ConnectedTerminal } from './ConnectedTerminal'
-import { terminalApi, systemApi, clipboardApi } from '@/lib/api'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { clipboardApi, systemApi, terminalApi } from '@/lib/api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
+import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { ConnectedTerminal } from './ConnectedTerminal'
 
-const {
-  mockRecordTerminalContinuityEvent,
-  mockGetOrCreateProjectContinuityCorrelation
-} = vi.hoisted(() => ({
-  mockRecordTerminalContinuityEvent: vi.fn(),
-  mockGetOrCreateProjectContinuityCorrelation: vi.fn(() => 'corr-project-a')
-}))
+const { mockRecordTerminalContinuityEvent, mockGetOrCreateProjectContinuityCorrelation } =
+  vi.hoisted(() => ({
+    mockRecordTerminalContinuityEvent: vi.fn(),
+    mockGetOrCreateProjectContinuityCorrelation: vi.fn(() => 'corr-project-a')
+  }))
 
 vi.mock('@/hooks/use-terminal-restore', () => ({
   isTerminalPendingPtyAssignment: vi.fn(() => false)
@@ -342,8 +341,8 @@ describe('ConnectedTerminal', () => {
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
     capturedDataCallback = null
-    capturedExitCallback = null
-    capturedResizeCallback = null
+    _capturedExitCallback = null
+    _capturedResizeCallback = null
     lastCreatedWebglInstance = null
     capturedLinkProviders.length = 0
 
@@ -368,13 +367,15 @@ describe('ConnectedTerminal', () => {
       } as DOMRect)
 
     // Re-setup onData and onExit mocks with fresh callback captures
-    vi.mocked(terminalApi).onData.mockImplementation((cb: (id: string, data: Uint8Array) => void) => {
-      capturedDataCallback = cb
-      return vi.fn()
-    })
+    vi.mocked(terminalApi).onData.mockImplementation(
+      (cb: (id: string, data: Uint8Array) => void) => {
+        capturedDataCallback = cb
+        return vi.fn()
+      }
+    )
     vi.mocked(terminalApi).onExit.mockImplementation(
       (cb: (id: string, exitCode: number, signal?: number) => void) => {
-        capturedExitCallback = cb
+        _capturedExitCallback = cb
         return vi.fn()
       }
     )
@@ -1106,7 +1107,6 @@ describe('ConnectedTerminal', () => {
       await vi.waitFor(() => {
         expect(vi.mocked(clipboardApi).readText).toHaveBeenCalled()
       })
-
     })
 
     it('should select all on Ctrl+A', async () => {
@@ -1313,7 +1313,6 @@ describe('ConnectedTerminal', () => {
     })
   })
 
-
   describe('Terminal file path link handling', () => {
     it('should open a file path only on ctrl/meta click', async () => {
       vi.mocked(openFilePathFromTerminal).mockResolvedValue({ ok: true })
@@ -1360,7 +1359,8 @@ describe('ConnectedTerminal', () => {
       vi.mocked(openFilePathFromTerminal).mockResolvedValue({
         ok: false,
         reason: 'missing-context',
-        message: 'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
+        message:
+          'No project or working directory found; set a project/cwd to open paths: src/renderer/App.tsx'
       })
       mockTerminalStoreState.findTerminalByPtyId.mockReturnValue(undefined)
       render(<ConnectedTerminal terminalId="external-123" />)
@@ -1425,7 +1425,6 @@ describe('ConnectedTerminal', () => {
       expect(consoleErrorSpy).toHaveBeenCalledWith('[Terminal File Link Open Failed]', failure)
       expect(toast.error).toHaveBeenCalledWith('Failed to open file from terminal output.')
     })
-
   })
 
   describe('WebGL context loss recovery', () => {
@@ -1552,8 +1551,8 @@ describe('ConnectedTerminal', () => {
           name: 'renderer-recovery-attempted',
           details: expect.objectContaining({
             renderer: 'webgl',
-            isRecovery: true,
-          }),
+            isRecovery: true
+          })
         })
       )
 
@@ -1562,8 +1561,8 @@ describe('ConnectedTerminal', () => {
           name: 'renderer-recovery-succeeded',
           details: expect.objectContaining({
             renderer: 'webgl',
-            isRecovery: true,
-          }),
+            isRecovery: true
+          })
         })
       )
 
@@ -1591,8 +1590,8 @@ describe('ConnectedTerminal', () => {
           name: 'renderer-recovery-exhausted',
           details: expect.objectContaining({
             attempts: expect.any(Number),
-            maxAttempts: expect.any(Number),
-          }),
+            maxAttempts: expect.any(Number)
+          })
         })
       )
 
@@ -2086,7 +2085,7 @@ describe('ConnectedTerminal', () => {
         vi.useFakeTimers()
 
         // Render with an external terminal ID
-        const { unmount } = render(<ConnectedTerminal terminalId="test-term-123" />)
+        render(<ConnectedTerminal terminalId="test-term-123" />)
 
         await vi.waitFor(() => {
           // Should NOT spawn since external ID is provided
@@ -2225,10 +2224,7 @@ describe('ConnectedTerminal', () => {
         expect.any(Number)
       )
       // Buffer repainted to redraw into the re-composited layer
-      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(
-        0,
-        mockTerminalInstance.rows - 1
-      )
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, mockTerminalInstance.rows - 1)
       // WebGL addon is NOT disposed/recreated — the context is healthy, only the
       // compositor needs a nudge. Recreating would add a needless blank gap.
       expect(webglAddonCreateCount).toBe(webglCountBeforeFocus)
@@ -2725,7 +2721,7 @@ describe('ConnectedTerminal', () => {
         code: 'SPAWN_FAILED'
       })
 
-      const { getByText } = render(<ConnectedTerminal />)
+      render(<ConnectedTerminal />)
 
       // Should handle the error gracefully
       await vi.waitFor(() => {

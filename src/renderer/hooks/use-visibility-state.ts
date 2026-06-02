@@ -1,12 +1,9 @@
-import { useEffect, useRef } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { visibilityApi } from '@/lib/visibility-api'
-import {
-  HIDDEN_BUFFER_TRUNCATION_DELAY,
-  useTerminalStore
-} from '@/stores/terminal-store'
+import { useEffect, useRef } from 'react'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { visibilityApi } from '@/lib/visibility-api'
 import { markVisible } from '@/lib/visibility-signal'
+import { HIDDEN_BUFFER_TRUNCATION_DELAY, useTerminalStore } from '@/stores/terminal-store'
 
 function debugLogMemoryStats(): void {
   if (!import.meta.env.DEV) return
@@ -27,9 +24,9 @@ function debugLogMemoryStats(): void {
 
   console.debug(
     `[MemTrack] terminals=${terminals.length} ` +
-    `transcript=${(totalTranscriptChars / 1024).toFixed(0)}KB ` +
-    `detachedOutput=${(totalDetachedChars / 1024).toFixed(0)}KB ` +
-    `scrollbackLines=${totalScrollbackLines}`
+      `transcript=${(totalTranscriptChars / 1024).toFixed(0)}KB ` +
+      `detachedOutput=${(totalDetachedChars / 1024).toFixed(0)}KB ` +
+      `scrollbackLines=${totalScrollbackLines}`
   )
 }
 

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { useTerminalStore } from '@/stores/terminal-store'
 import { terminalApi } from '@/lib/api'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 export function useExitCode(): void {
   const updateTerminalExitCode = useTerminalStore((state) => state.updateTerminalExitCode)

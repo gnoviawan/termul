@@ -1,6 +1,6 @@
 /* Local variable fonts (no network dependency, consistent across OS) */
-@import '@fontsource-variable/inter/index.css';
-@import '@fontsource-variable/jetbrains-mono/index.css';
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource-variable/jetbrains-mono/index.css";
 
 @tailwind base;
 @tailwind components;
@@ -105,7 +105,7 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
     /* Inter typographic features: kerning, contextual alts, tabular figures */
-    font-feature-settings: 'cv11', 'ss01', 'ss03', 'cv02', 'tnum';
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02", "tnum";
     font-variant-ligatures: contextual;
   }
 
@@ -114,7 +114,7 @@
   kbd,
   .font-mono {
     /* JetBrains Mono ligatures for code-ish UI (excluded inside terminals via xterm settings) */
-    font-feature-settings: 'calt', 'liga', 'zero';
+    font-feature-settings: "calt", "liga", "zero";
   }
 
   /* Press feedback for ALL pressable elements. Buttons must feel like the
@@ -123,9 +123,9 @@
      feedback. We scope by [data-press-feedback] for opt-out flexibility,
      but default it on for buttons / role=button / summary. */
   @media (hover: hover) and (pointer: fine) {
-    button:not(:disabled):not([data-press-feedback='off']),
-    [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']),
-    summary:not([data-press-feedback='off']) {
+    button:not(:disabled):not([data-press-feedback="off"]),
+    [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]),
+    summary:not([data-press-feedback="off"]) {
       /* Note: 'transition' here is shorthand and resets transition-property
          on the element. Components that rely on tailwind's transition-colors
          (e.g. hover:bg-primary) may lose their colour transition on buttons
@@ -140,9 +140,9 @@
       transition: transform 120ms var(--ease-out);
     }
 
-    button:not(:disabled):not([data-press-feedback='off']):active,
-    [role='button']:not([aria-disabled='true']):not([data-press-feedback='off']):active,
-    summary:not([data-press-feedback='off']):active {
+    button:not(:disabled):not([data-press-feedback="off"]):active,
+    [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]):active,
+    summary:not([data-press-feedback="off"]):active {
       transform: scale(0.97);
     }
   }
@@ -151,7 +151,7 @@
      functional state changes (colour, focus ring) intact. */
   @media (prefers-reduced-motion: reduce) {
     button:active,
-    [role='button']:active,
+    [role="button"]:active,
     summary:active {
       transform: none;
     }
@@ -209,19 +209,19 @@
      (xterm-arrow-up / xterm-arrow-down) and is unrelated to the
      thumb — earlier rules targeting `.xterm-scra` were no-ops. */
   .xterm .xterm-scrollable-element > .xterm-scrollbar {
-    width: 8px !important;
-    background: transparent !important;
+    width: 8px;
+    background: transparent;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
-    background: rgba(255, 255, 255, 0.15) !important;
-    border-radius: 4px !important;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
-    background: rgba(255, 255, 255, 0.25) !important;
+    background: rgba(255, 255, 255, 0.25);
   }
   /* Reserve space on the right so scrollbar doesn't overlay text */
   .xterm .xterm-viewport {
-    scrollbar-width: thin !important;
+    scrollbar-width: thin;
     padding-right: 10px;
   }
 
@@ -240,22 +240,36 @@
    * anchored to a trigger.
    * ------------------------------------------------------------ */
   [data-radix-popper-content-wrapper] > * {
-    transform-origin: var(--radix-popover-content-transform-origin,
-      var(--radix-tooltip-content-transform-origin,
-      var(--radix-dropdown-menu-content-transform-origin,
-      var(--radix-context-menu-content-transform-origin,
-      var(--radix-select-content-transform-origin,
-      var(--radix-menubar-content-transform-origin,
-      var(--radix-hover-card-content-transform-origin,
-      var(--radix-navigation-menu-viewport-transform-origin)))))))) !important;
-    animation-duration: 180ms !important;
-    animation-timing-function: var(--ease-out) !important;
+    transform-origin: var(
+      --radix-popover-content-transform-origin,
+      var(
+        --radix-tooltip-content-transform-origin,
+        var(
+          --radix-dropdown-menu-content-transform-origin,
+          var(
+            --radix-context-menu-content-transform-origin,
+            var(
+              --radix-select-content-transform-origin,
+              var(
+                --radix-menubar-content-transform-origin,
+                var(
+                  --radix-hover-card-content-transform-origin,
+                  var(--radix-navigation-menu-viewport-transform-origin)
+                )
+              )
+            )
+          )
+        )
+      )
+    );
+    animation-duration: 180ms;
+    animation-timing-function: var(--ease-out);
   }
 
   /* Closing animation should be a touch faster than opening so
      dismiss feels instant (asymmetric enter/exit timing). */
   [data-radix-popper-content-wrapper] > [data-state="closed"] {
-    animation-duration: 130ms !important;
+    animation-duration: 130ms;
   }
 
   /* ------------------------------------------------------------
@@ -279,16 +293,22 @@
    * timing (180/130ms) and only true Dialog / AlertDialog get
    * the 200/140ms treatment.
    * ------------------------------------------------------------ */
-  :where([role="dialog"], [role="alertdialog"])[data-state]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
-    animation-timing-function: var(--ease-out) !important;
+  :where([role="dialog"], [role="alertdialog"])[data-state]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-timing-function: var(--ease-out);
   }
 
-  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
-    animation-duration: 200ms !important;
+  :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-duration: 200ms;
   }
 
-  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not([data-radix-popper-content-wrapper] *):not([data-sheet]) {
-    animation-duration: 140ms !important;
+  :where([role="dialog"], [role="alertdialog"])[data-state="closed"]:not(
+    [data-radix-popper-content-wrapper] *
+  ):not([data-sheet]) {
+    animation-duration: 140ms;
   }
 
   /* ------------------------------------------------------------
@@ -306,13 +326,13 @@
    * !important duration would not silently win on rule order.
    * ------------------------------------------------------------ */
   [data-sheet][data-state="open"] {
-    animation-timing-function: var(--ease-drawer) !important;
-    animation-duration: 300ms !important;
+    animation-timing-function: var(--ease-drawer);
+    animation-duration: 300ms;
   }
 
   [data-sheet][data-state="closed"] {
-    animation-timing-function: var(--ease-drawer) !important;
-    animation-duration: 200ms !important;
+    animation-timing-function: var(--ease-drawer);
+    animation-duration: 200ms;
   }
 }
 

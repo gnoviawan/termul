@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { useUpdaterActions } from '@/stores/updater-store'
+import { useEffect } from 'react'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { useUpdaterActions } from '@/stores/updater-store'
 
 const MENU_EVENTS = {
   CHECK_FOR_UPDATES_TRIGGERED: 'updater:check-for-updates-triggered'

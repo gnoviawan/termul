@@ -3,7 +3,7 @@
  * Tests the session persistence API using Tauri plugin-store
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock @tauri-apps/plugin-store BEFORE importing the module under test
 const mockData = new Map<string, unknown>()
@@ -11,31 +11,38 @@ const mockData = new Map<string, unknown>()
 vi.mock('@tauri-apps/plugin-store', () => {
   return {
     Store: {
-      load: vi.fn(async (_path: string, _options?: { autoSave: boolean; defaults: Record<string, unknown> }) => {
-        return {
-          get: vi.fn(<T>(key: string) => Promise.resolve<T | null>((mockData.get(key) as T) ?? null)),
-          set: vi.fn(async (key: string, value: unknown) => {
-            mockData.set(key, value)
-          }),
-          delete: vi.fn(async (key: string) => {
-            mockData.delete(key)
-          }),
-          save: vi.fn(async () => {
-            // Mock save
-          })
+      load: vi.fn(
+        async (
+          _path: string,
+          _options?: { autoSave: boolean; defaults: Record<string, unknown> }
+        ) => {
+          return {
+            get: vi.fn(<T>(key: string) =>
+              Promise.resolve<T | null>((mockData.get(key) as T) ?? null)
+            ),
+            set: vi.fn(async (key: string, value: unknown) => {
+              mockData.set(key, value)
+            }),
+            delete: vi.fn(async (key: string) => {
+              mockData.delete(key)
+            }),
+            save: vi.fn(async () => {
+              // Mock save
+            })
+          }
         }
-      })
+      )
     }
   }
 })
 
+import type { SessionData } from '@shared/types/ipc.types'
 import { Store } from '@tauri-apps/plugin-store'
 import {
-  tauriSessionApi,
+  _resetStoreInstanceForTesting,
   createTauriSessionApi,
-  _resetStoreInstanceForTesting
+  tauriSessionApi
 } from '../tauri-session-api'
-import type { SessionData } from '@shared/types/ipc.types'
 
 type MockStore = {
   get: ReturnType<typeof vi.fn>
@@ -71,9 +78,7 @@ describe('tauriSessionApi', () => {
       {
         projectId: 'project-abc',
         activeTerminalId: 'terminal-123',
-        terminals: [
-          { id: 'terminal-123', shell: 'bash', cwd: '/home/user', history: [] }
-        ]
+        terminals: [{ id: 'terminal-123', shell: 'bash', cwd: '/home/user', history: [] }]
       }
     ]
   })
@@ -353,7 +358,7 @@ describe('tauriSessionApi', () => {
     })
 
     it('should save pending data before flushing', async () => {
-      const sessionData = createValidSessionData()
+      const _sessionData = createValidSessionData()
 
       // Set up the mock to return data for hasSession check
       currentMockStore.get.mockImplementation((key) => {
@@ -467,7 +472,7 @@ describe('tauriSessionApi', () => {
       ])
 
       // All saves should succeed (last write wins)
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result.success).toBe(true)
       })
 
@@ -558,16 +563,12 @@ describe('tauriSessionApi', () => {
     it('should preserve workspace state across save/restore', async () => {
       const sessionData: SessionData = {
         timestamp: new Date().toISOString(),
-        terminals: [
-          { id: 'term-1', shell: 'bash', cwd: '/home/user', history: [] }
-        ],
+        terminals: [{ id: 'term-1', shell: 'bash', cwd: '/home/user', history: [] }],
         workspaces: [
           {
             projectId: 'proj-1',
             activeTerminalId: 'term-1',
-            terminals: [
-              { id: 'term-1', shell: 'bash', cwd: '/home/user', history: [] }
-            ]
+            terminals: [{ id: 'term-1', shell: 'bash', cwd: '/home/user', history: [] }]
           },
           {
             projectId: 'proj-2',

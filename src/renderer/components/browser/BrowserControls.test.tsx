@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { BrowserControls } from './BrowserControls'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { BrowserControls } from './BrowserControls'
 
 // Mock browser-api
 vi.mock('@/lib/browser-api', () => ({
   browserTabGoBack: vi.fn().mockResolvedValue({ success: true }),
   browserTabGoForward: vi.fn().mockResolvedValue({ success: true }),
   browserTabReload: vi.fn().mockResolvedValue({ success: true }),
-  browserTabOpenDevtools: vi.fn().mockResolvedValue({ success: true }),
+  browserTabOpenDevtools: vi.fn().mockResolvedValue({ success: true })
 }))
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -108,9 +108,7 @@ describe('BrowserControls', () => {
   })
 
   it('renders URL input with current tab URL', () => {
-    useBrowserSessionStore
-      .getState()
-      .createTab('tab-1', 'https://example.com/page')
+    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com/page')
 
     renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 

@@ -1,18 +1,18 @@
+import { confirm } from '@tauri-apps/plugin-dialog'
+import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import { Download, Terminal, Clock } from 'lucide-react'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import {
   updaterStore,
-  useUpdaterState,
-  useUpdaterActions,
-  useUpdateVersion,
-  useUpdateDownloaded,
+  useDownloadProgress,
   useIsDownloading,
-  useDownloadProgress
+  useUpdateDownloaded,
+  useUpdaterActions,
+  useUpdaterState,
+  useUpdateVersion
 } from '@/stores/updater-store'
-import { isAurUpdateMode } from '@/lib/tauri-updater-api'
-import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 
 // Local storage keys
 const UPDATE_REMINDER_KEY = 'update-reminder-timestamp'
@@ -118,7 +118,12 @@ export function showUpdateDownloadedToast(version: string): void {
             hasActiveTerminals
               ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
               : `Termul will install version ${version} and restart now. Continue?`,
-            { title: 'Install update', kind: 'warning', okLabel: 'Install & Restart', cancelLabel: 'Not now' }
+            {
+              title: 'Install update',
+              kind: 'warning',
+              okLabel: 'Install & Restart',
+              cancelLabel: 'Not now'
+            }
           )
           if (!confirmed) return
 
@@ -168,7 +173,7 @@ function dismissDownloadProgressToast(version: string): void {
 export function useUpdateToast(): void {
   const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
   const version = useUpdateVersion()
-  const updateDownloaded = useUpdateDownloaded()
+  const _updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
   const downloadProgress = useDownloadProgress()
 

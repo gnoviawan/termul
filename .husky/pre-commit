@@ -2,5 +2,7 @@ echo "🔍 Running TypeScript typecheck..."
 bun run typecheck
 echo "✅ TypeScript check passed!"
 echo ""
-echo "🔍 Running ESLint on staged files..."
-bun x lint-staged
+echo "🔍 Running Biome on staged files..."
+bun x biome check --staged --no-errors-on-unmatched --write
+git update-index --again
+echo "✅ Biome check passed!"

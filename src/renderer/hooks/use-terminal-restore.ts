@@ -1,25 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Terminal as TerminalRecord } from '@/types/project'
-import { useProjectStore } from '../stores/project-store'
-import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
-import { useAppSettingsStore } from '../stores/app-settings-store'
-import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
-import { terminalApi, sessionApi } from '@/lib/api'
-import { shellApi } from '@/lib/shell-api'
+import { sessionApi, terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
-import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
+import { shellApi } from '@/lib/shell-api'
+import {
+  beginProjectContinuityCorrelation,
+  recordTerminalContinuityEvent as emitTerminalContinuityEvent
+} from '@/lib/terminal-continuity-instrumentation'
+import { isVisibleReady } from '@/lib/visibility-signal'
+import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
+import type { Terminal as TerminalRecord } from '@/types/project'
+import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import { useAppSettingsStore } from '../stores/app-settings-store'
+import { useProjectStore } from '../stores/project-store'
+import { useTerminalStore } from '../stores/terminal-store'
+import { findPaneContainingTab, terminalTabId, useWorkspaceStore } from '../stores/workspace-store'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
   setTerminalRestoreInProgress
 } from './useTerminalAutoSave'
-import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
-import {
-  beginProjectContinuityCorrelation,
-  recordTerminalContinuityEvent as emitTerminalContinuityEvent
-} from '@/lib/terminal-continuity-instrumentation'
-
-import { isVisibleReady } from '@/lib/visibility-signal'
 
 const DEFERRED_RETRY_MS = 50
 
@@ -27,8 +26,6 @@ const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
 // Safety timeout: prevent spawn from blocking lock forever
 const SPAWN_TIMEOUT_MS = 30000
-
-type RestoreAttemptStatus = 'completed' | 'blocked' | 'failed'
 
 const PROJECT_RESTORE_LOCKS = new Set<string>()
 const TERMINALS_PENDING_PTY_ASSIGNMENT = new Set<string>()
@@ -157,7 +154,7 @@ function debugLog(category: string, message: string, data?: unknown) {
   }
 }
 
-function debugTerminalContinuityEvent(event: string, details: Record<string, unknown>): void {
+function _debugTerminalContinuityEvent(event: string, details: Record<string, unknown>): void {
   debugLog('TERMINAL_CONTINUITY', event, details)
 }
 
@@ -285,7 +282,7 @@ export function useTerminalRestore(): void {
   // FIX #4: Use Set instead of boolean to track multiple restoring projects
   const isRestoringRef = useRef<Set<string>>(new Set())
   // Retry counter for visibility-deferred restore
-  const [visibilityRetry, setVisibilityRetry] = useState(0)
+  const [_visibilityRetry, setVisibilityRetry] = useState(0)
 
   useEffect(() => {
     const callId = crypto.randomUUID().slice(0, 7)
@@ -493,7 +490,9 @@ export function useTerminalRestore(): void {
         if (restoreMode !== 'layout') {
           const sessionResult = await sessionApi.restore()
           const sessionWorkspace = sessionResult.success
-            ? sessionResult.data.workspaces.find((workspace) => workspace.projectId === projectIdToRestore)
+            ? sessionResult.data.workspaces.find(
+                (workspace) => workspace.projectId === projectIdToRestore
+              )
             : null
           const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
           const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
@@ -644,13 +643,15 @@ export function useTerminalRestore(): void {
       if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
 
       // FIX #5: Also clean up the restoring flag for this project on cleanup
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
       isRestoringRef.current.delete(projectIdForCleanup)
       PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
       setTerminalRestoreInProgress(projectIdForCleanup, false, restoreOwnerId)
 
       // FIX #1: Force-release global spawn lock on cleanup to prevent deadlock
-      if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId || GLOBAL_SPAWN_LOCK_OWNER?.startsWith(projectIdForCleanup)) {
+      if (
+        GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId ||
+        GLOBAL_SPAWN_LOCK_OWNER?.startsWith(projectIdForCleanup)
+      ) {
         GLOBAL_SPAWN_LOCK_OWNER = null
         debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK on cleanup [${restoreOwnerId}]`)
       }
@@ -660,7 +661,7 @@ export function useTerminalRestore(): void {
       // and prevents a race condition where terminals are wiped before being saved to disk.
       // PTYs are managed by the backend and their lifecycle is independent of the renderer store.
     }
-  }, [activeProjectId, visibilityRetry])
+  }, [activeProjectId])
 }
 
 /**

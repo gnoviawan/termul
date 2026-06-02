@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { ChevronDown, Terminal } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { ShellInfo, DetectedShells } from '@shared/types/ipc.types'
 import { shellApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 interface ShellSelectorProps {
   onSelectShell: (shell: ShellInfo) => void

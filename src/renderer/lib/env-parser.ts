@@ -87,10 +87,7 @@ export function parseEnvFile(content: string): EnvParseResult {
  * @param imported - New variables from .env import
  * @returns Merged environment variables list
  */
-export function mergeEnvVars(
-  existing: EnvVariable[],
-  imported: EnvVariable[]
-): EnvVariable[] {
+export function mergeEnvVars(existing: EnvVariable[], imported: EnvVariable[]): EnvVariable[] {
   const merged = new Map<string, EnvVariable>()
 
   // Add existing vars first

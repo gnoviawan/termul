@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { getTerminalOptions, DEFAULT_TERMINAL_OPTIONS } from './terminal-config'
+import { describe, expect, it } from 'vitest'
+import { DEFAULT_TERMINAL_OPTIONS, getTerminalOptions } from './terminal-config'
 
 describe('getTerminalOptions', () => {
   it('should return windowsPty config for Windows platform', () => {

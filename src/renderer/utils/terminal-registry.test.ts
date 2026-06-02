@@ -1,16 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  registerTerminal,
-  unregisterTerminal,
-  getTerminal,
-  extractScrollback,
-  restoreScrollback,
-  getRegistrySize,
-  clearRegistry,
   captureScrollPosition,
-  getCachedScrollPosition,
+  clearRegistry,
   clearScrollPosition,
-  restoreScrollPosition
+  extractScrollback,
+  getCachedScrollPosition,
+  getRegistrySize,
+  getTerminal,
+  registerTerminal,
+  restoreScrollback,
+  restoreScrollPosition,
+  unregisterTerminal
 } from './terminal-registry'
 
 // Mock xterm Terminal
@@ -249,7 +249,9 @@ describe('terminal-registry', () => {
         captureScrollPosition('term-1')
 
         // Create terminal without scrollToLine
-        const terminalWithoutScroll = { write: vi.fn() } as unknown as import('@xterm/xterm').Terminal
+        const terminalWithoutScroll = {
+          write: vi.fn()
+        } as unknown as import('@xterm/xterm').Terminal
         const result = restoreScrollPosition('term-1', terminalWithoutScroll)
 
         expect(result).toBe(false)

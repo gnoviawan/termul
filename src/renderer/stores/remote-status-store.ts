@@ -1,5 +1,5 @@
-import { create } from 'zustand'
 import type { RemoteStatus } from '@shared/types/ipc.types'
+import { create } from 'zustand'
 
 /**
  * Global store for the embedded remote-terminal server status.
@@ -18,5 +18,4 @@ export const useRemoteStatusStore = create<RemoteStatusStore>((set) => ({
 }))
 
 /** Selector: current remote status (or null). */
-export const useRemoteStatus = (): RemoteStatus | null =>
-  useRemoteStatusStore((s) => s.status)
+export const useRemoteStatus = (): RemoteStatus | null => useRemoteStatusStore((s) => s.status)

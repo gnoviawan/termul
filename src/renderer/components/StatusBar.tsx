@@ -1,19 +1,30 @@
-import { Server, GitBranch, Folder, Bell, Pencil, Plus, FileQuestion, Download, ArrowUp, ArrowDown } from 'lucide-react'
-import type { Project } from '@/types/project'
+import {
+  ArrowDown,
+  ArrowUp,
+  Bell,
+  Download,
+  FileQuestion,
+  Folder,
+  GitBranch,
+  Pencil,
+  Plus,
+  Server
+} from 'lucide-react'
+import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
+import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
-import { useActiveTerminal } from '@/stores/terminal-store'
-import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import {
+  useShowExitCode,
   useShowGitBranch,
   useShowGitStatus,
-  useShowWorkingDirectory,
-  useShowExitCode
+  useShowWorkingDirectory
 } from '@/stores/context-bar-settings-store'
+import { useActiveTerminal } from '@/stores/terminal-store'
 import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
-import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
+import type { Project } from '@/types/project'
 
 interface StatusBarProps {
   project: Project | undefined
@@ -88,12 +99,13 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  {gitBranch} {gitStatus?.ahead ? `(${gitStatus.ahead} ahead)` : ''} {gitStatus?.behind ? `(${gitStatus.behind} behind)` : ''}
+                  {gitBranch} {gitStatus?.ahead ? `(${gitStatus.ahead} ahead)` : ''}{' '}
+                  {gitStatus?.behind ? `(${gitStatus.behind} behind)` : ''}
                 </TooltipContent>
               </Tooltip>
             )}
 
-            {showGitStatus && gitStatus && gitStatus.hasChanges && (
+            {showGitStatus && gitStatus?.hasChanges && (
               <GitStatusIndicator
                 modified={gitStatus.modified}
                 staged={gitStatus.staged}
@@ -194,7 +206,11 @@ interface GitStatusIndicatorProps {
   untracked: number
 }
 
-function GitStatusIndicator({ modified, staged, untracked }: GitStatusIndicatorProps): React.JSX.Element | null {
+function GitStatusIndicator({
+  modified,
+  staged,
+  untracked
+}: GitStatusIndicatorProps): React.JSX.Element | null {
   const items: React.ReactNode[] = []
 
   if (modified > 0) {

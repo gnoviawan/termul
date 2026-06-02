@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import WorkspaceLayout from './WorkspaceLayout'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
-import type { Project, Terminal, ProjectColor } from '@/types/project'
+import type { Project, ProjectColor, Terminal } from '@/types/project'
+import WorkspaceLayout from './WorkspaceLayout'
 
 function createProject(id: string, path: string, color: ProjectColor): Project {
   return {
@@ -58,14 +58,16 @@ vi.mock('@/stores/project-store', () => ({
       }
       return selector ? selector(state) : state
     }),
-    { getState: vi.fn(() => ({
-      projects: [],
-      activeProjectId: '',
-      isLoaded: true,
-      isWorktreeOperationLocked: false,
-      removeWorktree: vi.fn(),
-      updateProject: vi.fn()
-    })) }
+    {
+      getState: vi.fn(() => ({
+        projects: [],
+        activeProjectId: '',
+        isLoaded: true,
+        isWorktreeOperationLocked: false,
+        removeWorktree: vi.fn(),
+        updateProject: vi.fn()
+      }))
+    }
   ),
   useProjectsLoaded: () => mockUseProjectsLoaded(),
   useProjects: () => mockUseProjects(),
@@ -87,10 +89,12 @@ vi.mock('@/stores/terminal-store', () => ({
 }))
 
 vi.mock('@/stores/app-settings-store', () => ({
-  useAppSettingsStore: vi.fn((selector?: (state: { settings: { remoteBindMode: 'localhost' } }) => unknown) => {
-    const state = { settings: { remoteBindMode: 'localhost' as const } }
-    return selector ? selector(state) : state
-  }),
+  useAppSettingsStore: vi.fn(
+    (selector?: (state: { settings: { remoteBindMode: 'localhost' } }) => unknown) => {
+      const state = { settings: { remoteBindMode: 'localhost' as const } }
+      return selector ? selector(state) : state
+    }
+  ),
   useTerminalFontSize: vi.fn(() => 14),
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
@@ -150,10 +154,12 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
 
   return {
     ...actual,
-    useKeyboardShortcutsStore: vi.fn((selector?: (state: { shortcuts: typeof shortcuts }) => unknown) => {
-      const state = { shortcuts }
-      return selector ? selector(state) : state
-    }),
+    useKeyboardShortcutsStore: vi.fn(
+      (selector?: (state: { shortcuts: typeof shortcuts }) => unknown) => {
+        const state = { shortcuts }
+        return selector ? selector(state) : state
+      }
+    ),
     matchesShortcut: actual.matchesShortcut
   }
 })
@@ -226,7 +232,9 @@ const { mockApi } = vi.hoisted(() => ({
       onShortcut: vi.fn((_callback: () => Promise<boolean>) => vi.fn())
     },
     shell: {
-      getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { default: null, available: [] } })
+      getAvailableShells: vi
+        .fn()
+        .mockResolvedValue({ success: true, data: { default: null, available: [] } })
     },
     terminal: {
       getGitBranch: vi.fn().mockResolvedValue({ success: true, data: 'main' }),
@@ -263,7 +271,9 @@ const { mockApi } = vi.hoisted(() => ({
       toggleMaximize: vi.fn().mockResolvedValue({ success: true, data: false }),
       close: vi.fn(),
       onMaximizeChange: vi.fn(() => vi.fn()),
-      onCloseRequested: vi.fn<(callback: () => Promise<boolean>) => () => void>((_callback) => vi.fn()),
+      onCloseRequested: vi.fn<(callback: () => Promise<boolean>) => () => void>((_callback) =>
+        vi.fn()
+      ),
       respondToClose: vi.fn()
     },
     clipboard: {
@@ -392,7 +402,9 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(screen.getByText('No Projects Yet')).toBeInTheDocument()
       expect(
-        screen.getByText('Create your first project to organize your terminals, snapshots, and commands')
+        screen.getByText(
+          'Create your first project to organize your terminals, snapshots, and commands'
+        )
       ).toBeInTheDocument()
     })
 
@@ -541,9 +553,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      const description = screen.getByText(
-        /Create your first project to organize your terminals/
-      )
+      const description = screen.getByText(/Create your first project to organize your terminals/)
       expect(description.className).toContain('text-muted-foreground')
     })
   })
@@ -833,9 +843,13 @@ describe('WorkspaceLayout - Empty States', () => {
       }
 
       const useEditorStoreModule = await import('@/stores/editor-store')
-      const getStateSpy = vi.spyOn(useEditorStoreModule.useEditorStore, 'getState').mockReturnValue(
-        dirtyEditorState as unknown as ReturnType<typeof useEditorStoreModule.useEditorStore.getState>
-      )
+      const getStateSpy = vi
+        .spyOn(useEditorStoreModule.useEditorStore, 'getState')
+        .mockReturnValue(
+          dirtyEditorState as unknown as ReturnType<
+            typeof useEditorStoreModule.useEditorStore.getState
+          >
+        )
 
       renderWithRouter()
       expect(closeRequestedCallback).toBeDefined()
@@ -879,7 +893,9 @@ describe('WorkspaceLayout - Empty States', () => {
       mockUseActiveProject.mockReturnValue(project)
       mockUseActiveProjectId.mockReturnValue('a')
 
-      mockWaitForPendingAppSettingsPersistence.mockRejectedValueOnce(new Error('settings flush failed'))
+      mockWaitForPendingAppSettingsPersistence.mockRejectedValueOnce(
+        new Error('settings flush failed')
+      )
 
       renderWithRouter()
       expect(closeRequestedCallback).toBeDefined()

@@ -1,17 +1,17 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
-import { EditorState, Compartment } from '@codemirror/state'
-import {
-  EditorView,
-  lineNumbers,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-  keymap
-} from '@codemirror/view'
-import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { highlightSelectionMatches } from '@codemirror/search'
-import { createTermulTheme } from '@/components/editor/codemirror-theme'
 import type { Extension } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
+import {
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers
+} from '@codemirror/view'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createTermulTheme } from '@/components/editor/codemirror-theme'
 
 // Cache loaded language extensions
 const languageCache = new Map<string, Extension>()
@@ -335,7 +335,10 @@ export function useCodeMirror(
       const scrollDOM = currentView.scrollDOM
       const viewportHeight = scrollDOM.clientHeight
       const maxScrollTop = Math.max(0, scrollDOM.scrollHeight - viewportHeight)
-      const desiredScrollTop = Math.max(0, Math.min(maxScrollTop, lineBlock.top - viewportHeight / 2))
+      const desiredScrollTop = Math.max(
+        0,
+        Math.min(maxScrollTop, lineBlock.top - viewportHeight / 2)
+      )
       onScrollChangeRef.current(desiredScrollTop)
       onVisibleRangeChangeRef.current?.(getVisibleLineRangeForView(currentView))
       currentView.focus()

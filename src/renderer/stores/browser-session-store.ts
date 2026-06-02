@@ -43,7 +43,7 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       canGoBack: false,
       canGoForward: false,
       annotationMode: false,
-      annotationSubMode: 'draw',
+      annotationSubMode: 'draw'
     }
     set((state) => {
       const next = new Map(state.tabs)
@@ -135,5 +135,5 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
 
   getTab: (id: string) => {
     return get().tabs.get(id)
-  },
+  }
 }))

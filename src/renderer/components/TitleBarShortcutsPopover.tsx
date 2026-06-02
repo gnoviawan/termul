@@ -1,12 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Keyboard } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { Keyboard } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
-import {
-  useResetShortcut,
-  useUpdateShortcut
-} from '@/hooks/use-keyboard-shortcuts'
+import { useResetShortcut, useUpdateShortcut } from '@/hooks/use-keyboard-shortcuts'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcut } from '@/types/settings'
 

@@ -1,18 +1,18 @@
-import { invoke, type InvokeArgs, Channel } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
+  GitStatus,
   IpcResult,
   TerminalApi,
-  TerminalInfo,
-  TerminalSpawnOptions,
+  TerminalCwdChangedCallback,
   TerminalDataCallback,
   TerminalExitCallback,
-  TerminalCwdChangedCallback,
+  TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
-  TerminalExitCodeChangedCallback,
-  GitStatus
+  TerminalInfo,
+  TerminalSpawnOptions
 } from '@shared/types/ipc.types'
+import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 /**
@@ -102,7 +102,9 @@ function subscribeSharedEvent<K extends keyof EventPayloadMap>(
     return () => {}
   }
 
-  let entry = sharedEventListeners.get(eventName) as SharedListenerEntry<EventPayloadMap[K]> | undefined
+  let entry = sharedEventListeners.get(eventName) as
+    | SharedListenerEntry<EventPayloadMap[K]>
+    | undefined
 
   if (!entry) {
     if (IS_DEV) {
@@ -218,7 +220,7 @@ function captureStackTrace(): string {
 export function createTauriTerminalApi(): TerminalApi {
   // Per-terminal data callback stored between onData registration and spawn
   const dataCallbacks = new Set<TerminalDataCallback>()
-  const registerListener = <T>(
+  const _registerListener = <T>(
     eventName: string,
     callback: (payload: T) => void,
     debugLabel: string
@@ -271,7 +273,7 @@ export function createTauriTerminalApi(): TerminalApi {
           totalCalls: SPAWN_CALLS.length,
           options,
           stackTrace: stack,
-          recentCalls: SPAWN_CALLS.slice(-5).map(c => ({
+          recentCalls: SPAWN_CALLS.slice(-5).map((c) => ({
             id: c.id,
             time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
             shell: c.shell,
@@ -287,7 +289,7 @@ export function createTauriTerminalApi(): TerminalApi {
             console.warn('⚠️ Rapid spawns detected', {
               callCount: last5.length,
               timeSpan: `${timeSpan}ms`,
-              calls: last5.map(c => ({
+              calls: last5.map((c) => ({
                 id: c.id,
                 time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
                 stack: c.stack
@@ -318,7 +320,7 @@ export function createTauriTerminalApi(): TerminalApi {
 
       on_data.onmessage = (buf: ArrayBuffer) => {
         const bytes = new Uint8Array(buf)
-        
+
         if (capturedTerminalId) {
           // Normal path: we know the terminal ID
           for (const callback of dataCallbacks) {
@@ -405,9 +407,7 @@ export function createTauriTerminalApi(): TerminalApi {
         IPC_EVENTS.TERMINAL_EXIT,
         (payload) => {
           if (import.meta.env.DEV) {
-            devLog(
-              `[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`
-            )
+            devLog(`[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`)
           }
           callback(payload.id, payload.exitCode ?? -1, payload.signal ?? undefined)
         },
@@ -530,7 +530,10 @@ export async function addRendererRef(ptyId: string, rendererId: string): Promise
  * Internal method to remove renderer ref (not part of TerminalApi interface)
  * Called when a terminal component unmounts to unregister from the Rust backend
  */
-export async function removeRendererRef(ptyId: string, rendererId: string): Promise<IpcResult<void>> {
+export async function removeRendererRef(
+  ptyId: string,
+  rendererId: string
+): Promise<IpcResult<void>> {
   // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
   const request = { terminalId: ptyId, rendererId }
   return invokeIpc<void>(IPC_COMMANDS.REMOVE_RENDERER_REF, { request })
@@ -545,16 +548,20 @@ if (typeof window !== 'undefined' && IS_DEV) {
   globalDebug.__TERMUL_SPAWN_TRACKER__ = {
     getCalls: () => [...SPAWN_CALLS],
     getCallCount: () => SPAWN_CALLS.length,
-    clearCalls: () => { SPAWN_CALLS.length = 0 },
+    clearCalls: () => {
+      SPAWN_CALLS.length = 0
+    },
     getLastNCalls: (n: number) => SPAWN_CALLS.slice(-n),
     printSummary: () => {
-      console.table(SPAWN_CALLS.map(c => ({
-        id: c.id,
-        time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
-        shell: c.shell || 'N/A',
-        cwd: c.cwd || 'N/A',
-        caller: c.stack.split(' <- ')[0] || 'unknown'
-      })))
+      console.table(
+        SPAWN_CALLS.map((c) => ({
+          id: c.id,
+          time: new Date(c.timestamp).toISOString().split('T')[1].slice(0, 12),
+          shell: c.shell || 'N/A',
+          cwd: c.cwd || 'N/A',
+          caller: c.stack.split(' <- ')[0] || 'unknown'
+        }))
+      )
       devLog(`Total spawn calls: ${SPAWN_CALLS.length}`)
 
       // Detect potential loops

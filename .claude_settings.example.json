@@ -8,11 +8,7 @@
   "permissions": {
     "_defaultMode_note": "Safe default: read-only access. Change to 'edit' to allow code modifications.",
     "defaultMode": "view",
-    "allow": [
-      "Read(./**)",
-      "Glob(./**)",
-      "Grep(./**)"
-    ],
+    "allow": ["Read(./**)", "Glob(./**)", "Grep(./**)"],
     "_full_permissions_example": {
       "_note": "Uncomment the array below to ENABLE FULL PERMISSIONS for code editing, bash commands, and web access",
       "allow_full": [

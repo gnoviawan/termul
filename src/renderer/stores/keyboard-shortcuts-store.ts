@@ -1,7 +1,7 @@
 import { create } from 'zustand'
+import { isMac } from '@/lib/platform'
 import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
-import { isMac } from '@/lib/platform'
 
 interface KeyboardShortcutsState {
   shortcuts: KeyboardShortcutsConfig
@@ -177,9 +177,9 @@ export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean 
   // This lets the same 'ctrl+k' default work with both ⌘+K and Ctrl+K on Mac.
   if (isMac) {
     const aliased = normalized.startsWith('cmd+')
-      ? 'ctrl+' + normalized.slice(4)
+      ? `ctrl+${normalized.slice(4)}`
       : normalized.startsWith('ctrl+')
-        ? 'cmd+' + normalized.slice(5)
+        ? `cmd+${normalized.slice(5)}`
         : normalized
     return aliased === shortcutKey
   }

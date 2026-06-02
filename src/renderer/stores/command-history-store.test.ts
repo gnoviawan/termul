@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { useCommandHistoryStore } from './command-history-store'
 
 describe('command-history-store', () => {

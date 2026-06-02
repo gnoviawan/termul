@@ -1,9 +1,9 @@
 /** The classified kind of a git ref decoration, used for chip styling. */
-export type GitRefKind = "head" | "tag" | "remote" | "branch";
+export type GitRefKind = 'head' | 'tag' | 'remote' | 'branch'
 
 export interface DescribedRef {
-  label: string;
-  kind: GitRefKind;
+  label: string
+  kind: GitRefKind
 }
 
 /**
@@ -22,45 +22,45 @@ export interface DescribedRef {
  * which short names cannot distinguish.
  */
 export function describeRef(ref: string): DescribedRef {
-  const trimmed = ref.trim();
+  const trimmed = ref.trim()
 
   // `HEAD -> <ref>`: the current branch. Classify by the target ref.
-  if (trimmed.startsWith("HEAD -> ")) {
-    const target = trimmed.slice("HEAD -> ".length).trim();
-    return { label: stripRefPrefix(target), kind: "head" };
+  if (trimmed.startsWith('HEAD -> ')) {
+    const target = trimmed.slice('HEAD -> '.length).trim()
+    return { label: stripRefPrefix(target), kind: 'head' }
   }
 
-  if (trimmed === "HEAD") {
-    return { label: "HEAD", kind: "head" };
+  if (trimmed === 'HEAD') {
+    return { label: 'HEAD', kind: 'head' }
   }
 
   // Annotated/lightweight tags are decorated as `tag: refs/tags/<name>`.
-  if (trimmed.startsWith("tag: ")) {
-    const target = trimmed.slice("tag: ".length).trim();
-    return { label: stripRefPrefix(target), kind: "tag" };
+  if (trimmed.startsWith('tag: ')) {
+    const target = trimmed.slice('tag: '.length).trim()
+    return { label: stripRefPrefix(target), kind: 'tag' }
   }
 
-  if (trimmed.startsWith("refs/tags/")) {
-    return { label: trimmed.slice("refs/tags/".length), kind: "tag" };
+  if (trimmed.startsWith('refs/tags/')) {
+    return { label: trimmed.slice('refs/tags/'.length), kind: 'tag' }
   }
 
-  if (trimmed.startsWith("refs/remotes/")) {
-    return { label: trimmed.slice("refs/remotes/".length), kind: "remote" };
+  if (trimmed.startsWith('refs/remotes/')) {
+    return { label: trimmed.slice('refs/remotes/'.length), kind: 'remote' }
   }
 
-  if (trimmed.startsWith("refs/heads/")) {
-    return { label: trimmed.slice("refs/heads/".length), kind: "branch" };
+  if (trimmed.startsWith('refs/heads/')) {
+    return { label: trimmed.slice('refs/heads/'.length), kind: 'branch' }
   }
 
   // Unknown/odd decoration: show it verbatim and treat it as a branch rather
   // than guessing "remote" from a slash (which mislabels local slashed names).
-  return { label: stripRefPrefix(trimmed), kind: "branch" };
+  return { label: stripRefPrefix(trimmed), kind: 'branch' }
 }
 
 /** Strip a known canonical ref prefix for display, leaving the human name. */
 function stripRefPrefix(ref: string): string {
-  if (ref.startsWith("refs/heads/")) return ref.slice("refs/heads/".length);
-  if (ref.startsWith("refs/remotes/")) return ref.slice("refs/remotes/".length);
-  if (ref.startsWith("refs/tags/")) return ref.slice("refs/tags/".length);
-  return ref;
+  if (ref.startsWith('refs/heads/')) return ref.slice('refs/heads/'.length)
+  if (ref.startsWith('refs/remotes/')) return ref.slice('refs/remotes/'.length)
+  if (ref.startsWith('refs/tags/')) return ref.slice('refs/tags/'.length)
+  return ref
 }

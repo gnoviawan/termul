@@ -1,29 +1,29 @@
-import { act, renderHook } from '@testing-library/react'
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { useSSHConnection } from './use-ssh-connection'
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { useSSHConnection } from './use-ssh-connection'
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   write: vi.fn(),
   kill: vi.fn(),
   connect: vi.fn(),
-  createAskpassScript: vi.fn(),
+  createAskpassScript: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mocks.spawn,
     write: mocks.write,
-    kill: mocks.kill,
+    kill: mocks.kill
   },
   sshApi: {
     connect: mocks.connect,
-    sftpListDir: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    sftpListDir: vi.fn().mockResolvedValue({ success: true, data: [] })
   },
-  createAskpassScript: mocks.createAskpassScript,
+  createAskpassScript: mocks.createAskpassScript
 }))
 
 vi.mock('sonner', () => ({
@@ -31,8 +31,8 @@ vi.mock('sonner', () => ({
     success: vi.fn(),
     error: vi.fn(),
     warning: vi.fn(),
-    info: vi.fn(),
-  },
+    info: vi.fn()
+  }
 }))
 
 const baseProfile: SSHProfile = {
@@ -42,7 +42,7 @@ const baseProfile: SSHProfile = {
   port: 22,
   username: 'deploy',
   authMethod: 'agent',
-  portForwards: [],
+  portForwards: []
 }
 
 describe('useSSHConnection', () => {
@@ -56,17 +56,17 @@ describe('useSSHConnection', () => {
       isLoaded: false,
       activeProfileId: null,
       editingFile: null,
-      editingContent: '',
+      editingContent: ''
     })
     useTerminalStore.setState({
       terminals: [],
       activeTerminalId: '',
-      ptyIdIndex: new Map(),
+      ptyIdIndex: new Map()
     })
 
     mocks.spawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'ssh', cwd: '/' },
+      data: { id: 'pty-1', shell: 'ssh', cwd: '/' }
     })
     mocks.write.mockResolvedValue({ success: true, data: undefined })
     mocks.connect.mockResolvedValue({
@@ -77,8 +77,8 @@ describe('useSSHConnection', () => {
         status: 'connected',
         terminalId: null,
         error: null,
-        reconnectAttempts: 0,
-      },
+        reconnectAttempts: 0
+      }
     })
   })
 
@@ -114,7 +114,7 @@ describe('useSSHConnection', () => {
     const malicious: SSHProfile = {
       ...baseProfile,
       authMethod: 'key',
-      privateKeyPath: "/tmp/key'; rm -rf $HOME #",
+      privateKeyPath: "/tmp/key'; rm -rf $HOME #"
     }
     const { result } = renderHook(() => useSSHConnection(malicious))
 
@@ -153,7 +153,7 @@ describe('useSSHConnection', () => {
     mocks.connect.mockResolvedValueOnce({
       success: false,
       error: 'Password authentication failed',
-      code: 'SSH_CONNECT_ERROR',
+      code: 'SSH_CONNECT_ERROR'
     })
 
     const { result } = renderHook(() => useSSHConnection(baseProfile))
@@ -173,7 +173,7 @@ describe('useSSHConnection', () => {
     mocks.connect.mockResolvedValueOnce({
       success: false,
       error: 'timed out',
-      code: 'SSH_CONNECT_ERROR',
+      code: 'SSH_CONNECT_ERROR'
     })
 
     const { result } = renderHook(() => useSSHConnection(baseProfile))
@@ -194,7 +194,7 @@ describe('useSSHConnection', () => {
     mocks.connect.mockResolvedValueOnce({
       success: false,
       error: 'auth failed',
-      code: 'SSH_CONNECT_ERROR',
+      code: 'SSH_CONNECT_ERROR'
     })
 
     const { result } = renderHook(() => useSSHConnection(baseProfile))
@@ -216,7 +216,7 @@ describe('useSSHConnection', () => {
     mocks.connect.mockResolvedValueOnce({
       success: false,
       error: 'auth failed',
-      code: 'SSH_CONNECT_ERROR',
+      code: 'SSH_CONNECT_ERROR'
     })
     mocks.spawn
       .mockResolvedValueOnce({ success: true, data: { id: 'pty-1', shell: 'ssh', cwd: '/' } })

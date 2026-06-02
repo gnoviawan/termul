@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Project, ProjectColor, Worktree, ProjectGroup } from '@/types/project'
+import type { Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
   // State
@@ -56,7 +56,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
   },
 
-  addProject: (name: string, color: ProjectColor, path?: string, defaultShell?: string): Project => {
+  addProject: (
+    name: string,
+    color: ProjectColor,
+    path?: string,
+    defaultShell?: string
+  ): Project => {
     const newProject: Project = {
       id: Date.now().toString(),
       name,
@@ -81,11 +86,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   deleteProject: (id: string): void => {
     const { projects, activeProjectId, groups } = get()
     const remaining = projects.filter((p) => p.id !== id)
-    
+
     // Also remove from any group it belongs to
-    const updatedGroups = groups.map(g => ({
+    const updatedGroups = groups.map((g) => ({
       ...g,
-      projectIds: g.projectIds.filter(pid => pid !== id)
+      projectIds: g.projectIds.filter((pid) => pid !== id)
     }))
 
     set({
@@ -134,9 +139,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   addWorktree: (projectId: string, worktree: Worktree): void => {
     set((state) => ({
       projects: state.projects.map((p) =>
-        p.id === projectId
-          ? { ...p, worktrees: [...(p.worktrees ?? []), worktree] }
-          : p
+        p.id === projectId ? { ...p, worktrees: [...(p.worktrees ?? []), worktree] } : p
       )
     }))
   },
@@ -148,19 +151,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ? {
               ...p,
               worktrees: (p.worktrees ?? []).filter((w) => w.id !== worktreeId),
-              activeWorktreeId: p.activeWorktreeId === worktreeId ? null : p.activeWorktreeId,
+              activeWorktreeId: p.activeWorktreeId === worktreeId ? null : p.activeWorktreeId
             }
           : p
-      ),
+      )
     }))
   },
 
   setActiveWorktree: (projectId: string, worktreeId: string | null): void => {
     set((state) => ({
       projects: state.projects.map((p) =>
-        p.id === projectId
-          ? { ...p, activeWorktreeId: worktreeId }
-          : p
+        p.id === projectId ? { ...p, activeWorktreeId: worktreeId } : p
       )
     }))
   },
@@ -186,21 +187,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   removeGroup: (id: string, deleteProjects: boolean): void => {
     const { groups, projects, activeProjectId } = get()
-    const groupToRemove = groups.find(g => g.id === id)
+    const groupToRemove = groups.find((g) => g.id === id)
     if (!groupToRemove) return
 
     let updatedProjects = projects
     if (deleteProjects) {
-      updatedProjects = projects.filter(p => !groupToRemove.projectIds.includes(p.id))
+      updatedProjects = projects.filter((p) => !groupToRemove.projectIds.includes(p.id))
     }
 
     const nextActiveProjectId =
       deleteProjects && !updatedProjects.some((p) => p.id === activeProjectId)
-        ? updatedProjects[0]?.id ?? ''
+        ? (updatedProjects[0]?.id ?? '')
         : activeProjectId
 
     set({
-      groups: groups.filter(g => g.id !== id),
+      groups: groups.filter((g) => g.id !== id),
       projects: updatedProjects,
       activeProjectId: nextActiveProjectId
     })
@@ -208,22 +209,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   renameGroup: (id: string, newName: string): void => {
     set((state) => ({
-      groups: state.groups.map(g => g.id === id ? { ...g, name: newName } : g)
+      groups: state.groups.map((g) => (g.id === id ? { ...g, name: newName } : g))
     }))
   },
 
   toggleGroupCollapse: (id: string): void => {
     set((state) => ({
-      groups: state.groups.map(g => g.id === id ? { ...g, isCollapsed: !g.isCollapsed } : g)
+      groups: state.groups.map((g) => (g.id === id ? { ...g, isCollapsed: !g.isCollapsed } : g))
     }))
   },
 
   moveProjectToGroup: (projectId: string, targetGroupId: string | null, index?: number): void => {
     set((state) => {
       // 1. Remove from all existing groups
-      const cleanedGroups = state.groups.map(g => ({
+      const cleanedGroups = state.groups.map((g) => ({
         ...g,
-        projectIds: g.projectIds.filter(pid => pid !== projectId)
+        projectIds: g.projectIds.filter((pid) => pid !== projectId)
       }))
 
       // 2. Add to target group if it exists
@@ -232,7 +233,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
 
       return {
-        groups: cleanedGroups.map(g => {
+        groups: cleanedGroups.map((g) => {
           if (g.id === targetGroupId) {
             const newProjectIds = [...g.projectIds]
             if (typeof index === 'number') {
@@ -250,9 +251,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   reorderGroups: (groupIds: string[]): void => {
     set((state) => {
-      const groupMap = new Map(state.groups.map(g => [g.id, g]))
+      const groupMap = new Map(state.groups.map((g) => [g.id, g]))
       const reorderedGroups = groupIds
-        .map(id => groupMap.get(id))
+        .map((id) => groupMap.get(id))
         .filter((g): g is ProjectGroup => g !== undefined)
       return { groups: reorderedGroups }
     })
@@ -260,16 +261,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   reorderProjectInGroup: (groupId: string, projectIds: string[]): void => {
     set((state) => ({
-      groups: state.groups.map(g => g.id === groupId ? { ...g, projectIds } : g)
+      groups: state.groups.map((g) => (g.id === groupId ? { ...g, projectIds } : g))
     }))
   }
 }))
 
 // Selectors for performance (selective subscriptions)
 export function useActiveProject(): Project | undefined {
-  return useProjectStore(
-    (state) => state.projects.find((p) => p.id === state.activeProjectId)
-  )
+  return useProjectStore((state) => state.projects.find((p) => p.id === state.activeProjectId))
 }
 
 export function useProjects(): Project[] {

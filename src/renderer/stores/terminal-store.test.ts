@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useProjectStore } from './project-store'
 import {
   HIDDEN_BUFFER_TRUNCATION_DELAY,
   MAX_TRANSCRIPT_CHARS,
   TRUNCATED_BUFFER_SIZE,
   useTerminalStore
 } from './terminal-store'
-import { useProjectStore } from './project-store'
 
 describe('terminal-store', () => {
   beforeEach(() => {
@@ -575,8 +575,9 @@ describe('terminal-store', () => {
           truncateHiddenTerminalBuffers
         } = useTerminalStore.getState()
 
-        const largeScrollback = Array.from({ length: TRUNCATED_BUFFER_SIZE + 25 }, (_, index) =>
-          `line-${index + 1}`
+        const largeScrollback = Array.from(
+          { length: TRUNCATED_BUFFER_SIZE + 25 },
+          (_, index) => `line-${index + 1}`
         )
         const transcriptWithAnsi = largeScrollback
           .map((line, index) => `\u001b[3${index % 7}m${line}\u001b[0m`)
@@ -584,9 +585,7 @@ describe('terminal-store', () => {
         updateTerminalScrollback('t1', largeScrollback)
         useTerminalStore.setState((state) => ({
           terminals: state.terminals.map((terminal) =>
-            terminal.id === 't1'
-              ? { ...terminal, transcript: transcriptWithAnsi }
-              : terminal
+            terminal.id === 't1' ? { ...terminal, transcript: transcriptWithAnsi } : terminal
           )
         }))
 
@@ -616,7 +615,10 @@ describe('terminal-store', () => {
         setTerminalPtyId('t1', 'pty-hidden-transcript-only')
         appendTranscript(
           'pty-hidden-transcript-only',
-          Array.from({ length: TRUNCATED_BUFFER_SIZE + 10 }, (_, index) => `line-${index + 1}`).join('\n')
+          Array.from(
+            { length: TRUNCATED_BUFFER_SIZE + 10 },
+            (_, index) => `line-${index + 1}`
+          ).join('\n')
         )
 
         setAppHidden(true)

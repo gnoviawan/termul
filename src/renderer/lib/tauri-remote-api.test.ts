@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { IpcResult, RemoteProjectTree, RemoteStatus } from '@shared/types/ipc.types'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockInvoke } = vi.hoisted(() => ({
   mockInvoke: vi.fn()

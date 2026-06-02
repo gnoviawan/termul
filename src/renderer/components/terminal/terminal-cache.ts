@@ -14,10 +14,10 @@
  *   On remount:  takeCachedTerminal(ptyId) → Terminal | undefined
  */
 
-import { Terminal } from "@xterm/xterm";
+import type { Terminal } from '@xterm/xterm'
 
 /** Map of PTY ID → cached Terminal instance. */
-const cache = new Map<string, Terminal>();
+const cache = new Map<string, Terminal>()
 
 /**
  * Store a terminal in the cache and detach its DOM element.
@@ -32,27 +32,27 @@ const cache = new Map<string, Terminal>();
  * freezes after rapid switching".
  */
 export function cacheTerminal(ptyId: string, terminal: Terminal): void {
-	const existing = cache.get(ptyId);
-	if (existing && existing !== terminal) {
-		// Different instance already cached for this PTY — dispose the old
-		// one to release its WebGL context, addons, and DOM node.
-		try {
-			existing.dispose();
-		} catch {
-			// Already disposed in some other path — ignore.
-		}
-		cache.delete(ptyId);
-	} else if (existing === terminal) {
-		// Same instance re-cached — only ensure DOM is detached.
-		terminal.element?.remove();
-		return;
-	}
+  const existing = cache.get(ptyId)
+  if (existing && existing !== terminal) {
+    // Different instance already cached for this PTY — dispose the old
+    // one to release its WebGL context, addons, and DOM node.
+    try {
+      existing.dispose()
+    } catch {
+      // Already disposed in some other path — ignore.
+    }
+    cache.delete(ptyId)
+  } else if (existing === terminal) {
+    // Same instance re-cached — only ensure DOM is detached.
+    terminal.element?.remove()
+    return
+  }
 
-	// Detach the xterm element from the DOM so it doesn't linger in the
-	// old container. The element is preserved for reattachment later.
-	terminal.element?.remove();
+  // Detach the xterm element from the DOM so it doesn't linger in the
+  // old container. The element is preserved for reattachment later.
+  terminal.element?.remove()
 
-	cache.set(ptyId, terminal);
+  cache.set(ptyId, terminal)
 }
 
 /**
@@ -62,23 +62,23 @@ export function cacheTerminal(ptyId: string, terminal: Terminal): void {
  *   container.appendChild(terminal.element!)
  */
 export function takeCachedTerminal(ptyId: string): Terminal | undefined {
-	const terminal = cache.get(ptyId);
-	if (terminal) {
-		cache.delete(ptyId);
-	}
-	return terminal;
+  const terminal = cache.get(ptyId)
+  if (terminal) {
+    cache.delete(ptyId)
+  }
+  return terminal
 }
 
 /**
  * Check if a terminal is in the cache without removing it.
  */
 export function hasCachedTerminal(ptyId: string): boolean {
-	return cache.has(ptyId);
+  return cache.has(ptyId)
 }
 
 /**
  * Clear all cached terminals — useful for testing or app-wide cleanup.
  */
 export function clearTerminalCache(): void {
-	cache.clear();
+  cache.clear()
 }
