@@ -95,7 +95,7 @@ export function injectCspScriptHashes(
 ): string {
 	return scriptHashes.length > 0
 		? serialized.replace('{{CSP_SCRIPT_HASHES}}', scriptHashes.join(' '))
-		: serialized.replace(' {{CSP_SCRIPT_HASHES}}', '');
+		: serialized.replace(/\s*\{\{CSP_SCRIPT_HASHES\}\}/g, '');
 }
 
 // ─── Main (postbuild) ─────────────────────────────────────────────────────────
