@@ -2,6 +2,7 @@
 mod browser_tab_manager;
 mod commands;
 mod migrations;
+mod path_validation;
 mod pty;
 mod remote;
 mod secure_storage;
