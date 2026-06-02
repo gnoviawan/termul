@@ -56,6 +56,10 @@ describe('editor-store saveFile', () => {
 
     expect(flushEditorContent).toHaveBeenCalledWith(path)
     expect(filesystemApi.writeFile).toHaveBeenCalledWith(path, 'flushed-latest')
+    expect(filesystemApi.writeFile).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(flushEditorContent).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(filesystemApi.writeFile).mock.invocationCallOrder[0]
+    )
     expect(saved).toBe(true)
     expect(useEditorStore.getState().openFiles.get(path)?.isDirty).toBe(false)
   })

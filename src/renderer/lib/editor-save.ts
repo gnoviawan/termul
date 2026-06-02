@@ -19,11 +19,16 @@ export function isSaveFileShortcut(event: KeyboardEvent): boolean {
 /** Flush live editor buffer (if mounted) and persist the file. */
 export async function requestSaveEditorFile(filePath: string): Promise<boolean> {
   const fileName = getEditorFileBaseName(filePath)
-  const saved = await useEditorStore.getState().saveFile(filePath)
-  if (saved) {
-    toast.success(`${fileName} saved`)
-  } else {
+  try {
+    const saved = await useEditorStore.getState().saveFile(filePath)
+    if (saved) {
+      toast.success(`${fileName} saved`)
+    } else {
+      toast.error(`Failed to save ${fileName}`)
+    }
+    return saved
+  } catch {
     toast.error(`Failed to save ${fileName}`)
+    return false
   }
-  return saved
 }

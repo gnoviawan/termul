@@ -51,9 +51,6 @@ export function useFileWatcher(): void {
       const fileState = editorState.openFiles.get(path)
       if (fileState) {
         if (consumeEditorSelfSave(path)) {
-          if (!fileState.isDirty) {
-            void editorState.reloadFile(path)
-          }
           return
         }
 
