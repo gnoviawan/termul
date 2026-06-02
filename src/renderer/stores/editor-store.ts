@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/shallow'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
 import { flushEditorContent } from '@/lib/editor-content-flush'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
 
 const EDITOR_TAB_LIMIT = 15
@@ -245,6 +246,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })
       set({ openFiles: updatedFiles })
       markEditorSelfSave(path)
+      scheduleGitStatusRefreshForPath(path)
 
       window.setTimeout(() => {
         const latest = get().openFiles.get(path)
