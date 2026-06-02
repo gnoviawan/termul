@@ -337,6 +337,49 @@ export interface VisibilityApi {
 	setVisibilityState: (isVisible: boolean) => Promise<IpcResult<void>>;
 }
 
+/** Network bind scope for the embedded remote terminal server. */
+export type RemoteBindMode = "localhost" | "all";
+
+// Remote terminal server status (mirrors Rust remote::RemoteStatus)
+export interface RemoteStatus {
+	running: boolean;
+	url: string | null;
+	port: number | null;
+	/** `localhost` or `all` while running. */
+	bindMode: RemoteBindMode | null;
+	/** `127.0.0.1` or `0.0.0.0` while running. */
+	bindHost: string | null;
+}
+
+// One terminal entry within a remote project tree (mirrors Rust RemoteTerminal)
+export interface RemoteTerminalEntry {
+	ptyId: string;
+	name: string;
+	cwd?: string;
+}
+
+// One project with its terminals (mirrors Rust RemoteProject)
+export interface RemoteProjectEntry {
+	id: string;
+	name: string;
+	terminals: RemoteTerminalEntry[];
+}
+
+// Full project tree published to the remote server (mirrors Rust ProjectTree)
+export interface RemoteProjectTree {
+	projects: RemoteProjectEntry[];
+	// Index signature to satisfy Tauri's InvokeArgs constraint
+	[key: string]: unknown;
+}
+
+// Remote terminal server control API
+export interface RemoteServerApi {
+	start: (options?: { bindMode?: RemoteBindMode }) => Promise<IpcResult<RemoteStatus>>;
+	stop: () => Promise<IpcResult<RemoteStatus>>;
+	status: () => Promise<IpcResult<RemoteStatus>>;
+	publishProjects: (tree: RemoteProjectTree) => Promise<IpcResult<void>>;
+}
+
 // Filesystem types re-exported for convenience
 import type {
 	DirectoryEntry,
@@ -354,11 +397,13 @@ export interface FilesystemApi {
 	readFile: (filePath: string) => Promise<IpcResult<FileContent>>;
 	getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>;
 	searchContent: (
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<FileSearchResponse>>;
 	searchContentStreamStart: (
 		searchId: string,
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<void>>;
@@ -380,6 +425,7 @@ export interface FilesystemApi {
 		}) => void,
 	) => () => void;
 	searchFileNames: (
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<{ files: string[]; truncated: boolean }>>;

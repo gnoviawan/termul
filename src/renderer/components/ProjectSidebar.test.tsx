@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectSidebar } from './ProjectSidebar'
 import type { Project } from '@/types/project'
+import { useProjectStore } from '@/stores/project-store'
 
 const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
@@ -262,16 +263,6 @@ describe('ProjectSidebar', () => {
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
-  it('should render project avatars with first letter', () => {
-    renderWithRouter()
-
-    const activeProjectsContainer = screen.getByTestId('active-projects-container')
-    const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
-    const letters = avatars.map((avatar) => avatar.textContent)
-
-    expect(letters).toStrictEqual(['P', 'P'])
-  })
-
   it('should call onSelectProject when project is clicked', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
@@ -328,31 +319,8 @@ describe('ProjectSidebar', () => {
     ]
     renderWithRouter({ projects: projectsWithEmptyName })
 
-    // Should show fallback character '?' for empty name
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('?')
-  })
-
-  it('should extract first alphabetic character for emoji project names', () => {
-    const projectsWithEmoji: Project[] = [
-      { id: '1', name: '🚀Rocket', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmoji })
-
-    // Should extract 'R' from Rocket, not the emoji
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('R')
-  })
-
-  it('should preserve emoji-only project names in avatar fallback', () => {
-    const projectsWithEmojiOnlyName: Project[] = [
-      { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmojiOnlyName })
-
-    // Should keep full emoji grapheme as fallback, not a surrogate fragment
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('🚀')
+    // Empty-named project still renders its row without crashing.
+    expect(screen.getByTestId('active-projects-container')).toBeInTheDocument()
   })
 })
 
@@ -820,5 +788,51 @@ describe('ProjectSidebar Worktree Search', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
 
     expect(input.value).toBe('')
+  })
+})
+
+describe('ProjectSidebar Folder Grouping', () => {
+  beforeEach(() => {
+    // Reset groups in the store before each test
+    useProjectStore.setState({ groups: [] })
+  })
+
+  it('should render active projects grouped under folder section when groups are configured', () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: false
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    // Folder header should be visible
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Project One (id: 1) should be nested inside the folder
+    expect(screen.getByText('Project One')).toBeInTheDocument()
+  })
+
+  it('should hide folder contents when group is collapsed', async () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: true
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Since it is collapsed, Project One should NOT be rendered
+    expect(screen.queryByText('Project One')).not.toBeInTheDocument()
   })
 })

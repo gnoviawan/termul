@@ -37,6 +37,9 @@ export const TOC_SETTINGS_KEY = "settings/toc";
 
 export type TerminalUrlOpenMode = "system" | "termul";
 
+/** Which interface the remote terminal HTTP server binds to when started. */
+export type RemoteBindMode = "localhost" | "all";
+
 // Application-wide settings
 export interface AppSettings {
 	terminalFontFamily: string;
@@ -53,6 +56,8 @@ export interface AppSettings {
 	sidebarVisible: boolean;
 	fileExplorerVisible: boolean;
 	sshPanelVisible: boolean;
+	/** Remote server bind: localhost (127.0.0.1) or all interfaces (0.0.0.0). */
+	remoteBindMode: RemoteBindMode;
 }
 
 // Terminal buffer size options
@@ -109,6 +114,24 @@ export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
 	{ value: "termul", label: "Termul Browser" },
 ];
 
+export const REMOTE_BIND_MODE_OPTIONS: Array<{
+	value: RemoteBindMode;
+	label: string;
+	description: string;
+}> = [
+	{
+		value: "localhost",
+		label: "Localhost only (127.0.0.1)",
+		description: "Only this machine can connect directly. Safest default.",
+	},
+	{
+		value: "all",
+		label: "All interfaces (0.0.0.0)",
+		description:
+			"Listen on every network interface. Other devices on your LAN can reach the port.",
+	},
+];
+
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
 	terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -125,6 +148,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 	sidebarVisible: true,
 	fileExplorerVisible: true,
 	sshPanelVisible: true,
+	remoteBindMode: "localhost",
 };
 
 // Persistence key for app settings

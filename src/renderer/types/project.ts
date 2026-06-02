@@ -24,6 +24,13 @@ export interface Worktree {
   createdAt: string // ISO timestamp
 }
 
+export interface ProjectGroup {
+  id: string
+  name: string
+  projectIds: string[]
+  isCollapsed?: boolean
+}
+
 export interface Project {
   id: string
   name: string

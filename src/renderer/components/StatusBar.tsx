@@ -13,6 +13,7 @@ import {
   useShowExitCode
 } from '@/stores/context-bar-settings-store'
 import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
+import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 
 interface StatusBarProps {
   project: Project | undefined
@@ -122,6 +123,8 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center space-x-4">
+        <RemoteAccessPopover />
+
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>

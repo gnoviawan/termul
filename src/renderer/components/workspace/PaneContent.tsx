@@ -20,6 +20,10 @@ import type { ShellInfo } from "@shared/types/ipc.types";
 // Import useShallow for selective re-rendering
 import { useShallow } from "zustand/shallow";
 
+/** Inactive tabs stay mounted but must not intercept clicks on the active tab beneath. */
+const INACTIVE_TAB_PANE_CLASS =
+	"w-full h-full absolute inset-0 invisible pointer-events-none";
+
 interface PaneContentProps {
 	pane: LeafNode;
 	onAddTerminal?: (paneId: string, shell?: ShellInfo) => void;
@@ -306,8 +310,8 @@ export function PaneContent({
 										key={tab.id}
 										className={cn(
 											isVisible
-												? "w-full h-full relative"
-												: "w-full h-full absolute inset-0 invisible",
+												? "w-full h-full"
+												: INACTIVE_TAB_PANE_CLASS,
 											// In-app highlight: ring the whole terminal content when its
 											// process finished while unfocused. Distinct amber accent,
 											// inset so it stays inside the pane and clear of the
@@ -363,9 +367,7 @@ export function PaneContent({
 									<div
 										key={tab.id}
 										className={
-											isVisible
-												? "w-full h-full"
-												: "w-full h-full absolute inset-0 invisible"
+											isVisible ? "w-full h-full" : INACTIVE_TAB_PANE_CLASS
 										}
 									>
 										<EditorPanel
@@ -387,9 +389,7 @@ export function PaneContent({
 									<div
 										key={tab.id}
 										className={
-											isVisible
-												? "w-full h-full"
-												: "w-full h-full absolute inset-0 invisible"
+											isVisible ? "w-full h-full" : INACTIVE_TAB_PANE_CLASS
 										}
 									>
 										<BrowserPanel
@@ -411,9 +411,7 @@ export function PaneContent({
 									<div
 										key={tab.id}
 										className={
-											isVisible
-												? "w-full h-full"
-												: "w-full h-full absolute inset-0 invisible"
+											isVisible ? "w-full h-full" : INACTIVE_TAB_PANE_CLASS
 										}
 									>
 										<GitPanel cwd={tab.cwd} isVisible={isVisible} />
@@ -432,9 +430,7 @@ export function PaneContent({
 									<div
 										key={tab.id}
 										className={
-											isVisible
-												? "w-full h-full"
-												: "w-full h-full absolute inset-0 invisible"
+											isVisible ? "w-full h-full" : INACTIVE_TAB_PANE_CLASS
 										}
 									>
 										<GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />

@@ -6,14 +6,25 @@ import {
   FileText, 
   Plus, 
   Minus, 
+  Pencil,
+  FileQuestion,
+  Check,
   RotateCcw,
   ChevronDown,
   GitBranch,
   RefreshCw,
   Search,
   GitCommit,
-  ArrowUp
+  ArrowUp,
+  AlignLeft,
+  Columns2,
 } from "lucide-react";
+import { GitDiffView } from "@/components/git/GitDiffView";
+import {
+  loadGitDiffViewMode,
+  saveGitDiffViewMode,
+  type GitDiffViewMode,
+} from "@/lib/parse-unified-diff";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -69,6 +80,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [confirmAmendOpen, setConfirmAmendOpen] = useState(false);
+  const [diffViewMode, setDiffViewMode] = useState<GitDiffViewMode>(loadGitDiffViewMode);
   // Synchronous in-flight guard so a same-tick double-click cannot dispatch two
   // commits before the isCommitting state has re-rendered.
   const commitInFlight = React.useRef(false);
@@ -345,16 +357,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       ? `Push ${ahead}`
       : "Up to date";
 
-  const getFileIcon = (status: GitFileStatus) => {
-    switch (status) {
-      case "added": return <Plus className="text-green-500" size={14} />;
-      case "modified": return <div className="w-3.5 h-3.5 border-2 border-amber-500 rounded-full" />;
-      case "deleted": return <Minus className="text-red-500" size={14} />;
-      case "renamed": return <RotateCcw className="text-blue-500" size={14} />;
-      default: return <FileCode size={14} />;
-    }
-  };
-
   const stagedSelectionCount =
     selectionSection === "staged" ? selectedPaths.size : 0;
   const unstagedSelectionCount =
@@ -415,7 +417,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       isActive={selectedFile === file.path && selectedStaged}
                       isSelected={inSelection}
                       onClick={(e) => handleFileClick(e, file.path, true, stagedFiles)}
-                      icon={getFileIcon(file.status)}
                     >
                       <RowAction
                         icon={<Minus size={13} />}
@@ -468,7 +469,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       isActive={selectedFile === file.path && !selectedStaged}
                       isSelected={inSelection}
                       onClick={(e) => handleFileClick(e, file.path, false, unstagedFiles)}
-                      icon={getFileIcon(file.status)}
                     >
                       <RowAction
                         icon={<RotateCcw size={13} />}
@@ -585,14 +585,50 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <div className="flex-1 flex flex-col min-w-0 bg-card/30">
         {selectedFile ? (
           <>
-            <div className="p-3 border-b border-border flex items-center justify-between bg-background">
-              <div className="flex items-center gap-3 overflow-hidden">
+            <div className="p-3 border-b border-border flex items-center justify-between gap-2 bg-background">
+              <div className="flex items-center gap-3 overflow-hidden min-w-0">
                 <FileCode size={16} className="text-primary shrink-0" />
                 <span className="text-sm font-medium truncate">{selectedFile}</span>
               </div>
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
-                {selectedStaged ? "Staged" : "Working tree"}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <div
+                  className="flex items-center rounded-md border border-border p-0.5"
+                  role="group"
+                  aria-label="Diff view mode"
+                >
+                  <Button
+                    type="button"
+                    variant={diffViewMode === "inline" ? "secondary" : "ghost"}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Inline diff"
+                    aria-pressed={diffViewMode === "inline"}
+                    onClick={() => {
+                      setDiffViewMode("inline");
+                      saveGitDiffViewMode("inline");
+                    }}
+                  >
+                    <AlignLeft size={14} />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={diffViewMode === "split" ? "secondary" : "ghost"}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Side-by-side diff"
+                    aria-pressed={diffViewMode === "split"}
+                    onClick={() => {
+                      setDiffViewMode("split");
+                      saveGitDiffViewMode("split");
+                    }}
+                  >
+                    <Columns2 size={14} />
+                  </Button>
+                </div>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {selectedStaged ? "Staged" : "Working tree"}
+                </span>
+              </div>
             </div>
             <ScrollArea className="flex-1 font-mono text-xs">
               {currentDiff === undefined || currentDiff === null ? (
@@ -601,27 +637,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
-                <div className="p-4 whitespace-pre" style={{ tabSize: 4, MozTabSize: 4 }}>
-                  {currentDiff.split('\n').map((line: string, i: number) => {
-                    const isAddition = line.startsWith('+');
-                    const isDeletion = line.startsWith('-');
-                    const isHeader = line.startsWith('@@') || line.startsWith('diff') || line.startsWith('index');
-                    
-                    return (
-                      <div 
-                        key={i} 
-                        className={cn(
-                          "px-2 py-0.5",
-                          isAddition && "bg-green-500/10 text-green-400",
-                          isDeletion && "bg-red-500/10 text-red-400",
-                          isHeader && "text-muted-foreground italic bg-muted/20"
-                        )}
-                      >
-                        {line || ' '}
-                      </div>
-                    );
-                  })}
-                </div>
+                <GitDiffView diff={currentDiff} mode={diffViewMode} />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
                   <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
@@ -704,7 +720,7 @@ function SectionHeader({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div className="flex items-center gap-0.5 opacity-60 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
         {children}
       </div>
     </div>
@@ -781,12 +797,57 @@ function RowAction({
   );
 }
 
-function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
+const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {
+  added: "Added",
+  modified: "Modified",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  untracked: "Untracked",
+  staged: "Staged",
+};
+
+function GitStatusBadge({ status }: { status: GitFileStatus }) {
+  const label = GIT_STATUS_LABELS[status];
+  let icon: React.ReactNode;
+  switch (status) {
+    case "added":
+      icon = <Plus className="text-green-500" size={14} aria-hidden />;
+      break;
+    case "modified":
+      icon = <Pencil className="text-amber-500" size={14} aria-hidden />;
+      break;
+    case "deleted":
+      icon = <Minus className="text-red-500" size={14} aria-hidden />;
+      break;
+    case "renamed":
+      icon = <RotateCcw className="text-blue-500" size={14} aria-hidden />;
+      break;
+    case "untracked":
+      icon = <FileQuestion className="text-orange-500" size={14} aria-hidden />;
+      break;
+    case "staged":
+      icon = <Check className="text-primary" size={14} aria-hidden />;
+      break;
+    default:
+      icon = <FileCode size={14} aria-hidden />;
+  }
+
+  return (
+    <div
+      className="flex h-5 w-5 shrink-0 items-center justify-center"
+      title={label}
+      aria-label={label}
+    >
+      {icon}
+    </div>
+  );
+}
+
+function FileItem({ file, isActive, isSelected, onClick, children }: {
   file: { path: string, status: GitFileStatus },
   isActive: boolean,
   isSelected: boolean,
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void,
-  icon: React.ReactNode,
   children?: React.ReactNode,
 }) {
   const fileName = file.path.split('/').pop() || file.path;
@@ -818,22 +879,20 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
             : "hover:bg-secondary/80 text-muted-foreground hover:text-foreground",
       )}
     >
-      <div className="shrink-0">{icon}</div>
-      <div className="flex-1 min-w-0 flex flex-col">
+      <GitStatusBadge status={file.status} />
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-0.5 transition-opacity focus-within:opacity-100",
+          isSelected || isActive
+            ? "opacity-100"
+            : "opacity-60 group-hover/row:opacity-100",
+        )}
+      >
         {children}
-      </div>
-      <div className={cn(
-        "text-[10px] uppercase font-bold px-1 rounded shrink-0",
-        file.status === 'added' && "text-green-500",
-        file.status === 'modified' && "text-amber-500",
-        file.status === 'deleted' && "text-red-500",
-        file.status === 'renamed' && "text-blue-500",
-      )}>
-        {file.status === 'modified' ? 'M' : file.status.charAt(0).toUpperCase()}
       </div>
     </div>
   );

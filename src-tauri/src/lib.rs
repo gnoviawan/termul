@@ -3,7 +3,9 @@ mod browser_tab_manager;
 mod commands;
 mod agent_registry;
 mod migrations;
+mod path_validation;
 mod pty;
+mod remote;
 mod secure_storage;
 mod shell_paths;
 mod ssh;
@@ -13,6 +15,7 @@ mod worktree;
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
+use remote::RemoteServerState;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
@@ -686,6 +689,10 @@ pub fn run() {
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
 
+            // Create Remote Server State
+            let remote_state = Arc::new(RemoteServerState::new());
+            app.manage(remote_state);
+
             // Register default migrations
             register_default_migrations(migration_manager.as_ref());
 
@@ -837,6 +844,11 @@ pub fn run() {
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
             secure_storage::secure_storage_delete,
+            // Remote server commands
+            commands::remote_server_start,
+            commands::remote_server_stop,
+            commands::remote_server_status,
+            commands::remote_publish_projects,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -852,6 +864,9 @@ pub fn run() {
             let ssh_manager = app_handle
                 .try_state::<Arc<ssh::SSHManager>>()
                 .map(|state| state.inner().clone());
+            let remote_state = app_handle
+                .try_state::<Arc<RemoteServerState>>()
+                .map(|state| state.inner().clone());
 
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
@@ -863,6 +878,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(ssh_manager) = ssh_manager {
                         ssh_manager.shutdown().await;
+                    }
+                    if let Some(remote_state) = remote_state {
+                        let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
@@ -876,6 +894,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(ssh_manager) = ssh_manager {
                         ssh_manager.shutdown().await;
+                    }
+                    if let Some(remote_state) = remote_state {
+                        let _ = remote_state.stop().await;
                     }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();

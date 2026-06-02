@@ -2,8 +2,8 @@
 //!
 //! This module provides Windows-specific PTY spawning functionality using ConPTY.
 
-use std::ffi::c_void;
 use std::fs::File;
+use winapi::ctypes::c_void;
 use std::mem::{size_of, MaybeUninit};
 use std::os::windows::io::FromRawHandle;
 
@@ -389,8 +389,11 @@ pub fn spawn_conpty(
         CloseHandle(output_write);
 
         // 9. Create reader and writer from our pipe ends
-        let reader = Box::new(File::from_raw_handle(output_read)) as Box<dyn std::io::Read + Send>;
-        let writer = Box::new(File::from_raw_handle(input_write)) as Box<dyn std::io::Write + Send>;
+        // std:: uses its own c_void; winapi handles must be cast at the boundary.
+        let reader = Box::new(File::from_raw_handle(output_read as *mut std::ffi::c_void))
+            as Box<dyn std::io::Read + Send>;
+        let writer = Box::new(File::from_raw_handle(input_write as *mut std::ffi::c_void))
+            as Box<dyn std::io::Write + Send>;
 
         let conpty_handles = ConPtyHandles { hpcon };
 

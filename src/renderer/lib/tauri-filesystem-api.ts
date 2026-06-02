@@ -46,7 +46,11 @@ const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 const SEARCH_MAX_FILES_WITH_MATCHES = 100;
 const SEARCH_MAX_MATCHES_PER_FILE = 30;
 
-async function searchWithRipgrep(rootPath: string, query: string): Promise<{
+async function searchWithRipgrep(
+	scopeRoot: string,
+	rootPath: string,
+	query: string,
+): Promise<{
 	results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>;
 	truncated: boolean;
 	scannedFiles: number;
@@ -63,6 +67,7 @@ async function searchWithRipgrep(rootPath: string, query: string): Promise<{
 			};
 		}>('search_content', {
 			request: {
+				scopeRoot,
 				rootPath,
 				query,
 			},
@@ -277,7 +282,8 @@ export function createTauriFilesystemApi(): FilesystemApi {
 			}
 		},
 
-		async searchContent(rootPath: string, query: string) {
+		async searchContent(scopeRoot: string, rootPath: string, query: string) {
+			const normalizedScopeRoot = scopeRoot.replace(/\\/g, "/");
 			const normalizedRootPath = rootPath.replace(/\\/g, "/");
 			const trimmedQuery = query.trim();
 			if (!trimmedQuery) {
@@ -292,7 +298,11 @@ export function createTauriFilesystemApi(): FilesystemApi {
 				};
 			}
 
-			const ripgrepResult = await searchWithRipgrep(normalizedRootPath, trimmedQuery);
+			const ripgrepResult = await searchWithRipgrep(
+				normalizedScopeRoot,
+				normalizedRootPath,
+				trimmedQuery,
+			);
 			if (ripgrepResult) {
 				return {
 					success: true,
@@ -383,11 +393,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
 			*/
 		},
 
-		async searchContentStreamStart(searchId: string, rootPath: string, query: string) {
+		async searchContentStreamStart(
+			searchId: string,
+			scopeRoot: string,
+			rootPath: string,
+			query: string,
+		) {
 			try {
 				const response = await invoke<{ success: boolean; error?: string; code?: string }>(
 					"search_content_stream",
-					{ request: { searchId, rootPath, query } },
+					{ request: { searchId, scopeRoot, rootPath, query } },
 				);
 				if (!response?.success) {
 					return {
@@ -440,7 +455,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
 			return () => cleanupTauriListener(unlisten);
 		},
 
-		async searchFileNames(rootPath: string, query: string) {
+		async searchFileNames(scopeRoot: string, rootPath: string, query: string) {
 			try {
 				const response = await invoke<{
 					success: boolean;
@@ -448,7 +463,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
 					error?: string;
 					code?: string;
 				}>("search_file_names", {
-					request: { rootPath, query }
+					request: { scopeRoot, rootPath, query }
 				});
 				if (!response?.success || !response.data) {
 					return {

@@ -266,6 +266,30 @@ function ConnectedTerminalComponent({
 	const pendingActivityUpdateRef = useRef<{ id: string } | null>(null);
 	const lastClipboardOpRef = useRef<number>(0);
 
+	/** Clear sidebar activity indicator when this view unmounts (e.g. tab switch). */
+	const clearTerminalActivityOnUnmount = useCallback((): void => {
+		if (activityTimeoutRef.current) {
+			clearTimeout(activityTimeoutRef.current);
+			activityTimeoutRef.current = null;
+		}
+		pendingActivityUpdateRef.current = null;
+		lastActivityUpdateRef.current = 0;
+
+		const store = useTerminalStore.getState();
+		const storeTerminalId =
+			(ptyIdRef.current
+				? store.findTerminalByPtyId(ptyIdRef.current)?.id
+				: undefined) ??
+			(targetId
+				? (store.terminals.find((t) => t.id === targetId)?.id ??
+					store.findTerminalByPtyId(targetId)?.id)
+				: undefined);
+
+		if (storeTerminalId) {
+			store.updateTerminalActivityBatch(storeTerminalId, false, Date.now());
+		}
+	}, [targetId]);
+
 	// Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
 	const handlePtyResize = useCallback(
 		async (cols: number, rows: number): Promise<void> => {
@@ -1218,21 +1242,7 @@ function ConnectedTerminalComponent({
 				cleanupExitListenerRef.current = null;
 			}
 
-			// Clean up activity timeout timer
-			if (activityTimeoutRef.current) {
-				clearTimeout(activityTimeoutRef.current);
-			}
-			// Flush pending activity update on unmount
-			if (pendingActivityUpdateRef.current) {
-				useTerminalStore
-					.getState()
-					.updateTerminalActivityBatch(
-						pendingActivityUpdateRef.current.id,
-						true,
-						Date.now(),
-					);
-				pendingActivityUpdateRef.current = null;
-			}
+			clearTerminalActivityOnUnmount();
 			// Cursor cleanup: Disable cursor blink before WebGL disposal to prevent ghost cursors
 			if (terminalRef.current) {
 				terminalRef.current.options.cursorBlink = false;
@@ -1660,11 +1670,11 @@ function ConnectedTerminalComponent({
 			if (cleanupDataListenerRef.current) cleanupDataListenerRef.current();
 			if (cleanupExitListenerRef.current) cleanupExitListenerRef.current();
 
-			if (activityTimeoutRef.current) clearTimeout(activityTimeoutRef.current);
+			clearTerminalActivityOnUnmount();
 			disposeWebglAddon(); terminal.dispose(); terminalRef.current = null; setTerminalInstance(null);
 			didInitRef.current = false; initializedTerminalIdRef.current = undefined;
 		};
-	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handlePtyResize, setTerminalHealthStatus, disposeWebglAddon]);
+	}, [targetId, autoSpawn, rendererPreference, fontFamily, fontSize, bufferSize, instanceId, externalTerminalId, autoFocus, handleTerminalData, handlePtyResize, setTerminalHealthStatus, disposeWebglAddon, clearTerminalActivityOnUnmount]);
 
 	const isCrashed = healthStatus === "disconnected" || healthStatus === "crashed";
 
