@@ -12,8 +12,16 @@ import {
   RefreshCw,
   Search,
   GitCommit,
-  ArrowUp
+  ArrowUp,
+  AlignLeft,
+  Columns2,
 } from "lucide-react";
+import { GitDiffView } from "@/components/git/GitDiffView";
+import {
+  loadGitDiffViewMode,
+  saveGitDiffViewMode,
+  type GitDiffViewMode,
+} from "@/lib/parse-unified-diff";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -69,6 +77,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [confirmAmendOpen, setConfirmAmendOpen] = useState(false);
+  const [diffViewMode, setDiffViewMode] = useState<GitDiffViewMode>(loadGitDiffViewMode);
   // Synchronous in-flight guard so a same-tick double-click cannot dispatch two
   // commits before the isCommitting state has re-rendered.
   const commitInFlight = React.useRef(false);
@@ -585,14 +594,50 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <div className="flex-1 flex flex-col min-w-0 bg-card/30">
         {selectedFile ? (
           <>
-            <div className="p-3 border-b border-border flex items-center justify-between bg-background">
-              <div className="flex items-center gap-3 overflow-hidden">
+            <div className="p-3 border-b border-border flex items-center justify-between gap-2 bg-background">
+              <div className="flex items-center gap-3 overflow-hidden min-w-0">
                 <FileCode size={16} className="text-primary shrink-0" />
                 <span className="text-sm font-medium truncate">{selectedFile}</span>
               </div>
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
-                {selectedStaged ? "Staged" : "Working tree"}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <div
+                  className="flex items-center rounded-md border border-border p-0.5"
+                  role="group"
+                  aria-label="Diff view mode"
+                >
+                  <Button
+                    type="button"
+                    variant={diffViewMode === "inline" ? "secondary" : "ghost"}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Inline diff"
+                    aria-pressed={diffViewMode === "inline"}
+                    onClick={() => {
+                      setDiffViewMode("inline");
+                      saveGitDiffViewMode("inline");
+                    }}
+                  >
+                    <AlignLeft size={14} />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={diffViewMode === "split" ? "secondary" : "ghost"}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Side-by-side diff"
+                    aria-pressed={diffViewMode === "split"}
+                    onClick={() => {
+                      setDiffViewMode("split");
+                      saveGitDiffViewMode("split");
+                    }}
+                  >
+                    <Columns2 size={14} />
+                  </Button>
+                </div>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {selectedStaged ? "Staged" : "Working tree"}
+                </span>
+              </div>
             </div>
             <ScrollArea className="flex-1 font-mono text-xs">
               {currentDiff === undefined || currentDiff === null ? (
@@ -601,27 +646,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
-                <div className="p-4 whitespace-pre" style={{ tabSize: 4, MozTabSize: 4 }}>
-                  {currentDiff.split('\n').map((line: string, i: number) => {
-                    const isAddition = line.startsWith('+');
-                    const isDeletion = line.startsWith('-');
-                    const isHeader = line.startsWith('@@') || line.startsWith('diff') || line.startsWith('index');
-                    
-                    return (
-                      <div 
-                        key={i} 
-                        className={cn(
-                          "px-2 py-0.5",
-                          isAddition && "bg-green-500/10 text-green-400",
-                          isDeletion && "bg-red-500/10 text-red-400",
-                          isHeader && "text-muted-foreground italic bg-muted/20"
-                        )}
-                      >
-                        {line || ' '}
-                      </div>
-                    );
-                  })}
-                </div>
+                <GitDiffView diff={currentDiff} mode={diffViewMode} />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
                   <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
