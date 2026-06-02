@@ -777,6 +777,41 @@ describe('ConnectedTerminal', () => {
     expect(cleanupFn).toHaveBeenCalled()
   })
 
+  it('should clear terminal activity indicator on unmount', async () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'store-term-1', ptyId: 'terminal-123', healthStatus: 'running' },
+    ]
+    mockTerminalStoreState.findTerminalByPtyId.mockImplementation((ptyId: string) =>
+      ptyId === 'terminal-123'
+        ? { id: 'store-term-1', ptyId: 'terminal-123', healthStatus: 'running' }
+        : undefined,
+    )
+
+    const { unmount } = render(<ConnectedTerminal storeTerminalId="store-term-1" />)
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+    })
+
+    expect(capturedDataCallback).toBeTruthy()
+    capturedDataCallback!('terminal-123', new TextEncoder().encode('x'))
+
+    expect(mockTerminalStoreState.updateTerminalActivityBatch).toHaveBeenCalledWith(
+      'store-term-1',
+      true,
+      expect.any(Number),
+    )
+
+    mockTerminalStoreState.updateTerminalActivityBatch.mockClear()
+    unmount()
+
+    expect(mockTerminalStoreState.updateTerminalActivityBatch).toHaveBeenCalledWith(
+      'store-term-1',
+      false,
+      expect.any(Number),
+    )
+  })
+
   it('should set up resize hook on mount', async () => {
     render(<ConnectedTerminal />)
 

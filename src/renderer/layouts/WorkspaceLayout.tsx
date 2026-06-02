@@ -104,6 +104,7 @@ import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 import type { SFTPEntry } from "@shared/types/ssh.types";
 import { SSHFileExplorer } from "@/components/ssh/SSHFileExplorer";
 import { cn } from "@/lib/utils";
+import { isSaveFileShortcut, requestSaveEditorFile } from "@/lib/editor-save";
 
 function getShortcutTargetContext(target: EventTarget | null): {
 	isInEditor: boolean;
@@ -711,8 +712,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		});
 	}, [activeProjectId]);
 
+	// Capture-phase save so WebView/editors cannot block Ctrl+S before it reaches us.
+	useEffect(() => {
+		const handleSaveShortcut = (e: KeyboardEvent): void => {
+			if (!isSaveFileShortcut(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const path =
+				activeTab?.type === "editor"
+					? activeTab.filePath
+					: useEditorStore.getState().activeFilePath;
+			if (path) {
+				void requestSaveEditorFile(path);
+			}
+		};
+
+		window.addEventListener("keydown", handleSaveShortcut, { capture: true });
+		return () =>
+			window.removeEventListener("keydown", handleSaveShortcut, { capture: true });
+	}, [activeTab]);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			if (isSaveFileShortcut(e)) return;
+
 			// Safety net: skip workspace handling when an earlier handler has already
 			// processed this event by calling preventDefault() — e.g. xterm clipboard
 			// ops or ConnectedTerminal's customKeyEventHandler for terminal-owned keys.
@@ -720,15 +743,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 			const { isInEditor, isInTerminal, isInInput } =
 				getShortcutTargetContext(e.target);
-
-			// Save File (Ctrl+S / ⌘+S) — should work even in editors
-			if (matchesShortcut(e, getActiveKey("saveFile"))) {
-				e.preventDefault();
-				if (activeTab?.type === "editor") {
-					useEditorStore.getState().saveFile(activeTab.filePath);
-				}
-				return;
-			}
 
 			// Close Tab (Ctrl+W / ⌘+W)
 			// On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)

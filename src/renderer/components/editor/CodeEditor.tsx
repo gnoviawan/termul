@@ -2,6 +2,10 @@ import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import { useShallow } from 'zustand/shallow'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useCodeMirror, type VisibleLineRange } from '@/hooks/use-codemirror'
+import {
+  registerEditorContentFlusher,
+  unregisterEditorContentFlusher
+} from '@/lib/editor-content-flush'
 import { TocPanel } from './TocPanel'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
@@ -60,7 +64,8 @@ export function CodeEditor({
     }))
   )
 
-  const { view, setContent, scrollToLine, restoreViewState } = useCodeMirror(containerRef, {
+  const { view, setContent, flushPendingContent, scrollToLine, restoreViewState } = useCodeMirror(containerRef, {
+    filePath,
     content,
     language,
     readOnly,
@@ -99,6 +104,11 @@ export function CodeEditor({
     },
     [getPanelWidth, setTocWidth]
   )
+
+  useEffect(() => {
+    registerEditorContentFlusher(filePath, flushPendingContent)
+    return () => unregisterEditorContentFlusher(filePath)
+  }, [filePath, flushPendingContent])
 
   // Update content when it changes from external source (file reload)
   const prevContentRef = useRef(content)

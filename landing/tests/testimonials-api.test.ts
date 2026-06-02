@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   getModerationStatus,
+  getClientIp,
   parseSubmission,
   toAdminTestimonial,
   toPublicTestimonial,
@@ -130,5 +131,37 @@ describe('testimonial API helpers', () => {
     expect(getModerationStatus('reject')).toBe('rejected');
     expect(getModerationStatus('delete')).toBeNull();
     expect(getModerationStatus('unknown')).toBeNull();
+  });
+
+  test('rejects file uploads on text-only fields', () => {
+    const file = new File(['Alex'], 'name.txt', { type: 'text/plain' });
+
+    try {
+      parseSubmission(submissionForm({ name: file }));
+      throw new Error('Expected parseSubmission to throw');
+    } catch (error) {
+      expectApiError(error, 400, 'Name must be plain text.');
+    }
+  });
+
+  test('uses the first forwarded IP when CF-Connecting-IP is absent', () => {
+    const request = new Request('https://termul.dev/api/testimonials', {
+      headers: {
+        'X-Forwarded-For': '1.2.3.4, 5.6.7.8',
+      },
+    });
+
+    expect(getClientIp(request)).toBe('1.2.3.4');
+  });
+
+  test('prefers CF-Connecting-IP over X-Forwarded-For', () => {
+    const request = new Request('https://termul.dev/api/testimonials', {
+      headers: {
+        'CF-Connecting-IP': '9.9.9.9',
+        'X-Forwarded-For': '1.2.3.4, 5.6.7.8',
+      },
+    });
+
+    expect(getClientIp(request)).toBe('9.9.9.9');
   });
 });

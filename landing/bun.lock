@@ -11,6 +11,7 @@
         "@unhead/react": "^3.1.1",
         "clsx": "^2.1.1",
         "framer-motion": "^12.38.0",
+        "hono": "^4.12.23",
         "lucide-react": "^1.17.0",
         "motion": "^12.40.0",
         "ogl": "^1.0.11",
@@ -545,6 +546,8 @@
     "hermes-estree": ["hermes-estree@0.25.1", "", {}, "sha512-0wUoCcLp+5Ev5pDW2OriHC2MJCbwLwuRx+gAqMTOkGKJJiBCLjtrvy4PWUGn6MIVefecRpzoOZ/UV6iGdOr+Cw=="],
 
     "hermes-parser": ["hermes-parser@0.25.1", "", { "dependencies": { "hermes-estree": "0.25.1" } }, "sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA=="],
+
+    "hono": ["hono@4.12.23", "", {}, "sha512-eIaZ9qDgu7XV0pxOCrg7/WhnQ6Ivm22UcxhXx/A3dcbqbbYgBEkc6e/J/s7j2tS96zoB0S9VBdLwQNCWwUo4LA=="],
 
     "hookable": ["hookable@6.1.1", "", {}, "sha512-U9LYDy1CwhMCnprUfeAZWZGByVbhd54hwepegYTK7Pi5NvqEj63ifz5z+xukznehT7i6NIZRu89Ay1AZmRsLEQ=="],
 

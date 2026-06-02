@@ -2,9 +2,11 @@ import { useRef, useEffect, useMemo, useCallback } from "react";
 import {
 	BlockNoteEditor,
 	BlockNoteSchema,
+	createExtension,
 	defaultBlockSpecs,
 	createCodeBlockSpec,
 } from "@blocknote/core";
+import { requestSaveEditorFile } from "@/lib/editor-save";
 import { codeBlockOptions } from "@blocknote/code-block";
 import { mermaidBlockSpec } from "@/components/editor/mermaid-block-spec";
 import type { TocHeading } from "@/hooks/use-toc-headings";
@@ -47,6 +49,7 @@ function convertMermaidBlocks(
 }
 
 interface UseBlockNoteOptions {
+	filePath: string;
 	initialMarkdown: string;
 	onChange: (markdown: string) => void;
 }
@@ -55,12 +58,14 @@ interface UseBlockNoteResult {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	editor: BlockNoteEditor<any, any, any>;
 	replaceContent: (markdown: string) => void;
+	flushPendingContent: () => Promise<void>;
 	getHeadings: () => TocHeading[];
 	scrollToBlock: (blockId: string) => void;
 }
 
 export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 	const onChangeRef = useRef(options.onChange);
+	const filePathRef = useRef(options.filePath);
 	const initialMarkdownRef = useRef(options.initialMarkdown);
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Guard to suppress onChange during programmatic replaceBlocks calls
@@ -69,6 +74,21 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 	const replaceTokenRef = useRef(0);
 
 	onChangeRef.current = options.onChange;
+	filePathRef.current = options.filePath;
+
+	const saveShortcutExtension = useMemo(
+		() =>
+			createExtension(() => ({
+				key: "termulSaveShortcut",
+				keyboardShortcuts: {
+					"Mod-s": () => {
+						void requestSaveEditorFile(filePathRef.current);
+						return true;
+					},
+				},
+			}))(),
+		[],
+	);
 
 	const editor = useMemo(() => {
 		const schema = BlockNoteSchema.create({
@@ -78,8 +98,11 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 				mermaid: mermaidBlockSpec(),
 			},
 		});
-		return BlockNoteEditor.create({ schema });
-	}, []);
+		return BlockNoteEditor.create({
+			schema,
+			extensions: [saveShortcutExtension],
+		});
+	}, [saveShortcutExtension]);
 
 	const runReplace = useCallback(
 		async (markdown: string, token: number): Promise<void> => {
@@ -152,6 +175,20 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 		[runReplace],
 	);
 
+	const flushPendingContent = useCallback(async (): Promise<void> => {
+		if (debounceTimerRef.current) {
+			clearTimeout(debounceTimerRef.current);
+			debounceTimerRef.current = null;
+		}
+		if (isReplacingRef.current) return;
+		try {
+			const markdown = await editor.blocksToMarkdownLossy(editor.document);
+			onChangeRef.current(markdown);
+		} catch {
+			// Failed to convert to markdown
+		}
+	}, [editor]);
+
 	const getHeadings = useCallback((): TocHeading[] => {
 		return editor.document.flatMap((block) => {
 			if (block.type !== "heading") {
@@ -217,5 +254,5 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 		[editor],
 	);
 
-	return { editor, replaceContent, getHeadings, scrollToBlock };
+	return { editor, replaceContent, flushPendingContent, getHeadings, scrollToBlock };
 }

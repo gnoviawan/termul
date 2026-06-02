@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import { EditorState, Compartment } from '@codemirror/state'
+import { EditorState, Compartment, Prec } from '@codemirror/state'
 import {
   EditorView,
   lineNumbers,
@@ -11,6 +11,7 @@ import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirro
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { highlightSelectionMatches } from '@codemirror/search'
 import { createTermulTheme } from '@/components/editor/codemirror-theme'
+import { requestSaveEditorFile } from '@/lib/editor-save'
 import type { Extension } from '@codemirror/state'
 
 // Cache loaded language extensions
@@ -88,6 +89,7 @@ export interface VisibleLineRange {
 }
 
 interface UseCodeMirrorOptions {
+  filePath: string
   content: string
   language: string
   readOnly?: boolean
@@ -100,6 +102,7 @@ interface UseCodeMirrorOptions {
 interface UseCodeMirrorResult {
   view: EditorView | null
   setContent: (content: string) => void
+  flushPendingContent: () => void
   scrollToLine: (lineNumber: number, highlightTerm?: string) => void
   restoreViewState: (lineNumber: number, column: number, scrollTop: number) => void
   getVisibleLineRange: () => VisibleLineRange | null
@@ -131,8 +134,10 @@ export function useCodeMirror(
   const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
   const pendingRestoreTokenRef = useRef<symbol | null>(null)
+  const filePathRef = useRef(options.filePath)
 
   // Keep refs up to date
+  filePathRef.current = options.filePath
   onChangeRef.current = options.onChange
   onCursorChangeRef.current = options.onCursorChange
   onScrollChangeRef.current = options.onScrollChange
@@ -191,6 +196,18 @@ export function useCodeMirror(
       indentOnInput(),
       history(),
       highlightSelectionMatches(),
+      Prec.highest(
+        keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => {
+              void requestSaveEditorFile(filePathRef.current)
+              return true
+            },
+            preventDefault: true
+          }
+        ])
+      ),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       themeCompartment.current.of(createTermulTheme(isDark)),
       updateListener,
@@ -282,6 +299,17 @@ export function useCodeMirror(
     })
 
     return () => observer.disconnect()
+  }, [])
+
+  const flushPendingContent = useCallback((): void => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
+    }
+    const view = viewRef.current
+    if (view) {
+      onChangeRef.current(view.state.doc.toString())
+    }
   }, [])
 
   const setContent = useCallback((content: string) => {
@@ -382,6 +410,7 @@ export function useCodeMirror(
   return {
     view: viewReady ? viewRef.current : null,
     setContent,
+    flushPendingContent,
     scrollToLine,
     restoreViewState,
     getVisibleLineRange
