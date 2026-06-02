@@ -22,6 +22,23 @@ vi.mock('@/stores/terminal-store', () => ({
   }))
 }))
 
+// Mock remote status store (StatusBar hosts RemoteAccessPopover)
+vi.mock('@/stores/remote-status-store', () => ({
+  useRemoteStatus: vi.fn(() => null),
+  useRemoteStatusStore: vi.fn(() => ({ setStatus: vi.fn() }))
+}))
+
+vi.mock('@/lib/api', () => ({
+  remoteServerApi: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    status: vi.fn()
+  },
+  openerApi: {
+    openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  }
+}))
+
 // Mock the home directory hook
 vi.mock('@/hooks/use-cwd', () => ({
   useHomeDirectory: vi.fn(() => '/home/user'),
@@ -176,6 +193,20 @@ describe('StatusBar', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
       expect(screen.getByLabelText('Context bar settings')).toBeDefined()
+    })
+  })
+
+  describe('remote access popover', () => {
+    it('should render the remote terminal access trigger', () => {
+      renderWithProviders(<StatusBar project={mockProject} />)
+
+      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+    })
+
+    it('should render remote trigger without an active project', () => {
+      renderWithProviders(<StatusBar project={undefined} />)
+
+      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
     })
   })
 })
