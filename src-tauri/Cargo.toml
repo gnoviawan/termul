@@ -31,6 +31,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 
+# ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
+# only). rustls-tls matches the backend already pulled in by the updater plugin.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
+
 # PTY and async runtime
 portable-pty = "0.9"
 anyhow = "1"

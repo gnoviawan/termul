@@ -18,6 +18,7 @@ import type { GitStatusDetail } from "@shared/types/ipc.types";
 import { cn } from "@/lib/utils";
 import { EditorTab } from "./EditorTab";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AgentIcon } from "@/components/agents/AgentIcon";
 import { useWorkspaceStore, useLeafCount, editorTabId } from "@/stores/workspace-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTerminalStore } from "@/stores/terminal-store";
@@ -147,10 +148,18 @@ function TerminalTabInline({
 					<div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
 				)}
 
-				<TerminalIcon
-					size={12}
-					className={cn("mr-2", isActive ? "text-primary" : "")}
-				/>
+				{terminal.kind === 'agent' && terminal.agentId ? (
+					<AgentIcon
+						agentId={terminal.agentId}
+						name={terminal.agentName}
+						className="h-3 w-3 mr-2"
+					/>
+				) : (
+					<TerminalIcon
+						size={12}
+						className={cn("mr-2", isActive ? "text-primary" : "")}
+					/>
+				)}
 				{isEditing ? (
 					<input
 						ref={inputRef}

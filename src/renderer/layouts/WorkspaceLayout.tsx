@@ -41,6 +41,7 @@ import { useSidebarVisible } from "@/stores/sidebar-store";
 import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile, useSSHStore } from "@/stores/ssh-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCommandHistoryStore } from "@/stores/command-history-store";
+import { loadCustomAgents } from "@/lib/agents/custom-agents";
 import {
 	useWorkspaceStore,
 	useActiveTab,
@@ -100,6 +101,8 @@ import { ResizeEdges } from "@/components/ResizeEdges";
 import { resolveEnvForSpawn } from "@/lib/env-parser";
 import { getDefaultCwdForProject, getActiveWorktreeForProject } from "@/lib/worktree-context";
 import { spawnTerminalInPane } from "@/lib/terminal-spawn";
+import { launchAgentInPane } from "@/lib/agent-launch";
+import { BUILT_IN_AGENTS } from "@/lib/agents/agent-registry";
 import { browserTabHide, browserTabShow } from "@/lib/browser-api";
 import type { SFTPEntry } from "@shared/types/ssh.types";
 import { SSHFileExplorer } from "@/components/ssh/SSHFileExplorer";
@@ -151,6 +154,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0);
 
 	const isLoaded = useProjectsLoaded();
+
+	// Warm custom-agent cache so tab icons resolve before the launcher opens.
+	useEffect(() => {
+		void loadCustomAgents()
+	}, []);
+
 	const confirmTerminalClose = useConfirmTerminalClose();
 	const projects = useProjects();
 	const activeProject = useActiveProject();
@@ -412,12 +421,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
 	// Ensure tabs exist for currently visible project terminals.
 	// Project workspace loading/removal is owned by persistence + restore flows.
+	// Debounce: rapid terminal store mutations (addTerminal → setTerminalPtyId →
+	// addTabToPane) settle before syncTerminalTabs runs, preventing the MOUNT/UNMOUNT
+	// cascade where intermediate states look like "orphaned" tabs.
 	const ensureCallCountRef = useRef(0);
 	const lastEnsuredTerminalIdsRef = useRef<string[]>([]);
 	const lastEnsuredProjectIdRef = useRef<string>("");
+	const syncDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
 		const terminalIds = terminals.map((terminal) => terminal.id);
+
+		// Clear any pending debounce — only the latest mutation triggers a sync.
+		if (syncDebounceTimerRef.current) {
+			clearTimeout(syncDebounceTimerRef.current);
+			syncDebounceTimerRef.current = null;
+		}
 
 		// If we switched projects, we should wait for the persistence layer (useEditorPersistence)
 		// to finish its job of replacing the entire workspace tree.
@@ -437,19 +456,32 @@ export default function WorkspaceLayout(): React.JSX.Element {
 			return;
 		}
 
-		const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
+		// Debounce: wait for store mutations to settle before syncing tabs.
+		// This prevents the cascade where syncTerminalTabs runs between addTerminal
+		// and addTabToPane, sees a tab as orphaned, removes it, triggering
+		// ConnectedTerminal unmount and a restore re-trigger.
+		syncDebounceTimerRef.current = setTimeout(() => {
+			lastEnsuredTerminalIdsRef.current = terminalIds;
+			const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
 
-		console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${ensureId}]`, {
-			projectId: activeProjectId,
-			terminalCount: terminalIds.length,
-			terminalIds,
-			prevCount: prevIds.length,
-			callCount: ensureCallCountRef.current,
-		});
+			console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${ensureId}]`, {
+				projectId: activeProjectId,
+				terminalCount: terminalIds.length,
+				terminalIds,
+				prevCount: prevIds.length,
+				callCount: ensureCallCountRef.current,
+			});
 
-		lastEnsuredTerminalIdsRef.current = terminalIds;
-		const workspaceStore = useWorkspaceStore.getState();
-		workspaceStore.syncTerminalTabs(terminalIds);
+			const workspaceStore = useWorkspaceStore.getState();
+			workspaceStore.syncTerminalTabs(terminalIds);
+		}, 100);
+
+		return () => {
+			if (syncDebounceTimerRef.current) {
+				clearTimeout(syncDebounceTimerRef.current);
+				syncDebounceTimerRef.current = null;
+			}
+		};
 	}, [terminals, activeProjectId]);
 
 	// Sync legacy stores (activeTerminalId, activeFilePath) from workspace pane tree
@@ -668,6 +700,29 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		handleCreateTerminalInPane(paneId);
 	}, [handleCreateTerminalInPane]);
 
+	// ADR-004.5: command-bar "Launch Agent" entry. Launches the default agent's
+	// TUI in the active pane with no seed prompt so the user composes inside the
+	// agent UI; the empty-pane launcher offers the full prompt+picker flow.
+	const handleLaunchAgent = useCallback(async () => {
+		const paneId = useWorkspaceStore.getState().activePaneId;
+		if (!paneId || !activeProjectId) return;
+		const cwd = getDefaultCwdForProject(activeProjectId);
+		const result = await launchAgentInPane(
+			paneId,
+			activeProjectId,
+			cwd,
+			BUILT_IN_AGENTS[0],
+			undefined,
+			{
+				envVars: activeProject?.envVars,
+				maxTerminalsPerProject: maxTerminals,
+			},
+		);
+		if (!result.success) {
+			toast.error(result.error || "Failed to launch agent");
+		}
+	}, [activeProjectId, activeProject?.envVars, maxTerminals]);
+
 	const handleAddTerminal = useCallback((paneId: string | undefined, shell?: ShellInfo) => {
 		const targetPaneId = paneId ?? useWorkspaceStore.getState().activePaneId;
 		if (!targetPaneId) return;
@@ -850,17 +905,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				return;
 			}
 
-			// New terminal (Ctrl+T) - workspace only
+			// Ctrl+T: show the agent launcher prompt overlay in the active pane.
+			// The launcher is an overlay — existing tabs are preserved underneath.
+			// When the agent is launched, a new tab is added to the same pane.
 			if (matchesShortcut(e, getActiveKey("newTerminal"))) {
 				if (!isWorkspaceRoute) return;
 				e.preventDefault();
 				e.stopPropagation();
-				if (terminals.length >= maxTerminals) {
-					toast.error(`Maximum ${maxTerminals} terminals per project`);
-					return;
-				}
 				const paneId = useWorkspaceStore.getState().activePaneId;
-				handleCreateTerminalInPane(paneId);
+				if (paneId) {
+					const current = useWorkspaceStore.getState().agentLauncherPaneId;
+					// Toggle: if already showing on this pane, hide it; otherwise show it.
+					if (current === paneId) {
+						useWorkspaceStore.getState().hideAgentLauncher();
+					} else {
+						useWorkspaceStore.getState().showAgentLauncher(paneId);
+					}
+				}
 				return;
 			}
 
@@ -1432,6 +1493,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				projects={projects}
 				onSwitchProject={selectProject}
 				onAddTerminal={() => handleAddTerminal(undefined)}
+				onShowAgentLauncher={() => {
+					const paneId = useWorkspaceStore.getState().activePaneId;
+					if (paneId) {
+						useWorkspaceStore.getState().showAgentLauncher(paneId);
+					}
+				}}
+				onLaunchAgent={handleLaunchAgent}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}
 				onOpenProjectSettings={handleOpenProjectSettings}

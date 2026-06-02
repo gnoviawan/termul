@@ -6,6 +6,15 @@ export interface PersistedTerminal {
   cwd?: string
   scrollback?: string[] // Legacy text snapshot for restoration fallback
   transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration; cap at renderer MAX_TRANSCRIPT_CHARS to avoid unbounded persistence
+  // ADR-004.4: terminal-native agent metadata. Persisted so a restored agent
+  // terminal re-spawns the agent TUI — but the seed prompt is intentionally NOT
+  // persisted, so restore boots the agent fresh rather than re-submitting a
+  // stale task. Restore-prompt suppression is enforced in use-terminal-restore.
+  kind?: 'shell' | 'agent'
+  agentId?: string
+  agentName?: string
+  agentProgram?: string
+  agentArgs?: string[]
 }
 
 // Default scrollback limit to prevent excessive storage
@@ -51,7 +60,11 @@ export const PersistenceKeys = {
   snapshots: (projectId: string): string => `snapshots/${projectId}`,
   projects: 'projects',
   settings: 'settings',
-  windowState: 'window-state'
+  windowState: 'window-state',
+  // ADR-004.3 / ADR-004.6: user-defined terminal-native agent definitions.
+  customAgents: 'agents/custom',
+  // Last-selected agent in the launcher (persisted across sessions).
+  lastSelectedAgent: 'agents/last-selected'
 } as const
 
 // Persisted project data (stored at projects.json)

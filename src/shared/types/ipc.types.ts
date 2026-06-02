@@ -10,6 +10,17 @@ export interface TerminalSpawnOptions {
 	env?: Record<string, string>;
 	cols?: number;
 	rows?: number;
+	// ADR-004.2: terminal-native agent launch.
+	// When `program` is set, the PTY runs that executable directly (with `args`
+	// as discrete argv entries) instead of resolving a login shell. The prompt is
+	// always a single element of `args` — never shell-interpolated. When `program`
+	// is omitted, spawn behavior is byte-for-byte identical to the shell path.
+	/** Absolute path or PATH-resolvable executable to run instead of a shell. */
+	program?: string;
+	/** argv tail; each element is passed as a discrete, unescaped argument. */
+	args?: string[];
+	/** Descriptive marker for the session type. Defaults to 'shell'. */
+	kind?: "shell" | "agent";
 	// Index signature to satisfy Tauri's InvokeArgs constraint
 	[key: string]: unknown;
 }

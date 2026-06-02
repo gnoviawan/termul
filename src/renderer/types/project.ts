@@ -87,6 +87,14 @@ export interface Terminal {
   hasActivity?: boolean // Whether terminal has recent output activity
   lastActivityTimestamp?: number // Timestamp when last activity occurred
   needsAttention?: boolean // Whether this terminal's process finished while it was not the focused/visible terminal; drives the in-app highlight border
+  // ADR-004.4: terminal-native agent launch metadata. Descriptive-only — no
+  // behavior keys off these except tab labeling and restore-prompt suppression.
+  // Git/cwd trackers, resize, and persistence ignore them.
+  agentId?: string // Agent Registry id, e.g. 'claude-code'
+  agentName?: string // Display name, e.g. 'Claude Code' — used for the tab label
+  agentProgram?: string // Resolved/declared program for restore re-spawn (no prompt)
+  agentArgs?: string[] // baseArgs only (seed prompt intentionally excluded for restore)
+  kind?: 'shell' | 'agent' // Session type marker; defaults to 'shell' when unset
 }
 
 export interface TerminalLine {

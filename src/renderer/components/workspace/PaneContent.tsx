@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { ConnectedTerminal } from "@/components/terminal/ConnectedTerminal";
+import { AgentLauncher } from "@/components/agents/AgentLauncher";
+import { AgentIcon } from "@/components/agents/AgentIcon";
 import { EditorPanel } from "@/components/editor/EditorPanel";
 import { BrowserPanel } from "@/components/browser/BrowserPanel";
 import { GitPanel } from "@/components/git/GitPanel";
@@ -13,10 +15,7 @@ import { useProjectStore } from "@/stores/project-store";
 import { usePaneDnd } from "@/hooks/use-pane-dnd";
 import type { LeafNode } from "@/types/workspace.types";
 import type { WorkspaceTab } from "@/stores/workspace-store";
-import type { ShellInfo, DetectedShells } from "@shared/types/ipc.types";
-import { Button } from "@/components/ui/button";
-import { Terminal as TerminalIcon } from "lucide-react";
-import { shellApi } from "@/lib/api";
+import type { ShellInfo } from "@shared/types/ipc.types";
 
 // Import useShallow for selective re-rendering
 import { useShallow } from "zustand/shallow";
@@ -69,10 +68,11 @@ export function PaneContent({
 	);
 
 	// FIX: Batch workspace store subscriptions with useShallow to prevent cascading re-renders
-	const { activePaneId, fullscreenPaneId, setActivePane } = useWorkspaceStore(
+	const { activePaneId, fullscreenPaneId, agentLauncherPaneId, setActivePane } = useWorkspaceStore(
 		useShallow((state) => ({
 			activePaneId: state.activePaneId,
 			fullscreenPaneId: state.fullscreenPaneId,
+			agentLauncherPaneId: state.agentLauncherPaneId,
 			setActivePane: state.setActivePane,
 		})),
 	);
@@ -93,6 +93,42 @@ export function PaneContent({
 		previewTarget?.paneId === pane.id && !isFullscreenPane
 			? previewTarget.position
 			: null;
+
+	// Agent loading: show pulsing icon for a minimum duration after the terminal
+	// is first seen. The xterm renderer attaches almost instantly (same frame),
+	// so rendererAttachmentCount alone isn't enough for a visible loading state.
+	const [agentLoadingIds, setAgentLoadingIds] = useState<Set<string>>(new Set());
+	const agentLoadingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+	const prevAgentTerminalIdsRef = useRef<string[]>([]);
+	const AGENT_LOADING_MS = 1500;
+
+	// Detect newly appeared agent terminals and start loading timers.
+	// This runs after every render where terminalsInPane changes (useShallow).
+	useEffect(() => {
+		const currentIds = terminalsInPane
+			.filter((t) => t.kind === 'agent' && t.agentId && t.ptyId)
+			.map((t) => t.id);
+		const prevIds = prevAgentTerminalIdsRef.current;
+		prevAgentTerminalIdsRef.current = currentIds;
+
+		for (const id of currentIds) {
+			if (!prevIds.includes(id) && !agentLoadingTimers.current.has(id)) {
+				// New agent terminal — add to loading set with a minimum duration.
+				setAgentLoadingIds((prev) => new Set(prev).add(id));
+				agentLoadingTimers.current.set(
+					id,
+					setTimeout(() => {
+						setAgentLoadingIds((prev) => {
+							const next = new Set(prev);
+							next.delete(id);
+							return next;
+						});
+						agentLoadingTimers.current.delete(id);
+					}, AGENT_LOADING_MS),
+				);
+			}
+		}
+	}, [terminalsInPane]);
 
 	const handleFocus = useCallback(() => {
 		if (!isActivePane) {
@@ -146,32 +182,6 @@ export function PaneContent({
 					: panePreviewPosition === "bottom"
 						? "-translate-y-2"
 						: "";
-
-	const [shells, setShells] = useState<DetectedShells | null>(null);
-
-	useEffect(() => {
-		const fetchShells = async (): Promise<void> => {
-			try {
-				const result = await shellApi.getAvailableShells();
-				if (result.success) {
-					setShells(result.data);
-				}
-			} catch {
-				setShells(null);
-			}
-		};
-		void fetchShells();
-	}, []);
-
-	const sortedShells = useMemo(() => {
-		return shells?.available?.slice().sort((a, b) => {
-			if (defaultShell) {
-				if (a.name === defaultShell) return -1;
-				if (b.name === defaultShell) return 1;
-			}
-			return a.displayName.localeCompare(b.displayName);
-		});
-	}, [shells, defaultShell]);
 
 	return (
 		<div
@@ -246,24 +256,50 @@ export function PaneContent({
 								if (!terminal) {
 									return null;
 								}
-								// CRITICAL: Skip rendering if terminal doesn't have a PTY ID yet
-								// This prevents spawn loops when workspace tabs aren't fully synced
+								// CRITICAL: Only skip rendering if terminal doesn't have a PTY
+								// ID yet — this prevents spawn loops when workspace tabs aren't
+								// fully synced. For agent terminals with a ptyId, ConnectedTerminal
+								// MUST mount so it can attach the renderer (which sets
+								// rendererAttachmentCount to 1). Instead of blocking the mount,
+								// we overlay the agent loading icon on top until the renderer
+								// attaches — see the overlay div after ConnectedTerminal.
 								if (!terminal.ptyId) {
 									const isVisible = activeTab?.id === tab.id;
+									const isAgent = terminal.kind === 'agent' && !!terminal.agentId;
 									return (
 										<div
 											key={tab.id}
 											className={
 												isVisible
-													? "w-full h-full flex items-center justify-center text-muted-foreground text-sm"
+													? "w-full h-full flex flex-col items-center justify-center gap-3"
 													: "hidden"
 											}
 										>
-											Connecting...
+											{isAgent ? (
+												<>
+													<span className="animate-pulse motion-reduce:animate-none">
+														<AgentIcon
+															agentId={terminal.agentId!}
+															className="h-16 w-16"
+														/>
+													</span>
+													<span className="text-sm text-muted-foreground">
+														Starting {terminal.agentName ?? terminal.name}…
+													</span>
+												</>
+											) : (
+												<span className="text-sm text-muted-foreground">
+													Connecting…
+												</span>
+											)}
 										</div>
 									);
 								}
 								const isVisible = activeTab?.id === tab.id;
+								const isAgentLoading =
+									terminal.kind === 'agent' &&
+									!!terminal.agentId &&
+									agentLoadingIds.has(terminal.id);
 								const connectedTerminalSpawnOptions = {
 									projectId: terminal.projectId,
 									shell: terminal.shell,
@@ -299,6 +335,23 @@ export function PaneContent({
 											className="w-full h-full"
 											isVisible={isVisible}
 										/>
+										{/* Agent loading overlay: shown until ConnectedTerminal attaches
+											the renderer (rendererAttachmentCount flips to 1). Covers the
+											xterm div with a centered pulsing icon so the user sees feedback. */}
+										{isAgentLoading && (
+											<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/95">
+												<span className="animate-pulse motion-reduce:animate-none">
+													<AgentIcon
+														agentId={terminal.agentId!}
+														name={terminal.agentName}
+														className="h-16 w-16"
+													/>
+												</span>
+												<span className="text-sm text-muted-foreground">
+													Starting {terminal.agentName ?? terminal.name}…
+												</span>
+											</div>
+										)}
 									</div>
 								);
 							})}
@@ -386,30 +439,9 @@ export function PaneContent({
 							})}
 
 						{pane.tabs.length === 0 ? (
-							<div className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-8">
-								<div className="flex flex-col items-center gap-2 text-center">
-									<span className="text-muted-foreground text-sm font-medium">
-										Drag a tab or file here
-									</span>
-									<span className="text-muted-foreground/50 text-xs">
-										or open a new terminal or tab
-									</span>
-								</div>
-
-								<div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
-									{sortedShells?.map((shell) => (
-										<Button
-											key={shell.name}
-											variant="outline"
-											size="sm"
-											className="h-8 text-[11px] gap-2"
-											onClick={() => onAddTerminal?.(pane.id, shell)}
-										>
-											<TerminalIcon size={12} />
-											{shell.displayName}
-										</Button>
-									))}
-								</div>
+							<div className="absolute inset-0">
+								{/* ADR-004.5: agent launch + plain terminal picker */}
+								<AgentLauncher paneId={pane.id} />
 							</div>
 						) : null}
 					</div>
@@ -417,6 +449,21 @@ export function PaneContent({
 
 				{isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}
 			</div>
+
+			{/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. */}
+			{agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
+				<div
+					className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm"
+					role="dialog"
+					aria-modal="true"
+					aria-label="Agent launcher"
+					onKeyDown={(e) => {
+						if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
+					}}
+				>
+					<AgentLauncher paneId={pane.id} />
+				</div>
+			) : null}
 		</div>
 	);
 }

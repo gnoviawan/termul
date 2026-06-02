@@ -1,6 +1,7 @@
 // Module declarations
 mod browser_tab_manager;
 mod commands;
+mod agent_registry;
 mod migrations;
 mod path_validation;
 mod pty;
@@ -756,6 +757,8 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_set_visibility,
+            // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
+            commands::agent_registry_fetch,
             // Browser tab commands
             commands::browser_tab_create,
             commands::browser_tab_navigate,
