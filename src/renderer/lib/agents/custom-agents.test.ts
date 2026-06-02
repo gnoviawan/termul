@@ -115,6 +115,18 @@ describe('persistence flows', () => {
 		expect(await loadCustomAgents()).toEqual([])
 	})
 
+	it('loadCustomAgents keeps cache when persistence read fails', async () => {
+		const icon = '<svg viewBox="0 0 16 16"><circle /></svg>'
+		mockRead.mockResolvedValueOnce({
+			success: true,
+			data: { agents: [toAgentDefinition({ ...validInput, id: 'custom-1', icon })] },
+		})
+		await loadCustomAgents()
+		mockRead.mockResolvedValueOnce({ success: false, error: 'disk error' })
+		expect(await loadCustomAgents()).toHaveLength(1)
+		expect(getAgentById('custom-1')?.icon).toBe(icon)
+	})
+
 	it('loadCustomAgents forces isBuiltIn:false on load', async () => {
 		mockRead.mockResolvedValue({
 			success: true,

@@ -46,6 +46,10 @@ export function getAgentById(agentId: string): TerminalAgentDefinition | undefin
 	return getBuiltInAgent(agentId) ?? customAgentsById.get(agentId)
 }
 
+function getCachedCustomAgents(): TerminalAgentDefinition[] {
+	return [...customAgentsById.values()]
+}
+
 const VALID_PROMPT_MODES: readonly AgentPromptMode[] = ['positional', 'flag', 'none']
 
 export interface CustomAgentInput {
@@ -108,8 +112,11 @@ export async function loadCustomAgents(): Promise<TerminalAgentDefinition[]> {
 		updateCustomAgentsCache(agents)
 		return agents
 	}
-	updateCustomAgentsCache([])
-	return []
+	if (!result.success && result.code === 'FILE_NOT_FOUND') {
+		updateCustomAgentsCache([])
+		return []
+	}
+	return getCachedCustomAgents()
 }
 
 async function saveCustomAgents(agents: TerminalAgentDefinition[]): Promise<void> {
@@ -118,6 +125,7 @@ async function saveCustomAgents(agents: TerminalAgentDefinition[]): Promise<void
 	if (!result.success) {
 		throw new Error(result.error || 'Failed to save custom agents')
 	}
+	updateCustomAgentsCache(agents)
 }
 
 /**

@@ -96,11 +96,11 @@ function validateAndNormalizeSvg(untrusted) {
 	if (untrusted.length > MAX_SVG_BYTES) {
 		throw new Error('SVG payload too large')
 	}
-	if (!/^\s*<svg\b/i.test(untrusted)) {
+	const rootTag = untrusted.match(/<svg\b[^>]*>/i)?.[0]
+	if (!rootTag) {
 		throw new Error('Payload is not an SVG document')
 	}
-	const rootTag = untrusted.match(/^\s*<svg\b[^>]*>/i)?.[0]
-	if (!rootTag || !/\bviewBox\s*=/i.test(rootTag)) {
+	if (!/\bviewBox\s*=/i.test(rootTag)) {
 		throw new Error('SVG root is missing viewBox')
 	}
 	if (/<script\b/i.test(untrusted) || /\bon\w+\s*=/i.test(untrusted)) {
