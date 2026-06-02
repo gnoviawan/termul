@@ -12,9 +12,39 @@ import { persistenceApi } from '@/lib/api'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import {
 	BUILT_IN_AGENTS,
+	getBuiltInAgent,
 	type AgentPromptMode,
 	type TerminalAgentDefinition,
 } from '@/lib/agents/agent-registry'
+
+let customAgentsById = new Map<string, TerminalAgentDefinition>()
+let customAgentsCacheVersion = 0
+const customAgentsCacheListeners = new Set<() => void>()
+
+function updateCustomAgentsCache(agents: readonly TerminalAgentDefinition[]): void {
+	customAgentsById = new Map(agents.map((a) => [a.id, a]))
+	customAgentsCacheVersion += 1
+	for (const listener of customAgentsCacheListeners) {
+		listener()
+	}
+}
+
+/** Subscribe to custom-agent cache updates (for AgentIcon and similar). */
+export function subscribeCustomAgentsCache(listener: () => void): () => void {
+	customAgentsCacheListeners.add(listener)
+	return () => {
+		customAgentsCacheListeners.delete(listener)
+	}
+}
+
+export function getCustomAgentsCacheVersion(): number {
+	return customAgentsCacheVersion
+}
+
+/** Built-in or persisted custom agent by launch-table id. */
+export function getAgentById(agentId: string): TerminalAgentDefinition | undefined {
+	return getBuiltInAgent(agentId) ?? customAgentsById.get(agentId)
+}
 
 const VALID_PROMPT_MODES: readonly AgentPromptMode[] = ['positional', 'flag', 'none']
 
@@ -74,8 +104,11 @@ export async function loadCustomAgents(): Promise<TerminalAgentDefinition[]> {
 	const result = await persistenceApi.read<PersistedCustomAgents>(PersistenceKeys.customAgents)
 	if (result.success && Array.isArray(result.data?.agents)) {
 		// Defensive: force isBuiltIn:false on load so a tampered file can't shadow built-ins.
-		return result.data.agents.map((a) => ({ ...a, isBuiltIn: false }))
+		const agents = result.data.agents.map((a) => ({ ...a, isBuiltIn: false as const }))
+		updateCustomAgentsCache(agents)
+		return agents
 	}
+	updateCustomAgentsCache([])
 	return []
 }
 

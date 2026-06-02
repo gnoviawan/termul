@@ -1,5 +1,9 @@
-import { memo, useMemo } from 'react'
-import { getBuiltInAgent } from '@/lib/agents/agent-registry'
+import { memo, useMemo, useSyncExternalStore } from 'react'
+import {
+	getAgentById,
+	getCustomAgentsCacheVersion,
+	subscribeCustomAgentsCache,
+} from '@/lib/agents/custom-agents'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 
 /**
@@ -27,13 +31,21 @@ export const AgentIcon = memo(function AgentIcon({
 	icon: iconProp,
 	className = 'h-3.5 w-3.5',
 }: AgentIconProps): React.JSX.Element {
+	const customAgentsCacheVersion = useSyncExternalStore(
+		subscribeCustomAgentsCache,
+		getCustomAgentsCacheVersion,
+		getCustomAgentsCacheVersion,
+	)
+
 	const resolved = useMemo(() => {
-		const builtIn = getBuiltInAgent(agentId)
-		const displayName = name ?? builtIn?.name
-		const rawIcon = iconProp ?? builtIn?.icon
+		// Re-resolve when the custom-agent cache is refreshed after load/upsert.
+		void customAgentsCacheVersion
+		const def = getAgentById(agentId)
+		const displayName = name ?? def?.name
+		const rawIcon = iconProp ?? def?.icon
 		const icon = rawIcon ? sanitizeInlineAgentSvg(rawIcon) : null
 		return { displayName, icon }
-	}, [agentId, iconProp, name])
+	}, [agentId, customAgentsCacheVersion, iconProp, name])
 
 	if (resolved.icon) {
 		return (

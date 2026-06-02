@@ -41,6 +41,7 @@ import { useSidebarVisible } from "@/stores/sidebar-store";
 import { useSSHProfiles, useSSHActions, useActiveSSHProfileId, useActiveSSHProfile, useSSHStore } from "@/stores/ssh-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCommandHistoryStore } from "@/stores/command-history-store";
+import { loadCustomAgents } from "@/lib/agents/custom-agents";
 import {
 	useWorkspaceStore,
 	useActiveTab,
@@ -152,6 +153,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 	const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0);
 
 	const isLoaded = useProjectsLoaded();
+
+	// Warm custom-agent cache so tab icons resolve before the launcher opens.
+	useEffect(() => {
+		void loadCustomAgents()
+	}, []);
+
 	const confirmTerminalClose = useConfirmTerminalClose();
 	const projects = useProjects();
 	const activeProject = useActiveProject();

@@ -17,6 +17,7 @@ vi.mock('@/lib/api', () => ({
 
 import {
 	deleteCustomAgent,
+	getAgentById,
 	loadAllAgents,
 	loadCustomAgents,
 	mergeAgents,
@@ -121,6 +122,19 @@ describe('persistence flows', () => {
 		})
 		const loaded = await loadCustomAgents()
 		expect(loaded[0].isBuiltIn).toBe(false)
+	})
+
+	it('getAgentById resolves custom agents after loadCustomAgents', async () => {
+		const icon = '<svg viewBox="0 0 16 16"><circle /></svg>'
+		mockRead.mockResolvedValue({
+			success: true,
+			data: {
+				agents: [toAgentDefinition({ ...validInput, id: 'custom-1', icon })],
+			},
+		})
+		await loadCustomAgents()
+		expect(getAgentById('custom-1')?.icon).toBe(icon)
+		expect(getAgentById('claude-code')?.command).toBe('claude')
 	})
 
 	it('upsertCustomAgent validates then writes', async () => {
