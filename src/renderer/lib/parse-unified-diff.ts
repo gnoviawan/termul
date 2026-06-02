@@ -20,8 +20,8 @@ function classifyLine(line: string): DiffLineKind {
     line.startsWith("@@") ||
     line.startsWith("diff ") ||
     line.startsWith("index ") ||
-    line.startsWith("---") ||
-    line.startsWith("+++")
+    line.startsWith("--- ") ||
+    line.startsWith("+++ ")
   ) {
     return "header";
   }

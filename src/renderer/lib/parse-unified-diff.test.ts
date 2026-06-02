@@ -18,6 +18,13 @@ describe("parseUnifiedDiffInline", () => {
     expect(lines[1].text).toBe("old");
     expect(lines[3].text).toBe("context");
   });
+
+  it("treats multi-dash/plus hunk body lines as changes, not headers", () => {
+    const lines = parseUnifiedDiffInline("@@ -1 +1 @@\n----\n++++");
+    expect(lines.map((l) => l.kind)).toEqual(["header", "deletion", "addition"]);
+    expect(lines[1].text).toBe("---");
+    expect(lines[2].text).toBe("+++");
+  });
 });
 
 describe("parseUnifiedDiffSplit", () => {
