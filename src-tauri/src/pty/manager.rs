@@ -140,7 +140,7 @@ pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
 pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
 pub const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
 
-/// Public information about a spawned terminal
+/// Public info emitted to renderer on spawn (also forwarded to ws clients)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalInfo {
@@ -151,6 +151,17 @@ pub struct TerminalInfo {
     pub cols: u16,
     pub rows: u16,
 }
+
+/// Broadcast channel capacity (number of buffered output batches per terminal).
+/// Each batch is up to READ_BUF (16KB) bytes. 1024 slots ≈ 16MB max buffered output.
+/// Slow receivers will receive `RecvError::Lagged` — acceptable; they miss bytes
+/// rather than back-pressuring the PTY.
+const TERM_BROADCAST_CAPACITY: usize = 1024;
+
+/// Maximum scrollback bytes retained per terminal for remote-client replay.
+/// 256 KiB ≈ several screenfuls of history; bounded so memory stays predictable
+/// even for very chatty terminals. Oldest bytes are evicted first.
+pub const SCROLLBACK_CAP: usize = 256 * 1024;
 
 /// Options for spawning a new terminal
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +202,15 @@ pub struct TerminalInstance {
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
+    /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
+    /// Each flusher batch is sent as a `Vec<u8>` message. Tauri frontend keeps using
+    /// its dedicated Channel — this field is only consumed by the remote module.
+    pub broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
+    /// Rolling scrollback buffer of recent raw PTY output (VT100 bytes).
+    /// Replayed to remote web clients on connect so they see prior output
+    /// (persistence + parity with the desktop terminal). Capped at
+    /// `SCROLLBACK_CAP` bytes; oldest bytes are dropped first.
+    pub scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -234,6 +254,29 @@ impl TerminalInstance {
     /// Returns when the terminal became orphaned, if ever.
     pub fn orphan_since(&self) -> Option<Instant> {
         *self.orphan_since.read()
+    }
+
+    /// Subscribe to live PTY output. Returns a receiver that yields raw byte batches.
+    /// Use this from the remote WebSocket module to forward output to web clients.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.broadcast_tx.subscribe()
+    }
+
+    /// Atomically snapshot the current scrollback AND subscribe to the live
+    /// broadcast, under the scrollback write lock.
+    ///
+    /// Holding the lock across both operations guarantees no output is lost or
+    /// duplicated at the seam: any batch appended to scrollback before this call
+    /// is in the returned snapshot, and any batch after is delivered via the
+    /// receiver. The flusher takes the same lock when appending, so the two
+    /// cannot interleave.
+    pub fn subscribe_with_backlog(
+        &self,
+    ) -> (Vec<u8>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let guard = self.scrollback.write();
+        let rx = self.broadcast_tx.subscribe();
+        let snapshot: Vec<u8> = guard.iter().copied().collect();
+        (snapshot, rx)
     }
 }
 
@@ -545,6 +588,8 @@ impl PtyManager {
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
+                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -562,10 +607,12 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_broadcast = instance.broadcast_tx.clone();
+            let flusher_scrollback = instance.scrollback.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
             });
 
             // Spawn reader thread
@@ -664,6 +711,8 @@ impl PtyManager {
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
+                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -677,10 +726,12 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_broadcast = instance.broadcast_tx.clone();
+            let flusher_scrollback = instance.scrollback.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
             });
 
             // Spawn reader thread
@@ -837,80 +888,76 @@ impl PtyManager {
     /// ADR-002.3: Flusher thread — batched Channel output at FLUSH_INTERVAL.
     /// Takes pending buffer via std::mem::take every 4ms and sends via binary channel.
     /// If on_data is None, skips sending (just drains).
+    ///
+    /// broadcast_tx: per-terminal broadcast channel. When present, each flushed
+    /// batch is also sent so remote WebSocket clients receive live output.
+    /// Send failures are ignored (no active remote subscribers is normal).
+    ///
+    /// scrollback: rolling history buffer. Each batch is appended (under its
+    /// write lock, capped at `SCROLLBACK_CAP`) BEFORE broadcasting, so a remote
+    /// client calling `subscribe_with_backlog` sees a consistent seam between
+    /// replayed history and live output.
     fn flusher_loop(
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
+        broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
+        scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
         on_data: Option<Channel<Response>>,
         terminal_id: String,
     ) {
         let id = terminal_id;
         log::info!("[PTY {}] Flusher thread starting", id);
 
-        if on_data.is_none() {
-            // No binary channel — read and discard flusher
-            loop {
-                std::thread::sleep(FLUSH_INTERVAL);
-                if done_flag.load(Ordering::Acquire) {
-                    break;
-                }
-                // Drain pending buffer silently
-                if let Ok(mut guard) = pending_buf.lock() {
-                    guard.clear();
-                }
-            }
-            // Final drain
-            if let Ok(mut guard) = pending_buf.lock() {
-                guard.clear();
-            }
-            log::info!("[PTY {}] Flusher thread ended (no channel)", id);
-            return;
-        }
+        let channel_ref: Option<&Channel<Response>> = on_data.as_ref();
 
-        let channel = on_data.unwrap();
+        // Append a batch to the capped scrollback ring buffer (oldest bytes evicted first).
+        fn push_scrollback(buf: &Arc<RwLock<std::collections::VecDeque<u8>>>, data: &[u8]) {
+            let mut guard = buf.write();
+            guard.extend(data.iter().copied());
+            let overflow = guard.len().saturating_sub(SCROLLBACK_CAP);
+            if overflow > 0 {
+                guard.drain(0..overflow);
+            }
+        }
 
         loop {
             std::thread::sleep(FLUSH_INTERVAL);
 
-            if done_flag.load(Ordering::Acquire) {
-                // One final flush before exiting
-                let chunk = match pending_buf.lock() {
-                    Ok(mut guard) => {
-                        if guard.is_empty() {
-                            None
-                        } else {
-                            Some(std::mem::take(&mut *guard))
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
-                        break;
-                    }
-                };
-                if let Some(data) = chunk {
-                    if let Err(e) = channel.send(Response::new(data)) {
-                        log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
-                    }
-                }
-                break;
-            }
-
             let chunk = match pending_buf.lock() {
-                Ok(mut guard) => {
-                    if guard.is_empty() {
-                        continue;
-                    }
-                    Some(std::mem::take(&mut *guard))
-                }
-                Err(e) => {
-                    log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
-                    break;
-                }
+                Ok(mut guard) if !guard.is_empty() => Some(std::mem::take(&mut *guard)),
+                _ => None,
             };
 
             if let Some(data) = chunk {
-                if let Err(e) = channel.send(Response::new(data)) {
-                    log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                // Record into scrollback FIRST so subscribe_with_backlog sees a clean seam.
+                push_scrollback(&scrollback, &data);
+
+                // Broadcast to remote WebSocket subscribers (best-effort; ignore Lagged/NoReceivers)
+                let _ = broadcast_tx.send(data.clone());
+
+                // Forward to Tauri frontend channel (may be None for detached terminals)
+                if let Some(ch) = channel_ref {
+                    if let Err(e) = ch.send(Response::new(data)) {
+                        log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                    }
                 }
+            }
+
+            if done_flag.load(Ordering::Acquire) {
+                // One final broadcast of anything still buffered
+                if let Ok(mut guard) = pending_buf.lock() {
+                    if !guard.is_empty() {
+                        let final_data = std::mem::take(&mut *guard);
+                        push_scrollback(&scrollback, &final_data);
+                        let _ = broadcast_tx.send(final_data.clone());
+                        if let Some(ch) = channel_ref {
+                            if let Err(e) = ch.send(Response::new(final_data)) {
+                                log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                            }
+                        }
+                    }
+                }
+                break;
             }
         }
 
@@ -1446,7 +1493,7 @@ impl PtyManager {
 #[derive(Debug)]
 struct WindowsConPtyChild {
     pid: u32,
-    process_handle: *mut std::ffi::c_void,
+    process_handle: *mut winapi::ctypes::c_void,
 }
 
 #[cfg(target_os = "windows")]
@@ -1527,7 +1574,7 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
     }
 
     fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync + 'static> {
-        let mut dup: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut dup: *mut winapi::ctypes::c_void = std::ptr::null_mut();
         unsafe {
             let ok = winapi::um::handleapi::DuplicateHandle(
                 winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -1614,7 +1661,7 @@ impl portable_pty::Child for WindowsConPtyChild {
     }
 
     fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
-        Some(self.process_handle)
+        Some(self.process_handle as *mut std::ffi::c_void)
     }
 }
 

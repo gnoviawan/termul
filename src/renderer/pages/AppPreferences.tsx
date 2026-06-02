@@ -61,6 +61,7 @@ export default function AppPreferences(): React.JSX.Element {
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [isResetShortcutsDialogOpen, setIsResetShortcutsDialogOpen] = useState(false)
+
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const updateShortcut = useUpdateShortcut()
