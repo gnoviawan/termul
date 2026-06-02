@@ -87,6 +87,10 @@ vi.mock('@/stores/terminal-store', () => ({
 }))
 
 vi.mock('@/stores/app-settings-store', () => ({
+  useAppSettingsStore: vi.fn((selector?: (state: { settings: { remoteBindMode: 'localhost' } }) => unknown) => {
+    const state = { settings: { remoteBindMode: 'localhost' as const } }
+    return selector ? selector(state) : state
+  }),
   useTerminalFontSize: vi.fn(() => 14),
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
@@ -96,6 +100,29 @@ vi.mock('@/stores/app-settings-store', () => ({
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue')
 }))
+
+vi.mock('@/stores/remote-status-store', () => ({
+  useRemoteStatus: vi.fn(() => null),
+  useRemoteStatusStore: Object.assign(vi.fn(), {
+    getState: vi.fn(() => ({ setStatus: vi.fn() }))
+  })
+}))
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    remoteServerApi: {
+      start: vi.fn(),
+      stop: vi.fn(),
+      status: vi.fn(),
+      publishProjects: vi.fn()
+    },
+    openerApi: {
+      openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+    }
+  }
+})
 
 vi.mock('@/stores/keyboard-shortcuts-store', async () => {
   const actual = await vi.importActual<typeof import('@/stores/keyboard-shortcuts-store')>(
