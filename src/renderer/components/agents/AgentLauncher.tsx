@@ -45,6 +45,9 @@ interface AgentLauncherProps {
 
 const AGENT_SELECT_NEW = '__new__'
 
+/** Survives overlay unmount (Ctrl+T) so the selector does not flash the default agent. */
+let cachedLastSelectedAgentId: string | null = null
+
 export function AgentLauncher({
 	paneId,
 	agents: agentsProp,
@@ -55,52 +58,47 @@ export function AgentLauncher({
 		BUILT_IN_AGENTS,
 	)
 	const agents = agentsProp ?? loadedAgents
-	const [selectedAgentId, setSelectedAgentId] = useState<string>(agents[0]?.id ?? '')
+	const [selectedAgentId, setSelectedAgentId] = useState(
+		() => cachedLastSelectedAgentId ?? agents[0]?.id ?? '',
+	)
 	const [isLaunching, setIsLaunching] = useState(false)
 	const [isSpawningTerminal, setIsSpawningTerminal] = useState(false)
 	const [shells, setShells] = useState<DetectedShells | null>(null)
 	const [showCreateDialog, setShowCreateDialog] = useState(false)
 
+	const persistSelectedAgent = useCallback((agentId: string) => {
+		if (!agentId || agentId === AGENT_SELECT_NEW) return
+		cachedLastSelectedAgentId = agentId
+		void persistenceApi.write(PersistenceKeys.lastSelectedAgent, { agentId })
+	}, [])
+
 	useEffect(() => {
 		if (agentsProp) return
 		let cancelled = false
-		void loadAllAgents()
-			.then((all) => {
-				if (!cancelled && all.length > 0) {
-					setLoadedAgents(all)
+		void (async () => {
+			try {
+				const [all, persisted] = await Promise.all([
+					loadAllAgents(),
+					persistenceApi.read<{ agentId: string }>(PersistenceKeys.lastSelectedAgent),
+				])
+				if (cancelled) return
+				const pool = all.length > 0 ? all : [...BUILT_IN_AGENTS]
+				if (all.length > 0) setLoadedAgents(all)
+				const savedId = persisted.success ? persisted.data?.agentId : undefined
+				const nextId =
+					savedId && pool.some((a) => a.id === savedId) ? savedId : (pool[0]?.id ?? '')
+				if (nextId) {
+					cachedLastSelectedAgentId = nextId
+					setSelectedAgentId(nextId)
 				}
-			})
-			.catch(() => {})
+			} catch {
+				// Keep built-in default when persistence or agent load fails.
+			}
+		})()
 		return () => {
 			cancelled = true
 		}
 	}, [agentsProp])
-
-	useEffect(() => {
-		if (!selectedAgentId) return
-		void persistenceApi.write(PersistenceKeys.lastSelectedAgent, {
-			agentId: selectedAgentId,
-		})
-	}, [selectedAgentId])
-
-	useEffect(() => {
-		if (agentsProp) return
-		let cancelled = false
-		void persistenceApi.read<{ agentId: string }>(PersistenceKeys.lastSelectedAgent).then(
-			(result) => {
-				if (cancelled) return
-				if (result.success && result.data?.agentId) {
-					const id = result.data.agentId
-					if (agents.some((a) => a.id === id)) {
-						setSelectedAgentId(id)
-					}
-				}
-			},
-		)
-		return () => {
-			cancelled = true
-		}
-	}, [agents, agentsProp])
 
 	const activeProjectId = useProjectStore((s) => s.activeProjectId)
 	const maxTerminals = useMaxTerminalsPerProject()
@@ -210,8 +208,9 @@ export function AgentLauncher({
 				return
 			}
 			setSelectedAgentId(value)
+			persistSelectedAgent(value)
 		},
-		[],
+		[persistSelectedAgent],
 	)
 
 	const spawnShellTerminal = useCallback(
@@ -264,12 +263,13 @@ export function AgentLauncher({
 				const all = await loadAllAgents()
 				setLoadedAgents(all)
 				setSelectedAgentId(saved.id)
+				persistSelectedAgent(saved.id)
 				toast.success(`Added "${def.name}" to your agents`)
 			} catch (err) {
 				toast.error(err instanceof Error ? err.message : 'Failed to save agent')
 			}
 		},
-		[],
+		[persistSelectedAgent],
 	)
 
 	const canLaunch = selectedAgent && !isLaunching
