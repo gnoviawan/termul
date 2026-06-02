@@ -7,13 +7,19 @@ export function normalizeRootIconSvg(svg: string): string {
 	)
 }
 
+function rootSvgOpeningTag(normalized: string): string | null {
+	const match = normalized.match(/^\s*<svg\b[^>]*>/i)
+	return match?.[0] ?? null
+}
+
 /** Sanitize inline agent SVG before rendering with dangerouslySetInnerHTML. */
 export function sanitizeInlineAgentSvg(svg: string): string | null {
 	const cleaned = DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },
 	})
 	const normalized = normalizeRootIconSvg(cleaned)
-	if (!/^\s*<svg\b/i.test(normalized)) return null
-	if (!/viewBox/i.test(normalized)) return null
+	const rootTag = rootSvgOpeningTag(normalized)
+	if (!rootTag) return null
+	if (!/\bviewBox\s*=/i.test(rootTag)) return null
 	return normalized
 }

@@ -15,6 +15,8 @@ export function parseBaseArgsInput(input: string): string[] {
 		if (quote) {
 			if (ch === quote) {
 				quote = null
+				args.push(current)
+				current = ''
 				continue
 			}
 			current += ch

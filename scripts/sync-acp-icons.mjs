@@ -15,6 +15,7 @@ const ICONS_DIR = join(ROOT, 'src', 'renderer', 'assets', 'agent-icons', 'acp')
 const MANIFEST_PATH = join(ICONS_DIR, 'manifest.json')
 const REGISTRY_URL = 'https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json'
 const SAFE_AGENT_ID = /^[A-Za-z0-9._-]+$/
+const FETCH_TIMEOUT_MS = 10_000
 
 function isSafeIconPath(filepath) {
 	const iconsRoot = resolve(ICONS_DIR)
@@ -22,14 +23,29 @@ function isSafeIconPath(filepath) {
 	return resolved === iconsRoot || resolved.startsWith(`${iconsRoot}${sep}`)
 }
 
+async function fetchWithTimeout(url, options = {}) {
+	const controller = new AbortController()
+	const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+	try {
+		return await fetch(url, { ...options, signal: controller.signal })
+	} catch (err) {
+		if (err?.name === 'AbortError') {
+			throw new Error(`Request timed out after ${FETCH_TIMEOUT_MS}ms: ${url}`)
+		}
+		throw err
+	} finally {
+		clearTimeout(timeoutId)
+	}
+}
+
 async function fetchJSON(url) {
-	const res = await fetch(url)
+	const res = await fetchWithTimeout(url)
 	if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`)
 	return res.json()
 }
 
 async function fetchText(url) {
-	const res = await fetch(url)
+	const res = await fetchWithTimeout(url)
 	if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`)
 	return res.text()
 }
