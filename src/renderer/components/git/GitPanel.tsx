@@ -348,16 +348,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       ? `Push ${ahead}`
       : "Up to date";
 
-  const getFileIcon = (status: GitFileStatus) => {
-    switch (status) {
-      case "added": return <Plus className="text-green-500" size={14} />;
-      case "modified": return <div className="w-3.5 h-3.5 border-2 border-amber-500 rounded-full" />;
-      case "deleted": return <Minus className="text-red-500" size={14} />;
-      case "renamed": return <RotateCcw className="text-blue-500" size={14} />;
-      default: return <FileCode size={14} />;
-    }
-  };
-
   const stagedSelectionCount =
     selectionSection === "staged" ? selectedPaths.size : 0;
   const unstagedSelectionCount =
@@ -418,7 +408,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       isActive={selectedFile === file.path && selectedStaged}
                       isSelected={inSelection}
                       onClick={(e) => handleFileClick(e, file.path, true, stagedFiles)}
-                      icon={getFileIcon(file.status)}
                     >
                       <RowAction
                         icon={<Minus size={13} />}
@@ -471,7 +460,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       isActive={selectedFile === file.path && !selectedStaged}
                       isSelected={inSelection}
                       onClick={(e) => handleFileClick(e, file.path, false, unstagedFiles)}
-                      icon={getFileIcon(file.status)}
                     >
                       <RowAction
                         icon={<RotateCcw size={13} />}
@@ -830,12 +818,11 @@ function GitStatusBadge({ status }: { status: GitFileStatus }) {
   );
 }
 
-function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
+function FileItem({ file, isActive, isSelected, onClick, children }: {
   file: { path: string, status: GitFileStatus },
   isActive: boolean,
   isSelected: boolean,
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void,
-  icon: React.ReactNode,
   children?: React.ReactNode,
 }) {
   const fileName = file.path.split('/').pop() || file.path;
@@ -867,12 +854,11 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
             : "hover:bg-secondary/80 text-muted-foreground hover:text-foreground",
       )}
     >
-      <div className="shrink-0">{icon}</div>
+      <GitStatusBadge status={file.status} />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
-      <GitStatusBadge status={file.status} />
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
         {children}
       </div>
