@@ -1,28 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Terminal as TerminalRecord } from '@/types/project'
-import { useProjectStore } from '../stores/project-store'
-import { useTerminalStore, cleanupProjectTerminals } from '../stores/terminal-store'
-import { useAppSettingsStore } from '../stores/app-settings-store'
-import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stores/workspace-store'
-import { terminalApi, sessionApi } from '@/lib/api'
-import { shellApi } from '@/lib/shell-api'
-import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
-import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
+import { sessionApi, terminalApi } from '@/lib/api'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { shellApi } from '@/lib/shell-api'
+import {
+  beginProjectContinuityCorrelation,
+  recordTerminalContinuityEvent as emitTerminalContinuityEvent
+} from '@/lib/terminal-continuity-instrumentation'
+import { isVisibleReady } from '@/lib/visibility-signal'
+import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
+import type { Terminal as TerminalRecord } from '@/types/project'
+import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import { useAppSettingsStore } from '../stores/app-settings-store'
+import { useProjectStore } from '../stores/project-store'
+import { useTerminalStore } from '../stores/terminal-store'
+import { findPaneContainingTab, terminalTabId, useWorkspaceStore } from '../stores/workspace-store'
 import {
   loadPersistedTerminals,
   saveTerminalLayout,
   setTerminalRestoreInProgress
 } from './useTerminalAutoSave'
-import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
-import {
-  beginProjectContinuityCorrelation,
-  recordTerminalContinuityEvent as emitTerminalContinuityEvent
-} from '@/lib/terminal-continuity-instrumentation'
-
-import { isVisibleReady } from '@/lib/visibility-signal'
 
 const DEFERRED_RETRY_MS = 50
 
@@ -30,8 +29,6 @@ const RESTORE_RETRY_DELAY_MS = 100
 const MAX_RESTORE_RETRIES = 10
 // Safety timeout: prevent spawn from blocking lock forever
 const SPAWN_TIMEOUT_MS = 30000
-
-type RestoreAttemptStatus = 'completed' | 'blocked' | 'failed'
 
 const PROJECT_RESTORE_LOCKS = new Set<string>()
 const TERMINALS_PENDING_PTY_ASSIGNMENT = new Set<string>()
@@ -160,10 +157,6 @@ function debugLog(category: string, message: string, data?: unknown) {
   }
 }
 
-function debugTerminalContinuityEvent(event: string, details: Record<string, unknown>): void {
-  debugLog('TERMINAL_CONTINUITY', event, details)
-}
-
 // Summary interval tracker
 let summaryInterval: ReturnType<typeof setInterval> | null = null
 
@@ -290,6 +283,7 @@ export function useTerminalRestore(): void {
   // Retry counter for visibility-deferred restore
   const [visibilityRetry, setVisibilityRetry] = useState(0)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityRetry intentionally retriggers restore attempts
   useEffect(() => {
     const callId = crypto.randomUUID().slice(0, 7)
     RESTORE_CALL_STACK.push(callId)
@@ -496,7 +490,9 @@ export function useTerminalRestore(): void {
         if (restoreMode !== 'layout') {
           const sessionResult = await sessionApi.restore()
           const sessionWorkspace = sessionResult.success
-            ? sessionResult.data.workspaces.find((workspace) => workspace.projectId === projectIdToRestore)
+            ? sessionResult.data.workspaces.find(
+                (workspace) => workspace.projectId === projectIdToRestore
+              )
             : null
           const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
           const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
@@ -647,13 +643,15 @@ export function useTerminalRestore(): void {
       if (idx > -1) RESTORE_CALL_STACK.splice(idx, 1)
 
       // FIX #5: Also clean up the restoring flag for this project on cleanup
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- Ref access in cleanup is intentional
       isRestoringRef.current.delete(projectIdForCleanup)
       PROJECT_RESTORE_LOCKS.delete(projectIdForCleanup)
       setTerminalRestoreInProgress(projectIdForCleanup, false, restoreOwnerId)
 
       // FIX #1: Force-release global spawn lock on cleanup to prevent deadlock
-      if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId || GLOBAL_SPAWN_LOCK_OWNER?.startsWith(projectIdForCleanup)) {
+      if (
+        GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId ||
+        GLOBAL_SPAWN_LOCK_OWNER?.startsWith(projectIdForCleanup)
+      ) {
         GLOBAL_SPAWN_LOCK_OWNER = null
         debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK on cleanup [${restoreOwnerId}]`)
       }
@@ -874,12 +872,10 @@ async function restoreFromLayout(
           persistedTerminal.kind === 'agent' && !!persistedTerminal.agentProgram
         const agentDef =
           isAgentTerminal && persistedTerminal.agentId
-            ? getBuiltInAgent(persistedTerminal.agentId) ??
-              customAgents.find((a) => a.id === persistedTerminal.agentId)
+            ? (getBuiltInAgent(persistedTerminal.agentId) ??
+              customAgents.find((a) => a.id === persistedTerminal.agentId))
             : undefined
-        const agentEnv = agentDef?.env
-          ? resolveAgentEnv(agentDef.env, projectEnv)
-          : {}
+        const agentEnv = agentDef?.env ? resolveAgentEnv(agentDef.env, projectEnv) : {}
         const spawnEnv =
           hasProjectEnv || Object.keys(agentEnv).length > 0
             ? { ...projectEnv, ...agentEnv }

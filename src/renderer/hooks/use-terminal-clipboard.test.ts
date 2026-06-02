@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, cleanup, act } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
 import type { Terminal } from '@xterm/xterm'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockClipboardApi } = vi.hoisted(() => ({
   mockClipboardApi: {
@@ -51,7 +51,9 @@ describe('useTerminalClipboard', () => {
 
     it('should initialize with hasSelection based on terminal state', () => {
       const mockTerminal = createMockTerminal(true, 'selected text')
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
       expect(result.current.hasSelection).toBe(true)
     })
 
@@ -69,7 +71,9 @@ describe('useTerminalClipboard', () => {
   describe('selection state management', () => {
     it('should update hasSelection when selection changes', () => {
       const mockTerminal = createMockTerminal(false, '')
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       expect(result.current.hasSelection).toBe(false)
 
@@ -84,7 +88,9 @@ describe('useTerminalClipboard', () => {
 
     it('should update hasSelection when selection is cleared', () => {
       const mockTerminal = createMockTerminal(true, 'selected text')
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       expect(result.current.hasSelection).toBe(true)
 
@@ -118,7 +124,9 @@ describe('useTerminalClipboard', () => {
         onSelectionChange: vi.fn(() => ({ dispose: disposeMock }))
       }
 
-      const { unmount } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { unmount } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
       unmount()
 
       expect(disposeMock).toHaveBeenCalled()
@@ -138,7 +146,9 @@ describe('useTerminalClipboard', () => {
 
     it('should not call clipboard API when there is no selection', async () => {
       const mockTerminal = createMockTerminal(false, '')
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
@@ -152,7 +162,9 @@ describe('useTerminalClipboard', () => {
       const mockTerminal = createMockTerminal(true, selectedText)
       mockClipboardApi.writeText.mockResolvedValue({ success: true })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
@@ -165,16 +177,24 @@ describe('useTerminalClipboard', () => {
       const selectedText = 'Hello, World!'
       const mockTerminal = createMockTerminal(true, selectedText)
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      mockClipboardApi.writeText.mockResolvedValue({ success: false, error: 'Clipboard access denied' })
+      mockClipboardApi.writeText.mockResolvedValue({
+        success: false,
+        error: 'Clipboard access denied'
+      })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
       })
 
       expect(mockClipboardApi.writeText).toHaveBeenCalledWith(selectedText)
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to copy to clipboard:', 'Clipboard access denied')
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to copy to clipboard:',
+        'Clipboard access denied'
+      )
 
       consoleErrorSpy.mockRestore()
     })
@@ -186,7 +206,9 @@ Line 3`
       const mockTerminal = createMockTerminal(true, selectedText)
       mockClipboardApi.writeText.mockResolvedValue({ success: true })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
@@ -200,7 +222,9 @@ Line 3`
       const mockTerminal = createMockTerminal(true, selectedText)
       mockClipboardApi.writeText.mockResolvedValue({ success: true })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
@@ -214,7 +238,9 @@ Line 3`
       const mockTerminal = createMockTerminal(true, largeSelection)
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.copySelection()
@@ -243,7 +269,9 @@ Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -257,7 +285,9 @@ Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -269,16 +299,24 @@ Line 3`
     it('should handle clipboard read failure gracefully', async () => {
       const mockTerminal = createMockTerminal(false, '')
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      mockClipboardApi.readText.mockResolvedValue({ success: false, error: 'Clipboard access denied' })
+      mockClipboardApi.readText.mockResolvedValue({
+        success: false,
+        error: 'Clipboard access denied'
+      })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
       })
 
       expect(mockTerminal.paste).not.toHaveBeenCalled()
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to read from clipboard:', 'Clipboard access denied')
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to read from clipboard:',
+        'Clipboard access denied'
+      )
 
       consoleErrorSpy.mockRestore()
     })
@@ -290,7 +328,9 @@ Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -304,7 +344,9 @@ Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -321,13 +363,17 @@ Line 3`
       const mockTerminal = createMockTerminal(false, '')
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockTerminal.paste).toHaveBeenCalledWith('function hello() {\r  console.log("Hello, World!");\r  return true;\r}')
+      expect(mockTerminal.paste).toHaveBeenCalledWith(
+        'function hello() {\r  console.log("Hello, World!");\r  return true;\r}'
+      )
     })
 
     it('should not paste content exceeding max size', async () => {
@@ -336,7 +382,9 @@ Line 3`
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: largeContent })
 
-      const { result } = renderHook(() => useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({ terminal: mockTerminal as unknown as Terminal })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -403,10 +451,12 @@ Line 3`
       mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: true })
       const onImagePaste = vi.fn()
 
-      const { result } = renderHook(() => useTerminalClipboard({
-        terminal: mockTerminal as unknown as Terminal,
-        onImagePaste
-      }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          onImagePaste
+        })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -424,10 +474,12 @@ Line 3`
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: 'pasted text' })
       const onImagePaste = vi.fn()
 
-      const { result } = renderHook(() => useTerminalClipboard({
-        terminal: mockTerminal as unknown as Terminal,
-        onImagePaste
-      }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          onImagePaste
+        })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -445,10 +497,12 @@ Line 3`
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: 'fallback text' })
       const onImagePaste = vi.fn()
 
-      const { result } = renderHook(() => useTerminalClipboard({
-        terminal: mockTerminal as unknown as Terminal,
-        onImagePaste
-      }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          onImagePaste
+        })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()
@@ -464,9 +518,11 @@ Line 3`
       mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: true })
       mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
 
-      const { result } = renderHook(() => useTerminalClipboard({
-        terminal: mockTerminal as unknown as Terminal
-      }))
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal
+        })
+      )
 
       await act(async () => {
         await result.current.pasteFromClipboard()

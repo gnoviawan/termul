@@ -40,8 +40,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           // !important), leaving the toast see-through over the app.
           toast:
             'group toast group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
-          default:
-            'group-[.toaster]:bg-background group-[.toaster]:text-foreground',
+          default: 'group-[.toaster]:bg-background group-[.toaster]:text-foreground',
           description: 'group-[.toast]:text-muted-foreground',
           actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
           cancelButton: 'group-[.toast]:bg-muted group-[.toast]:text-muted-foreground'
@@ -52,5 +51,4 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export { Toaster, toast }

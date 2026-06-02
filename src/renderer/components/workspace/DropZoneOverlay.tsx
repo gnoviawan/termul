@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
-import { cn } from '@/lib/utils'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { cn } from '@/lib/utils'
 import type { DropPosition } from '@/types/workspace.types'
 
 interface DropZoneOverlayProps {
@@ -57,10 +57,7 @@ export function DropZoneOverlay({ paneId }: DropZoneOverlayProps): React.JSX.Ele
   const hoveredZone = previewTarget?.paneId === paneId ? previewTarget.position : null
 
   return (
-    <div
-      className="absolute inset-0 z-50 pointer-events-auto"
-      onDragLeave={onOverlayDragLeave}
-    >
+    <div className="absolute inset-0 z-50 pointer-events-auto" onDragLeave={onOverlayDragLeave}>
       <div
         className={cn(
           'absolute left-0 top-0 w-1/4 h-full transition-colors',

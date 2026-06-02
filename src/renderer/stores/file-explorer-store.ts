@@ -1,9 +1,6 @@
+import type { DirectoryEntry, FileSearchResult } from '@shared/types/filesystem.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type {
-  DirectoryEntry,
-  FileSearchResult
-} from '@shared/types/filesystem.types'
 import { filesystemApi } from '@/lib/api'
 
 function normalizePath(p: string): string {
@@ -11,7 +8,7 @@ function normalizePath(p: string): string {
 }
 
 function isPathWithinRoot(path: string, rootPath: string): boolean {
-  return path === rootPath || path.startsWith(rootPath + '/')
+  return path === rootPath || path.startsWith(`${rootPath}/`)
 }
 
 /**
@@ -45,7 +42,7 @@ export interface FileClipboard {
 }
 
 /** Worktree root override - when set, explorer roots at worktree path instead of project root */
-export type WorktreeRootOverride = string | null;
+export type WorktreeRootOverride = string | null
 
 export interface FileExplorerState {
   rootPath: string | null
@@ -235,7 +232,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       // Also collapse any child directories
       const newExpandedFiltered = new Set<string>()
       newExpanded.forEach((dir) => {
-        if (!dir.startsWith(normalized + '/')) {
+        if (!dir.startsWith(`${normalized}/`)) {
           newExpandedFiltered.add(dir)
         } else {
           newContents.delete(dir)
@@ -430,13 +427,15 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     const isDirectory = await (async () => {
       try {
         const result = await filesystemApi.getFileInfo(normalizedDest)
-        return result.success && result.data ? true : false
+        return !!(result.success && result.data)
       } catch {
         return false
       }
     })()
 
-    const targetDir = isDirectory ? normalizedDest : normalizedDest.substring(0, normalizedDest.lastIndexOf('/'))
+    const targetDir = isDirectory
+      ? normalizedDest
+      : normalizedDest.substring(0, normalizedDest.lastIndexOf('/'))
 
     for (const srcPath of clipboard.paths) {
       const normalizedSrc = normalizePath(srcPath)
@@ -659,11 +658,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       return
     }
 
-    const fileNameResult = await filesystemApi.searchFileNames(
-      searchScopeRoot,
-      rootPath,
-      trimmed
-    )
+    const fileNameResult = await filesystemApi.searchFileNames(searchScopeRoot, rootPath, trimmed)
     if (get().searchRequestId === requestId && fileNameResult.success) {
       set({ searchFileNameMatches: fileNameResult.data.files })
     }
@@ -704,7 +699,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 // Selector hooks
 export function useFileExplorer(): Pick<
   FileExplorerState,
-  'rootPath'
+  | 'rootPath'
   | 'expandedDirs'
   | 'directoryContents'
   | 'selectedPaths'
@@ -775,7 +770,7 @@ export function useFileExplorerActions(): Pick<
   return useFileExplorerStore(
     useShallow((state) => ({
       setRootPath: state.setRootPath,
-    setWorktreeRoot: state.setWorktreeRoot,
+      setWorktreeRoot: state.setWorktreeRoot,
       toggleDirectory: state.toggleDirectory,
       refreshDirectory: state.refreshDirectory,
       selectPath: state.selectPath,

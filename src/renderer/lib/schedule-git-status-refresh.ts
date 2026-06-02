@@ -1,5 +1,5 @@
-import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { useGitStatusStore } from '@/stores/git-status-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
 const DEBOUNCE_MS = 1000
 

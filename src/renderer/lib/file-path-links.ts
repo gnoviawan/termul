@@ -13,7 +13,9 @@ export type FilePathResolutionResult =
   | { ok: true; path: string }
   | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
 
-type OpenFilePathFailureReason = Extract<FilePathResolutionResult, { ok: false }>['reason'] | 'open-failed'
+type OpenFilePathFailureReason =
+  | Extract<FilePathResolutionResult, { ok: false }>['reason']
+  | 'open-failed'
 
 export type OpenFilePathResult =
   | { ok: true }
@@ -126,7 +128,9 @@ function normalizeAbsolutePath(value: string): string {
 
 function isAbsolutePath(value: string): boolean {
   const normalized = normalizePathSeparators(value)
-  return normalized.startsWith('//') || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)
+  return (
+    normalized.startsWith('//') || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)
+  )
 }
 
 function joinPath(base: string, candidate: string): string {
@@ -187,7 +191,12 @@ function canonicalizeAbsolutePath(value: string): string | null {
 }
 
 function shouldCompareCaseInsensitively(path: string, root: string): boolean {
-  return /^[a-zA-Z]:\//.test(path) || /^[a-zA-Z]:\//.test(root) || path.startsWith('//') || root.startsWith('//')
+  return (
+    /^[a-zA-Z]:\//.test(path) ||
+    /^[a-zA-Z]:\//.test(root) ||
+    path.startsWith('//') ||
+    root.startsWith('//')
+  )
 }
 
 function isPathWithinRoot(path: string, root: string): boolean {
@@ -246,7 +255,11 @@ export function trimWrappedPath(value: string): string {
   const result = value.trim()
 
   for (const [start, end] of WRAPPER_PAIRS) {
-    if (result.startsWith(start) && result.endsWith(end) && result.length >= start.length + end.length) {
+    if (
+      result.startsWith(start) &&
+      result.endsWith(end) &&
+      result.length >= start.length + end.length
+    ) {
       return result.slice(start.length, result.length - end.length).trim()
     }
   }
@@ -346,7 +359,9 @@ function getErrorMessage(
     case 'not-found':
       return `File not found: ${candidate}`
     case 'open-failed':
-      return details ? `Failed to open file: ${candidate} (${details})` : `Failed to open file: ${candidate}`
+      return details
+        ? `Failed to open file: ${candidate} (${details})`
+        : `Failed to open file: ${candidate}`
   }
 }
 
@@ -372,7 +387,9 @@ export async function openFilePathFromTerminal(
     await useEditorStore.getState().openFile(resolution.path)
 
     if (position.line) {
-      useEditorStore.getState().updateCursorPosition(resolution.path, position.line, position.column ?? 1)
+      useEditorStore
+        .getState()
+        .updateCursorPosition(resolution.path, position.line, position.column ?? 1)
     }
 
     useWorkspaceStore.getState().addEditorTab(resolution.path)

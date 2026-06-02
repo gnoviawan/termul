@@ -45,20 +45,17 @@ export function markVisible(): void {
  */
 export function waitForVisibility(): Promise<void> {
   if (visibleReady) return Promise.resolve()
-  
+
   // Check document visibility at call time — resolves instantly in tests and
   // dev environments where the window is already visible.
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
     markVisible()
     return Promise.resolve()
   }
-  
+
   // Safety timeout: if visibility never fires (e.g. test environment),
   // resolve after 5 seconds so the app doesn't hang forever.
-  return Promise.race([
-    signalPromise,
-    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-  ])
+  return Promise.race([signalPromise, new Promise<void>((resolve) => setTimeout(resolve, 5000))])
 }
 
 /**
@@ -71,9 +68,6 @@ export function isVisibleReady(): boolean {
 // Auto-resolve when the document is already visible (dev server, tests,
 // hot reload, non-Tauri browser). Only deferred in production builds
 // where tauri.conf.json sets `"visible": false`.
-if (
-  typeof document !== 'undefined' &&
-  document.visibilityState === 'visible'
-) {
+if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
   markVisible()
 }

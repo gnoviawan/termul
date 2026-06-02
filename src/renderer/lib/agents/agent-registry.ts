@@ -35,30 +35,30 @@ import piIcon from '@/assets/agent-icons/pi.svg?raw'
 export type AgentPromptMode = 'positional' | 'flag' | 'none'
 
 export interface TerminalAgentDefinition {
-	/** Stable launch-table id, e.g. 'claude-code'. */
-	id: string
-	/** Display name, e.g. 'Claude Code'. */
-	name: string
-	/** Resolvable binary name or absolute path, e.g. 'claude'. */
-	command: string
-	/** Static args always prepended before the prompt (e.g. gemini's '-i'). */
-	baseArgs: string[]
-	/** How the user's prompt is supplied to the agent. */
-	promptMode: AgentPromptMode
-	/** Required when `promptMode === 'flag'`; the flag the prompt follows. */
-	promptFlag?: string
-	/**
-	 * Optional env requirements. Values may reference an existing env var with a
-	 * leading `$` (e.g. `{ ANTHROPIC_API_KEY: '$ANTHROPIC_API_KEY' }`), resolved
-	 * at launch time against the process/project env.
-	 */
-	env?: Record<string, string>
-	/** Resolved icon SVG markup (bundled inline so currentColor inherits). */
-	icon?: string
-	/** Optional link to an ACP Registry entry for identity reuse (ADR-004.6). */
-	registryId?: string
-	/** True for app-shipped definitions; false for user-defined agents. */
-	isBuiltIn: boolean
+  /** Stable launch-table id, e.g. 'claude-code'. */
+  id: string
+  /** Display name, e.g. 'Claude Code'. */
+  name: string
+  /** Resolvable binary name or absolute path, e.g. 'claude'. */
+  command: string
+  /** Static args always prepended before the prompt (e.g. gemini's '-i'). */
+  baseArgs: string[]
+  /** How the user's prompt is supplied to the agent. */
+  promptMode: AgentPromptMode
+  /** Required when `promptMode === 'flag'`; the flag the prompt follows. */
+  promptFlag?: string
+  /**
+   * Optional env requirements. Values may reference an existing env var with a
+   * leading `$` (e.g. `{ ANTHROPIC_API_KEY: '$ANTHROPIC_API_KEY' }`), resolved
+   * at launch time against the process/project env.
+   */
+  env?: Record<string, string>
+  /** Resolved icon SVG markup (bundled inline so currentColor inherits). */
+  icon?: string
+  /** Optional link to an ACP Registry entry for identity reuse (ADR-004.6). */
+  registryId?: string
+  /** True for app-shipped definitions; false for user-defined agents. */
+  isBuiltIn: boolean
 }
 
 /**
@@ -70,19 +70,19 @@ export interface TerminalAgentDefinition {
  * as "no prompt" so the agent simply boots its TUI.
  */
 export function buildAgentArgv(
-	def: TerminalAgentDefinition,
-	prompt: string | undefined,
+  def: TerminalAgentDefinition,
+  prompt: string | undefined
 ): { program: string; args: string[] } {
-	const args = [...def.baseArgs]
-	const hasPrompt = typeof prompt === 'string' && prompt.trim().length > 0
+  const args = [...def.baseArgs]
+  const hasPrompt = typeof prompt === 'string' && prompt.trim().length > 0
 
-	if (hasPrompt && def.promptMode === 'positional') {
-		args.push(prompt as string)
-	} else if (hasPrompt && def.promptMode === 'flag' && def.promptFlag) {
-		args.push(def.promptFlag, prompt as string)
-	}
+  if (hasPrompt && def.promptMode === 'positional') {
+    args.push(prompt as string)
+  } else if (hasPrompt && def.promptMode === 'flag' && def.promptFlag) {
+    args.push(def.promptFlag, prompt as string)
+  }
 
-	return { program: def.command, args }
+  return { program: def.command, args }
 }
 
 /**
@@ -99,74 +99,74 @@ export function buildAgentArgv(
  *    TUI with a starting prompt).
  */
 export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
-	{
-		id: 'claude-code',
-		name: 'Claude Code',
-		command: 'claude',
-		baseArgs: [],
-		promptMode: 'positional',
-		registryId: 'claude-acp',
-		icon: claudeCodeIcon as string,
-		isBuiltIn: true,
-	},
-	{
-		id: 'codex',
-		name: 'Codex',
-		command: 'codex',
-		baseArgs: [],
-		promptMode: 'positional',
-		registryId: 'codex-acp',
-		icon: codexIcon as string,
-		isBuiltIn: true,
-	},
-	{
-		id: 'cursor',
-		name: 'Cursor',
-		command: 'cursor-agent',
-		baseArgs: [],
-		promptMode: 'positional',
-		registryId: 'cursor',
-		icon: cursorIcon as string,
-		isBuiltIn: true,
-	},
-	{
-		id: 'gemini-cli',
-		name: 'Gemini CLI',
-		command: 'gemini',
-		baseArgs: [],
-		promptMode: 'flag',
-		promptFlag: '-i',
-		registryId: 'gemini',
-		icon: geminiIcon as string,
-		isBuiltIn: true,
-	},
-	{
-		id: 'opencode',
-		name: 'OpenCode',
-		command: 'opencode',
-		baseArgs: [],
-		promptMode: 'flag',
-		promptFlag: '--prompt',
-		registryId: 'opencode',
-		icon: opencodeIcon as string,
-		isBuiltIn: true,
-	},
-	{
-		id: 'pi',
-		name: 'pi',
-		command: 'pi',
-		baseArgs: [],
-		// pi accepts a positional seed prompt (the first non-flag argument is
-		// loaded as the initial prompt in the TUI). Confirmed via pi --help:
-		// "<prompt>" optional — seed the conversation with a starting prompt.
-		promptMode: 'positional',
-		registryId: 'pi-acp',
-		icon: piIcon as string,
-		isBuiltIn: true,
-	},
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    command: 'claude',
+    baseArgs: [],
+    promptMode: 'positional',
+    registryId: 'claude-acp',
+    icon: claudeCodeIcon as string,
+    isBuiltIn: true
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    command: 'codex',
+    baseArgs: [],
+    promptMode: 'positional',
+    registryId: 'codex-acp',
+    icon: codexIcon as string,
+    isBuiltIn: true
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    command: 'cursor-agent',
+    baseArgs: [],
+    promptMode: 'positional',
+    registryId: 'cursor',
+    icon: cursorIcon as string,
+    isBuiltIn: true
+  },
+  {
+    id: 'gemini-cli',
+    name: 'Gemini CLI',
+    command: 'gemini',
+    baseArgs: [],
+    promptMode: 'flag',
+    promptFlag: '-i',
+    registryId: 'gemini',
+    icon: geminiIcon as string,
+    isBuiltIn: true
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode',
+    baseArgs: [],
+    promptMode: 'flag',
+    promptFlag: '--prompt',
+    registryId: 'opencode',
+    icon: opencodeIcon as string,
+    isBuiltIn: true
+  },
+  {
+    id: 'pi',
+    name: 'pi',
+    command: 'pi',
+    baseArgs: [],
+    // pi accepts a positional seed prompt (the first non-flag argument is
+    // loaded as the initial prompt in the TUI). Confirmed via pi --help:
+    // "<prompt>" optional — seed the conversation with a starting prompt.
+    promptMode: 'positional',
+    registryId: 'pi-acp',
+    icon: piIcon as string,
+    isBuiltIn: true
+  }
 ] as const
 
 /** Look up a built-in agent definition by its launch-table id. */
 export function getBuiltInAgent(id: string): TerminalAgentDefinition | undefined {
-	return BUILT_IN_AGENTS.find((a) => a.id === id)
+  return BUILT_IN_AGENTS.find((a) => a.id === id)
 }

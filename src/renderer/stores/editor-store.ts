@@ -1,10 +1,10 @@
+import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
 import { flushEditorContent } from '@/lib/editor-content-flush'
-import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 
 const EDITOR_TAB_LIMIT = 15
 
@@ -408,9 +408,7 @@ export function useOpenFiles(): Map<string, EditorFileState> {
 }
 
 export function useOpenFilePaths(): string[] {
-  return useEditorStore(
-    useShallow((state) => Array.from(state.openFiles.keys()))
-  )
+  return useEditorStore(useShallow((state) => Array.from(state.openFiles.keys())))
 }
 
 export function useOpenFile(filePath: string): EditorFileState | undefined {

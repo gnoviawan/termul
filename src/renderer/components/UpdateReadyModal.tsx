@@ -1,6 +1,6 @@
-import { useEffect, useCallback, KeyboardEvent } from 'react'
-import { X, Download, AlertTriangle } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { AlertTriangle, Download, X } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useEffect } from 'react'
 
 interface UpdateReadyModalProps {
   isOpen: boolean

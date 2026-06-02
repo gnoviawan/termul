@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RemoteFileExplorer } from './RemoteFileExplorer'
 
 const mocks = vi.hoisted(() => ({
-  sftpListDir: vi.fn(),
+  sftpListDir: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -11,15 +11,15 @@ vi.mock('@/lib/api', () => ({
     sftpListDir: mocks.sftpListDir,
     sftpDownload: vi.fn(),
     sftpDelete: vi.fn(),
-    sftpMkdir: vi.fn(),
-  },
+    sftpMkdir: vi.fn()
+  }
 }))
 
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
-    error: vi.fn(),
-  },
+    error: vi.fn()
+  }
 }))
 
 describe('RemoteFileExplorer', () => {

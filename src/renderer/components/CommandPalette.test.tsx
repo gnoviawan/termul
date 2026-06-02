@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { CommandPalette } from './CommandPalette'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Project } from '@/types/project'
+import { CommandPalette } from './CommandPalette'
 
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
@@ -77,13 +77,17 @@ describe('CommandPalette', () => {
   it('renders a compact command-center layout with metadata, categories, shortcuts, and footer hints', () => {
     renderPalette()
 
-    expect(screen.getByPlaceholderText('Search commands, projects, settings...')).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText('Search commands, projects, settings...')
+    ).toBeInTheDocument()
     expect(screen.getByText('Workspace')).toBeInTheDocument()
     expect(screen.getByText('Navigation')).toBeInTheDocument()
     expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Tools')).toBeInTheDocument()
     expect(screen.getByText('Open a new shell in the active pane')).toBeInTheDocument()
-    expect(screen.getByText('Show the agent launcher prompt in the active pane')).toBeInTheDocument()
+    expect(
+      screen.getByText('Show the agent launcher prompt in the active pane')
+    ).toBeInTheDocument()
     expect(screen.getByText('Ctrl+T')).toBeInTheDocument()
     expect(screen.getByText('Navigate')).toBeInTheDocument()
     expect(screen.getByText('Select')).toBeInTheDocument()
@@ -93,9 +97,9 @@ describe('CommandPalette', () => {
   it('orders the Projects group above Workspace, Navigation, and Tools', () => {
     const { container } = renderPalette()
 
-    const headings = Array.from(
-      container.querySelectorAll('[cmdk-group-heading]')
-    ).map((el) => el.textContent)
+    const headings = Array.from(container.querySelectorAll('[cmdk-group-heading]')).map(
+      (el) => el.textContent
+    )
 
     const projectsIndex = headings.indexOf('Projects')
     expect(projectsIndex).toBeGreaterThanOrEqual(0)
@@ -174,13 +178,33 @@ describe('CommandPalette', () => {
       callback: keyof React.ComponentProps<typeof CommandPalette>
     }> = [
       { label: 'New Terminal', commandId: 'new-terminal', callback: 'onAddTerminal' },
-      { label: 'Agent Launcher', commandId: 'show-agent-launcher', callback: 'onShowAgentLauncher' },
+      {
+        label: 'Agent Launcher',
+        commandId: 'show-agent-launcher',
+        callback: 'onShowAgentLauncher'
+      },
       { label: 'New Browser Tab', commandId: 'new-browser-tab', callback: 'onNewBrowserTab' },
       { label: 'Save Workspace Snapshot', commandId: 'save-snapshot', callback: 'onSaveSnapshot' },
-      { label: 'Project Settings', commandId: 'open-project-settings', callback: 'onOpenProjectSettings' },
-      { label: 'App Preferences', commandId: 'open-app-preferences', callback: 'onOpenAppPreferences' },
-      { label: 'Command History', commandId: 'open-command-history', callback: 'onOpenCommandHistory' },
-      { label: 'Open Shortcut Menu', commandId: 'open-shortcut-menu', callback: 'onOpenShortcutMenu' }
+      {
+        label: 'Project Settings',
+        commandId: 'open-project-settings',
+        callback: 'onOpenProjectSettings'
+      },
+      {
+        label: 'App Preferences',
+        commandId: 'open-app-preferences',
+        callback: 'onOpenAppPreferences'
+      },
+      {
+        label: 'Command History',
+        commandId: 'open-command-history',
+        callback: 'onOpenCommandHistory'
+      },
+      {
+        label: 'Open Shortcut Menu',
+        commandId: 'open-shortcut-menu',
+        callback: 'onOpenShortcutMenu'
+      }
     ]
 
     for (const testCase of cases) {
@@ -280,10 +304,7 @@ describe('CommandPalette', () => {
     fireEvent.click(screen.getByLabelText('Pin Save Workspace Snapshot'))
 
     await waitFor(() => {
-      expect(consoleWarn).toHaveBeenCalledWith(
-        'Failed to toggle pinned command',
-        expect.any(Error)
-      )
+      expect(consoleWarn).toHaveBeenCalledWith('Failed to toggle pinned command', expect.any(Error))
     })
     expect(props.onClose).not.toHaveBeenCalled()
     expect(props.onSaveSnapshot).not.toHaveBeenCalled()
@@ -301,10 +322,7 @@ describe('CommandPalette', () => {
     await waitFor(() => {
       expect(props.onClose).toHaveBeenCalled()
       expect(props.onSaveSnapshot).toHaveBeenCalled()
-      expect(consoleWarn).toHaveBeenCalledWith(
-        'Failed to save recent command',
-        expect.any(Error)
-      )
+      expect(consoleWarn).toHaveBeenCalledWith('Failed to save recent command', expect.any(Error))
     })
 
     consoleWarn.mockRestore()

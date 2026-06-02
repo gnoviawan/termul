@@ -1,44 +1,52 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { RotateCcw, Keyboard, Download, CheckCircle2, AlertCircle, ExternalLink, X } from 'lucide-react'
+import type { DetectedShells } from '@shared/types/ipc.types'
 import {
-  useTerminalFontFamily,
-  useTerminalFontSize,
-  useTerminalBufferSize,
-  useTerminalRenderer,
-  useDefaultShell,
-  useDefaultProjectColor,
-  useMaxTerminalsPerProject,
+  AlertCircle,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Keyboard,
+  RotateCcw,
+  X
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ShortcutRecorder } from '@/components/ShortcutRecorder'
+import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
+import {
+  useResetAllShortcuts,
+  useResetShortcut,
+  useUpdateShortcut
+} from '@/hooks/use-keyboard-shortcuts'
+import { shellApi, terminalApi } from '@/lib/api'
+import { availableColors, getColorClasses } from '@/lib/colors'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { cn } from '@/lib/utils'
+import {
   useConfirmTerminalClose,
+  useDefaultProjectColor,
+  useDefaultShell,
+  useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
+  useTerminalBufferSize,
+  useTerminalFontFamily,
+  useTerminalFontSize,
+  useTerminalRenderer,
   useTerminalUrlOpenMode
 } from '@/stores/app-settings-store'
-import { useUpdateAppSetting, useResetAppSettings } from '@/hooks/use-app-settings'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
+import type { ProjectColor } from '@/types/project'
 import {
-  FONT_FAMILY_OPTIONS,
   BUFFER_SIZE_OPTIONS,
+  FONT_FAMILY_OPTIONS,
   MAX_TERMINALS_OPTIONS,
   ORPHAN_TIMEOUT_OPTIONS,
   TERMINAL_RENDERER_OPTIONS,
   TERMINAL_URL_OPEN_MODE_OPTIONS,
   type TerminalUrlOpenMode
 } from '@/types/settings'
-import type { DetectedShells } from '@shared/types/ipc.types'
-import type { ProjectColor } from '@/types/project'
-import { availableColors, getColorClasses } from '@/lib/colors'
-import { cn } from '@/lib/utils'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { ShortcutRecorder } from '@/components/ShortcutRecorder'
-import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import {
-  useUpdateShortcut,
-  useResetShortcut,
-  useResetAllShortcuts
-} from '@/hooks/use-keyboard-shortcuts'
-import { useUpdaterState, useUpdaterActions } from '@/stores/updater-store'
-import { shellApi, terminalApi } from '@/lib/api'
-import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 
 export default function AppPreferences(): React.JSX.Element {
   const navigate = useNavigate()
@@ -52,7 +60,7 @@ export default function AppPreferences(): React.JSX.Element {
   const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
-  const confirmTerminalClose = useConfirmTerminalClose()
+  const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
 
   const updateSetting = useUpdateAppSetting()
@@ -69,8 +77,17 @@ export default function AppPreferences(): React.JSX.Element {
   const resetAllShortcuts = useResetAllShortcuts()
 
   // Updater state
-  const { isChecking, updateAvailable, version, lastChecked, autoUpdateEnabled, skippedVersion, error: updateError, isManualUpdateMode } = useUpdaterState()
-  const { checkForUpdates, downloadUpdate, installAndRestart, setAutoUpdateEnabled } = useUpdaterActions()
+  const {
+    isChecking,
+    updateAvailable,
+    version,
+    lastChecked,
+    autoUpdateEnabled,
+    skippedVersion,
+    error: updateError,
+    isManualUpdateMode
+  } = useUpdaterState()
+  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled } = useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -128,8 +145,8 @@ export default function AppPreferences(): React.JSX.Element {
     updateSetting('terminalUrlOpenMode', value)
   }
 
-  const handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
-    await updateSetting("confirmTerminalClose", enabled)
+  const _handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
+    await updateSetting('confirmTerminalClose', enabled)
   }
 
   const handleOrphanDetectionToggle = async (enabled: boolean) => {
@@ -184,12 +201,12 @@ export default function AppPreferences(): React.JSX.Element {
             <h1 className="text-xl font-semibold text-foreground leading-tight">
               Application Preferences
             </h1>
-            <p className="text-xs text-muted-foreground">
-              Configure global application settings
-            </p>
+            <p className="text-xs text-muted-foreground">Configure global application settings</p>
           </div>
           <button
-            onClick={() => { navigate('/') }}
+            onClick={() => {
+              navigate('/')
+            }}
             className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             title="Close"
             aria-label="Close preferences"
@@ -201,519 +218,542 @@ export default function AppPreferences(): React.JSX.Element {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-8 pb-32">
           <div className="max-w-4xl mx-auto space-y-12">
-          {/* Terminal Appearance Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Terminal Appearance</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Customize the look and feel of your terminal.
-                </p>
-              </div>
-              <div className="w-2/3 space-y-6">
-                {/* Font Family */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Font Family
-                  </label>
-                  <select
-                    value={fontFamily}
-                    onChange={(e) => handleFontFamilyChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    {FONT_FAMILY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Choose a monospace font for terminal text.
+            {/* Terminal Appearance Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Terminal Appearance</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Customize the look and feel of your terminal.
                   </p>
                 </div>
-
-                {/* Font Size */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Font Size: {fontSize}px
-                  </label>
-                  <div className="flex items-center gap-4">
-                    <input
-                      type="range"
-                      min={10}
-                      max={24}
-                      value={fontSize}
-                      onChange={(e) => handleFontSizeChange(parseInt(e.target.value))}
-                      className="flex-1 h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
-                    />
-                    <span className="text-sm text-muted-foreground w-12 text-right">
-                      {fontSize}px
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Adjust terminal text size (10-24px).
-                  </p>
-                </div>
-
-                {/* Buffer Size */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Scrollback Buffer Size
-                  </label>
-                  <select
-                    value={bufferSize}
-                    onChange={(e) => handleBufferSizeChange(parseInt(e.target.value))}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    {BUFFER_SIZE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Number of lines to keep in terminal history. Higher values use more memory. Changes apply to new terminals.
-                  </p>
-                </div>
-
-                {/* Max Terminals */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Max Terminals Per Project
-                  </label>
-                  <select
-                    value={maxTerminals}
-                    onChange={(e) => handleMaxTerminalsChange(parseInt(e.target.value))}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    {MAX_TERMINALS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Maximum number of terminal tabs allowed per project.
-                  </p>
-                </div>
-
-                {/* Terminal Renderer */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Terminal Renderer
-                  </label>
-                  <select
-                    value={terminalRenderer}
-                    onChange={(e) => handleRendererChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    {TERMINAL_RENDERER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    GPU-accelerated rendering for terminal output. WebGL provides best performance. Changes apply to new terminals.
-                  </p>
-                </div>
-
-                {/* Preview */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Preview
-                  </label>
-                  <div
-                    className="bg-terminal-bg border border-border rounded-md p-4 text-terminal-fg"
-                    style={{
-                      fontFamily: fontFamily,
-                      fontSize: `${fontSize}px`,
-                      lineHeight: 1.2
-                    }}
-                  >
-                    <div>$ echo "Hello, World!"</div>
-                    <div>Hello, World!</div>
-                    <div>$ ls -la</div>
-                    <div>drwxr-xr-x  5 user staff 160 Jan 11 10:00 .</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Default Shell Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Default Shell</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Set the default shell for new terminals.
-                </p>
-              </div>
-              <div className="w-2/3 space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Shell
-                  </label>
-                  <select
-                    value={(() => {
-                      // Normalize the stored defaultShell for display
-                      // If it's a path, use it directly; if it's a name, find matching shell's path
-                      if (!defaultShell) return ''
-                      if (defaultShell.includes('\\') || defaultShell.includes('/')) {
-                        return defaultShell
-                      }
-                      // Find shell by name or by basename of path
-                      const match = availableShells?.available.find((s) => {
-                        if (s.name === defaultShell) return true
-                        const pathBasename = s.path.split(/[\\/]/).pop()
-                        return pathBasename === defaultShell
-                      })
-                      return match?.path ?? defaultShell
-                    })()}
-                    onChange={(e) => handleDefaultShellChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    <option value="">System Default</option>
-                    {availableShells?.available?.map((shell) => (
-                      <option key={shell.path} value={shell.path}>
-                        {shell.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    This can be overridden per-project in project settings.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Terminal Behavior Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Configure how inactive terminals are managed.
-                </p>
-              </div>
-              <div className="w-2/3 space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Open Terminal Links In
-                  </label>
-                  <select
-                    value={terminalUrlOpenMode}
-                    onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
-                  >
-                    {TERMINAL_URL_OPEN_MODE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system browser or a new Termul browser tab.
-                  </p>
-                </div>
-
-                {/* Orphan Detection Toggle */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Orphan Detection
-                  </label>
-                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-                    <div className="flex-1">
-                      <div className="text-sm text-foreground">Enable orphan detection</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        Automatically clean up terminals that have been inactive
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
-                      className={cn(
-                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                        orphanDetectionEnabled ? 'bg-primary' : 'bg-input'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                          orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
-                        )}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Timeout Dropdown */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Timeout Before Cleanup
-                  </label>
-                  <select
-                    value={orphanDetectionTimeout ?? 600000}
-                    onChange={(e) => handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value) : null)}
-                    disabled={!orphanDetectionEnabled}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Terminals inactive for this duration will be cleaned up (only if not displayed).
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* New Project Defaults Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">New Project Defaults</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Set default options for new projects.
-                </p>
-              </div>
-              <div className="w-2/3 space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Default Color
-                  </label>
-                  <div className="flex gap-2 flex-wrap">
-                    {availableColors.map((color) => {
-                      const colors = getColorClasses(color)
-                      return (
-                        <button
-                          key={color}
-                          onClick={() => handleDefaultProjectColorChange(color)}
-                          className={cn(
-                            'w-8 h-8 rounded-full transition-all',
-                            colors.bg,
-                            defaultProjectColor === color
-                              ? 'ring-2 ring-offset-2 ring-offset-background ring-current'
-                              : 'hover:opacity-80'
-                          )}
-                          title={color.charAt(0).toUpperCase() + color.slice(1)}
-                        />
-                      )
-                    })}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    New projects will use this color by default.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Keyboard Shortcuts Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <div className="flex items-center gap-2">
-                  <Keyboard size={18} className="text-primary" />
-                  <h2 className="text-lg font-medium text-foreground">Keyboard Shortcuts</h2>
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Customize keyboard shortcuts to match your workflow.
-                </p>
-                <button
-                  onClick={() => setIsResetShortcutsDialogOpen(true)}
-                  className="mt-4 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <RotateCcw size={12} />
-                  Reset all shortcuts
-                </button>
-              </div>
-              <div className="w-2/3 space-y-4">
-                {Object.values(shortcuts).map((shortcut) => (
-                  <ShortcutRecorder
-                    key={shortcut.id}
-                    shortcut={shortcut}
-                    allShortcuts={shortcuts}
-                    onUpdate={updateShortcut}
-                    onReset={resetShortcut}
-                  />
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {/* Updates Section */}
-          <section>
-            <div className="flex items-start gap-6 border-b border-border pb-8">
-              <div className="w-1/3 pt-1">
-                <div className="flex items-center gap-2">
-                  <Download size={18} className="text-primary" />
-                  <h2 className="text-lg font-medium text-foreground">Updates</h2>
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Manage application updates and version information.
-                </p>
-              </div>
-              <div className="w-2/3 space-y-6">
-                {/* Current Version */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Current Version
-                  </label>
-                  <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-                    <span className="text-sm font-mono text-foreground">v{import.meta.env.PACKAGE_VERSION || '0.1.0'}</span>
-                  </div>
-                </div>
-
-                {/* Update Status */}
-                {updateAvailable && version && (
+                <div className="w-2/3 space-y-6">
+                  {/* Font Family */}
                   <div>
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Update Available
+                      Font Family
                     </label>
-                    <div className={cn(
-                      'border rounded-md px-4 py-3 flex items-center gap-3',
-                      isManualUpdateMode
-                        ? 'bg-amber-500/10 border-amber-500/20'
-                        : 'bg-green-500/10 border-green-500/20'
-                    )}>
-                      <CheckCircle2 size={18} className={cn('flex-shrink-0', isManualUpdateMode ? 'text-amber-500' : 'text-green-500')} />
+                    <select
+                      value={fontFamily}
+                      onChange={(e) => handleFontFamilyChange(e.target.value)}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      {FONT_FAMILY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Choose a monospace font for terminal text.
+                    </p>
+                  </div>
+
+                  {/* Font Size */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Font Size: {fontSize}px
+                    </label>
+                    <div className="flex items-center gap-4">
+                      <input
+                        type="range"
+                        min={10}
+                        max={24}
+                        value={fontSize}
+                        onChange={(e) => handleFontSizeChange(parseInt(e.target.value, 10))}
+                        className="flex-1 h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                      <span className="text-sm text-muted-foreground w-12 text-right">
+                        {fontSize}px
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Adjust terminal text size (10-24px).
+                    </p>
+                  </div>
+
+                  {/* Buffer Size */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Scrollback Buffer Size
+                    </label>
+                    <select
+                      value={bufferSize}
+                      onChange={(e) => handleBufferSizeChange(parseInt(e.target.value, 10))}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      {BUFFER_SIZE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Number of lines to keep in terminal history. Higher values use more memory.
+                      Changes apply to new terminals.
+                    </p>
+                  </div>
+
+                  {/* Max Terminals */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Max Terminals Per Project
+                    </label>
+                    <select
+                      value={maxTerminals}
+                      onChange={(e) => handleMaxTerminalsChange(parseInt(e.target.value, 10))}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      {MAX_TERMINALS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Maximum number of terminal tabs allowed per project.
+                    </p>
+                  </div>
+
+                  {/* Terminal Renderer */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Terminal Renderer
+                    </label>
+                    <select
+                      value={terminalRenderer}
+                      onChange={(e) => handleRendererChange(e.target.value)}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      {TERMINAL_RENDERER_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      GPU-accelerated rendering for terminal output. WebGL provides best
+                      performance. Changes apply to new terminals.
+                    </p>
+                  </div>
+
+                  {/* Preview */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Preview
+                    </label>
+                    <div
+                      className="bg-terminal-bg border border-border rounded-md p-4 text-terminal-fg"
+                      style={{
+                        fontFamily: fontFamily,
+                        fontSize: `${fontSize}px`,
+                        lineHeight: 1.2
+                      }}
+                    >
+                      <div>$ echo "Hello, World!"</div>
+                      <div>Hello, World!</div>
+                      <div>$ ls -la</div>
+                      <div>drwxr-xr-x 5 user staff 160 Jan 11 10:00 .</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Default Shell Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Default Shell</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Set the default shell for new terminals.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Shell
+                    </label>
+                    <select
+                      value={(() => {
+                        // Normalize the stored defaultShell for display
+                        // If it's a path, use it directly; if it's a name, find matching shell's path
+                        if (!defaultShell) return ''
+                        if (defaultShell.includes('\\') || defaultShell.includes('/')) {
+                          return defaultShell
+                        }
+                        // Find shell by name or by basename of path
+                        const match = availableShells?.available.find((s) => {
+                          if (s.name === defaultShell) return true
+                          const pathBasename = s.path.split(/[\\/]/).pop()
+                          return pathBasename === defaultShell
+                        })
+                        return match?.path ?? defaultShell
+                      })()}
+                      onChange={(e) => handleDefaultShellChange(e.target.value)}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      <option value="">System Default</option>
+                      {availableShells?.available?.map((shell) => (
+                        <option key={shell.path} value={shell.path}>
+                          {shell.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      This can be overridden per-project in project settings.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Terminal Behavior Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Configure how inactive terminals are managed.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Open Terminal Links In
+                    </label>
+                    <select
+                      value={terminalUrlOpenMode}
+                      onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    >
+                      {TERMINAL_URL_OPEN_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system
+                      browser or a new Termul browser tab.
+                    </p>
+                  </div>
+
+                  {/* Orphan Detection Toggle */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Orphan Detection
+                    </label>
+                    <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
                       <div className="flex-1">
-                        <div className="text-sm font-medium text-foreground">Version {version} is available!</div>
+                        <div className="text-sm text-foreground">Enable orphan detection</div>
                         <div className="text-xs text-muted-foreground mt-0.5">
-                          {isAurUpdater
-                            ? 'Update through AUR with: yay -S termul-manager'
-                            : isManualUpdateMode
-                              ? 'Automatic update is unavailable. Please download and install the latest version manually.'
-                              : 'A new version is ready to download.'}
+                          Automatically clean up terminals that have been inactive
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
+                        className={cn(
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                          orphanDetectionEnabled ? 'bg-primary' : 'bg-input'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                            orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
+                          )}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Timeout Dropdown */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Timeout Before Cleanup
+                    </label>
+                    <select
+                      value={orphanDetectionTimeout ?? 600000}
+                      onChange={(e) =>
+                        handleOrphanTimeoutChange(
+                          e.target.value ? parseInt(e.target.value, 10) : null
+                        )
+                      }
+                      disabled={!orphanDetectionEnabled}
+                      className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Terminals inactive for this duration will be cleaned up (only if not
+                      displayed).
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* New Project Defaults Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">New Project Defaults</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Set default options for new projects.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Default Color
+                    </label>
+                    <div className="flex gap-2 flex-wrap">
+                      {availableColors.map((color) => {
+                        const colors = getColorClasses(color)
+                        return (
+                          <button
+                            key={color}
+                            onClick={() => handleDefaultProjectColorChange(color)}
+                            className={cn(
+                              'w-8 h-8 rounded-full transition-all',
+                              colors.bg,
+                              defaultProjectColor === color
+                                ? 'ring-2 ring-offset-2 ring-offset-background ring-current'
+                                : 'hover:opacity-80'
+                            )}
+                            title={color.charAt(0).toUpperCase() + color.slice(1)}
+                          />
+                        )
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      New projects will use this color by default.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Keyboard Shortcuts Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Keyboard size={18} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">Keyboard Shortcuts</h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Customize keyboard shortcuts to match your workflow.
+                  </p>
+                  <button
+                    onClick={() => setIsResetShortcutsDialogOpen(true)}
+                    className="mt-4 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <RotateCcw size={12} />
+                    Reset all shortcuts
+                  </button>
+                </div>
+                <div className="w-2/3 space-y-4">
+                  {Object.values(shortcuts).map((shortcut) => (
+                    <ShortcutRecorder
+                      key={shortcut.id}
+                      shortcut={shortcut}
+                      allShortcuts={shortcuts}
+                      onUpdate={updateShortcut}
+                      onReset={resetShortcut}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {/* Updates Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Download size={18} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">Updates</h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Manage application updates and version information.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-6">
+                  {/* Current Version */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Current Version
+                    </label>
+                    <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
+                      <span className="text-sm font-mono text-foreground">
+                        v{import.meta.env.PACKAGE_VERSION || '0.1.0'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Update Status */}
+                  {updateAvailable && version && (
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                        Update Available
+                      </label>
+                      <div
+                        className={cn(
+                          'border rounded-md px-4 py-3 flex items-center gap-3',
+                          isManualUpdateMode
+                            ? 'bg-amber-500/10 border-amber-500/20'
+                            : 'bg-green-500/10 border-green-500/20'
+                        )}
+                      >
+                        <CheckCircle2
+                          size={18}
+                          className={cn(
+                            'flex-shrink-0',
+                            isManualUpdateMode ? 'text-amber-500' : 'text-green-500'
+                          )}
+                        />
+                        <div className="flex-1">
+                          <div className="text-sm font-medium text-foreground">
+                            Version {version} is available!
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {isAurUpdater
+                              ? 'Update through AUR with: yay -S termul-manager'
+                              : isManualUpdateMode
+                                ? 'Automatic update is unavailable. Please download and install the latest version manually.'
+                                : 'A new version is ready to download.'}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Update Error */}
-                {updateError && (
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Update Error
-                    </label>
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-md px-4 py-3 flex items-center gap-3">
-                      <AlertCircle size={18} className="text-red-500 flex-shrink-0" />
-                      <div className="flex-1">
-                        <div className="text-sm text-foreground">{updateError}</div>
+                  {/* Update Error */}
+                  {updateError && (
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                        Update Error
+                      </label>
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-md px-4 py-3 flex items-center gap-3">
+                        <AlertCircle size={18} className="text-red-500 flex-shrink-0" />
+                        <div className="flex-1">
+                          <div className="text-sm text-foreground">{updateError}</div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Check for Updates Button */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Check for Updates
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={checkForUpdates}
-                      disabled={isChecking}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
-                    >
-                      <Download size={16} />
-                      {isChecking ? 'Checking for updates...' : 'Check for Updates'}
-                    </button>
-                    {updateAvailable && isManualUpdateMode && (
+                  {/* Check for Updates Button */}
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Check for Updates
+                    </label>
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={installAndRestart}
-                        className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 border border-amber-500 rounded-lg text-sm text-white transition-colors"
+                        onClick={checkForUpdates}
+                        disabled={isChecking}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
                       >
-                        <ExternalLink size={16} />
-                        Open Download Page
+                        <Download size={16} />
+                        {isChecking ? 'Checking for updates...' : 'Check for Updates'}
                       </button>
+                      {updateAvailable && isManualUpdateMode && (
+                        <button
+                          onClick={installAndRestart}
+                          className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 border border-amber-500 rounded-lg text-sm text-white transition-colors"
+                        >
+                          <ExternalLink size={16} />
+                          Open Download Page
+                        </button>
+                      )}
+                    </div>
+                    {lastChecked && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Last checked: {formatLastChecked(lastChecked)}
+                      </p>
                     )}
                   </div>
-                  {lastChecked && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Last checked: {formatLastChecked(lastChecked)}
-                    </p>
-                  )}
-                </div>
 
-                {/* Auto-update Toggle */}
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Auto-update
-                  </label>
-                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-                    <div className="flex-1">
-                      <div className="text-sm text-foreground">Automatically check for updates</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        When enabled, the app will periodically check for new versions
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
-                      className={cn(
-                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                        autoUpdateEnabled ? 'bg-primary' : 'bg-input'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                          autoUpdateEnabled ? 'translate-x-6' : 'translate-x-1'
-                        )}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Skipped Version */}
-                {skippedVersion && (
+                  {/* Auto-update Toggle */}
                   <div>
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Skipped Version
+                      Auto-update
                     </label>
-                    <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-                      <div className="text-sm text-foreground">
-                        You are currently skipping version <span className="font-mono">{skippedVersion}</span>
+                    <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                      <div className="flex-1">
+                        <div className="text-sm text-foreground">
+                          Automatically check for updates
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          When enabled, the app will periodically check for new versions
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        This version will not be offered again until a newer version is available.
-                      </div>
+                      <button
+                        onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
+                        className={cn(
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                          autoUpdateEnabled ? 'bg-primary' : 'bg-input'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                            autoUpdateEnabled ? 'translate-x-6' : 'translate-x-1'
+                          )}
+                        />
+                      </button>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          </section>
 
-          {/* Reset Section */}
-          <section>
-            <div className="flex items-start gap-6 pb-8">
-              <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Reset Settings</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Restore all settings to their default values.
-                </p>
+                  {/* Skipped Version */}
+                  {skippedVersion && (
+                    <div>
+                      <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                        Skipped Version
+                      </label>
+                      <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
+                        <div className="text-sm text-foreground">
+                          You are currently skipping version{' '}
+                          <span className="font-mono">{skippedVersion}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          This version will not be offered again until a newer version is available.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="w-2/3">
-                <button
-                  onClick={() => setIsResetDialogOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-card hover:bg-secondary border border-border rounded-lg text-sm text-foreground transition-colors"
-                >
-                  <RotateCcw size={16} />
-                  Reset to Defaults
-                </button>
+            </section>
+
+            {/* Reset Section */}
+            <section>
+              <div className="flex items-start gap-6 pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Reset Settings</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Restore all settings to their default values.
+                  </p>
+                </div>
+                <div className="w-2/3">
+                  <button
+                    onClick={() => setIsResetDialogOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-card hover:bg-secondary border border-border rounded-lg text-sm text-foreground transition-colors"
+                  >
+                    <RotateCcw size={16} />
+                    Reset to Defaults
+                  </button>
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
-      </div>
       </main>
 
       {/* Reset Confirmation Dialog */}

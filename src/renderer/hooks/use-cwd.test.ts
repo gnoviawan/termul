@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 // Constants matching the implementation
 const TRUNCATE_START_LENGTH = 15
@@ -6,11 +6,7 @@ const TRUNCATE_ELLIPSIS_LENGTH = 3
 
 // Test the pure utility functions directly without React dependencies
 // We copy the function implementations here to test them in isolation
-function formatPath(
-  fullPath: string,
-  homeDir: string | undefined,
-  maxLength: number = 50
-): string {
+function formatPath(fullPath: string, homeDir: string | undefined, maxLength: number = 50): string {
   if (!fullPath) return ''
 
   let formatted = fullPath
@@ -21,11 +17,8 @@ function formatPath(
     const normalizedPath = fullPath.replace(/\\/g, '/')
 
     // Check if path starts with home dir followed by a separator or is exactly home dir
-    if (
-      normalizedPath === normalizedHome ||
-      normalizedPath.startsWith(normalizedHome + '/')
-    ) {
-      formatted = '~' + normalizedPath.slice(normalizedHome.length)
+    if (normalizedPath === normalizedHome || normalizedPath.startsWith(`${normalizedHome}/`)) {
+      formatted = `~${normalizedPath.slice(normalizedHome.length)}`
     } else {
       // Keep original path but normalize slashes for display consistency
       formatted = normalizedPath

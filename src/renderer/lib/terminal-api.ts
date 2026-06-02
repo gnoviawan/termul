@@ -9,8 +9,8 @@
  *   await terminalApi.spawn({ cwd: '/path' })
  */
 
-import { createTauriTerminalApi } from './tauri-terminal-api'
 import type { TerminalApi } from '@shared/types/ipc.types'
+import { createTauriTerminalApi } from './tauri-terminal-api'
 
 /**
  * Singleton TerminalApi instance

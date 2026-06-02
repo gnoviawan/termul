@@ -1,11 +1,20 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useKeyboardShortcutsStore, findConflictingShortcut, normalizeKeyEvent, formatKeyForDisplay, matchesShortcut } from './keyboard-shortcuts-store'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
+import {
+  findConflictingShortcut,
+  formatKeyForDisplay,
+  matchesShortcut,
+  normalizeKeyEvent,
+  useKeyboardShortcutsStore
+} from './keyboard-shortcuts-store'
 
 describe('keyboard-shortcuts-store', () => {
   beforeEach(() => {
     // Reset store to initial state before each test
-    const defaults: Record<string, typeof DEFAULT_KEYBOARD_SHORTCUTS[keyof typeof DEFAULT_KEYBOARD_SHORTCUTS]> = {}
+    const defaults: Record<
+      string,
+      (typeof DEFAULT_KEYBOARD_SHORTCUTS)[keyof typeof DEFAULT_KEYBOARD_SHORTCUTS]
+    > = {}
     for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
       defaults[key] = { ...shortcut }
     }
@@ -59,7 +68,9 @@ describe('keyboard-shortcuts-store', () => {
 
       // Then set it back to default
       updateShortcut('commandPalette', 'ctrl+k')
-      expect(useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey).toBeUndefined()
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey
+      ).toBeUndefined()
     })
 
     it('should not affect other shortcuts when updating one', () => {
@@ -83,7 +94,9 @@ describe('keyboard-shortcuts-store', () => {
 
       // Reset it
       resetShortcut('commandPalette')
-      expect(useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey).toBeUndefined()
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey
+      ).toBeUndefined()
     })
 
     it('should not affect other shortcuts when resetting one', () => {

@@ -121,12 +121,7 @@
       "UpdateAvailableToast",
       "UpdateReadyModal"
     ],
-    "browser": [
-      "AnnotationExportModal",
-      "AnnotationPanel",
-      "BrowserControls",
-      "BrowserPanel"
-    ],
+    "browser": ["AnnotationExportModal", "AnnotationPanel", "BrowserControls", "BrowserPanel"],
     "editor": [
       "CodeEditor",
       "EditorPanel",
@@ -137,11 +132,7 @@
       "TocPanel",
       "mermaid-block-spec"
     ],
-    "file-explorer": [
-      "FileExplorer",
-      "FileTreeContextMenu",
-      "FileTreeNode"
-    ],
+    "file-explorer": ["FileExplorer", "FileTreeContextMenu", "FileTreeNode"],
     "terminal": [
       "ActivityIndicator",
       "ConnectedTerminal",
@@ -199,13 +190,7 @@
       "toggle-group",
       "tooltip"
     ],
-    "workspace": [
-      "DropZoneOverlay",
-      "EditorTab",
-      "PaneContent",
-      "PaneRenderer",
-      "WorkspaceTabBar"
-    ]
+    "workspace": ["DropZoneOverlay", "EditorTab", "PaneContent", "PaneRenderer", "WorkspaceTabBar"]
   },
   "stores": [
     "annotation-store",
@@ -299,11 +284,7 @@
     "data_migration_run_migrations",
     "data_migration_rollback"
   ],
-  "tauri_commands_sync": [
-    "detect_shells",
-    "get_default_shell",
-    "get_home_directory"
-  ],
+  "tauri_commands_sync": ["detect_shells", "get_default_shell", "get_home_directory"],
   "rust_modules": [
     "browser_tab_manager",
     "commands",

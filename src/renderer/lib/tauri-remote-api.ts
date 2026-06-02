@@ -1,4 +1,3 @@
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import type {
   IpcResult,
   RemoteBindMode,
@@ -6,6 +5,7 @@ import type {
   RemoteServerApi,
   RemoteStatus
 } from '@shared/types/ipc.types'
+import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
  * Tauri IPC adapter for the embedded remote terminal server.
@@ -46,10 +46,7 @@ export const remoteServerApi: RemoteServerApi = {
   /** Start the embedded server on the chosen bind mode (auto-port). */
   async start(options?: { bindMode?: RemoteBindMode }): Promise<IpcResult<RemoteStatus>> {
     const bindMode = options?.bindMode
-    return invokeIpc<RemoteStatus>(
-      IPC_COMMANDS.START,
-      bindMode ? { bindMode } : undefined
-    )
+    return invokeIpc<RemoteStatus>(IPC_COMMANDS.START, bindMode ? { bindMode } : undefined)
   },
 
   /** Stop the embedded server and disconnect all web clients. */

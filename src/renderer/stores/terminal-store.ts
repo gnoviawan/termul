@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Terminal, GitStatus, TerminalHealthStatus } from '@/types/project'
+import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
 const GLOBAL_TERMINAL_LIMIT = 30
@@ -447,9 +447,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         return state
       }
       return {
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, needsAttention: value } : t
-        )
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, needsAttention: value } : t))
       }
     })
   },
@@ -506,7 +504,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return {
         terminals: state.terminals.map((t) =>
           t.id === id
-            ? { ...t, ptyId: newPtyId, healthStatus: 'running', transcript: undefined, pendingScrollback: undefined }
+            ? {
+                ...t,
+                ptyId: newPtyId,
+                healthStatus: 'running',
+                transcript: undefined,
+                pendingScrollback: undefined
+              }
             : t
         ),
         ptyIdIndex: newIndex,
@@ -565,7 +569,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         const nextDetachedOutput = t.detachedOutput
           ? (() => {
               const trimmedMax = trimTranscriptToMaxChars(t.detachedOutput!)
-              return trimmedMax === t.detachedOutput && t.detachedOutput!.length <= TRUNCATED_BUFFER_SIZE
+              return trimmedMax === t.detachedOutput &&
+                t.detachedOutput!.length <= TRUNCATED_BUFFER_SIZE
                 ? t.detachedOutput
                 : trimTranscriptToRecentLines(trimmedMax)
             })()
@@ -604,10 +609,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return {
         terminals: remainingTerminals,
         ptyIdIndex: newIndex,
-        activeTerminalId:
-          state.terminals.some((t) => t.id === state.activeTerminalId && t.projectId === projectId)
-            ? ''
-            : state.activeTerminalId
+        activeTerminalId: state.terminals.some(
+          (t) => t.id === state.activeTerminalId && t.projectId === projectId
+        )
+          ? ''
+          : state.activeTerminalId
       }
     })
   },
@@ -619,7 +625,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   isTerminalLimitReached: (): boolean => {
     return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
   }
-}));
+}))
 
 // Helper to cleanup project terminals from outside the store
 export function cleanupProjectTerminals(projectId: string): void {

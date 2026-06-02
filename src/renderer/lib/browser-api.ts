@@ -96,10 +96,7 @@ export async function browserTabCreate(
   return invoke('browser_tab_create', { tabId, url, bounds })
 }
 
-export async function browserTabNavigate(
-  tabId: string,
-  url: string
-): Promise<IpcResult<void>> {
+export async function browserTabNavigate(tabId: string, url: string): Promise<IpcResult<void>> {
   return invoke('browser_tab_navigate', { tabId, url })
 }
 
@@ -137,7 +134,6 @@ export async function browserTabReload(tabId: string): Promise<IpcResult<void>> 
 export async function browserTabOpenDevtools(tabId: string): Promise<IpcResult<void>> {
   return invoke('browser_tab_open_devtools', { tabId })
 }
-
 
 function createBrowserEventSubscription<T>(
   eventName: string,
@@ -216,7 +212,11 @@ export async function browserTabInjectAnnotationMarkers(
   annotations: MarkerAnnotation[],
   selectedId: string | null
 ): Promise<IpcResult<void>> {
-  return invoke('browser_tab_inject_annotation_markers', { tabId, annotationsJson: JSON.stringify(annotations), selectedId })
+  return invoke('browser_tab_inject_annotation_markers', {
+    tabId,
+    annotationsJson: JSON.stringify(annotations),
+    selectedId
+  })
 }
 
 export async function browserTabUpdateAnnotationMarkerSelection(

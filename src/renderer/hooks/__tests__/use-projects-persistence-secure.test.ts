@@ -1,7 +1,7 @@
+import type { PersistedProjectData } from '@shared/types/persistence.types'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
-import type { PersistedProjectData } from '@shared/types/persistence.types'
 import type { Project } from '@/types/project'
 
 const REDACTED_VALUE = '[REDACTED]'
@@ -197,12 +197,8 @@ describe('use-projects-persistence secure storage integration', () => {
       expect(apiMocks.persistenceWriteDebounced).toHaveBeenCalled()
     })
 
-    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith(
-      'project:test-project:env:OLD_SECRET'
-    )
-    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith(
-      'project:test-project:env:SHARED_KEY'
-    )
+    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith('project:test-project:env:OLD_SECRET')
+    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith('project:test-project:env:SHARED_KEY')
     expect(apiMocks.secureStorageSet).toHaveBeenCalledWith(
       'project:test-project:env:RENAMED_SECRET',
       'new-secret'
@@ -281,9 +277,7 @@ describe('use-projects-persistence secure storage integration', () => {
       await result.current()
     })
 
-    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith(
-      'project:test-project:env:API_KEY'
-    )
+    expect(apiMocks.secureStorageDelete).toHaveBeenCalledWith('project:test-project:env:API_KEY')
     expect(apiMocks.persistenceWrite).toHaveBeenCalled()
 
     unmount()

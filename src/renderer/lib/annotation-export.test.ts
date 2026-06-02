@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { exportAnnotationsToJson, exportAnnotationsToMarkdown, exportAnnotationsToAfsJson } from './annotation-export'
 import type { Annotation } from '@/stores/annotation-store'
+import {
+  exportAnnotationsToAfsJson,
+  exportAnnotationsToJson,
+  exportAnnotationsToMarkdown
+} from './annotation-export'
 
 const baseAnnotation: Annotation = {
   id: 'annotation-1',
@@ -16,7 +20,7 @@ const baseAnnotation: Annotation = {
     selectorConfidence: 'unique-class',
     attributes: {
       class: 'btn-primary',
-      'data-testid': 'submit-button',
+      'data-testid': 'submit-button'
     },
     textContent: 'Submit **now** > later',
     textTruncated: false,
@@ -24,8 +28,8 @@ const baseAnnotation: Annotation = {
       x: 10,
       y: 20,
       width: 120,
-      height: 36,
-    },
+      height: 36
+    }
   },
   intent: 'question',
   severity: 'suggestion',
@@ -34,7 +38,7 @@ const baseAnnotation: Annotation = {
   viewportHeight: 900,
   schemaVersion: 1,
   createdAt: 1715000000000,
-  updatedAt: 1715000000000,
+  updatedAt: 1715000000000
 }
 
 describe('annotation-export', () => {
@@ -42,14 +46,18 @@ describe('annotation-export', () => {
     const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'compact')
 
     expect(markdown).toContain('# Example \\*Page\\*')
-    expect(markdown).toContain('1. button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)')
+    expect(markdown).toContain(
+      '1. button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)'
+    )
     expect(markdown).toContain('> Review this \\_button\\_')
   })
 
   it('exports element annotations in standard markdown with text preview', () => {
     const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'standard')
 
-    expect(markdown).toContain('Element: button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)')
+    expect(markdown).toContain(
+      'Element: button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)'
+    )
     expect(markdown).toContain('Text: Submit \\*\\*now\\*\\* \\> later')
   })
 
@@ -74,7 +82,7 @@ describe('annotation-export', () => {
         selectorConfidence: 'unique-class',
         attributes: {
           class: 'btn-primary',
-          'data-testid': 'submit-button',
+          'data-testid': 'submit-button'
         },
         textContent: 'a'.repeat(120),
         textTruncated: false,
@@ -82,9 +90,9 @@ describe('annotation-export', () => {
           x: 10,
           y: 20,
           width: 120,
-          height: 36,
-        },
-      },
+          height: 36
+        }
+      }
     }
 
     const markdown = exportAnnotationsToMarkdown([annotation], 'standard')
@@ -136,8 +144,8 @@ describe('annotation-export', () => {
           x: 50,
           y: 100,
           width: 300,
-          height: 200,
-        },
+          height: 200
+        }
       }
 
       const json = exportAnnotationsToAfsJson([regionAnnotation])
@@ -158,8 +166,8 @@ describe('annotation-export', () => {
         geometry: {
           type: 'point',
           x: 200,
-          y: 400,
-        },
+          y: 400
+        }
       }
 
       const json = exportAnnotationsToAfsJson([noteAnnotation])
@@ -183,8 +191,8 @@ describe('annotation-export', () => {
           x: 100,
           y: 200,
           width: 400,
-          height: 300,
-        },
+          height: 300
+        }
       }
 
       const noteAnnotation: Annotation = {
@@ -194,15 +202,11 @@ describe('annotation-export', () => {
         geometry: {
           type: 'point',
           x: 300,
-          y: 500,
-        },
+          y: 500
+        }
       }
 
-      const json = exportAnnotationsToAfsJson([
-        baseAnnotation,
-        regionAnnotation,
-        noteAnnotation,
-      ])
+      const json = exportAnnotationsToAfsJson([baseAnnotation, regionAnnotation, noteAnnotation])
       const parsed = JSON.parse(json)
 
       expect(parsed.annotations).toHaveLength(3)
@@ -234,11 +238,23 @@ describe('annotation-export', () => {
       const afs = parsed.annotations[0]
 
       const unsupported = [
-        'status', 'thread', 'resolvedBy', 'resolvedAt',
-        'reactComponents', 'cssClasses', 'computedStyles',
-        'accessibility', 'nearbyText', 'selectedText',
-        'isFixed', 'isMultiSelect', 'fullPath', 'nearbyElements',
-        'kind', 'placement', 'rearrange',
+        'status',
+        'thread',
+        'resolvedBy',
+        'resolvedAt',
+        'reactComponents',
+        'cssClasses',
+        'computedStyles',
+        'accessibility',
+        'nearbyText',
+        'selectedText',
+        'isFixed',
+        'isMultiSelect',
+        'fullPath',
+        'nearbyElements',
+        'kind',
+        'placement',
+        'rearrange'
       ]
 
       for (const field of unsupported) {
@@ -249,7 +265,7 @@ describe('annotation-export', () => {
     it('uses empty string for empty description', () => {
       const noDescription: Annotation = {
         ...baseAnnotation,
-        description: '',
+        description: ''
       }
 
       const json = exportAnnotationsToAfsJson([noDescription])

@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
-import { useMenuUpdaterListener } from './use-menu-updater-listener'
-import { useUpdaterStore } from '@/stores/updater-store'
 import { listen } from '@tauri-apps/api/event'
+import { renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { useUpdaterStore } from '@/stores/updater-store'
+import { useMenuUpdaterListener } from './use-menu-updater-listener'
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()

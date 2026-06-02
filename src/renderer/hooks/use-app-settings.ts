@@ -1,11 +1,11 @@
-import { useEffect, useCallback } from 'react'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
-import { useSidebarStore } from '@/stores/sidebar-store'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { useSSHPanelStore } from '@/stores/ssh-panel-store'
+import { useCallback, useEffect } from 'react'
 import { persistenceApi, terminalApi } from '@/lib/api'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useSidebarStore } from '@/stores/sidebar-store'
+import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import type { AppSettings } from '@/types/settings'
-import { DEFAULT_APP_SETTINGS, APP_SETTINGS_KEY } from '@/types/settings'
+import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
 
 type PanelSettingKey = 'sidebarVisible' | 'fileExplorerVisible' | 'sshPanelVisible'
 

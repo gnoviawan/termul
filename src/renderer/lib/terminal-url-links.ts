@@ -23,7 +23,11 @@ const URL_CANDIDATE_REGEX = /(?:https?:\/\/|[a-zA-Z][a-zA-Z0-9+.-]*:)[^\s<>{}"'`
 function trimWrapped(value: string): string {
   const result = value.trim()
   for (const [start, end] of WRAPPER_PAIRS) {
-    if (result.startsWith(start) && result.endsWith(end) && result.length > start.length + end.length) {
+    if (
+      result.startsWith(start) &&
+      result.endsWith(end) &&
+      result.length > start.length + end.length
+    ) {
       return result.slice(start.length, result.length - end.length).trim()
     }
   }

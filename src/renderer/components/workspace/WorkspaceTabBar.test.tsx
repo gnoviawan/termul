@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { WorkspaceTabBar } from './WorkspaceTabBar'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import type { DragPayload } from '@/types/workspace.types'
+import { WorkspaceTabBar } from './WorkspaceTabBar'
 
 const mockSetActiveTab = vi.fn()
 const mockSetActivePane = vi.fn()
@@ -30,7 +30,9 @@ const mockEditorStoreState = {
 
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: Object.assign(
-    vi.fn((selector: (state: typeof mockWorkspaceStoreState) => unknown) => selector(mockWorkspaceStoreState)),
+    vi.fn((selector: (state: typeof mockWorkspaceStoreState) => unknown) =>
+      selector(mockWorkspaceStoreState)
+    ),
     {
       getState: () => mockWorkspaceStoreState
     }
@@ -42,7 +44,9 @@ vi.mock('@/stores/workspace-store', () => ({
 
 vi.mock('@/stores/editor-store', () => ({
   useEditorStore: Object.assign(
-    vi.fn((selector: (state: typeof mockEditorStoreState) => unknown) => selector(mockEditorStoreState)),
+    vi.fn((selector: (state: typeof mockEditorStoreState) => unknown) =>
+      selector(mockEditorStoreState)
+    ),
     {
       getState: () => mockEditorStoreState
     }
@@ -50,14 +54,19 @@ vi.mock('@/stores/editor-store', () => ({
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: vi.fn((selector: (state: { terminals: Array<{ id: string; name: string; shell: string }> }) => unknown) =>
-    selector({
-      terminals: [
-        { id: 'term-1', name: 'Terminal 1', shell: 'bash' },
-        { id: 'term-2', name: 'Terminal 2', shell: 'zsh' },
-        { id: 'term-3', name: 'Terminal 3', shell: 'bash' }
-      ]
-    })
+  useTerminalStore: vi.fn(
+    (
+      selector: (state: {
+        terminals: Array<{ id: string; name: string; shell: string }>
+      }) => unknown
+    ) =>
+      selector({
+        terminals: [
+          { id: 'term-1', name: 'Terminal 1', shell: 'bash' },
+          { id: 'term-2', name: 'Terminal 2', shell: 'zsh' },
+          { id: 'term-3', name: 'Terminal 3', shell: 'bash' }
+        ]
+      })
   ),
   useProjectsWithActivity: () => [],
   useProjectsWithErrors: () => new Set()
@@ -65,10 +74,15 @@ vi.mock('@/stores/terminal-store', () => ({
 
 vi.mock('@/stores/browser-session-store', () => ({
   useBrowserSessionStore: Object.assign(
-    vi.fn((selector: (state: { getTab: (id: string) => { title: string; url: string } | null }) => unknown) =>
-      selector({
-        getTab: () => ({ title: 'Docs', url: 'https://example.com' })
-      })
+    vi.fn(
+      (
+        selector: (state: {
+          getTab: (id: string) => { title: string; url: string } | null
+        }) => unknown
+      ) =>
+        selector({
+          getTab: () => ({ title: 'Docs', url: 'https://example.com' })
+        })
     ),
     {
       getState: () => ({
@@ -181,14 +195,7 @@ async function flushShellEffect(): Promise<void> {
 
 describe('WorkspaceTabBar', () => {
   it('shows pane plus action and no pane-close side control', async () => {
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={[]}
-        activeTabId={null}
-        onAddTerminal={vi.fn()}
-      />
-    )
+    render(<WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} onAddTerminal={vi.fn()} />)
 
     await flushShellEffect()
 
@@ -203,12 +210,7 @@ describe('WorkspaceTabBar', () => {
     const onAddTerminal = vi.fn()
 
     render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={[]}
-        activeTabId={null}
-        onAddTerminal={onAddTerminal}
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} onAddTerminal={onAddTerminal} />
     )
 
     await flushShellEffect()
@@ -242,13 +244,7 @@ describe('WorkspaceTabBar', () => {
   })
 
   it('renders fullscreen focus button when leafCount > 1', async () => {
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={[]}
-        activeTabId={null}
-      />
-    )
+    render(<WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} />)
 
     await flushShellEffect()
 
@@ -259,13 +255,7 @@ describe('WorkspaceTabBar', () => {
   it('renders restore button when pane is fullscreen', async () => {
     mockWorkspaceStoreState.fullscreenPaneId = 'pane-a'
 
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={[]}
-        activeTabId={null}
-      />
-    )
+    render(<WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} />)
 
     await flushShellEffect()
 
@@ -277,11 +267,7 @@ describe('WorkspaceTabBar', () => {
     const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="edit-/a.ts"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="edit-/a.ts" />
     )
 
     await flushShellEffect()
@@ -319,13 +305,7 @@ describe('WorkspaceTabBar', () => {
   it('uses the fallback close path when no onCloseEditorTab callback is provided', async () => {
     const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
 
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="edit-/a.ts"
-      />
-    )
+    render(<WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="edit-/a.ts" />)
 
     await flushShellEffect()
 
@@ -364,13 +344,7 @@ describe('WorkspaceTabBar', () => {
     mockCloseFileIfIdle.mockReturnValue(false)
     const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
 
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="edit-/a.ts"
-      />
-    )
+    render(<WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="edit-/a.ts" />)
 
     await flushShellEffect()
 
@@ -410,11 +384,7 @@ describe('WorkspaceTabBar', () => {
     const tabs: WorkspaceTab[] = [{ type: 'browser', id: 'browser-1', browserTabId: 'btab-1' }]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="browser-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="browser-1" />
     )
 
     await flushShellEffect()
@@ -433,11 +403,7 @@ describe('WorkspaceTabBar', () => {
     const tabs: WorkspaceTab[] = [{ type: 'terminal', id: 'tab-1', terminalId: 'term-1' }]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()
@@ -472,11 +438,7 @@ describe('WorkspaceTabBar', () => {
     ]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()
@@ -525,11 +487,7 @@ describe('WorkspaceTabBar', () => {
     ]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()
@@ -577,11 +535,7 @@ describe('WorkspaceTabBar', () => {
     ]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()
@@ -628,11 +582,7 @@ describe('WorkspaceTabBar', () => {
     ]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()
@@ -667,11 +617,7 @@ describe('WorkspaceTabBar', () => {
     ]
 
     const { container } = render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={tabs}
-        activeTabId="tab-1"
-      />
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="tab-1" />
     )
 
     await flushShellEffect()

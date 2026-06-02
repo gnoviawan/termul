@@ -81,14 +81,11 @@ export const useTocIsVisible = (): boolean =>
 export const useTocMaxHeadingLevel = (): number =>
   useTocSettingsStore((state) => state.settings.maxHeadingLevel)
 
-export const useTocWidth = (): number =>
-  useTocSettingsStore((state) => state.settings.width)
+export const useTocWidth = (): number => useTocSettingsStore((state) => state.settings.width)
 
-export const useTocSettings = (): TocSettings =>
-  useTocSettingsStore((state) => state.settings)
+export const useTocSettings = (): TocSettings => useTocSettingsStore((state) => state.settings)
 
-export const useTocSettingsLoaded = (): boolean =>
-  useTocSettingsStore((state) => state.isLoaded)
+export const useTocSettingsLoaded = (): boolean => useTocSettingsStore((state) => state.isLoaded)
 
 export const useTocSettingsHydrated = (): boolean =>
   useTocSettingsStore((state) => state.isLoaded || state.loadFailed)

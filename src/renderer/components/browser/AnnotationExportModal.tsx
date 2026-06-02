@@ -1,63 +1,59 @@
-import { useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Check, Copy, X } from 'lucide-react'
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
-import { Copy, Check, X } from "lucide-react";
-import { clipboardApi } from "@/lib/clipboard-api";
-import type { Annotation, OutputLevel } from "@/stores/annotation-store";
+  SelectValue
+} from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  exportAnnotationsToMarkdown,
-  exportAnnotationsToJson,
   exportAnnotationsToAfsJson,
-} from "@/lib/annotation-export";
+  exportAnnotationsToJson,
+  exportAnnotationsToMarkdown
+} from '@/lib/annotation-export'
+import { clipboardApi } from '@/lib/clipboard-api'
+import type { Annotation, OutputLevel } from '@/stores/annotation-store'
 
 interface AnnotationExportModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  annotations: Annotation[];
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  annotations: Annotation[]
 }
 
 export function AnnotationExportModal({
   open,
   onOpenChange,
-  annotations,
+  annotations
 }: AnnotationExportModalProps): React.JSX.Element {
-  const [activeTab, setActiveTab] = useState<"markdown" | "json" | "afs">("markdown");
-  const [level, setLevel] = useState<OutputLevel>("standard");
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [activeTab, setActiveTab] = useState<'markdown' | 'json' | 'afs'>('markdown')
+  const [level, setLevel] = useState<OutputLevel>('standard')
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
 
-  const markdownPreview = exportAnnotationsToMarkdown(annotations, level);
-  const jsonPreview = exportAnnotationsToJson(annotations);
-  const afsPreview = exportAnnotationsToAfsJson(annotations);
+  const markdownPreview = exportAnnotationsToMarkdown(annotations, level)
+  const jsonPreview = exportAnnotationsToJson(annotations)
+  const afsPreview = exportAnnotationsToAfsJson(annotations)
 
   const handleCopy = async () => {
-    const text = activeTab === "markdown" ? markdownPreview : activeTab === "json" ? jsonPreview : afsPreview;
+    const text =
+      activeTab === 'markdown' ? markdownPreview : activeTab === 'json' ? jsonPreview : afsPreview
     try {
-      const result = await clipboardApi.writeText(text);
+      const result = await clipboardApi.writeText(text)
       if (result.success) {
-        setCopyState("copied");
-        setTimeout(() => setCopyState("idle"), 2000);
+        setCopyState('copied')
+        setTimeout(() => setCopyState('idle'), 2000)
       } else {
-        setCopyState("error");
-        setTimeout(() => setCopyState("idle"), 2000);
+        setCopyState('error')
+        setTimeout(() => setCopyState('idle'), 2000)
       }
     } catch {
-      setCopyState("error");
-      setTimeout(() => setCopyState("idle"), 2000);
+      setCopyState('error')
+      setTimeout(() => setCopyState('idle'), 2000)
     }
-  };
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -66,36 +62,57 @@ export function AnnotationExportModal({
           <DialogTitle>Export Annotations</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "markdown" | "json" | "afs")}>
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as 'markdown' | 'json' | 'afs')}
+        >
           <div className="flex items-center justify-between mb-3">
             <TabsList>
-              <TabsTrigger value="markdown" className="text-xs">Markdown</TabsTrigger>
-              <TabsTrigger value="json" className="text-xs">JSON</TabsTrigger>
-              <TabsTrigger value="afs" className="text-xs">AFS (Agentation Format)</TabsTrigger>
+              <TabsTrigger value="markdown" className="text-xs">
+                Markdown
+              </TabsTrigger>
+              <TabsTrigger value="json" className="text-xs">
+                JSON
+              </TabsTrigger>
+              <TabsTrigger value="afs" className="text-xs">
+                AFS (Agentation Format)
+              </TabsTrigger>
             </TabsList>
 
-            {activeTab === "markdown" && (
+            {activeTab === 'markdown' && (
               <Select value={level} onValueChange={(v) => setLevel(v as OutputLevel)}>
                 <SelectTrigger className="h-8 text-xs w-[130px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="compact" className="text-xs">Compact</SelectItem>
-                  <SelectItem value="standard" className="text-xs">Standard</SelectItem>
-                  <SelectItem value="detailed" className="text-xs">Detailed</SelectItem>
+                  <SelectItem value="compact" className="text-xs">
+                    Compact
+                  </SelectItem>
+                  <SelectItem value="standard" className="text-xs">
+                    Standard
+                  </SelectItem>
+                  <SelectItem value="detailed" className="text-xs">
+                    Detailed
+                  </SelectItem>
                 </SelectContent>
               </Select>
             )}
 
-            <Button size="sm" variant="outline" className={`h-8 text-xs gap-1.5 ${copyState === "error" ? "text-red-500 border-red-300" : ""}`} onClick={handleCopy} aria-label={copyState === "error" ? "Copy failed" : undefined}>
-              {copyState === "copied" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className={`h-8 text-xs gap-1.5 ${copyState === 'error' ? 'text-red-500 border-red-300' : ''}`}
+              onClick={handleCopy}
+              aria-label={copyState === 'error' ? 'Copy failed' : undefined}
+            >
+              {copyState === 'copied' ? (
                 <Check size={14} className="text-green-500" />
-              ) : copyState === "error" ? (
+              ) : copyState === 'error' ? (
                 <X size={14} className="text-red-500" />
               ) : (
                 <Copy size={14} />
               )}
-              {copyState === "copied" ? "Copied" : copyState === "error" ? "Failed" : "Copy"}
+              {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Failed' : 'Copy'}
             </Button>
           </div>
 
@@ -119,5 +136,5 @@ export function AnnotationExportModal({
         </Tabs>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

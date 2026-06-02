@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { DownloadEvent } from '@tauri-apps/plugin-updater'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/app', () => ({
   getVersion: vi.fn()
@@ -32,22 +32,22 @@ vi.mock('../tauri-rollback-api', () => ({
 }))
 
 import { getVersion } from '@tauri-apps/api/app'
-import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { check } from '@tauri-apps/plugin-updater'
 import { createBackup, setAppVersion } from '../tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from '../tauri-rollback-api'
 import {
+  _resetUpdaterStateForTesting,
   checkForUpdates,
   clearPendingUpdate,
   downloadUpdate,
-  installAndRestart,
-  getUpdaterState,
-  setAutoUpdateEnabled,
   getAutoUpdateEnabled,
-  mapTauriUpdateToInfo,
+  getUpdaterState,
+  installAndRestart,
   isUpdateAvailable,
+  mapTauriUpdateToInfo,
   registerUpdateEventHandlers,
-  _resetUpdaterStateForTesting
+  setAutoUpdateEnabled
 } from '../tauri-updater-api'
 
 function createMockUpdate(version: string, body?: string, date?: string) {

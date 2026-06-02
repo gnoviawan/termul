@@ -1,5 +1,5 @@
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import type { IpcResult, SystemApi } from '@shared/types/ipc.types'
+import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
  * IPC Event names
@@ -19,7 +19,7 @@ import type { IpcResult, SystemApi } from '@shared/types/ipc.types'
  * 3. If more than 2 intervals have passed, system was likely asleep
  * 4. Triggering the resume callback when sleep is detected
  */
-const IPC_EVENTS = {
+const _IPC_EVENTS = {
   POWER_RESUME: 'system://power-resume' // Not emitted - using heartbeat fallback instead
 } as const
 

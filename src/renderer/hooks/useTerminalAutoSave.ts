@@ -1,15 +1,15 @@
 import { useEffect, useRef } from 'react'
-import { useTerminalStore } from '../stores/terminal-store'
 import { persistenceApi } from '@/lib/api'
-import { useProjectStore } from '../stores/project-store'
+import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 import type { Terminal } from '@/types/project'
 import type {
   PersistedTerminal,
   PersistedTerminalLayout
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
+import { useProjectStore } from '../stores/project-store'
+import { useTerminalStore } from '../stores/terminal-store'
 import { extractScrollback } from '../utils/terminal-registry'
-import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 
 function transcriptToScrollback(transcript?: string): string[] | undefined {
   if (!transcript) {
@@ -284,7 +284,8 @@ export async function saveTerminalLayout(
     snapshot: toPersistedTerminalSnapshot(terminal)
   }))
   const layout: PersistedTerminalLayout = {
-    activeTerminalId: projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
+    activeTerminalId:
+      projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
     terminals: terminalSnapshots.map(({ snapshot }) => snapshot.persistedTerminal),
     updatedAt: new Date().toISOString()
   }

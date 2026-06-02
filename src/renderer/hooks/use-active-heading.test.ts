@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import { getActiveHeadingFromVisibleRange, useBlockNoteActiveHeading, useCodeMirrorActiveHeading } from './use-active-heading'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  getActiveHeadingFromVisibleRange,
+  useBlockNoteActiveHeading,
+  useCodeMirrorActiveHeading
+} from './use-active-heading'
 import type { TocHeading } from './use-toc-headings'
 
 const headings: TocHeading[] = [
@@ -19,9 +23,15 @@ describe('use-active-heading', () => {
   })
 
   it('returns the nearest heading at or above the visible line', () => {
-    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 1, endLine: 5 })).toBe('heading-line-1')
-    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 6, endLine: 10 })).toBe('heading-line-4')
-    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 10, endLine: 12 })).toBe('heading-line-8')
+    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 1, endLine: 5 })).toBe(
+      'heading-line-1'
+    )
+    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 6, endLine: 10 })).toBe(
+      'heading-line-4'
+    )
+    expect(getActiveHeadingFromVisibleRange(headings, { startLine: 10, endLine: 12 })).toBe(
+      'heading-line-8'
+    )
   })
 
   it('returns undefined when there are no headings', () => {

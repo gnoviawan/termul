@@ -96,7 +96,11 @@ export function parseMarkdownHeadings(content: string): TocHeading[] {
 
     const previousRawLine = lines[index - 1] ?? ''
     const previousLine = previousRawLine.trim()
-    if (!previousLine || ATX_HEADING_PATTERN.test(previousRawLine) || previousRawLine.startsWith('    ')) {
+    if (
+      !previousLine ||
+      ATX_HEADING_PATTERN.test(previousRawLine) ||
+      previousRawLine.startsWith('    ')
+    ) {
       continue
     }
 

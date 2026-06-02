@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core'
 import type { IpcResult } from '@shared/types/ipc.types'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * Secure storage API for storing sensitive data using OS-native secure storage

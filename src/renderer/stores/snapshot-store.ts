@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { persistenceApi } from '@/lib/api'
 import type { Snapshot } from '@/types/project'
 import type {
   PersistedSnapshot,
@@ -8,7 +9,6 @@ import type {
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { useProjectStore } from './project-store'
-import { persistenceApi } from '@/lib/api'
 
 export interface SnapshotState {
   // State

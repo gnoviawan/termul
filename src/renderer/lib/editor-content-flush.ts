@@ -2,10 +2,7 @@ export type EditorContentFlusher = () => void | Promise<void>
 
 const flushersByPath = new Map<string, EditorContentFlusher>()
 
-export function registerEditorContentFlusher(
-  path: string,
-  flush: EditorContentFlusher,
-): void {
+export function registerEditorContentFlusher(path: string, flush: EditorContentFlusher): void {
   flushersByPath.set(path, flush)
 }
 

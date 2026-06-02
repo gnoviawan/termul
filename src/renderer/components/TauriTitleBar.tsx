@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Minus, Square, Copy, X } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { Copy, Minus, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 
 const focusableButtonClass =
   'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
@@ -20,16 +20,18 @@ export function TauriTitleBar(): React.JSX.Element {
 
     // Listen for resize events to track maximize state
     let unlisten: (() => void) | undefined
-    appWindow.onResized(() => {
-      checkMaximized()
-    }).then((fn) => {
-      if (mounted) {
-        unlisten = fn
-      } else {
-        // Component already unmounted, clean up immediately
-        fn()
-      }
-    })
+    appWindow
+      .onResized(() => {
+        checkMaximized()
+      })
+      .then((fn) => {
+        if (mounted) {
+          unlisten = fn
+        } else {
+          // Component already unmounted, clean up immediately
+          fn()
+        }
+      })
 
     return () => {
       mounted = false

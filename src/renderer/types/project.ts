@@ -51,7 +51,7 @@ export interface Project {
 // Helper getters for worktree operations
 export function getActiveWorktree(project: Project): Worktree | undefined {
   if (!project.activeWorktreeId) return undefined
-  return project.worktrees?.find(w => w.id === project.activeWorktreeId)
+  return project.worktrees?.find((w) => w.id === project.activeWorktreeId)
 }
 
 export function isWorktreeTermulManaged(worktree: Worktree): boolean {

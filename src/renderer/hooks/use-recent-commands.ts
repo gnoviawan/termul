@@ -1,6 +1,6 @@
-import { useEffect, useCallback } from 'react'
-import { useRecentCommandsStore } from '@/stores/recent-commands-store'
+import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useRecentCommandsStore } from '@/stores/recent-commands-store'
 
 export const RECENT_COMMANDS_KEY = 'settings/recent-commands'
 

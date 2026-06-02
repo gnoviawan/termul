@@ -1,5 +1,5 @@
-import { useCallback } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useCallback } from 'react'
 import { isLinux } from '@/lib/platform'
 
 /**
@@ -43,44 +43,44 @@ const REGIONS: Region[] = [
   {
     direction: 'North',
     cursor: 'n-resize',
-    style: { top: 0, left: 0, right: 0, height: EDGE },
+    style: { top: 0, left: 0, right: 0, height: EDGE }
   },
   {
     direction: 'South',
     cursor: 's-resize',
-    style: { bottom: 0, left: 0, right: 0, height: EDGE },
+    style: { bottom: 0, left: 0, right: 0, height: EDGE }
   },
   {
     direction: 'West',
     cursor: 'w-resize',
-    style: { top: 0, bottom: 0, left: 0, width: EDGE },
+    style: { top: 0, bottom: 0, left: 0, width: EDGE }
   },
   {
     direction: 'East',
     cursor: 'e-resize',
-    style: { top: 0, bottom: 0, right: 0, width: EDGE },
+    style: { top: 0, bottom: 0, right: 0, width: EDGE }
   },
   // Corners (rendered after edges so they win on z-order overlap).
   {
     direction: 'NorthWest',
     cursor: 'nw-resize',
-    style: { top: 0, left: 0, width: CORNER, height: CORNER },
+    style: { top: 0, left: 0, width: CORNER, height: CORNER }
   },
   {
     direction: 'NorthEast',
     cursor: 'ne-resize',
-    style: { top: 0, right: 0, width: CORNER, height: CORNER },
+    style: { top: 0, right: 0, width: CORNER, height: CORNER }
   },
   {
     direction: 'SouthWest',
     cursor: 'sw-resize',
-    style: { bottom: 0, left: 0, width: CORNER, height: CORNER },
+    style: { bottom: 0, left: 0, width: CORNER, height: CORNER }
   },
   {
     direction: 'SouthEast',
     cursor: 'se-resize',
-    style: { bottom: 0, right: 0, width: CORNER, height: CORNER },
-  },
+    style: { bottom: 0, right: 0, width: CORNER, height: CORNER }
+  }
 ]
 
 export function ResizeEdges(): React.JSX.Element | null {
@@ -97,17 +97,14 @@ export function ResizeEdges(): React.JSX.Element | null {
         // just no-op. The WM handles maximized windows itself.
       }
     },
-    [],
+    []
   )
 
   // Only render on Linux. On Windows/macOS the OS handles edge resize.
   if (!isLinux) return null
 
   return (
-    <div
-      className="pointer-events-none fixed inset-0 z-[9999]"
-      aria-hidden="true"
-    >
+    <div className="pointer-events-none fixed inset-0 z-[9999]" aria-hidden="true">
       {REGIONS.map((region) => (
         <div
           key={region.direction}

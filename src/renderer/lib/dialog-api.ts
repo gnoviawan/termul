@@ -9,8 +9,8 @@
  *   const result = await dialogApi.selectDirectory()
  */
 
-import { open, confirm } from '@tauri-apps/plugin-dialog'
 import type { DialogApi, IpcResult } from '@shared/types/ipc.types'
+import { confirm, open } from '@tauri-apps/plugin-dialog'
 
 /**
  * Create a DialogApi implementation using Tauri's dialog plugin

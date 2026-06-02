@@ -1,5 +1,5 @@
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import type { IpcResult, VisibilityApi } from '@shared/types/ipc.types'
+import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
  * IPC Command names

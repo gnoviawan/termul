@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
-import App from './App'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUpdaterStore } from '@/stores/updater-store'
 import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
+import App from './App'
 
 const { mockContextBarSettingsRead } = vi.hoisted(() => ({
   mockContextBarSettingsRead: vi.fn()

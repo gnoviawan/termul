@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * Finding C regression test.
@@ -20,20 +20,10 @@ import { dirname, resolve } from 'node:path'
 // test is independent of the runner's cwd (monorepo, per-package config, IDE
 // single-file runs).
 const HERE = dirname(fileURLToPath(import.meta.url))
-const OVERLAY_SCRIPT_PATH = resolve(
-  HERE,
-  '../../../../src-tauri/resources/annotation-overlay.js'
-)
+const OVERLAY_SCRIPT_PATH = resolve(HERE, '../../../../src-tauri/resources/annotation-overlay.js')
 const overlaySource = readFileSync(OVERLAY_SCRIPT_PATH, 'utf8')
 
-const CAPTURE_EVENTS = [
-  'mousedown',
-  'mousemove',
-  'mouseup',
-  'click',
-  'keydown',
-  'contextmenu',
-]
+const CAPTURE_EVENTS = ['mousedown', 'mousemove', 'mouseup', 'click', 'keydown', 'contextmenu']
 
 // addEventListener's 3rd arg signals capture either as the boolean `true` or as
 // an options object `{ capture: true }`. Accept both so the test guards behavior,
@@ -54,6 +44,7 @@ function injectOverlay(mode: string, tabId: string): void {
   w.__termul_annotation_mode = mode
   w.__termul_annotation_tab_id = tabId
   // Indirect eval runs the IIFE in global scope where jsdom `window`/`document` live.
+  // biome-ignore lint/complexity/noCommaOperator: indirect eval idiom requires the comma sequence
   ;(0, eval)(overlaySource)
 }
 

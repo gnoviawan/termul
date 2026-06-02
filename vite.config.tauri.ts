@@ -1,6 +1,6 @@
-import { defineConfig } from 'vite'
+import path from 'node:path'
 import react from '@vitejs/plugin-react-swc'
-import path from 'path'
+import { defineConfig } from 'vite'
 import pkg from './package.json' with { type: 'json' }
 
 const host = process.env.TAURI_DEV_HOST

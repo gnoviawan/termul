@@ -1,12 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import {
-  File,
-  FileCode,
-  FileJson,
-  FileText,
-  Folder,
-  FolderOpen
-} from 'lucide-react'
+import { File, FileCode, FileJson, FileText, Folder, FolderOpen } from 'lucide-react'
 
 const extensionIconMap: Record<string, LucideIcon> = {
   ts: FileCode,

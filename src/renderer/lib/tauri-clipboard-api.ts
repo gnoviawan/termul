@@ -1,32 +1,32 @@
-import { readText, writeText, readImage } from '@tauri-apps/plugin-clipboard-manager';
-import type { IpcResult } from '@shared/types/ipc.types';
+import type { IpcResult } from '@shared/types/ipc.types'
+import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 
-const MAX_CLIPBOARD_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_CLIPBOARD_SIZE = 10 * 1024 * 1024 // 10MB
 
 export const tauriClipboardApi = {
   async readText(): Promise<IpcResult<string>> {
     try {
-      const text = await readText();
-      return { success: true, data: text };
+      const text = await readText()
+      return { success: true, data: text }
     } catch (err) {
-      return { success: false, error: String(err), code: 'READ_ERROR' };
+      return { success: false, error: String(err), code: 'READ_ERROR' }
     }
   },
 
   async writeText(text: string): Promise<IpcResult<void>> {
     try {
-      const size = new Blob([text]).size;
+      const size = new Blob([text]).size
       if (size > MAX_CLIPBOARD_SIZE) {
         return {
           success: false,
           error: `Text too large (${size} bytes, max ${MAX_CLIPBOARD_SIZE})`,
           code: 'CLIPBOARD_TOO_LARGE'
-        };
+        }
       }
-      await writeText(text);
-      return { success: true, data: undefined };
+      await writeText(text)
+      return { success: true, data: undefined }
     } catch (err) {
-      return { success: false, error: String(err), code: 'WRITE_ERROR' };
+      return { success: false, error: String(err), code: 'WRITE_ERROR' }
     }
   },
 
@@ -34,13 +34,13 @@ export const tauriClipboardApi = {
     try {
       // readImage() resolves with an Image when image data is on the clipboard,
       // and throws when no image is present or on unsupported platforms.
-      await readImage();
-      return { success: true, data: true };
+      await readImage()
+      return { success: true, data: true }
     } catch (err) {
       if (import.meta.env.DEV) {
-        console.warn('hasImage: readImage() rejected:', err);
+        console.warn('hasImage: readImage() rejected:', err)
       }
-      return { success: true, data: false };
+      return { success: true, data: false }
     }
-  },
-};
+  }
+}

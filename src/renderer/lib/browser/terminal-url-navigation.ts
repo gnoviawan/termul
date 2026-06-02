@@ -1,6 +1,6 @@
 import { openerApi } from '@/lib/api'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 export const TERMINAL_DEDICATED_BROWSER_TAB_ID = 'terminal-link-browser'

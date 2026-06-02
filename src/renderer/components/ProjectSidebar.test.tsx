@@ -1,11 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { ProjectSidebar } from './ProjectSidebar'
-import type { Project } from '@/types/project'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
+import type { Project } from '@/types/project'
+import { ProjectSidebar } from './ProjectSidebar'
 
-const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
+const {
+  mockGetAvailableShells,
+  mockSpawnTerminalInPane,
+  mockActivateAndOpenTerminal,
+  mockUseProjectsWithActivity,
+  mockUseProjectsWithErrors
+} = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
   mockSpawnTerminalInPane: vi.fn(),
   mockActivateAndOpenTerminal: vi.fn(),
@@ -19,7 +25,10 @@ vi.mock('@/lib/api', () => ({
   },
   worktreeApi: {
     list: vi.fn().mockResolvedValue({ success: true, data: [] }),
-    checkDirty: vi.fn().mockResolvedValue({ success: true, data: { modified: 0, staged: 0, untracked: 0, hasChanges: false } }),
+    checkDirty: vi.fn().mockResolvedValue({
+      success: true,
+      data: { modified: 0, staged: 0, untracked: 0, hasChanges: false }
+    }),
     ensureSymlinks: vi.fn().mockResolvedValue({ success: true, data: [] }),
     remove: vi.fn().mockResolvedValue({ success: true })
   },
@@ -548,9 +557,7 @@ describe('ProjectSidebar Worktree Row', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
     expandWorktrees()
 
-    expect(
-      screen.getByLabelText('Open terminal in try-new-hero')
-    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Open terminal in try-new-hero')).toBeInTheDocument()
   })
 
   it('opens a terminal in the worktree when the terminal button is clicked, without triggering row select', async () => {

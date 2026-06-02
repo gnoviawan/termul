@@ -1,24 +1,23 @@
 import { useEffect, useRef } from 'react'
-import { useEditorStore } from '@/stores/editor-store'
 import { persistenceApi } from '@/lib/api'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import type { EditorFileState } from '@/stores/editor-store'
+import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import {
-  useWorkspaceStore,
-  findPaneById,
-  getAllLeafPanes,
-  editorTabId,
-  terminalTabId,
-  browserTabId
-} from '@/stores/workspace-store'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { loadPersistedTerminals } from './useTerminalAutoSave'
-import type { EditorFileState } from '@/stores/editor-store'
-import type { PaneNode, SplitNode, PaneDirection } from '@/types/workspace.types'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import {
+  browserTabId,
+  editorTabId,
+  findPaneById,
+  terminalTabId,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
+import type { PaneDirection, PaneNode, SplitNode } from '@/types/workspace.types'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import { loadPersistedTerminals } from './useTerminalAutoSave'
 
 interface PersistedEditorFile {
   filePath: string
@@ -59,7 +58,12 @@ interface PersistedGitHistoryTabRef {
   cwd: string
 }
 
-type PersistedTabRef = PersistedEditorTabRef | PersistedTerminalTabRef | PersistedBrowserTabRef | PersistedGitTabRef | PersistedGitHistoryTabRef
+type PersistedTabRef =
+  | PersistedEditorTabRef
+  | PersistedTerminalTabRef
+  | PersistedBrowserTabRef
+  | PersistedGitTabRef
+  | PersistedGitHistoryTabRef
 
 interface PersistedLeafNode {
   type: 'leaf'
@@ -98,7 +102,7 @@ interface PersistedEditorState {
 }
 
 function editorStateKey(projectId: string): string {
-  return 'editor-state/' + projectId
+  return `editor-state/${projectId}`
 }
 
 function normalizePath(path: string): string {
@@ -113,7 +117,7 @@ function filterExpandedDirsByRoot(expandedDirs: string[], rootPath?: string): st
   const normalizedRoot = normalizePath(rootPath)
   return expandedDirs
     .map((dir) => normalizePath(dir))
-    .filter((dir) => dir === normalizedRoot || dir.startsWith(normalizedRoot + '/'))
+    .filter((dir) => dir === normalizedRoot || dir.startsWith(`${normalizedRoot}/`))
 }
 
 // Serialize pane tree for persistence with both editor and terminal tabs
@@ -218,7 +222,9 @@ function createTerminalMatcher(
   matchTerminalId: (persistedTerminalId: string) => string | null
 } {
   const liveTerminalsById = new Map(liveTerminals.map((terminal) => [terminal.id, terminal]))
-  const layoutTerminalsById = new Map(layout?.terminals.map((terminal) => [terminal.id, terminal]) ?? [])
+  const layoutTerminalsById = new Map(
+    layout?.terminals.map((terminal) => [terminal.id, terminal]) ?? []
+  )
   const unusedLiveTerminals = [...liveTerminals]
 
   const consumeLiveTerminal = (terminalId: string): string | null => {
@@ -260,7 +266,9 @@ function createTerminalMatcher(
       }
 
       const nameAndShellIndex = unusedLiveTerminals.findIndex((terminal) => {
-        return terminal.name === persistedTerminal.name && terminal.shell === persistedTerminal.shell
+        return (
+          terminal.name === persistedTerminal.name && terminal.shell === persistedTerminal.shell
+        )
       })
       if (nameAndShellIndex >= 0) {
         const [match] = unusedLiveTerminals.splice(nameAndShellIndex, 1)
@@ -454,7 +462,11 @@ export function useEditorPersistence(projectId: string): void {
     const restoreRunId = ++restoreRunIdRef.current
     let cancelled = false
     const isStale = (): boolean => {
-      return cancelled || restoreRunIdRef.current !== restoreRunId || prevProjectIdRef.current !== projectId
+      return (
+        cancelled ||
+        restoreRunIdRef.current !== restoreRunId ||
+        prevProjectIdRef.current !== projectId
+      )
     }
 
     async function restore(): Promise<void> {
@@ -470,9 +482,7 @@ export function useEditorPersistence(projectId: string): void {
         useEditorStore.getState().clearAllFiles()
 
         // Read new project's persisted state
-        const result = await persistenceApi.read<PersistedEditorState>(
-          editorStateKey(projectId)
-        )
+        const result = await persistenceApi.read<PersistedEditorState>(editorStateKey(projectId))
 
         if (isStale()) {
           return
@@ -509,7 +519,11 @@ export function useEditorPersistence(projectId: string): void {
               return
             }
 
-            editorStore.updateCursorPosition(file.filePath, file.cursorPosition.line, file.cursorPosition.col)
+            editorStore.updateCursorPosition(
+              file.filePath,
+              file.cursorPosition.line,
+              file.cursorPosition.col
+            )
             editorStore.updateScrollTop(file.filePath, file.scrollTop)
             if (file.viewMode !== 'code') {
               editorStore.setViewMode(file.filePath, file.viewMode)

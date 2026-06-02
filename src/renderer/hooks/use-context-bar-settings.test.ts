@@ -1,15 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import {
-  useContextBarSettings,
-  useUpdateContextBarSetting
-} from './use-context-bar-settings'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import {
   CONTEXT_BAR_SETTINGS_KEY,
-  DEFAULT_CONTEXT_BAR_SETTINGS,
-  type ContextBarSettings
+  type ContextBarSettings,
+  DEFAULT_CONTEXT_BAR_SETTINGS
 } from '@/types/settings'
+import { useContextBarSettings, useUpdateContextBarSetting } from './use-context-bar-settings'
 
 const { mockPersistenceRead, mockPersistenceWriteDebounced } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
@@ -63,9 +60,7 @@ describe('useContextBarSettings', () => {
     renderHook(() => useContextBarSettings())
 
     await waitFor(() => {
-      expect(useContextBarSettingsStore.getState().settings).toEqual(
-        DEFAULT_CONTEXT_BAR_SETTINGS
-      )
+      expect(useContextBarSettingsStore.getState().settings).toEqual(DEFAULT_CONTEXT_BAR_SETTINGS)
       expect(useContextBarSettingsStore.getState().isLoaded).toBe(true)
     })
   })
@@ -77,9 +72,7 @@ describe('useContextBarSettings', () => {
     renderHook(() => useContextBarSettings())
 
     await waitFor(() => {
-      expect(useContextBarSettingsStore.getState().settings).toEqual(
-        DEFAULT_CONTEXT_BAR_SETTINGS
-      )
+      expect(useContextBarSettingsStore.getState().settings).toEqual(DEFAULT_CONTEXT_BAR_SETTINGS)
       expect(useContextBarSettingsStore.getState().isLoaded).toBe(true)
     })
 
@@ -130,12 +123,9 @@ describe('useUpdateContextBarSetting', () => {
       ...DEFAULT_CONTEXT_BAR_SETTINGS,
       showGitStatus: false
     })
-    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-      CONTEXT_BAR_SETTINGS_KEY,
-      {
-        ...DEFAULT_CONTEXT_BAR_SETTINGS,
-        showGitStatus: false
-      }
-    )
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY, {
+      ...DEFAULT_CONTEXT_BAR_SETTINGS,
+      showGitStatus: false
+    })
   })
 })

@@ -1,10 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import type { SFTPEntry, SSHProfile } from '@shared/types/ssh.types'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { sshApi, terminalApi, createAskpassScript } from '@/lib/api'
+import { createAskpassScript, sshApi, terminalApi } from '@/lib/api'
 import { isWindows } from '@/lib/platform'
-import { useSSHConnections, useSSHActions } from '@/stores/ssh-store'
+import { useSSHActions, useSSHConnections } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import type { SSHProfile, SFTPEntry } from '@shared/types/ssh.types'
 
 export function useSSHConnection(profile: SSHProfile | null) {
   const connections = useSSHConnections()
@@ -13,12 +13,8 @@ export function useSSHConnection(profile: SSHProfile | null) {
   const isConnectingStatus = connection?.status === 'connecting'
   const connectionId = connection?.id
   const terminalStoreId = connection?.terminalId
-  const {
-    markConnecting,
-    markDisconnected,
-    updateConnectionId,
-    updateConnectionStatusByProfile,
-  } = useSSHActions()
+  const { markConnecting, markDisconnected, updateConnectionId, updateConnectionStatusByProfile } =
+    useSSHActions()
 
   const [localTerminalPtyId, setLocalTerminalPtyId] = useState<string | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -30,20 +26,25 @@ export function useSSHConnection(profile: SSHProfile | null) {
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [isLoadingRoot, setIsLoadingRoot] = useState(false)
 
-  const loadDirectory = useCallback(async (path: string, overrideConnectionId?: string) => {
-    const id = overrideConnectionId ?? connectionId
-    if (!id) return
-    setIsLoadingRoot(true)
-    try {
-      const result = await sshApi.sftpListDir(id, path)
-      if (result.success) { setEntries(result.data); setCurrentPath(path) }
-      else toast.error(`Failed to load: ${result.error}`)
-    } catch (error) {
-      toast.error(`Failed to load: ${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      setIsLoadingRoot(false)
-    }
-  }, [connectionId])
+  const loadDirectory = useCallback(
+    async (path: string, overrideConnectionId?: string) => {
+      const id = overrideConnectionId ?? connectionId
+      if (!id) return
+      setIsLoadingRoot(true)
+      try {
+        const result = await sshApi.sftpListDir(id, path)
+        if (result.success) {
+          setEntries(result.data)
+          setCurrentPath(path)
+        } else toast.error(`Failed to load: ${result.error}`)
+      } catch (error) {
+        toast.error(`Failed to load: ${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setIsLoadingRoot(false)
+      }
+    },
+    [connectionId]
+  )
 
   // Stable ref for loadDirectory so effects always call latest version
   const loadDirRef = useRef(loadDirectory)
@@ -52,10 +53,13 @@ export function useSSHConnection(profile: SSHProfile | null) {
   // Pending timers so we can cancel writes/loads on disconnect/unmount
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => {
-    if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
-    if (restoreTimerRef.current) clearTimeout(restoreTimerRef.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
+      if (restoreTimerRef.current) clearTimeout(restoreTimerRef.current)
+    },
+    []
+  )
 
   // Restore terminal + SFTP when connection state becomes available (e.g. on workspace switch-back)
   useEffect(() => {
@@ -98,7 +102,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
       //   risking a broken/injectable command.
       const quoteArg = (arg: string): string => {
         if (isWindows) {
-          // eslint-disable-next-line no-control-regex -- strip control chars defensively
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: strip control chars defensively
           const safe = arg.replace(/["\u0000-\u001f]/g, '')
           return `"${safe}"`
         }
@@ -125,7 +129,9 @@ export function useSSHConnection(profile: SSHProfile | null) {
           // cannot launch a .bat helper, so auto-feeding the password into the
           // terminal does not work. The in-app SFTP/file browser (ssh2 backend)
           // still authenticates with the password; the terminal will prompt.
-          toast.info('On Windows, type your password in the terminal when prompted. File browsing connects automatically.')
+          toast.info(
+            'On Windows, type your password in the terminal when prompted. File browsing connects automatically.'
+          )
         } else {
           const result = await createAskpassScript(profile.password)
           if (result.success) spawnEnv = { SSH_ASKPASS: result.data, SSH_ASKPASS_REQUIRE: 'force' }
@@ -134,13 +140,21 @@ export function useSSHConnection(profile: SSHProfile | null) {
       }
 
       const spawnResult = await terminalApi.spawn({ env: spawnEnv })
-      if (!spawnResult.success) { toast.error('Failed to create terminal'); return }
+      if (!spawnResult.success) {
+        toast.error('Failed to create terminal')
+        return
+      }
 
       const ptyId = spawnResult.data.id
       setLocalTerminalPtyId(ptyId)
 
       const terminalStore = useTerminalStore.getState()
-      const terminal = terminalStore.addTerminal(`SSH: ${profile.name}`, `ssh-${profile.id}`, spawnResult.data.shell, spawnResult.data.cwd)
+      const terminal = terminalStore.addTerminal(
+        `SSH: ${profile.name}`,
+        `ssh-${profile.id}`,
+        spawnResult.data.shell,
+        spawnResult.data.cwd
+      )
       terminalStore.setTerminalPtyId(terminal.id, ptyId)
 
       // Reflect the in-progress state honestly: 'connecting' until we have a
@@ -149,7 +163,9 @@ export function useSSHConnection(profile: SSHProfile | null) {
       markConnecting(profile.id, terminal.id)
 
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
-      writeTimerRef.current = setTimeout(() => { void terminalApi.write(ptyId, sshCmd + '\r') }, 500)
+      writeTimerRef.current = setTimeout(() => {
+        void terminalApi.write(ptyId, `${sshCmd}\r`)
+      }, 500)
 
       // The ssh2/SFTP backend connection is the authoritative source of truth
       // for whether SSH actually authenticated.
@@ -173,12 +189,26 @@ export function useSSHConnection(profile: SSHProfile | null) {
         toast.error(`SSH connection failed: ${errMsg ?? 'unknown error'}`)
       }
     } catch (error) {
-      if (profile) updateConnectionStatusByProfile(profile.id, 'failed', error instanceof Error ? error.message : String(error))
+      if (profile)
+        updateConnectionStatusByProfile(
+          profile.id,
+          'failed',
+          error instanceof Error ? error.message : String(error)
+        )
       toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setIsConnecting(false)
     }
-  }, [profile, isConnecting, isConnected, localTerminalPtyId, markConnecting, updateConnectionId, updateConnectionStatusByProfile, loadDirectory])
+  }, [
+    profile,
+    isConnecting,
+    isConnected,
+    localTerminalPtyId,
+    markConnecting,
+    updateConnectionId,
+    updateConnectionStatusByProfile,
+    loadDirectory
+  ])
 
   // Called when the interactive ssh process in the PTY exits (e.g. the user
   // typed `exit`, or ssh failed and quit). The terminal PTY is now dead, so
@@ -188,7 +218,10 @@ export function useSSHConnection(profile: SSHProfile | null) {
   // healthy connection must NOT blank the file browser.
   const handleSSHProcessExit = useCallback(() => {
     if (!profile) return
-    if (writeTimerRef.current) { clearTimeout(writeTimerRef.current); writeTimerRef.current = null }
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current)
+      writeTimerRef.current = null
+    }
     setLocalTerminalPtyId(null)
     if (!isConnected) {
       setSftpReady(false)
@@ -199,8 +232,14 @@ export function useSSHConnection(profile: SSHProfile | null) {
 
   const handleDisconnect = useCallback(async () => {
     if (!profile) return
-    if (writeTimerRef.current) { clearTimeout(writeTimerRef.current); writeTimerRef.current = null }
-    if (restoreTimerRef.current) { clearTimeout(restoreTimerRef.current); restoreTimerRef.current = null }
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current)
+      writeTimerRef.current = null
+    }
+    if (restoreTimerRef.current) {
+      clearTimeout(restoreTimerRef.current)
+      restoreTimerRef.current = null
+    }
     // Call backend disconnect first to clean up SSH session, SFTP channels, and
     // port forwards. Skip backend call for purely local (never-authenticated)
     // connections whose id is still the temporary 'ssh-conn-' placeholder.
@@ -217,11 +256,13 @@ export function useSSHConnection(profile: SSHProfile | null) {
     setSftpReady(false)
     setEntries([])
     toast.info(`Disconnected: ${profile.name}`)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- profile?.id and profile?.name cover the only fields used
-  }, [localTerminalPtyId, connection, profile?.id, profile?.name, markDisconnected])
+  }, [localTerminalPtyId, connection, profile?.id, profile?.name, markDisconnected, profile])
 
   const handleBrowseFiles = useCallback(async () => {
-    if (!connectionId) { toast.error('Not connected — open a terminal first'); return }
+    if (!connectionId) {
+      toast.error('Not connected — open a terminal first')
+      return
+    }
     // If SFTP never came up (id still the local placeholder), retry the backend connect.
     if (connectionId.startsWith('ssh-conn-')) {
       if (!profile) return
@@ -253,28 +294,64 @@ export function useSSHConnection(profile: SSHProfile | null) {
       }
       return
     }
-    setSftpReady(true); void loadDirectory('/')
+    setSftpReady(true)
+    void loadDirectory('/')
   }, [connectionId, loadDirectory, profile, updateConnectionId, updateConnectionStatusByProfile])
 
-  const toggleDirectory = useCallback(async (dirPath: string) => {
-    if (!connectionId) return
-    if (expandedDirs.has(dirPath)) { setExpandedDirs((prev) => { const n = new Set(prev); n.delete(dirPath); return n }); return }
-    setLoadingDirs((prev) => new Set(prev).add(dirPath))
-    try {
-      const result = await sshApi.sftpListDir(connectionId, dirPath)
-      if (result.success) { setChildEntries((prev) => new Map(prev).set(dirPath, result.data)); setExpandedDirs((prev) => new Set(prev).add(dirPath)) }
-      else toast.error(`Permission denied: ${dirPath}`)
-    } catch (error) {
-      toast.error(`Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      setLoadingDirs((prev) => { const n = new Set(prev); n.delete(dirPath); return n })
-    }
-  }, [connectionId, expandedDirs])
+  const toggleDirectory = useCallback(
+    async (dirPath: string) => {
+      if (!connectionId) return
+      if (expandedDirs.has(dirPath)) {
+        setExpandedDirs((prev) => {
+          const n = new Set(prev)
+          n.delete(dirPath)
+          return n
+        })
+        return
+      }
+      setLoadingDirs((prev) => new Set(prev).add(dirPath))
+      try {
+        const result = await sshApi.sftpListDir(connectionId, dirPath)
+        if (result.success) {
+          setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
+          setExpandedDirs((prev) => new Set(prev).add(dirPath))
+        } else toast.error(`Permission denied: ${dirPath}`)
+      } catch (error) {
+        toast.error(
+          `Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`
+        )
+      } finally {
+        setLoadingDirs((prev) => {
+          const n = new Set(prev)
+          n.delete(dirPath)
+          return n
+        })
+      }
+    },
+    [connectionId, expandedDirs]
+  )
 
   return {
-    isConnected, isConnectingStatus, connectionId, localTerminalPtyId, isConnecting,
-    sftpReady, entries, currentPath, expandedDirs, childEntries, loadingDirs, isLoadingRoot,
-    setLocalTerminalPtyId, setSftpReady, setEntries,
-    handleConnect, handleDisconnect, handleSSHProcessExit, loadDirectory, handleBrowseFiles, toggleDirectory,
+    isConnected,
+    isConnectingStatus,
+    connectionId,
+    localTerminalPtyId,
+    isConnecting,
+    sftpReady,
+    entries,
+    currentPath,
+    expandedDirs,
+    childEntries,
+    loadingDirs,
+    isLoadingRoot,
+    setLocalTerminalPtyId,
+    setSftpReady,
+    setEntries,
+    handleConnect,
+    handleDisconnect,
+    handleSSHProcessExit,
+    loadDirectory,
+    handleBrowseFiles,
+    toggleDirectory
   }
 }
