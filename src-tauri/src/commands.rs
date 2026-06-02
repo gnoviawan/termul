@@ -994,6 +994,7 @@ pub struct FileSearchResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
 }
@@ -1001,6 +1002,7 @@ pub struct SearchContentRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentStreamRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
     pub search_id: String,
@@ -1034,6 +1036,7 @@ pub struct SearchContentDoneEvent {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
 }
@@ -1174,6 +1177,11 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
+    path_validation::validate_search_path(search_root, scope_root)
+        .map(|path| path.to_string_lossy().to_string())
+}
+
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
@@ -1249,16 +1257,12 @@ pub async fn search_content_stream(
         return Ok(IpcResult::success(()));
     }
 
-    // Validate search path to prevent path traversal attacks
-    // Use the root_path as both the search path and project boundary
-    let validated_root = match path_validation::validate_search_path(
-        &request.root_path,
-        &request.root_path,
-    ) {
-        Ok(path) => path.to_string_lossy().to_string(),
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
         Err(e) => {
             log::warn!(
-                "[Security] File search rejected: invalid root_path '{}': {}",
+                "[Security] File search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
                 request.root_path,
                 e
             );
@@ -1476,7 +1480,23 @@ pub async fn search_file_names(
         }));
     }
 
-    let mut stack = vec![request.root_path];
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(
+                "[Security] File name search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
+                request.root_path,
+                e
+            );
+            return Ok(IpcResult::error(
+                format!("Invalid search path: {}", e),
+                "PATH_VALIDATION_FAILED",
+            ));
+        }
+    };
+
+    let mut stack = vec![validated_root];
     let mut matches: Vec<String> = Vec::new();
     let mut truncated = false;
     let max_files = 100;
@@ -1559,7 +1579,23 @@ pub async fn search_content(
     let max_files_with_matches: usize = 100;
     let max_matches_per_file: usize = 30;
 
-    let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(
+                "[Security] Content search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
+                request.root_path,
+                e
+            );
+            return Ok(IpcResult::error(
+                format!("Invalid search path: {}", e),
+                "PATH_VALIDATION_FAILED",
+            ));
+        }
+    };
+
+    let args = build_search_args(trimmed_query, &validated_root, max_matches_per_file);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);

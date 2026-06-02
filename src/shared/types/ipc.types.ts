@@ -304,11 +304,13 @@ export interface FilesystemApi {
 	readFile: (filePath: string) => Promise<IpcResult<FileContent>>;
 	getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>;
 	searchContent: (
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<FileSearchResponse>>;
 	searchContentStreamStart: (
 		searchId: string,
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<void>>;
@@ -330,6 +332,7 @@ export interface FilesystemApi {
 		}) => void,
 	) => () => void;
 	searchFileNames: (
+		scopeRoot: string,
 		rootPath: string,
 		query: string,
 	) => Promise<IpcResult<{ files: string[]; truncated: boolean }>>;

@@ -1,4 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+fn path_has_parent_dir(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+}
 
 /// Validates that a search path is within the allowed project boundary.
 /// Returns the canonicalized path if valid, or an error if the path
@@ -21,11 +27,17 @@ pub fn validate_search_path(
     search_path: &str,
     project_root: &str,
 ) -> Result<PathBuf, String> {
-    // Reject paths with explicit path traversal components
-    if search_path.contains("..") {
+    if path_has_parent_dir(search_path) {
         return Err(format!(
             "Invalid search path: path traversal detected in '{}'",
             search_path
+        ));
+    }
+
+    if path_has_parent_dir(project_root) {
+        return Err(format!(
+            "Invalid project root: path traversal detected in '{}'",
+            project_root
         ));
     }
 
@@ -134,7 +146,8 @@ mod tests {
 
         assert!(result.is_ok());
         let canonical = result.unwrap();
-        assert!(canonical.starts_with(&project_root));
+        let canonical_project = fs::canonicalize(&project_root).unwrap();
+        assert!(canonical.starts_with(&canonical_project));
 
         cleanup_test_dir(&project_root);
     }
@@ -149,12 +162,17 @@ mod tests {
 
         assert!(result.is_ok());
         let canonical = result.unwrap();
-        assert!(canonical.starts_with(&project_root));
+        let canonical_project = fs::canonicalize(&project_root).unwrap();
+        assert!(canonical.starts_with(&canonical_project));
 
         cleanup_test_dir(&project_root);
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "directory symlinks require elevated privileges on Windows"
+    )]
     fn test_rejects_symlink_pointing_outside_project() {
         let project_root = setup_test_dir("reject_symlink");
         let outside_dir = std::env::temp_dir().join("outside_target");
@@ -164,22 +182,22 @@ mod tests {
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&outside_dir, &symlink_path).ok();
+            std::os::unix::fs::symlink(&outside_dir, &symlink_path)
+                .expect("failed to create symlink for path validation test");
         }
         #[cfg(windows)]
         {
-            std::os::windows::fs::symlink_dir(&outside_dir, &symlink_path).ok();
+            std::os::windows::fs::symlink_dir(&outside_dir, &symlink_path)
+                .expect("failed to create directory symlink for path validation test");
         }
 
-        if symlink_path.exists() {
-            let result =
-                validate_search_path(symlink_path.to_str().unwrap(), project_root.to_str().unwrap());
+        let result =
+            validate_search_path(symlink_path.to_str().unwrap(), project_root.to_str().unwrap());
 
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .contains("outside project boundary"));
-        }
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("outside project boundary"));
 
         cleanup_test_dir(&project_root);
         fs::remove_dir_all(&outside_dir).ok();
@@ -197,6 +215,22 @@ mod tests {
             canonical,
             fs::canonicalize(&project_root).unwrap()
         );
+
+        cleanup_test_dir(&project_root);
+    }
+
+    #[test]
+    fn test_accepts_directory_name_containing_double_dots() {
+        let project_root = setup_test_dir("accept_dotdot_name");
+        let weird_dir = project_root.join("foo..bar");
+        fs::create_dir_all(&weird_dir).expect("Failed to create subdirectory");
+
+        let result = validate_search_path(
+            weird_dir.to_str().unwrap(),
+            project_root.to_str().unwrap(),
+        );
+
+        assert!(result.is_ok());
 
         cleanup_test_dir(&project_root);
     }
