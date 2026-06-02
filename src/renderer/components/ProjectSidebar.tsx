@@ -1706,7 +1706,7 @@ const ProjectItem = memo(function ProjectItem({
           }
         }}
         className={cn(
-          'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer',
+          'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
           isActive
             ? `${colors.border} bg-sidebar-accent`
             : `${colors.borderMuted} hover:bg-sidebar-accent/50`
