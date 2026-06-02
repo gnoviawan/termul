@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertCircle, Check, Copy, ExternalLink, Globe, ShieldAlert } from 'lucide-react'
+import { AlertCircle, Check, Copy, ExternalLink, Monitor, ShieldAlert } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
@@ -75,7 +75,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Globe
+          <Monitor
             size={14}
             className={cn('mr-0', isRunning ? 'text-green-300' : undefined)}
           />
