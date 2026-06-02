@@ -14,7 +14,7 @@
  * by a null YAML value, e.g. `"! Access-Control-Allow-Origin": ~`.
  *
  * {{CSP_SCRIPT_HASHES}} in any source list is replaced at build time with the
- * SHA-256 hashes of all inline <script> blocks found in build/index.html.
+ * SHA-256 hashes of all inline <script> blocks found in dist/index.html.
  */
 
 import { createHash } from 'node:crypto';
@@ -29,23 +29,36 @@ const BUILD_DIR = 'dist';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type CspValue = Record<string, string[] | true>;
-type PermissionsValue = Record<string, string[]>;
+export type CspValue = Record<string, string[] | true>;
+export type PermissionsValue = Record<string, string[]>;
 
-interface RouteConfig {
+export interface RouteConfig {
 	path: string;
 	headers: Record<string, string | CspValue | PermissionsValue | null>;
 }
 
 // ─── SHA-256 helper ───────────────────────────────────────────────────────────
 
-function sha256(content: string): string {
+export function sha256(content: string): string {
 	return `'sha256-${createHash('sha256').update(content).digest('base64')}'`;
+}
+
+export function extractInlineScriptHashes(html: string): string[] {
+	const scriptHashes: string[] = [];
+
+	for (const match of html.matchAll(
+		/<script(?![^>]*\bsrc\b)[^>]*>([\s\S]*?)<\/script>/gi,
+	)) {
+		const content = match[1];
+		if (content.trim()) scriptHashes.push(sha256(content));
+	}
+
+	return scriptHashes;
 }
 
 // ─── Header value serializers ─────────────────────────────────────────────────
 
-function serializeCSP(directives: CspValue): string {
+export function serializeCSP(directives: CspValue): string {
 	return Object.entries(directives)
 		.map(([directive, sources]) =>
 			sources === true
@@ -55,7 +68,7 @@ function serializeCSP(directives: CspValue): string {
 		.join('; ');
 }
 
-function serializePermissionsPolicy(features: PermissionsValue): string {
+export function serializePermissionsPolicy(features: PermissionsValue): string {
 	return Object.entries(features)
 		.map(([feature, allowlist]) =>
 			allowlist.length === 0
@@ -65,7 +78,7 @@ function serializePermissionsPolicy(features: PermissionsValue): string {
 		.join(', ');
 }
 
-function serializeValue(
+export function serializeValue(
 	name: string,
 	value: string | CspValue | PermissionsValue,
 ): string {
@@ -76,48 +89,43 @@ function serializeValue(
 	return String(value);
 }
 
-// ─── Inline script hashes from index.html ────────────────────────────────────
-
-const html = readFileSync(`${BUILD_DIR}/index.html`, 'utf-8');
-const scriptHashes: string[] = [];
-
-for (const match of html.matchAll(
-	/<script(?![^>]*\bsrc\b)[^>]*>([\s\S]*?)<\/script>/gi,
-)) {
-	const content = match[1];
-	if (content.trim()) scriptHashes.push(sha256(content));
+export function injectCspScriptHashes(
+	serialized: string,
+	scriptHashes: string[],
+): string {
+	return scriptHashes.length > 0
+		? serialized.replace('{{CSP_SCRIPT_HASHES}}', scriptHashes.join(' '))
+		: serialized.replace(' {{CSP_SCRIPT_HASHES}}', '');
 }
 
-console.log('  Inline script hashes:', scriptHashes);
+// ─── Main (postbuild) ─────────────────────────────────────────────────────────
 
-// ─── Parse config and emit _headers ──────────────────────────────────────────
+if (import.meta.main) {
+	const html = readFileSync(`${BUILD_DIR}/index.html`, 'utf-8');
+	const scriptHashes = extractInlineScriptHashes(html);
 
-const routes = load(readFileSync(CONFIG_FILE, 'utf-8')) as RouteConfig[];
-const lines: string[] = [];
+	console.log('  Inline script hashes:', scriptHashes);
 
-for (const { path, headers } of routes) {
-	lines.push(path);
+	const routes = load(readFileSync(CONFIG_FILE, 'utf-8')) as RouteConfig[];
+	const lines: string[] = [];
 
-	for (const [name, value] of Object.entries(headers)) {
-		if (value === null || value === undefined) {
-			// Deletion directive — emit bare name (e.g. "! Access-Control-Allow-Origin")
-			lines.push(`  ${name}`);
-			continue;
+	for (const { path, headers } of routes) {
+		lines.push(path);
+
+		for (const [name, value] of Object.entries(headers)) {
+			if (value === null || value === undefined) {
+				lines.push(`  ${name}`);
+				continue;
+			}
+
+			let serialized = serializeValue(name, value);
+			serialized = injectCspScriptHashes(serialized, scriptHashes);
+			lines.push(`  ${name}: ${serialized}`);
 		}
 
-		let serialized = serializeValue(name, value);
-
-		// Inject computed hashes, or cleanly remove the placeholder if there are none
-		serialized =
-			scriptHashes.length > 0
-				? serialized.replace('{{CSP_SCRIPT_HASHES}}', scriptHashes.join(' '))
-				: serialized.replace(' {{CSP_SCRIPT_HASHES}}', '');
-
-		lines.push(`  ${name}: ${serialized}`);
+		lines.push('');
 	}
 
-	lines.push(''); // blank line between route blocks
+	writeFileSync(`${BUILD_DIR}/_headers`, lines.join('\n'));
+	console.log(`✓ _headers written to ${BUILD_DIR}/_headers`);
 }
-
-writeFileSync(`${BUILD_DIR}/_headers`, lines.join('\n'));
-console.log(`✓ _headers written to ${BUILD_DIR}/_headers`);

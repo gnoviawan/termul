@@ -10,6 +10,7 @@
     "postbuild": "bun scripts/write-headers.ts",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test": "bun test",
     "deploy": "wrangler pages deploy dist",
     "verify:prerender": "bun -e \"import fs from 'node:fs'; const html = fs.readFileSync('dist/index.html', 'utf8'); const checks = ['Everything in one workspace', 'Project-Based Workspaces', 'Embedded Browser']; const missing = checks.filter((s) => !html.includes(s)); if (missing.length) { console.error('Prerender check failed: missing in dist/index.html:', missing.join(', ')); process.exit(1); } console.log('Prerender check passed.');\""
   },
