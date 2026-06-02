@@ -704,7 +704,7 @@ function SectionHeader({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div className="flex items-center gap-0.5 opacity-60 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
         {children}
       </div>
     </div>
@@ -823,7 +823,14 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
         <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div
+        className={cn(
+          "flex items-center gap-0.5 transition-opacity focus-within:opacity-100",
+          isSelected || isActive
+            ? "opacity-100"
+            : "opacity-60 group-hover/row:opacity-100",
+        )}
+      >
         {children}
       </div>
       <div className={cn(
