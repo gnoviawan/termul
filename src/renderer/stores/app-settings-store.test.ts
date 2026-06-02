@@ -114,6 +114,7 @@ describe("app-settings-store", () => {
 				sidebarVisible: false,
 				fileExplorerVisible: true,
 				sshPanelVisible: true,
+				remoteBindMode: "localhost" as const,
 			};
 
 			const { setSettings } = useAppSettingsStore.getState();
@@ -144,6 +145,7 @@ describe("app-settings-store", () => {
 					sidebarVisible: false,
 					fileExplorerVisible: false,
 					sshPanelVisible: false,
+					remoteBindMode: "all" as const,
 				},
 				isLoaded: true,
 			});

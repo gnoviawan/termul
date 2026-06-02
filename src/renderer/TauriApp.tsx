@@ -29,6 +29,7 @@ import { useUpdateCheck } from './hooks/use-updater'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { useRemoteProjects } from './hooks/use-remote-projects'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
@@ -54,6 +55,7 @@ function AppEffects(): null {
   useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
+  useRemoteProjects()
 
   // Initialize desktop notification permissions once at app startup
   // so the OS permission prompt appears early, not on first terminal exit
