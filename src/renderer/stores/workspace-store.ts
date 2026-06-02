@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type {
   DropPosition,
   LeafNode,
@@ -7,7 +8,6 @@ import type {
   PaneNode,
   SplitNode
 } from '@/types/workspace.types'
-import { useTerminalStore } from '@/stores/terminal-store'
 
 export type WorkspaceTab =
   | { type: 'terminal'; id: string; terminalId: string }
@@ -847,7 +847,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               // Preserve tabs for terminals that exist in the store (even without
               // a ptyId). These are pending initialization and will sync once
               // the PTY is assigned.
-              (t.terminalId ? !terminalStore.terminals.some((term) => term.id === t.terminalId) : true)
+              (t.terminalId
+                ? !terminalStore.terminals.some((term) => term.id === t.terminalId)
+                : true)
           )
           if (hasOrphans) {
             didChange = true
@@ -858,7 +860,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   terminalTabIds.has(t.id) ||
                   // Keep pending terminals whose store record exists but ptyId
                   // hasn't been assigned yet.
-                  (t.terminalId ? terminalStore.terminals.some((term) => term.id === t.terminalId) : false)
+                  (t.terminalId
+                    ? terminalStore.terminals.some((term) => term.id === t.terminalId)
+                    : false)
               )
               let newActive = l.activeTabId
               if (newActive && !newTabs.some((t) => t.id === newActive)) {

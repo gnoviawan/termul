@@ -85,7 +85,9 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Tools')).toBeInTheDocument()
     expect(screen.getByText('Open a new shell in the active pane')).toBeInTheDocument()
-    expect(screen.getByText('Show the agent launcher prompt in the active pane')).toBeInTheDocument()
+    expect(
+      screen.getByText('Show the agent launcher prompt in the active pane')
+    ).toBeInTheDocument()
     expect(screen.getByText('Ctrl+T')).toBeInTheDocument()
     expect(screen.getByText('Navigate')).toBeInTheDocument()
     expect(screen.getByText('Select')).toBeInTheDocument()
@@ -176,7 +178,11 @@ describe('CommandPalette', () => {
       callback: keyof React.ComponentProps<typeof CommandPalette>
     }> = [
       { label: 'New Terminal', commandId: 'new-terminal', callback: 'onAddTerminal' },
-      { label: 'Agent Launcher', commandId: 'show-agent-launcher', callback: 'onShowAgentLauncher' },
+      {
+        label: 'Agent Launcher',
+        commandId: 'show-agent-launcher',
+        callback: 'onShowAgentLauncher'
+      },
       { label: 'New Browser Tab', commandId: 'new-browser-tab', callback: 'onNewBrowserTab' },
       { label: 'Save Workspace Snapshot', commandId: 'save-snapshot', callback: 'onSaveSnapshot' },
       {

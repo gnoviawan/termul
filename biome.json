@@ -39,7 +39,9 @@
         "useKeyWithClickEvents": "warn",
         "useSemanticElements": "warn",
         "useFocusableInteractive": "warn",
-        "useAriaPropsForRole": "warn"
+        "useAriaPropsForRole": "warn",
+        "useAriaPropsSupportedByRole": "warn",
+        "noAutofocus": "warn"
       },
       "style": {
         "noNonNullAssertion": "off"

@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 import { useEditorStore } from '@/stores/editor-store'
-import { useKeyboardShortcutsStore, matchesShortcut } from '@/stores/keyboard-shortcuts-store'
+import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 
 export function getEditorFileBaseName(filePath: string): string {
   const parts = filePath.split(/[\\/]/)

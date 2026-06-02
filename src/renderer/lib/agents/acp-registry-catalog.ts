@@ -9,26 +9,26 @@
  * definitions via `registryId`.
  */
 
-import { invoke } from '@tauri-apps/api/core'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import type { IpcResult } from '@shared/types/ipc.types'
+import { invoke } from '@tauri-apps/api/core'
 import type { TerminalAgentDefinition } from '@/lib/agents/agent-registry'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 /** A single agent identity entry from the ACP Registry. */
 export interface AcpRegistryEntry {
-	id: string
-	name: string
-	description?: string | null
-	website?: string | null
-	/** Remote CDN SVG URL (16x16 monochrome `currentColor`). */
-	icon?: string | null
+  id: string
+  name: string
+  description?: string | null
+  website?: string | null
+  /** Remote CDN SVG URL (16x16 monochrome `currentColor`). */
+  icon?: string | null
 }
 
 export interface AcpRegistryCatalog {
-	entries: AcpRegistryEntry[]
-	/** 'network' | 'cache' | 'empty' — where the entries came from. */
-	source: string
-	fetchedAt?: string | null
+  entries: AcpRegistryEntry[]
+  /** 'network' | 'cache' | 'empty' — where the entries came from. */
+  source: string
+  fetchedAt?: string | null
 }
 
 const EMPTY_CATALOG: AcpRegistryCatalog = { entries: [], source: 'empty', fetchedAt: null }
@@ -41,27 +41,25 @@ const EMPTY_CATALOG: AcpRegistryCatalog = { entries: [], source: 'empty', fetche
  * @param forceRefresh - bypass the disk cache and hit the network.
  */
 export async function fetchAcpRegistry(forceRefresh = false): Promise<AcpRegistryCatalog> {
-	if (!isTauriContext()) {
-		return EMPTY_CATALOG
-	}
-	try {
-		const result = await invoke<IpcResult<AcpRegistryCatalog>>('agent_registry_fetch', {
-			forceRefresh,
-		})
-		if (result.success) {
-			return result.data
-		}
-		return EMPTY_CATALOG
-	} catch {
-		return EMPTY_CATALOG
-	}
+  if (!isTauriContext()) {
+    return EMPTY_CATALOG
+  }
+  try {
+    const result = await invoke<IpcResult<AcpRegistryCatalog>>('agent_registry_fetch', {
+      forceRefresh
+    })
+    if (result.success) {
+      return result.data
+    }
+    return EMPTY_CATALOG
+  } catch {
+    return EMPTY_CATALOG
+  }
 }
 
 /** Build an id→entry index for O(1) identity lookup. */
-export function indexByRegistryId(
-	catalog: AcpRegistryCatalog,
-): Map<string, AcpRegistryEntry> {
-	return new Map(catalog.entries.map((e) => [e.id, e]))
+export function indexByRegistryId(catalog: AcpRegistryCatalog): Map<string, AcpRegistryEntry> {
+  return new Map(catalog.entries.map((e) => [e.id, e]))
 }
 
 /**
@@ -76,14 +74,14 @@ export function indexByRegistryId(
  * when the definition already has something to anchor it.
  */
 export function applyRegistryIdentity(
-	def: TerminalAgentDefinition,
-	index: Map<string, AcpRegistryEntry>,
+  def: TerminalAgentDefinition,
+  index: Map<string, AcpRegistryEntry>
 ): TerminalAgentDefinition {
-	if (!def.registryId) return def
-	const entry = index.get(def.registryId)
-	if (!entry) return def
-	// Prefer an already-bundled icon. We never promote a remote icon to a
-	// bundleless def — the default experience stays offline.
-	if (!def.icon) return def
-	return { ...def, icon: def.icon }
+  if (!def.registryId) return def
+  const entry = index.get(def.registryId)
+  if (!entry) return def
+  // Prefer an already-bundled icon. We never promote a remote icon to a
+  // bundleless def — the default experience stays offline.
+  if (!def.icon) return def
+  return { ...def, icon: def.icon }
 }

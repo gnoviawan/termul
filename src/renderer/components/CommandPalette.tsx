@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  Bot,
   Globe,
   History,
   Keyboard,
@@ -9,8 +10,7 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Terminal,
-  Bot
+  Terminal
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {

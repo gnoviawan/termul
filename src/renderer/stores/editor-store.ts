@@ -3,8 +3,8 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { filesystemApi } from '@/lib/api'
 import { flushEditorContent } from '@/lib/editor-content-flush'
-import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 
 const EDITOR_TAB_LIMIT = 15
 

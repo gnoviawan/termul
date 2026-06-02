@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { PaneNode } from '@/types/workspace.types'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useGitStatusStore } from '@/stores/git-status-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
+import type { PaneNode } from '@/types/workspace.types'
 import {
   collectOpenGitTabCwds,
   isPathWithinRepo,
   resetGitStatusRefreshSchedulerForTests,
-  scheduleGitStatusRefreshForPath,
+  scheduleGitStatusRefreshForPath
 } from './schedule-git-status-refresh'
 
 vi.mock('@/stores/git-status-store', () => ({
   useGitStatusStore: {
-    getState: vi.fn(),
-  },
+    getState: vi.fn()
+  }
 }))
 
 const REPO = 'C:/project'
@@ -23,7 +23,7 @@ function leafWithGitTab(cwd: string): PaneNode {
     type: 'leaf',
     id: 'leaf-1',
     tabs: [{ type: 'git', id: 'git-1', cwd }],
-    activeTabId: 'git-1',
+    activeTabId: 'git-1'
   }
 }
 
@@ -32,7 +32,7 @@ beforeEach(() => {
   resetGitStatusRefreshSchedulerForTests()
   refreshStatus.mockClear()
   vi.mocked(useGitStatusStore.getState).mockReturnValue({
-    refreshStatus,
+    refreshStatus
   } as unknown as ReturnType<typeof useGitStatusStore.getState>)
   useWorkspaceStore.setState({ root: leafWithGitTab(REPO) })
 })
@@ -97,8 +97,8 @@ describe('scheduleGitStatusRefreshForPath', () => {
         id: 'split-1',
         direction: 'horizontal',
         children: [leafWithGitTab(REPO), leafWithGitTab(otherRepo)],
-        sizes: [50, 50],
-      },
+        sizes: [50, 50]
+      }
     })
 
     scheduleGitStatusRefreshForPath(`${REPO}/src/foo.ts`)
@@ -114,8 +114,8 @@ describe('scheduleGitStatusRefreshForPath', () => {
         type: 'leaf',
         id: 'leaf-1',
         tabs: [{ type: 'editor', id: 'e-1', filePath: `${REPO}/a.ts` }],
-        activeTabId: 'e-1',
-      },
+        activeTabId: 'e-1'
+      }
     })
 
     scheduleGitStatusRefreshForPath(`${REPO}/src/foo.ts`)

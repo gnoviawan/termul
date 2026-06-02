@@ -1,15 +1,15 @@
-import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
-import { useShallow } from 'zustand/shallow'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
+import { useShallow } from 'zustand/shallow'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useCodeMirror, type VisibleLineRange } from '@/hooks/use-codemirror'
 import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
-import { TocPanel } from './TocPanel'
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
+import { TocPanel } from './TocPanel'
 
 interface CodeEditorProps {
   filePath: string
@@ -64,16 +64,19 @@ export function CodeEditor({
     }))
   )
 
-  const { view, setContent, flushPendingContent, scrollToLine, restoreViewState } = useCodeMirror(containerRef, {
-    filePath,
-    content,
-    language,
-    readOnly,
-    onChange,
-    onCursorChange,
-    onScrollChange,
-    onVisibleRangeChange: setVisibleRange
-  })
+  const { view, setContent, flushPendingContent, scrollToLine, restoreViewState } = useCodeMirror(
+    containerRef,
+    {
+      filePath,
+      content,
+      language,
+      readOnly,
+      onChange,
+      onCursorChange,
+      onScrollChange,
+      onVisibleRangeChange: setVisibleRange
+    }
+  )
 
   const getPanelWidth = useCallback((): number => {
     return layoutWidth || layoutRef.current?.clientWidth || 1000
@@ -119,6 +122,7 @@ export function CodeEditor({
     }
   }, [content, setContent])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: filePath intentionally retriggers the effect
   useEffect(() => {
     lastAppliedLineRef.current = null
     pendingRevealLineRef.current = null
@@ -179,21 +183,19 @@ export function CodeEditor({
   }, [initialCursorPosition, initialScrollTop, isVisible, restoreViewState, view])
 
   useEffect(() => {
-    const pending = (window as unknown as {
-      __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string }
-    }).__termulPendingRevealLine
+    const pending = (
+      window as unknown as {
+        __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string }
+      }
+    ).__termulPendingRevealLine
 
-    if (
-      pending &&
-      pending.filePath === filePath &&
-      isVisible &&
-      view
-    ) {
+    if (pending && pending.filePath === filePath && isVisible && view) {
       scrollToLine(pending.lineNumber, pending.searchTerm)
       lastAppliedLineRef.current = pending.lineNumber
       pendingRevealLineRef.current = null
       pendingRevealTermRef.current = undefined
-      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine = undefined
+      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine =
+        undefined
     }
 
     const handler = (event: Event): void => {
@@ -254,7 +256,11 @@ export function CodeEditor({
 
   return (
     <div
-      className={isVisible ? 'h-full w-full' : 'absolute inset-0 invisible pointer-events-none overflow-hidden'}
+      className={
+        isVisible
+          ? 'h-full w-full'
+          : 'absolute inset-0 invisible pointer-events-none overflow-hidden'
+      }
     >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">

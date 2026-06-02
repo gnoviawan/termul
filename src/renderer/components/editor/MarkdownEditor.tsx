@@ -1,16 +1,16 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { useShallow } from 'zustand/shallow'
+import { BlockNoteViewRaw } from '@blocknote/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
+import { useShallow } from 'zustand/shallow'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
-import { BlockNoteViewRaw } from '@blocknote/react'
-import { TocPanel } from './TocPanel'
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
+import { TocPanel } from './TocPanel'
 import '@blocknote/react/style.css'
 
 interface MarkdownEditorProps {
@@ -195,7 +195,11 @@ export function MarkdownEditor({
 
   return (
     <div
-      className={isVisible ? 'w-full h-full' : 'absolute inset-0 invisible pointer-events-none overflow-hidden'}
+      className={
+        isVisible
+          ? 'w-full h-full'
+          : 'absolute inset-0 invisible pointer-events-none overflow-hidden'
+      }
     >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">

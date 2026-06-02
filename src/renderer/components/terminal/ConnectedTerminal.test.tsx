@@ -780,12 +780,12 @@ describe('ConnectedTerminal', () => {
 
   it('should clear terminal activity indicator on unmount', async () => {
     mockTerminalStoreState.terminals = [
-      { id: 'store-term-1', ptyId: 'terminal-123', healthStatus: 'running' },
+      { id: 'store-term-1', ptyId: 'terminal-123', healthStatus: 'running' }
     ]
     mockTerminalStoreState.findTerminalByPtyId.mockImplementation((ptyId: string) =>
       ptyId === 'terminal-123'
         ? { id: 'store-term-1', ptyId: 'terminal-123', healthStatus: 'running' }
-        : undefined,
+        : undefined
     )
 
     const { unmount } = render(<ConnectedTerminal storeTerminalId="store-term-1" />)
@@ -800,7 +800,7 @@ describe('ConnectedTerminal', () => {
     expect(mockTerminalStoreState.updateTerminalActivityBatch).toHaveBeenCalledWith(
       'store-term-1',
       true,
-      expect.any(Number),
+      expect.any(Number)
     )
 
     mockTerminalStoreState.updateTerminalActivityBatch.mockClear()
@@ -809,7 +809,7 @@ describe('ConnectedTerminal', () => {
     expect(mockTerminalStoreState.updateTerminalActivityBatch).toHaveBeenCalledWith(
       'store-term-1',
       false,
-      expect.any(Number),
+      expect.any(Number)
     )
   })
 

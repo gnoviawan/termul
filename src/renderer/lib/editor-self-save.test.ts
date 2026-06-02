@@ -1,8 +1,5 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import {
-  consumeEditorSelfSave,
-  markEditorSelfSave
-} from './editor-self-save'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { consumeEditorSelfSave, markEditorSelfSave } from './editor-self-save'
 
 describe('editor-self-save', () => {
   beforeEach(() => {

@@ -254,7 +254,7 @@ vi.mock('@/components/CommandPalette', () => ({
 }))
 
 vi.mock('@/lib/agents/custom-agents', () => ({
-  loadCustomAgents: vi.fn(async () => []),
+  loadCustomAgents: vi.fn(async () => [])
 }))
 
 vi.mock('@/components/CommandHistoryModal', () => ({
