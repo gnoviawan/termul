@@ -124,7 +124,7 @@ export function EditorTab({
 							: operationStatus === "reloading"
 								? "Reloading file"
 								: operationStatus === "saved"
-									? "File updated"
+									? `${fileName} saved`
 									: "Close tab"
 					}
 					className={cn(

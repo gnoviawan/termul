@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
+import { flushEditorContent } from '@/lib/editor-content-flush'
+import { markEditorSelfSave } from '@/lib/editor-self-save'
 
 const EDITOR_TAB_LIMIT = 15
 
@@ -54,7 +56,7 @@ export interface EditorFileState {
   viewMode: 'code' | 'markdown'
   cursorPosition: { line: number; col: number }
   scrollTop: number
-  operationStatus: 'idle' | 'saving' | 'reloading'
+  operationStatus: 'idle' | 'saving' | 'reloading' | 'saved'
 }
 
 export interface EditorState {
@@ -205,6 +207,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   saveFile: async (path: string): Promise<boolean> => {
+    await flushEditorContent(path)
+
     const { openFiles } = get()
     const file = openFiles.get(path)
     if (!file) return false
@@ -237,9 +241,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         originalContent: current.content,
         isDirty: !bufferUnchanged,
         lastModified: Date.now(),
-        operationStatus: 'idle'
+        operationStatus: 'saved'
       })
       set({ openFiles: updatedFiles })
+      markEditorSelfSave(path)
+
+      window.setTimeout(() => {
+        const latest = get().openFiles.get(path)
+        if (latest?.operationStatus === 'saved') {
+          const resetFiles = new Map(get().openFiles)
+          const entry = resetFiles.get(path)
+          if (entry) {
+            resetFiles.set(path, { ...entry, operationStatus: 'idle' })
+            set({ openFiles: resetFiles })
+          }
+        }
+      }, 1500)
+
       return true
     } catch {
       const resetFiles = new Map(get().openFiles)
