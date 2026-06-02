@@ -36,6 +36,7 @@ interface CommandPaletteProps {
   projects: Project[]
   onSwitchProject: (id: string) => void
   onAddTerminal?: () => void
+  onShowAgentLauncher?: () => void
   onLaunchAgent?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
@@ -95,6 +96,7 @@ export function CommandPalette({
   projects,
   onSwitchProject,
   onAddTerminal,
+  onShowAgentLauncher,
   onLaunchAgent,
   onSaveSnapshot,
   onNewBrowserTab,
@@ -121,11 +123,24 @@ export function CommandPalette({
               id: 'new-terminal',
               category: 'workspace' as const,
               icon: <Terminal aria-hidden="true" size={16} />,
+              label: 'New Terminal',
+              description: 'Open a new shell in the active pane',
+              keywords: ['shell', 'console', 'pty', 'workspace'],
+              execute: onAddTerminal
+            }
+          ]
+        : []),
+      ...(onShowAgentLauncher
+        ? [
+            {
+              id: 'show-agent-launcher',
+              category: 'workspace' as const,
+              icon: <Bot aria-hidden="true" size={16} />,
               label: 'Agent Launcher',
               description: 'Show the agent launcher prompt in the active pane',
-              keywords: ['shell', 'console', 'pty', 'workspace', 'agent', 'prompt'],
+              keywords: ['agent', 'ai', 'claude', 'codex', 'prompt', 'launcher'],
               shortcut: getShortcutLabel?.('newTerminal'),
-              execute: onAddTerminal
+              execute: onShowAgentLauncher
             }
           ]
         : []),
@@ -257,6 +272,7 @@ export function CommandPalette({
       projects,
       onSwitchProject,
       onAddTerminal,
+      onShowAgentLauncher,
       onLaunchAgent,
       onSaveSnapshot,
       onNewBrowserTab,

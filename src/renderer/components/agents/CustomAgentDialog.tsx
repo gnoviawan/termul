@@ -27,6 +27,7 @@ import {
 	toAgentDefinition,
 	validateCustomAgent,
 } from '@/lib/agents/custom-agents'
+import { parseBaseArgsInput } from '@/lib/agents/parse-base-args'
 import { IconPicker } from './IconPicker'
 
 interface CustomAgentDialogProps {
@@ -76,10 +77,7 @@ export function CustomAgentDialog({
 			const input = {
 				name: form.name,
 				command: form.command,
-				baseArgs: form.baseArgs
-					.split(/\s+/)
-					.map((s) => s.trim())
-					.filter(Boolean),
+				baseArgs: parseBaseArgsInput(form.baseArgs),
 				promptMode: form.promptMode,
 				promptFlag: form.promptMode === 'flag' ? form.promptFlag : undefined,
 				icon: form.icon || undefined,

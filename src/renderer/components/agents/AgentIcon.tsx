@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
+import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 
 /**
  * Renders an agent's bundled SVG icon inline so `currentColor` inherits from
@@ -10,54 +11,46 @@ import { getBuiltInAgent } from '@/lib/agents/agent-registry'
  * agent ID can't be resolved.
  */
 
-function normalizeSvg(svg: string): string | null {
-	const src = svg
-		.replace(/\s+width="[^"]*"/g, '')
-		.replace(/\s+height="[^"]*"/g, '')
-	if (!/viewBox/i.test(src)) return null
-	return src
-}
-
 export interface AgentIconProps {
 	agentId: string
+	/** Optional display name (e.g. from terminal metadata for custom agents). */
+	name?: string
+	/** Optional pre-resolved icon markup (built-in or custom catalog SVG). */
+	icon?: string
 	/** Tailwind sizing class. Default: h-3.5 w-3.5 (tab-bar size). */
 	className?: string
 }
 
 export const AgentIcon = memo(function AgentIcon({
 	agentId,
+	name,
+	icon: iconProp,
 	className = 'h-3.5 w-3.5',
 }: AgentIconProps): React.JSX.Element {
-	const icon = useMemo(() => {
-		const agent = getBuiltInAgent(agentId)
-		if (!agent) return null
+	const resolved = useMemo(() => {
+		const builtIn = getBuiltInAgent(agentId)
+		const displayName = name ?? builtIn?.name
+		const rawIcon = iconProp ?? builtIn?.icon
+		const icon = rawIcon ? sanitizeInlineAgentSvg(rawIcon) : null
+		return { displayName, icon }
+	}, [agentId, iconProp, name])
 
-		if (agent.icon) {
-			const normalized = normalizeSvg(agent.icon)
-			if (normalized) return normalized
-		}
-
-		return null
-	}, [agentId])
-
-	if (icon) {
+	if (resolved.icon) {
 		return (
 			<span
 				aria-hidden="true"
 				className={`inline-flex shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full ${className}`}
-				dangerouslySetInnerHTML={{ __html: icon }}
+				dangerouslySetInnerHTML={{ __html: resolved.icon }}
 			/>
 		)
 	}
 
-	// Fallback: first letter of the agent name
-	const agent = getBuiltInAgent(agentId)
 	return (
 		<span
 			aria-hidden="true"
 			className={`flex shrink-0 items-center justify-center rounded-sm bg-foreground/10 text-[8px] font-semibold uppercase ${className}`}
 		>
-			{agent?.name?.charAt(0) ?? '?'}
+			{resolved.displayName?.charAt(0) ?? '?'}
 		</span>
 	)
 })

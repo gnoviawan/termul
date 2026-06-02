@@ -452,8 +452,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 		// This prevents the cascade where syncTerminalTabs runs between addTerminal
 		// and addTabToPane, sees a tab as orphaned, removes it, triggering
 		// ConnectedTerminal unmount and a restore re-trigger.
-		lastEnsuredTerminalIdsRef.current = terminalIds;
 		syncDebounceTimerRef.current = setTimeout(() => {
+			lastEnsuredTerminalIdsRef.current = terminalIds;
 			const ensureId = `ensure-${ensureCallCountRef.current++}-${Date.now().toString().slice(-6)}`;
 
 			console.log(`[WorkspaceLayout] syncTerminalTabs CALL [${ensureId}]`, {
@@ -1472,6 +1472,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 				projects={projects}
 				onSwitchProject={selectProject}
 				onAddTerminal={() => handleAddTerminal(undefined)}
+				onShowAgentLauncher={() => {
+					const paneId = useWorkspaceStore.getState().activePaneId;
+					if (paneId) {
+						useWorkspaceStore.getState().showAgentLauncher(paneId);
+					}
+				}}
 				onLaunchAgent={handleLaunchAgent}
 				onNewBrowserTab={handleNewBrowserTab}
 				onSaveSnapshot={handleOpenSnapshotModal}

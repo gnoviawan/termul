@@ -41,6 +41,26 @@ export interface LaunchAgentResult {
  * decide how to surface errors. On success the pane gains a terminal tab whose
  * foreground process is the agent binary, seeded with `prompt`.
  */
+/** Exported for restore/spawn paths that merge agent env with project env. */
+export function resolveAgentEnv(
+	defEnv: Record<string, string> | undefined,
+	surroundingEnv: Record<string, string>,
+): Record<string, string> {
+	if (!defEnv) return {}
+	const out: Record<string, string> = {}
+	for (const [key, raw] of Object.entries(defEnv)) {
+		if (!key.trim()) continue
+		let value = raw
+		if (raw.startsWith('$')) {
+			value = surroundingEnv[raw.slice(1)] ?? ''
+		}
+		if (value !== '') {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 export async function launchAgentInPane(
 	paneId: string,
 	projectId: string,
@@ -124,8 +144,9 @@ export async function launchAgentInPane(
 		const terminalId = Date.now().toString()
 		const agentArgsCopy = [...def.baseArgs]
 
+		const latestTerminals = useTerminalStore.getState().terminals
 		terminalStore.setTerminals([
-			...terminalStore.terminals,
+			...latestTerminals,
 			{
 				id: terminalId,
 				name: def.name,
@@ -162,31 +183,6 @@ export async function launchAgentInPane(
 			error: err instanceof Error ? err.message : String(err),
 		}
 	}
-}
-
-/**
- * Resolve an agent definition's env map. A value of the form `$NAME` is replaced
- * with the value of `NAME` from the surrounding env (project env or, as a
- * fallback, an empty string). Plain values pass through unchanged. Entries that
- * resolve to empty are dropped so we never inject blank API keys.
- */
-function resolveAgentEnv(
-	defEnv: Record<string, string> | undefined,
-	surroundingEnv: Record<string, string>,
-): Record<string, string> {
-	if (!defEnv) return {}
-	const out: Record<string, string> = {}
-	for (const [key, raw] of Object.entries(defEnv)) {
-		if (!key.trim()) continue
-		let value = raw
-		if (raw.startsWith('$')) {
-			value = surroundingEnv[raw.slice(1)] ?? ''
-		}
-		if (value !== '') {
-			out[key] = value
-		}
-	}
-	return out
 }
 
 /**

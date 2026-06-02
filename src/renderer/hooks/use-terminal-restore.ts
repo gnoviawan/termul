@@ -7,6 +7,9 @@ import { useWorkspaceStore, terminalTabId, findPaneContainingTab } from '../stor
 import { terminalApi, sessionApi } from '@/lib/api'
 import { shellApi } from '@/lib/shell-api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { resolveAgentEnv } from '@/lib/agent-launch'
+import { getBuiltInAgent } from '@/lib/agents/agent-registry'
+import { loadCustomAgents } from '@/lib/agents/custom-agents'
 import { getDefaultCwdForProject, ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import {
   loadPersistedTerminals,
@@ -799,7 +802,8 @@ async function restoreFromLayout(
 
     // Resolve project env vars for spawn
     // TODO: Pass actual system env from backend for variable expansion
-    const { env, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
+    const { env: projectEnv, hasProjectEnv } = resolveEnvForSpawn(project?.envVars, {})
+    const customAgents = await loadCustomAgents()
 
     debugLog('restoreFromLayout', `START [${restoreId}] ACQUIRING LOCK`, {
       projectId,
@@ -868,6 +872,18 @@ async function restoreFromLayout(
         // shows the prior conversation visually.
         const isAgentTerminal =
           persistedTerminal.kind === 'agent' && !!persistedTerminal.agentProgram
+        const agentDef =
+          isAgentTerminal && persistedTerminal.agentId
+            ? getBuiltInAgent(persistedTerminal.agentId) ??
+              customAgents.find((a) => a.id === persistedTerminal.agentId)
+            : undefined
+        const agentEnv = agentDef?.env
+          ? resolveAgentEnv(agentDef.env, projectEnv)
+          : {}
+        const spawnEnv =
+          hasProjectEnv || Object.keys(agentEnv).length > 0
+            ? { ...projectEnv, ...agentEnv }
+            : undefined
         const agentSpawnOptions = isAgentTerminal
           ? {
               program: persistedTerminal.agentProgram,
@@ -886,12 +902,12 @@ async function restoreFromLayout(
                 ? {
                     cwd: persistedTerminal.cwd,
                     ...agentSpawnOptions,
-                    ...(hasProjectEnv ? { env } : {})
+                    ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
                     shell: normalizedShell,
                     cwd: persistedTerminal.cwd,
-                    ...(hasProjectEnv ? { env } : {})
+                    ...(spawnEnv ? { env: spawnEnv } : {})
                   }
             )
             if (spawnTimeout) {

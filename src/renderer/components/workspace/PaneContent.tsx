@@ -339,11 +339,12 @@ export function PaneContent({
 												<span className="animate-pulse motion-reduce:animate-none">
 													<AgentIcon
 														agentId={terminal.agentId!}
+														name={terminal.agentName}
 														className="h-16 w-16"
 													/>
 												</span>
 												<span className="text-sm text-muted-foreground">
-													Starting {terminal.agentName ?? terminal.name}�
+													Starting {terminal.agentName ?? terminal.name}…
 												</span>
 											</div>
 										)}

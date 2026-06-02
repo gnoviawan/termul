@@ -8,18 +8,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-	mockAddTerminal,
-	mockSetTerminalPtyId,
-	mockSetTerminalAgentMetadata,
+	mockSetTerminals,
+	mockSelectTerminal,
 	mockIsTerminalLimitReached,
 	mockAddTabToPane,
 	mockTerminalApiSpawn,
 	mockEnsureWorktreeSymlinks,
 	mockTerminals,
 } = vi.hoisted(() => ({
-	mockAddTerminal: vi.fn(),
-	mockSetTerminalPtyId: vi.fn(),
-	mockSetTerminalAgentMetadata: vi.fn(),
+	mockSetTerminals: vi.fn(),
+	mockSelectTerminal: vi.fn(),
 	mockIsTerminalLimitReached: vi.fn(),
 	mockAddTabToPane: vi.fn(),
 	mockTerminalApiSpawn: vi.fn(),
@@ -31,9 +29,8 @@ vi.mock('@/stores/terminal-store', () => ({
 	useTerminalStore: {
 		getState: () => ({
 			terminals: mockTerminals,
-			addTerminal: mockAddTerminal,
-			setTerminalPtyId: mockSetTerminalPtyId,
-			setTerminalAgentMetadata: mockSetTerminalAgentMetadata,
+			setTerminals: mockSetTerminals,
+			selectTerminal: mockSelectTerminal,
 			isTerminalLimitReached: mockIsTerminalLimitReached,
 		}),
 	},
@@ -80,12 +77,16 @@ import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 const claude = getBuiltInAgent('claude-code')!
 const gemini = getBuiltInAgent('gemini-cli')!
 
+function lastCreatedTerminal(): Record<string, unknown> {
+	const batch = mockSetTerminals.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
+	return batch[batch.length - 1]
+}
+
 describe('launchAgentInPane', () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 		mockTerminals.length = 0
 		mockIsTerminalLimitReached.mockReturnValue(false)
-		mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
 		mockTerminalApiSpawn.mockResolvedValue({
 			success: true,
 			data: { id: 'pty-1', shell: 'claude', cwd: '/test' },
@@ -121,32 +122,39 @@ describe('launchAgentInPane', () => {
 
 	it('tags the terminal with agent metadata excluding the seed prompt', async () => {
 		await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'do a thing')
-		expect(mockSetTerminalAgentMetadata).toHaveBeenCalledWith('term-new-1', {
+		expect(mockSetTerminals).toHaveBeenCalled()
+		expect(lastCreatedTerminal()).toMatchObject({
+			kind: 'agent',
 			agentId: 'claude-code',
 			agentName: 'Claude Code',
 			agentProgram: 'claude',
 			agentArgs: [],
+			ptyId: 'pty-1',
 		})
-		// The seed prompt must not be persisted in metadata (restore caveat).
-		const meta = mockSetTerminalAgentMetadata.mock.calls[0][1]
-		expect(JSON.stringify(meta)).not.toContain('do a thing')
+		expect(JSON.stringify(lastCreatedTerminal())).not.toContain('do a thing')
 	})
 
-	it('names the terminal after the agent and adds a tab', async () => {
-		await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
-		expect(mockAddTerminal).toHaveBeenCalledWith('Claude Code', 'proj-1', 'claude', '/test')
-		expect(mockSetTerminalPtyId).toHaveBeenCalledWith('term-new-1', 'pty-1')
+	it('names the terminal after the agent, selects it, and adds a tab', async () => {
+		const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
+		expect(result.terminalId).toBeTruthy()
+		expect(lastCreatedTerminal()).toMatchObject({
+			name: 'Claude Code',
+			projectId: 'proj-1',
+			shell: 'claude',
+			cwd: '/test',
+		})
+		expect(mockSelectTerminal).toHaveBeenCalledWith(result.terminalId)
 		expect(mockAddTabToPane).toHaveBeenCalledWith(
 			'pane-1',
-			expect.objectContaining({ type: 'terminal', terminalId: 'term-new-1' }),
+			expect.objectContaining({ type: 'terminal', terminalId: result.terminalId }),
 		)
 	})
 
-	it('launches with no prompt (none mode) for pi', async () => {
+	it('passes the prompt positionally for pi', async () => {
 		const pi = getBuiltInAgent('pi')!
 		await launchAgentInPane('pane-1', 'proj-1', '/test', pi, 'ignored prompt')
 		expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
-			expect.objectContaining({ program: 'pi', args: [], kind: 'agent' }),
+			expect.objectContaining({ program: 'pi', args: ['ignored prompt'], kind: 'agent' }),
 		)
 	})
 
@@ -164,6 +172,6 @@ describe('launchAgentInPane', () => {
 		const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
 		expect(result.success).toBe(false)
 		expect(result.error).toBe('no binary')
-		expect(mockAddTerminal).not.toHaveBeenCalled()
+		expect(mockSetTerminals).not.toHaveBeenCalled()
 	})
 })

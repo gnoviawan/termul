@@ -102,7 +102,7 @@ impl ResolvedProgram {
 }
 
 /// ADR-004.2: Returns true if a Windows file path points to a directly-
-/// executable image (`.exe`, `.com`, `.scr`, or no extension). Anything else
+/// executable PE image (`.exe`, `.com`, `.scr` only). Anything else
 /// (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, ...) cannot be handed to
 /// `CreateProcessW` and would surface as `os error 193`.
 #[cfg(target_os = "windows")]
@@ -114,7 +114,7 @@ pub(super) fn is_directly_executable_windows(path: &str) -> bool {
         std::path::Path::new(trimmed)
             .extension()
             .and_then(|e| e.to_str()),
-        None | Some("exe") | Some("com") | Some("scr")
+        Some("exe") | Some("com") | Some("scr")
     )
 }
 
@@ -173,10 +173,10 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
             let local_node = shim_dir.join("node.exe");
             if local_node.exists() {
                 local_node.to_string_lossy().to_string()
+            } else if let Some(path) = resolve_executable_from_path("node.exe") {
+                path
             } else {
-                // Fall back to bare "node" — the Rust spawn code or the
-                // OS PATH resolution will find it.
-                "node.exe".to_string()
+                continue;
             }
         } else {
             exe_path_str
@@ -712,10 +712,16 @@ impl PtyManager {
             ResolvedProgram::new(self.get_default_shell()?)
         };
         // Merge prepend_args (from npm .cmd shim rewriting) with user args.
+        // User args apply only for agent/program spawns, not shell spawns.
+        let user_args = if options.program.is_some() {
+            options.args.clone().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let program_args: Vec<String> = resolved
             .prepend_args
             .into_iter()
-            .chain(options.args.clone().unwrap_or_default())
+            .chain(user_args)
             .collect();
         let shell_path = resolved.program;
 
@@ -1977,7 +1983,6 @@ mod tests {
             r"C:\bin\codex.exe",
             r"C:/bin/cursor.com",
             r"C:\bin\agent.scr",
-            r"C:\bin\nodot", // no-extension binary is also valid
             r"C:\bin\sub\path\agent.exe",
             r#"C:\bin\"quoted".exe"#, // trailing quote tolerated
         ] {
@@ -1988,6 +1993,7 @@ mod tests {
             );
         }
         for bad in [
+            r"C:\bin\nodot",
             r"C:\bin\opencode.cmd",
             r"C:\bin\agent.bat",
             r"C:\bin\script.ps1",

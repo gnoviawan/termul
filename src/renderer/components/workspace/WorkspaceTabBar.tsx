@@ -151,6 +151,7 @@ function TerminalTabInline({
 				{terminal.kind === 'agent' && terminal.agentId ? (
 					<AgentIcon
 						agentId={terminal.agentId}
+						name={terminal.agentName}
 						className="h-3 w-3 mr-2"
 					/>
 				) : (

@@ -32,12 +32,7 @@ export interface BundledIconEntry {
 	svg: string
 }
 
-/** Normalize SVG for inline rendering: strip fixed width/height. */
-export function normalizeIconSvg(svg: string): string {
-	return svg
-		.replace(/\s+width="[^"]*"/g, '')
-		.replace(/\s+height="[^"]*"/g, '')
-}
+export { normalizeRootIconSvg as normalizeIconSvg } from '@/lib/agents/sanitize-agent-icon'
 
 /**
  * Build ACP icon entries from manifest + glob-loaded SVG modules.

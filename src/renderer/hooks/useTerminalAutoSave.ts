@@ -198,7 +198,12 @@ export function useTerminalAutoSave(): void {
               t.cwd !== prev.cwd ||
               t.projectId !== prev.projectId ||
               t.isAppHidden !== prev.isAppHidden ||
-              t.appHiddenSince !== prev.appHiddenSince
+              t.appHiddenSince !== prev.appHiddenSince ||
+              t.kind !== prev.kind ||
+              t.agentId !== prev.agentId ||
+              t.agentName !== prev.agentName ||
+              t.agentProgram !== prev.agentProgram ||
+              JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(prev.agentArgs ?? [])
             )
           })
           if (added.length === 0 && removed.length === 0 && !changedFields) {

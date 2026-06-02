@@ -65,6 +65,7 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 				onClick={() => setOpen(true)}
 				className="shrink-0"
 				title="Choose icon"
+				aria-label="Choose icon"
 			>
 				{triggerIcon}
 			</button>
@@ -88,6 +89,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 										: 'border-border hover:bg-secondary',
 								)}
 								title="No icon"
+								aria-label="No icon"
+								aria-pressed={!value}
 							>
 								—
 							</button>
@@ -106,6 +109,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 												: 'border-border bg-muted hover:bg-muted/80 text-white',
 										)}
 										title={entry.label}
+										aria-label={entry.label}
+										aria-pressed={isSelected}
 									>
 										<InlineIcon svg={entry.svg} className="h-5 w-5" />
 										{isSelected && (

@@ -122,7 +122,7 @@ describe('built-in agent definitions', () => {
 			promptMode: 'flag',
 			promptFlag: '--prompt',
 		})
-		expect(byId['pi']).toMatchObject({ command: 'pi', promptMode: 'none' })
+		expect(byId['pi']).toMatchObject({ command: 'pi', promptMode: 'positional' })
 	})
 
 	it('every flag-mode built-in declares a promptFlag', () => {
@@ -156,7 +156,7 @@ describe('built-in agent definitions', () => {
 			program: 'opencode',
 			args: ['--prompt', 'P'],
 		})
-		expect(buildAgentArgv(getBuiltInAgent('pi')!, 'P')).toEqual({ program: 'pi', args: [] })
+		expect(buildAgentArgv(getBuiltInAgent('pi')!, 'P')).toEqual({ program: 'pi', args: ['P'] })
 	})
 
 	it('getBuiltInAgent returns undefined for unknown ids', () => {

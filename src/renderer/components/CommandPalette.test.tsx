@@ -43,6 +43,7 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     projects,
     onSwitchProject: vi.fn(),
     onAddTerminal: vi.fn(),
+    onShowAgentLauncher: vi.fn(),
     onSaveSnapshot: vi.fn(),
     onNewBrowserTab: vi.fn(),
     onOpenProjectSettings: vi.fn(),
@@ -81,7 +82,8 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Navigation')).toBeInTheDocument()
     expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Tools')).toBeInTheDocument()
-    expect(screen.getByText('Open a terminal in the active pane')).toBeInTheDocument()
+    expect(screen.getByText('Open a new shell in the active pane')).toBeInTheDocument()
+    expect(screen.getByText('Show the agent launcher prompt in the active pane')).toBeInTheDocument()
     expect(screen.getByText('Ctrl+T')).toBeInTheDocument()
     expect(screen.getByText('Navigate')).toBeInTheDocument()
     expect(screen.getByText('Select')).toBeInTheDocument()
@@ -172,6 +174,7 @@ describe('CommandPalette', () => {
       callback: keyof React.ComponentProps<typeof CommandPalette>
     }> = [
       { label: 'New Terminal', commandId: 'new-terminal', callback: 'onAddTerminal' },
+      { label: 'Agent Launcher', commandId: 'show-agent-launcher', callback: 'onShowAgentLauncher' },
       { label: 'New Browser Tab', commandId: 'new-browser-tab', callback: 'onNewBrowserTab' },
       { label: 'Save Workspace Snapshot', commandId: 'save-snapshot', callback: 'onSaveSnapshot' },
       { label: 'Project Settings', commandId: 'open-project-settings', callback: 'onOpenProjectSettings' },
@@ -199,6 +202,7 @@ describe('CommandPalette', () => {
   it('omits optional commands when callbacks are unavailable', () => {
     renderPalette({
       onAddTerminal: undefined,
+      onShowAgentLauncher: undefined,
       onSaveSnapshot: undefined,
       onNewBrowserTab: undefined,
       onOpenProjectSettings: undefined,
@@ -208,6 +212,7 @@ describe('CommandPalette', () => {
     })
 
     expect(screen.queryByText('New Terminal')).not.toBeInTheDocument()
+    expect(screen.queryByText('Agent Launcher')).not.toBeInTheDocument()
     expect(screen.queryByText('New Browser Tab')).not.toBeInTheDocument()
     expect(screen.queryByText('Save Workspace Snapshot')).not.toBeInTheDocument()
     expect(screen.queryByText('Project Settings')).not.toBeInTheDocument()

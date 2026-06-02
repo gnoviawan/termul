@@ -28,6 +28,7 @@ import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-setting
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { CustomAgentDialog } from './CustomAgentDialog'
+import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 
 /**
  * ADR-004.5: The "blank tab" agent launch surface.
@@ -249,7 +250,8 @@ export function AgentLauncher({
 	const handleAgentCreated = useCallback(
 		async (def: TerminalAgentDefinition) => {
 			try {
-				await upsertCustomAgent({
+				const saved = await upsertCustomAgent({
+					id: def.id,
 					name: def.name,
 					command: def.command,
 					baseArgs: def.baseArgs,
@@ -257,10 +259,11 @@ export function AgentLauncher({
 					promptFlag: def.promptFlag,
 					icon: def.icon,
 					registryId: def.registryId,
+					env: def.env,
 				})
 				const all = await loadAllAgents()
 				setLoadedAgents(all)
-				setSelectedAgentId(def.id)
+				setSelectedAgentId(saved.id)
 				toast.success(`Added "${def.name}" to your agents`)
 			} catch (err) {
 				toast.error(err instanceof Error ? err.message : 'Failed to save agent')
@@ -441,11 +444,7 @@ const AgentGlyph = memo(function AgentGlyph({
 }): React.JSX.Element {
 	const normalized = useMemo(() => {
 		if (!agent.icon) return null
-		const src = agent.icon
-			.replace(/\s+width="[^"]*"/g, '')
-			.replace(/\s+height="[^"]*"/g, '')
-		if (!/viewBox/i.test(src)) return null
-		return src
+		return sanitizeInlineAgentSvg(agent.icon)
 	}, [agent.icon])
 
 	if (normalized) {
