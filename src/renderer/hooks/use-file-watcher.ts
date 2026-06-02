@@ -4,6 +4,7 @@ import { filesystemApi } from '@/lib/api'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import type { FileChangeEvent } from '@shared/types/filesystem.types'
 
 function getDirname(filePath: string): string {
@@ -41,6 +42,8 @@ export function useFileWatcher(): void {
     const handleFileChanged = (event: FileChangeEvent): void => {
       const { path } = event
 
+      scheduleGitStatusRefreshForPath(path)
+
       // Debounced refresh for file explorer
       const parentDir = getDirname(path)
       scheduleRefresh(parentDir)
@@ -71,11 +74,13 @@ export function useFileWatcher(): void {
     }
 
     const handleFileCreated = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
       const parentDir = getDirname(event.path)
       scheduleRefresh(parentDir)
     }
 
     const handleFileDeleted = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
       const parentDir = getDirname(event.path)
       scheduleRefresh(parentDir)
 

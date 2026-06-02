@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 
 const EDITOR_TAB_LIMIT = 15
 
@@ -240,6 +241,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         operationStatus: 'idle'
       })
       set({ openFiles: updatedFiles })
+      scheduleGitStatusRefreshForPath(path)
       return true
     } catch {
       const resetFiles = new Map(get().openFiles)
