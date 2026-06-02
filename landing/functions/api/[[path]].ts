@@ -18,6 +18,7 @@ import {
 
 // Re-export helpers and types used by tests or other modules
 export {
+  getClientIp,
   getModerationStatus,
   parseSubmission,
   toAdminTestimonial,
@@ -53,8 +54,8 @@ app.get('/testimonials', (c) =>
 // The R2 key contains a slash (e.g. "testimonials/uuid-filename"), so the URL
 // encodes it with encodeURIComponent. A wildcard route captures the full
 // encoded key; we decode it back before passing to the handler.
-app.get('/testimonials/avatar/*', (c) =>
-  serveAvatar(ctx(c), decodeURIComponent(c.req.param('*') ?? '')));
+app.get('/testimonials/avatar/:key{.*}', (c) =>
+  serveAvatar(ctx(c), decodeURIComponent(c.req.param('key') ?? '')));
 
 app.post('/testimonials', (c) =>
   createTestimonial(ctx(c)));

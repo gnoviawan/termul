@@ -163,8 +163,14 @@ export async function deleteTestimonial({ env }: PagesContext, id: string) {
     throw new ApiError('Testimonial not found.', 404);
   }
 
-  if (row?.avatar_r2_key) {
-    await env.TESTIMONIAL_AVATARS.delete(row.avatar_r2_key);
+  if (row.avatar_r2_key) {
+    await env.TESTIMONIAL_AVATARS.delete(row.avatar_r2_key).catch((error) => {
+      console.error('Failed to delete testimonial avatar', {
+        id,
+        key: row.avatar_r2_key,
+        error,
+      });
+    });
   }
 
   return json({ ok: true });
@@ -317,38 +323,38 @@ export async function insertTestimonial(
 export async function checkRateLimit(db: D1Database, ip: string) {
   const windowStart = new Date(Date.now() - SUBMISSION_WINDOW_MS).toISOString();
   const ipHash = await sha256(ip);
-  const row = await db.prepare(
-    `SELECT COUNT(*) as count
-     FROM testimonial_submission_rate_limits
-     WHERE ip_hash = ? AND created_at > ?`,
-  )
-    .bind(ipHash, windowStart)
-    .first<{ count: number }>();
+  const now = new Date().toISOString();
 
-  if ((row?.count ?? 0) >= SUBMISSION_LIMIT) {
-    await db.prepare(
+  await db
+    .prepare(
       `DELETE FROM testimonial_submission_rate_limits
        WHERE created_at < ?`,
     )
-      .bind(windowStart)
-      .run();
-
-    return { allowed: false };
-  }
-
-  await db.prepare(
-    `INSERT INTO testimonial_submission_rate_limits (id, ip_hash, created_at)
-     VALUES (?, ?, ?)`,
-  )
-    .bind(crypto.randomUUID(), ipHash, new Date().toISOString())
-    .run();
-
-  await db.prepare(
-    `DELETE FROM testimonial_submission_rate_limits
-     WHERE created_at < ?`,
-  )
     .bind(windowStart)
     .run();
+
+  const insertResult = await db
+    .prepare(
+      `INSERT INTO testimonial_submission_rate_limits (id, ip_hash, created_at)
+       SELECT ?, ?, ?
+       WHERE (
+         SELECT COUNT(*) FROM testimonial_submission_rate_limits
+         WHERE ip_hash = ? AND created_at > ?
+       ) < ?`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      ipHash,
+      now,
+      ipHash,
+      windowStart,
+      SUBMISSION_LIMIT,
+    )
+    .run();
+
+  if ((insertResult.meta?.changes ?? 0) === 0) {
+    return { allowed: false };
+  }
 
   return { allowed: true };
 }
@@ -373,7 +379,11 @@ export function normalizeRequiredField(
   maxLength: number,
   label: string,
 ) {
-  const text = String(value ?? '').trim();
+  if (value !== null && typeof value !== 'string') {
+    throw new ApiError(`${label} must be plain text.`, 400);
+  }
+
+  const text = (value ?? '').trim();
   if (text.length < minLength) {
     throw new ApiError(`${label} is too short.`, 400);
   }
@@ -430,11 +440,16 @@ export async function sha256(value: string) {
 }
 
 export function getClientIp(request: Request) {
-  return (
-    request.headers.get('CF-Connecting-IP') ??
-    request.headers.get('X-Forwarded-For') ??
-    'unknown'
-  );
+  const cfIp = request.headers.get('CF-Connecting-IP');
+  if (cfIp) return cfIp;
+
+  const forwardedFor = request.headers.get('X-Forwarded-For');
+  if (forwardedFor) {
+    const first = forwardedFor.split(',')[0]?.trim();
+    if (first) return first;
+  }
+
+  return 'unknown';
 }
 
 export function json(body: unknown, status = 200) {
