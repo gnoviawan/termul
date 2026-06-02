@@ -18,37 +18,11 @@ export type TestimonialRow = {
   updated_at: string;
 };
 
-type D1PreparedStatement = {
-  bind: (...values: unknown[]) => D1PreparedStatement;
-  first: <T = unknown>() => Promise<T | null>;
-  all: <T = unknown>() => Promise<{ results: T[] }>;
-  run: () => Promise<{ meta?: { changes?: number } }>;
-};
-
-type D1DatabaseBinding = {
-  prepare: (query: string) => D1PreparedStatement;
-};
-
-type R2ObjectBody = {
-  body: ReadableStream;
-  httpMetadata?: {
-    contentType?: string;
-  };
-};
-
-type R2BucketBinding = {
-  put: (
-    key: string,
-    value: ArrayBuffer,
-    options?: { httpMetadata?: { contentType?: string } },
-  ) => Promise<unknown>;
-  get: (key: string) => Promise<R2ObjectBody | null>;
-  delete: (key: string) => Promise<void>;
-};
+type FormDataEntryValue = string | File;
 
 type Env = {
-  DB: D1DatabaseBinding;
-  TESTIMONIAL_AVATARS: R2BucketBinding;
+  DB: D1Database;
+  TESTIMONIAL_AVATARS: R2Bucket;
   TESTIMONIALS_ADMIN_TOKEN?: string;
 };
 
@@ -110,7 +84,7 @@ function ctx(c: Context<HonoEnv>): PagesContext {
 
 const app = new Hono<HonoEnv>().basePath('/api')
 
-app.onError((err, c) => {
+app.onError((err) => {
   if (err instanceof ApiError) {
     return json({ error: err.message }, err.status)
   }
@@ -129,7 +103,7 @@ app.get('/testimonials', (c) =>
 // encodes it with encodeURIComponent. A wildcard route captures the full
 // encoded key; we decode it back before passing to the handler.
 app.get('/testimonials/avatar/*', (c) =>
-  serveAvatar(ctx(c), decodeURIComponent(c.req.param('*'))))
+  serveAvatar(ctx(c), decodeURIComponent(c.req.param('*') ?? '')))
 
 app.post('/testimonials', (c) =>
   createTestimonial(ctx(c)))
@@ -352,7 +326,7 @@ export function parseSubmission(formData: FormData): SubmissionPayload {
 }
 
 async function storeAvatar(
-  bucket: R2BucketBinding,
+  bucket: R2Bucket,
   avatarFile: File | null,
 ): Promise<StoredAvatar> {
   if (!avatarFile) {
@@ -376,7 +350,7 @@ async function storeAvatar(
 }
 
 async function insertTestimonial(
-  db: D1DatabaseBinding,
+  db: D1Database,
   id: string,
   payload: SubmissionPayload,
   avatar: StoredAvatar,
@@ -404,7 +378,7 @@ async function insertTestimonial(
     .run();
 }
 
-async function checkRateLimit(db: D1DatabaseBinding, ip: string) {
+async function checkRateLimit(db: D1Database, ip: string) {
   const windowStart = new Date(Date.now() - SUBMISSION_WINDOW_MS).toISOString();
   const ipHash = await sha256(ip);
   const row = await db.prepare(
