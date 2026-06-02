@@ -6,6 +6,9 @@ import {
   FileText, 
   Plus, 
   Minus, 
+  Pencil,
+  FileQuestion,
+  Check,
   RotateCcw,
   ChevronDown,
   GitBranch,
@@ -781,6 +784,52 @@ function RowAction({
   );
 }
 
+const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {
+  added: "Added",
+  modified: "Modified",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  untracked: "Untracked",
+  staged: "Staged",
+};
+
+function GitStatusBadge({ status }: { status: GitFileStatus }) {
+  const label = GIT_STATUS_LABELS[status];
+  let icon: React.ReactNode;
+  switch (status) {
+    case "added":
+      icon = <Plus className="text-green-500" size={14} aria-hidden />;
+      break;
+    case "modified":
+      icon = <Pencil className="text-amber-500" size={14} aria-hidden />;
+      break;
+    case "deleted":
+      icon = <Minus className="text-red-500" size={14} aria-hidden />;
+      break;
+    case "renamed":
+      icon = <RotateCcw className="text-blue-500" size={14} aria-hidden />;
+      break;
+    case "untracked":
+      icon = <FileQuestion className="text-orange-500" size={14} aria-hidden />;
+      break;
+    case "staged":
+      icon = <Check className="text-primary" size={14} aria-hidden />;
+      break;
+    default:
+      icon = <FileCode size={14} aria-hidden />;
+  }
+
+  return (
+    <div
+      className="flex h-5 w-5 shrink-0 items-center justify-center"
+      title={label}
+      aria-label={label}
+    >
+      {icon}
+    </div>
+  );
+}
+
 function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
   file: { path: string, status: GitFileStatus },
   isActive: boolean,
@@ -819,21 +868,13 @@ function FileItem({ file, isActive, isSelected, onClick, icon, children }: {
       )}
     >
       <div className="shrink-0">{icon}</div>
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
+      <GitStatusBadge status={file.status} />
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
         {children}
-      </div>
-      <div className={cn(
-        "text-[10px] uppercase font-bold px-1 rounded shrink-0",
-        file.status === 'added' && "text-green-500",
-        file.status === 'modified' && "text-amber-500",
-        file.status === 'deleted' && "text-red-500",
-        file.status === 'renamed' && "text-blue-500",
-      )}>
-        {file.status === 'modified' ? 'M' : file.status.charAt(0).toUpperCase()}
       </div>
     </div>
   );
