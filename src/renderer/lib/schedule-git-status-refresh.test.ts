@@ -33,7 +33,7 @@ beforeEach(() => {
   refreshStatus.mockClear()
   vi.mocked(useGitStatusStore.getState).mockReturnValue({
     refreshStatus,
-  } as ReturnType<typeof useGitStatusStore.getState>)
+  } as unknown as ReturnType<typeof useGitStatusStore.getState>)
   useWorkspaceStore.setState({ root: leafWithGitTab(REPO) })
 })
 
@@ -97,6 +97,7 @@ describe('scheduleGitStatusRefreshForPath', () => {
         id: 'split-1',
         direction: 'horizontal',
         children: [leafWithGitTab(REPO), leafWithGitTab(otherRepo)],
+        sizes: [50, 50],
       },
     })
 
