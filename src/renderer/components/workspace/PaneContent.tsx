@@ -448,27 +448,26 @@ export function PaneContent({
 								<AgentLauncher paneId={pane.id} />
 							</div>
 						) : null}
-
-						{/* ADR-004.5 overlay: agent launcher prompt on top of existing tabs.
-							 Activated by Ctrl+T (or other shortcuts). Does NOT clear existing
-							 tabs — the launched agent terminal joins them in the same pane. */}
-						{agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
-							<div
-								className="absolute inset-0 z-10 bg-background/95 backdrop-blur-sm flex flex-col"
-								onKeyDown={(e) => {
-								if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
-								}}
-							>
-								<div className="relative flex-1">
-									<AgentLauncher paneId={pane.id} />
-								</div>
-							</div>
-						) : null}
 					</div>
 				</div>
 
 				{isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}
 			</div>
+
+			{/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. */}
+			{agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
+				<div
+					className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm"
+					role="dialog"
+					aria-modal="true"
+					aria-label="Agent launcher"
+					onKeyDown={(e) => {
+						if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
+					}}
+				>
+					<AgentLauncher paneId={pane.id} />
+				</div>
+			) : null}
 		</div>
 	);
 }
