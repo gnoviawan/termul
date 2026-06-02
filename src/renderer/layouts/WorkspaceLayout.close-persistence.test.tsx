@@ -234,6 +234,10 @@ vi.mock('@/components/CommandPalette', () => ({
   CommandPalette: () => null
 }))
 
+vi.mock('@/lib/agents/custom-agents', () => ({
+  loadCustomAgents: vi.fn(async () => []),
+}))
+
 vi.mock('@/components/CommandHistoryModal', () => ({
   CommandHistoryModal: () => null
 }))

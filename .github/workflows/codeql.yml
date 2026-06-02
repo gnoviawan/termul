@@ -46,6 +46,7 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-extended
           build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@5e316336eb4f107009e477d4bfbfff13d7250fae # v4
