@@ -1,10 +1,12 @@
-import type { FileChangeEvent } from '@shared/types/filesystem.types'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
-import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { useEditorStore } from '@/stores/editor-store'
+import { useWorkspaceStore, editorTabId } from '@/stores/workspace-store'
+import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
+import type { FileChangeEvent } from '@shared/types/filesystem.types'
+import { consumeEditorSelfSave } from '@/lib/editor-self-save'
 
 function getDirname(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')
@@ -41,6 +43,8 @@ export function useFileWatcher(): void {
     const handleFileChanged = (event: FileChangeEvent): void => {
       const { path } = event
 
+      scheduleGitStatusRefreshForPath(path)
+
       // Debounced refresh for file explorer
       const parentDir = getDirname(path)
       scheduleRefresh(parentDir)
@@ -49,20 +53,24 @@ export function useFileWatcher(): void {
       const editorState = useEditorStore.getState()
       const fileState = editorState.openFiles.get(path)
       if (fileState) {
+        if (consumeEditorSelfSave(path)) {
+          return
+        }
+
         // Skip if we just saved this file (within 2 seconds)
         if (Date.now() - fileState.lastModified < 2000) {
           return
         }
 
         if (!fileState.isDirty) {
-          editorState.reloadFile(path)
+          void editorState.reloadFile(path)
         } else {
           toast('File changed externally', {
             description: path.split(/[\\/]/).pop() || path,
             action: {
               label: 'Reload',
               onClick: () => {
-                useEditorStore.getState().reloadFile(path)
+                void useEditorStore.getState().reloadFile(path)
               }
             }
           })
@@ -71,11 +79,13 @@ export function useFileWatcher(): void {
     }
 
     const handleFileCreated = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
       const parentDir = getDirname(event.path)
       scheduleRefresh(parentDir)
     }
 
     const handleFileDeleted = (event: FileChangeEvent): void => {
+      scheduleGitStatusRefreshForPath(event.path)
       const parentDir = getDirname(event.path)
       scheduleRefresh(parentDir)
 

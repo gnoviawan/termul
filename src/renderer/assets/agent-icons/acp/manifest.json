@@ -1,0 +1,182 @@
+[
+  {
+    "id": "agoragentic-acp",
+    "name": "Agoragentic",
+    "file": "agoragentic-acp.svg"
+  },
+  {
+    "id": "amp-acp",
+    "name": "Amp",
+    "file": "amp-acp.svg"
+  },
+  {
+    "id": "auggie",
+    "name": "Auggie CLI",
+    "file": "auggie.svg"
+  },
+  {
+    "id": "autohand",
+    "name": "Autohand Code",
+    "file": "autohand.svg"
+  },
+  {
+    "id": "claude-acp",
+    "name": "Claude Agent",
+    "file": "claude-acp.svg"
+  },
+  {
+    "id": "cline",
+    "name": "Cline",
+    "file": "cline.svg"
+  },
+  {
+    "id": "codebuddy-code",
+    "name": "Codebuddy Code",
+    "file": "codebuddy-code.svg"
+  },
+  {
+    "id": "codex-acp",
+    "name": "Codex CLI",
+    "file": "codex-acp.svg"
+  },
+  {
+    "id": "cortex-code",
+    "name": "Cortex Code",
+    "file": "cortex-code.svg"
+  },
+  {
+    "id": "corust-agent",
+    "name": "Corust Agent",
+    "file": "corust-agent.svg"
+  },
+  {
+    "id": "crow-cli",
+    "name": "crow-cli",
+    "file": "crow-cli.svg"
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "file": "cursor.svg"
+  },
+  {
+    "id": "deepagents",
+    "name": "DeepAgents",
+    "file": "deepagents.svg"
+  },
+  {
+    "id": "dimcode",
+    "name": "DimCode",
+    "file": "dimcode.svg"
+  },
+  {
+    "id": "dirac",
+    "name": "Dirac",
+    "file": "dirac.svg"
+  },
+  {
+    "id": "factory-droid",
+    "name": "Factory Droid",
+    "file": "factory-droid.svg"
+  },
+  {
+    "id": "fast-agent",
+    "name": "fast-agent",
+    "file": "fast-agent.svg"
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini CLI",
+    "file": "gemini.svg"
+  },
+  {
+    "id": "github-copilot-cli",
+    "name": "GitHub Copilot",
+    "file": "github-copilot-cli.svg"
+  },
+  {
+    "id": "glm-acp-agent",
+    "name": "GLM Agent",
+    "file": "glm-acp-agent.svg"
+  },
+  {
+    "id": "goose",
+    "name": "goose",
+    "file": "goose.svg"
+  },
+  {
+    "id": "grok-build",
+    "name": "Grok Build",
+    "file": "grok-build.svg"
+  },
+  {
+    "id": "junie",
+    "name": "Junie",
+    "file": "junie.svg"
+  },
+  {
+    "id": "kilo",
+    "name": "Kilo",
+    "file": "kilo.svg"
+  },
+  {
+    "id": "kimi",
+    "name": "Kimi CLI",
+    "file": "kimi.svg"
+  },
+  {
+    "id": "minion-code",
+    "name": "Minion Code",
+    "file": "minion-code.svg"
+  },
+  {
+    "id": "mistral-vibe",
+    "name": "Mistral Vibe",
+    "file": "mistral-vibe.svg"
+  },
+  {
+    "id": "nova",
+    "name": "Nova",
+    "file": "nova.svg"
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode",
+    "file": "opencode.svg"
+  },
+  {
+    "id": "pi-acp",
+    "name": "pi ACP",
+    "file": "pi-acp.svg"
+  },
+  {
+    "id": "poolside",
+    "name": "Poolside",
+    "file": "poolside.svg"
+  },
+  {
+    "id": "qoder",
+    "name": "Qoder CLI",
+    "file": "qoder.svg"
+  },
+  {
+    "id": "qwen-code",
+    "name": "Qwen Code",
+    "file": "qwen-code.svg"
+  },
+  {
+    "id": "sigit",
+    "name": "siGit Code",
+    "file": "sigit.svg"
+  },
+  {
+    "id": "stakpak",
+    "name": "Stakpak",
+    "file": "stakpak.svg"
+  },
+  {
+    "id": "vtcode",
+    "name": "VT Code",
+    "file": "vtcode.svg"
+  }
+]

@@ -66,7 +66,17 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
       shell: terminal.shell,
       cwd: terminal.cwd,
       scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
-      transcript: terminal.transcript
+      transcript: terminal.transcript,
+      // ADR-004.4: persist agent identity + program/baseArgs (no seed prompt).
+      ...(terminal.kind === 'agent'
+        ? {
+            kind: 'agent' as const,
+            agentId: terminal.agentId,
+            agentName: terminal.agentName,
+            agentProgram: terminal.agentProgram,
+            agentArgs: terminal.agentArgs
+          }
+        : {})
     },
     scrollbackExtractionAvailable: extractedScrollback !== undefined,
     extractedScrollbackLineCount: extractedScrollback?.length ?? 0
@@ -188,7 +198,12 @@ export function useTerminalAutoSave(): void {
               t.cwd !== prev.cwd ||
               t.projectId !== prev.projectId ||
               t.isAppHidden !== prev.isAppHidden ||
-              t.appHiddenSince !== prev.appHiddenSince
+              t.appHiddenSince !== prev.appHiddenSince ||
+              t.kind !== prev.kind ||
+              t.agentId !== prev.agentId ||
+              t.agentName !== prev.agentName ||
+              t.agentProgram !== prev.agentProgram ||
+              JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(prev.agentArgs ?? [])
             )
           })
           if (added.length === 0 && removed.length === 0 && !changedFields) {

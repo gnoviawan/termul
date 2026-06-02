@@ -1,12 +1,16 @@
-import { BlockNoteViewRaw } from '@blocknote/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useShallow } from 'zustand/shallow'
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useBlockNote } from '@/hooks/use-blocknote'
+import {
+  registerEditorContentFlusher,
+  unregisterEditorContentFlusher
+} from '@/lib/editor-content-flush'
+import { BlockNoteViewRaw } from '@blocknote/react'
+import { TocPanel } from './TocPanel'
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
-import { TocPanel } from './TocPanel'
 import '@blocknote/react/style.css'
 
 interface MarkdownEditorProps {
@@ -65,10 +69,17 @@ export function MarkdownEditor({
     [onChange]
   )
 
-  const { editor, replaceContent, getHeadings, scrollToBlock } = useBlockNote({
+  const { editor, replaceContent, flushPendingContent, getHeadings, scrollToBlock } = useBlockNote({
+    filePath,
     initialMarkdown: content,
     onChange: wrappedOnChange
   })
+
+  useEffect(() => {
+    registerEditorContentFlusher(filePath, flushPendingContent)
+    return () => unregisterEditorContentFlusher(filePath)
+  }, [filePath, flushPendingContent])
+
   const isDark = useIsDark()
   const layoutRef = useRef<HTMLDivElement>(null)
   const blockNoteScrollRootRef = useRef<HTMLDivElement>(null)
@@ -184,11 +195,7 @@ export function MarkdownEditor({
 
   return (
     <div
-      className={
-        isVisible
-          ? 'w-full h-full'
-          : 'absolute inset-0 invisible pointer-events-none overflow-hidden'
-      }
+      className={isVisible ? 'w-full h-full' : 'absolute inset-0 invisible pointer-events-none overflow-hidden'}
     >
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">

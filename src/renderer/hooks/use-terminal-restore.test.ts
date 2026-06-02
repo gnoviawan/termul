@@ -52,6 +52,10 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/lib/agents/custom-agents', () => ({
+  loadCustomAgents: vi.fn(async () => [])
+}))
+
 vi.mock('@/lib/shell-api', () => ({
   shellApi: {
     getAvailableShells: vi.fn().mockResolvedValue({ success: true, data: { available: [] } })

@@ -9,7 +9,8 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Terminal
+  Terminal,
+  Bot
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -35,6 +36,8 @@ interface CommandPaletteProps {
   projects: Project[]
   onSwitchProject: (id: string) => void
   onAddTerminal?: () => void
+  onShowAgentLauncher?: () => void
+  onLaunchAgent?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
   onOpenProjectSettings?: () => void
@@ -88,6 +91,8 @@ export function CommandPalette({
   projects,
   onSwitchProject,
   onAddTerminal,
+  onShowAgentLauncher,
+  onLaunchAgent,
   onSaveSnapshot,
   onNewBrowserTab,
   onOpenProjectSettings,
@@ -114,10 +119,36 @@ export function CommandPalette({
               category: 'workspace' as const,
               icon: <Terminal aria-hidden="true" size={16} />,
               label: 'New Terminal',
-              description: 'Open a terminal in the active pane',
+              description: 'Open a new shell in the active pane',
               keywords: ['shell', 'console', 'pty', 'workspace'],
-              shortcut: getShortcutLabel?.('newTerminal'),
               execute: onAddTerminal
+            }
+          ]
+        : []),
+      ...(onShowAgentLauncher
+        ? [
+            {
+              id: 'show-agent-launcher',
+              category: 'workspace' as const,
+              icon: <Bot aria-hidden="true" size={16} />,
+              label: 'Agent Launcher',
+              description: 'Show the agent launcher prompt in the active pane',
+              keywords: ['agent', 'ai', 'claude', 'codex', 'prompt', 'launcher'],
+              shortcut: getShortcutLabel?.('newTerminal'),
+              execute: onShowAgentLauncher
+            }
+          ]
+        : []),
+      ...(onLaunchAgent
+        ? [
+            {
+              id: 'launch-agent',
+              category: 'workspace' as const,
+              icon: <Bot aria-hidden="true" size={16} />,
+              label: 'Launch Agent',
+              description: "Open a CLI agent's TUI in the active pane",
+              keywords: ['agent', 'ai', 'claude', 'codex', 'gemini', 'cursor', 'opencode', 'cli'],
+              execute: onLaunchAgent
             }
           ]
         : []),
@@ -232,6 +263,8 @@ export function CommandPalette({
       projects,
       onSwitchProject,
       onAddTerminal,
+      onShowAgentLauncher,
+      onLaunchAgent,
       onSaveSnapshot,
       onNewBrowserTab,
       onOpenProjectSettings,
