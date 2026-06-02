@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useShallow } from 'zustand/shallow'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useBlockNote } from '@/hooks/use-blocknote'
+import {
+  registerEditorContentFlusher,
+  unregisterEditorContentFlusher
+} from '@/lib/editor-content-flush'
 import { BlockNoteViewRaw } from '@blocknote/react'
 import { TocPanel } from './TocPanel'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
@@ -65,10 +69,17 @@ export function MarkdownEditor({
     [onChange]
   )
 
-  const { editor, replaceContent, getHeadings, scrollToBlock } = useBlockNote({
+  const { editor, replaceContent, flushPendingContent, getHeadings, scrollToBlock } = useBlockNote({
+    filePath,
     initialMarkdown: content,
     onChange: wrappedOnChange
   })
+
+  useEffect(() => {
+    registerEditorContentFlusher(filePath, flushPendingContent)
+    return () => unregisterEditorContentFlusher(filePath)
+  }, [filePath, flushPendingContent])
+
   const isDark = useIsDark()
   const layoutRef = useRef<HTMLDivElement>(null)
   const blockNoteScrollRootRef = useRef<HTMLDivElement>(null)
