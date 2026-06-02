@@ -37,7 +37,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const stageFiles = useGitStatusStore((state) => state.stageFiles);
   const unstageFiles = useGitStatusStore((state) => state.unstageFiles);
   const discardFiles = useGitStatusStore((state) => state.discardFiles);
-  const isFetchingStatus = useGitStatusStore((state) => state.isFetchingStatus);
   const commitContexts = useGitStatusStore((state) => state.commitContexts);
   const fetchCommitContext = useGitStatusStore((state) => state.fetchCommitContext);
   const commit = useGitStatusStore((state) => state.commit);
@@ -364,8 +363,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     <div className="flex h-full w-full bg-background overflow-hidden">
       {/* File List Sidebar */}
       <div className="w-80 border-r border-border flex flex-col shrink-0">
-        <div className="p-3 border-b border-border flex items-center justify-between gap-2">
-          <div className="relative flex-1">
+        <div className="p-3 border-b border-border">
+          <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
             <input
               type="text"
@@ -375,18 +374,6 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="h-8 w-8" 
-            onClick={() => {
-              refreshStatus(cwd);
-              fetchCommitContext(cwd);
-            }}
-            disabled={isFetchingStatus}
-          >
-            <RefreshCw className={cn("h-4 w-4", isFetchingStatus && "animate-spin")} />
-          </Button>
         </div>
 
         <ScrollArea className="flex-1">

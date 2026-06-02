@@ -1,7 +1,7 @@
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { useGitStatusStore } from '@/stores/git-status-store'
 
-const DEBOUNCE_MS = 300
+const DEBOUNCE_MS = 1000
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/')

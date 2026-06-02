@@ -69,7 +69,7 @@ describe('scheduleGitStatusRefreshForPath', () => {
 
     expect(refreshStatus).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(300)
+    await vi.advanceTimersByTimeAsync(1000)
 
     expect(refreshStatus).toHaveBeenCalledTimes(1)
     expect(refreshStatus).toHaveBeenCalledWith(REPO)
@@ -77,13 +77,13 @@ describe('scheduleGitStatusRefreshForPath', () => {
 
   it('does not reset debounce for unrelated paths while a refresh is pending', async () => {
     scheduleGitStatusRefreshForPath(`${REPO}/src/foo.ts`)
-    await vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(200)
     scheduleGitStatusRefreshForPath('C:/other/outside.ts')
-    await vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(200)
 
     expect(refreshStatus).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(150)
+    await vi.advanceTimersByTimeAsync(850)
 
     expect(refreshStatus).toHaveBeenCalledTimes(1)
     expect(refreshStatus).toHaveBeenCalledWith(REPO)
@@ -101,7 +101,7 @@ describe('scheduleGitStatusRefreshForPath', () => {
     })
 
     scheduleGitStatusRefreshForPath(`${REPO}/src/foo.ts`)
-    await vi.advanceTimersByTimeAsync(300)
+    await vi.advanceTimersByTimeAsync(1000)
 
     expect(refreshStatus).toHaveBeenCalledTimes(1)
     expect(refreshStatus).toHaveBeenCalledWith(REPO)
@@ -118,7 +118,7 @@ describe('scheduleGitStatusRefreshForPath', () => {
     })
 
     scheduleGitStatusRefreshForPath(`${REPO}/src/foo.ts`)
-    await vi.advanceTimersByTimeAsync(300)
+    await vi.advanceTimersByTimeAsync(1000)
 
     expect(refreshStatus).not.toHaveBeenCalled()
   })
