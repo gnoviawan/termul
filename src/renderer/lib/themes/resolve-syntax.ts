@@ -17,7 +17,7 @@ function resolveVariant(variant: ThemeVariant): ResolvedSyntaxColors {
     property: overrides['syntax-property'] ?? palette.ink,
     operator: overrides['syntax-operator'] ?? palette.ink,
     punctuation: overrides['syntax-punctuation'] ?? mixHex(palette.ink, palette.neutral, 0.2),
-    tag: overrides['syntax-tag'] ?? palette.primary,
+    tag: overrides['syntax-keyword'] ?? palette.primary,
     attributeName: overrides['syntax-property'] ?? palette.info,
     attributeValue: overrides['syntax-string'] ?? palette.success,
     heading: overrides['syntax-type'] ?? palette.primary,

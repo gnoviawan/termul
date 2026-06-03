@@ -2,6 +2,7 @@ import type { ColorThemeDefinition } from './types'
 
 /** Built-in color themes (dark variants; OpenCode palette-compatible). */
 export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
+  // syntax: VS Code Dark+ (Termul default editor)
   termul: {
     id: 'termul',
     name: 'Termul',
@@ -21,10 +22,14 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#c586c0',
         'syntax-string': '#ce9178',
         'syntax-type': '#4ec9b0',
-        'syntax-constant': '#b5cea8'
+        'syntax-constant': '#b5cea8',
+        'syntax-variable': '#9cdcfe',
+        'syntax-property': '#9cdcfe',
+        'syntax-function': '#dcdcaa'
       }
     }
   },
+  // syntax: opencode cursor + vscode fallback
   cursor: {
     id: 'cursor',
     name: 'Cursor',
@@ -44,10 +49,13 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#82d2ce',
         'syntax-string': '#e394dc',
         'syntax-type': '#efb080',
-        'syntax-constant': '#f8c762'
+        'syntax-constant': '#f8c762',
+        'syntax-property': '#81a1c1',
+        'syntax-function': '#efb080'
       }
     }
   },
+  // syntax: opencode catppuccin mocha + vscode fallback
   catppuccin: {
     id: 'catppuccin',
     name: 'Catppuccin',
@@ -67,10 +75,13 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#cba6f7',
         'syntax-string': '#a6e3a1',
         'syntax-primitive': '#89b4fa',
-        'syntax-constant': '#fab387'
+        'syntax-constant': '#fab387',
+        'syntax-type': '#f9e2af',
+        'syntax-function': '#89b4fa'
       }
     }
   },
+  // syntax: opencode dracula
   dracula: {
     id: 'dracula',
     name: 'Dracula',
@@ -90,10 +101,13 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#ff79c6',
         'syntax-string': '#f1fa8c',
         'syntax-primitive': '#50fa7b',
-        'syntax-constant': '#bd93f9'
+        'syntax-constant': '#bd93f9',
+        'syntax-property': '#8be9fd',
+        'syntax-function': '#50fa7b'
       }
     }
   },
+  // syntax: opencode nord + vscode fallback
   nord: {
     id: 'nord',
     name: 'Nord',
@@ -113,10 +127,12 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#81a1c1',
         'syntax-string': '#a3be8c',
         'syntax-type': '#8fbcbb',
-        'syntax-constant': '#b48ead'
+        'syntax-constant': '#b48ead',
+        'syntax-function': '#88c0d0'
       }
     }
   },
+  // syntax: opencode gruvbox
   gruvbox: {
     id: 'gruvbox',
     name: 'Gruvbox',
@@ -136,10 +152,12 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#fb4934',
         'syntax-string': '#b8bb26',
         'syntax-type': '#fabd2f',
-        'syntax-constant': '#d3869b'
+        'syntax-constant': '#d3869b',
+        'syntax-function': '#83a598'
       }
     }
   },
+  // syntax: opencode tokyonight
   tokyonight: {
     id: 'tokyonight',
     name: 'Tokyo Night',
@@ -159,10 +177,13 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#bb9af7',
         'syntax-string': '#9ece6a',
         'syntax-type': '#2ac3de',
-        'syntax-constant': '#ff9e64'
+        'syntax-constant': '#ff9e64',
+        'syntax-property': '#7dcfff',
+        'syntax-function': '#7aa2f7'
       }
     }
   },
+  // syntax: opencode ayu dark
   ayu: {
     id: 'ayu',
     name: 'Ayu',
@@ -178,14 +199,17 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         info: '#59c2ff'
       },
       overrides: {
-        'syntax-comment': '#acb6bf8c',
+        'syntax-comment': '#5a6673',
         'syntax-keyword': '#ff8f40',
-        'syntax-string': '#c2d94c',
-        'syntax-type': '#39bae6',
-        'syntax-constant': '#ffb454'
+        'syntax-string': '#aad94c',
+        'syntax-type': '#59c2ff',
+        'syntax-constant': '#d2a6ff',
+        'syntax-property': '#39bae6',
+        'syntax-function': '#ffb454'
       }
     }
   },
+  // syntax: opencode one-dark
   'one-dark': {
     id: 'one-dark',
     name: 'One Dark',
@@ -205,10 +229,14 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         'syntax-keyword': '#c678dd',
         'syntax-string': '#98c379',
         'syntax-type': '#e5c07b',
-        'syntax-constant': '#d19a66'
+        'syntax-constant': '#d19a66',
+        'syntax-variable': '#e06c75',
+        'syntax-property': '#56b6c2',
+        'syntax-function': '#61afef'
       }
     }
   },
+  // syntax: opencode github dark
   github: {
     id: 'github',
     name: 'GitHub',
@@ -226,9 +254,12 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
       overrides: {
         'syntax-comment': '#8b949e',
         'syntax-keyword': '#ff7b72',
-        'syntax-string': '#a5d6ff',
-        'syntax-type': '#ffa657',
-        'syntax-constant': '#79c0ff'
+        'syntax-string': '#39c5cf',
+        'syntax-type': '#d29922',
+        'syntax-constant': '#79c0ff',
+        'syntax-variable': '#d29922',
+        'syntax-property': '#39c5cf',
+        'syntax-function': '#bc8cff'
       }
     }
   }

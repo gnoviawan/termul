@@ -17,6 +17,13 @@ describe('apply-color-theme', () => {
     const syntax = resolveSyntaxColors(theme)
     expect(syntax.keyword).toBe('#cba6f7')
     expect(syntax.string).toBe('#a6e3a1')
+    expect(syntax.function).toBe('#89b4fa')
+  })
+
+  it('separates termul function color from keyword', () => {
+    const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
+    expect(syntax.keyword).toBe('#c586c0')
+    expect(syntax.function).toBe('#dcdcaa')
   })
 
   it('maps palette to xterm theme', () => {

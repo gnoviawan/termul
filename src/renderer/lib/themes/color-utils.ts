@@ -69,3 +69,26 @@ export function lightenHex(hex: string, amount: number): string {
 export function darkenHex(hex: string, amount: number): string {
   return mixHex(hex, '#000000', amount)
 }
+
+/** Normalize #rgb / #rrggbb / #rrggbbaa to lowercase #rrggbb (alpha stripped). */
+export function normalizeHex(hex: string): string {
+  let normalized = hex.trim().toLowerCase().replace(/^#/, '')
+  if (normalized.length === 8) {
+    normalized = normalized.slice(0, 6)
+  }
+  if (normalized.length === 3) {
+    normalized = normalized
+      .split('')
+      .map((ch) => ch + ch)
+      .join('')
+  }
+  if (normalized.length !== 6) {
+    throw new Error(`Invalid hex color: ${hex}`)
+  }
+  return `#${normalized}`
+}
+
+/** True when token color should be stored as an override (strict hex !== base). */
+export function shouldOverrideToken(tokenHex: string, baseHex: string): boolean {
+  return normalizeHex(tokenHex) !== normalizeHex(baseHex)
+}
