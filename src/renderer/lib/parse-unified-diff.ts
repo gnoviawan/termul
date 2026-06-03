@@ -6,6 +6,10 @@ export interface ParsedDiffLine {
   /** Raw line from git when needed for headers. */
   raw: string
   kind: DiffLineKind
+  /** Old file line number (for deletions and context). */
+  oldLineNumber?: number
+  /** New file line number (for additions and context). */
+  newLineNumber?: number
 }
 
 export interface SplitDiffRow {
@@ -44,6 +48,18 @@ function stripHunkPrefix(line: string): string {
   return line.length > 0 ? line.slice(1) : ''
 }
 
+function extractHunkLineNumbers(hunkHeader: string): { oldStart: number; newStart: number } | null {
+  // Parse @@ -oldStart,oldCount +newStart,newCount @@ format
+  const match = hunkHeader.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+  if (!match) {
+    return null
+  }
+  return {
+    oldStart: Number.parseInt(match[1], 10),
+    newStart: Number.parseInt(match[2], 10)
+  }
+}
+
 function toParsedLine(line: string, kind: DiffLineKind): ParsedDiffLine {
   const isHunkBody = kind === 'context' || kind === 'deletion' || kind === 'addition'
   return {
@@ -58,10 +74,46 @@ export function parseUnifiedDiffInline(diff: string): ParsedDiffLine[] {
   if (!diff) {
     return []
   }
-  return diff.split('\n').map((line) => {
+
+  const lines = diff.split('\n')
+  const result: ParsedDiffLine[] = []
+  let oldLineNum = 0
+  let newLineNum = 0
+
+  for (const line of lines) {
     const kind = classifyLine(line)
-    return toParsedLine(line, kind)
-  })
+
+    // Update line counters on hunk headers
+    if (kind === 'header' && line.startsWith('@@')) {
+      const hunkInfo = extractHunkLineNumbers(line)
+      if (hunkInfo) {
+        oldLineNum = hunkInfo.oldStart
+        newLineNum = hunkInfo.newStart
+      }
+      result.push(toParsedLine(line, kind))
+      continue
+    }
+
+    const parsed = toParsedLine(line, kind)
+
+    // Assign line numbers for hunk body lines
+    if (kind === 'deletion') {
+      parsed.oldLineNumber = oldLineNum
+      oldLineNum += 1
+    } else if (kind === 'addition') {
+      parsed.newLineNumber = newLineNum
+      newLineNum += 1
+    } else if (kind === 'context') {
+      parsed.oldLineNumber = oldLineNum
+      parsed.newLineNumber = newLineNum
+      oldLineNum += 1
+      newLineNum += 1
+    }
+
+    result.push(parsed)
+  }
+
+  return result
 }
 
 /**
@@ -76,12 +128,28 @@ export function parseUnifiedDiffSplit(diff: string): SplitDiffRow[] {
   const lines = diff.split('\n')
   const rows: SplitDiffRow[] = []
   let i = 0
+  let oldLineNum = 0
+  let newLineNum = 0
 
   while (i < lines.length) {
     const line = lines[i]
     const kind = classifyLine(line)
 
-    if (kind === 'header' || kind === 'meta') {
+    if (kind === 'header') {
+      // Update line counters on hunk headers
+      if (line.startsWith('@@')) {
+        const hunkInfo = extractHunkLineNumbers(line)
+        if (hunkInfo) {
+          oldLineNum = hunkInfo.oldStart
+          newLineNum = hunkInfo.newStart
+        }
+      }
+      rows.push({ fullWidth: toParsedLine(line, kind), left: null, right: null })
+      i += 1
+      continue
+    }
+
+    if (kind === 'meta') {
       rows.push({ fullWidth: toParsedLine(line, kind), left: null, right: null })
       i += 1
       continue
@@ -89,7 +157,11 @@ export function parseUnifiedDiffSplit(diff: string): SplitDiffRow[] {
 
     if (kind === 'context') {
       const parsed = toParsedLine(line, 'context')
-      rows.push({ left: parsed, right: { ...parsed } })
+      parsed.oldLineNumber = oldLineNum
+      parsed.newLineNumber = newLineNum
+      rows.push({ left: parsed, right: { ...parsed, newLineNumber: newLineNum } })
+      oldLineNum += 1
+      newLineNum += 1
       i += 1
       continue
     }
@@ -112,13 +184,27 @@ export function parseUnifiedDiffSplit(diff: string): SplitDiffRow[] {
       const rightText = additions[j]
       rows.push({
         left:
-          leftText !== undefined ? { text: leftText, raw: `-${leftText}`, kind: 'deletion' } : null,
+          leftText !== undefined
+            ? {
+                text: leftText,
+                raw: `-${leftText}`,
+                kind: 'deletion',
+                oldLineNumber: oldLineNum + j
+              }
+            : null,
         right:
           rightText !== undefined
-            ? { text: rightText, raw: `+${rightText}`, kind: 'addition' }
+            ? {
+                text: rightText,
+                raw: `+${rightText}`,
+                kind: 'addition',
+                newLineNumber: newLineNum + j
+              }
             : null
       })
     }
+    oldLineNum += deletions.length
+    newLineNum += additions.length
   }
 
   return rows
