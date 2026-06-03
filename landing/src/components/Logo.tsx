@@ -1,3 +1,5 @@
+import { Link } from 'react-router';
+
 import { cn } from '../lib/utils';
 
 interface LogoProps {
@@ -8,7 +10,14 @@ interface LogoProps {
 
 export const Logo = ({ className, iconClassName, textClassName }: LogoProps) => {
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <Link
+      to="/"
+      aria-label="Termul home"
+      className={cn(
+        'flex items-center gap-2 transition-[opacity,transform] duration-150 ease-[var(--ease-out)] hover:opacity-80 active:scale-[0.97]',
+        className,
+      )}
+    >
       <img
         src="/termul.svg"
         alt=""
@@ -19,6 +28,6 @@ export const Logo = ({ className, iconClassName, textClassName }: LogoProps) => 
         aria-hidden={true}
       />
       <span className={cn("text-xl font-semibold tracking-tight", textClassName)}>Termul</span>
-    </div>
+    </Link>
   );
 };
