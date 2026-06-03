@@ -99,7 +99,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const normalizedSearchQuery = searchQuery ?? ''
   const safeSearchResults = searchResults ?? []
   const safeSearchFileNameMatches = searchFileNameMatches ?? []
-	const fileNameMatchesPending = searchFileNameMatches === null
+  const fileNameMatchesPending = searchFileNameMatches === null
   const hasSearchInput = normalizedSearchQuery.length > 0
   const trimmedSearchQuery = normalizedSearchQuery.trim()
   const isSearchActive = trimmedSearchQuery.length > 0
