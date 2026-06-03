@@ -102,17 +102,33 @@ impl AgentConfig {
             .map(|(name, value)| agent_client_protocol::schema::EnvVariable::new(name, value))
             .collect();
 
+        // Resolve the command for direct spawning. On Windows, npm/PowerShell
+        // CLIs install as `.cmd`/`.bat` batch shims, which `CreateProcessW`
+        // cannot launch (os error 193). Reuse the PTY launcher's shim-aware
+        // resolver (ADR-004.2): it rewrites e.g. `gemini.cmd` to
+        // `node.exe <script>`, prepending the script ahead of the user args.
+        // A resolution failure falls back to the legacy PATH/PATHEXT lookup so
+        // any real spawn error stays observable.
+        let (command, args): (String, Vec<String>) = match crate::pty::manager::resolve_spawn_program(
+            &self.command,
+        ) {
+            Ok(resolved) => {
+                let mut args = resolved.prepend_args;
+                args.extend(self.args.iter().cloned());
+                (resolved.program, args)
+            }
+            Err(_) => (
+                crate::trackers::git_tracker::resolve_executable(&self.command),
+                self.args.clone(),
+            ),
+        };
+
         agent_client_protocol::schema::McpServer::Stdio(
             agent_client_protocol::schema::McpServerStdio::new(
                 self.name.clone(),
-                // Resolve the command against PATH/PATHEXT so a bare name like
-                // `gemini` finds `gemini.cmd` when spawned from the GUI (which
-                // does not get a shell's command resolution on Windows).
-                std::path::PathBuf::from(crate::trackers::git_tracker::resolve_executable(
-                    &self.command,
-                )),
+                std::path::PathBuf::from(command),
             )
-            .args(self.args.clone())
+            .args(args)
             .env(env),
         )
     }
@@ -160,5 +176,52 @@ mod tests {
             }
             _ => panic!("expected stdio server"),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn agent_config_rewrites_windows_cmd_shim_and_orders_args() {
+        // Simulate an npm-installed agent that exists only as a `.cmd` shim.
+        let dir = std::env::temp_dir().join("termul-test-acp-cmd-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\gemini\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\gemini\\bin\\gemini"), b"").unwrap();
+
+        let shim_path = dir.join("gemini.cmd");
+        let shim_content = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            endLocal & goto #_undefined_# 2>NUL || \"%_prog%\" \"%dp0%\\node_modules\\gemini\\bin\\gemini\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let config = AgentConfig {
+            name: "gemini".to_string(),
+            command: shim_path.to_string_lossy().to_string(),
+            args: vec!["--experimental-acp".to_string()],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+
+        match config.to_mcp_server() {
+            agent_client_protocol::schema::McpServer::Stdio(stdio) => {
+                // Command rewritten to the directly-executable interpreter.
+                assert!(
+                    stdio.command.to_string_lossy().ends_with("node.exe"),
+                    "expected node.exe, got: {}",
+                    stdio.command.display()
+                );
+                // Script path is prepended ahead of the user's configured args.
+                assert_eq!(stdio.args.len(), 2);
+                assert!(
+                    stdio.args[0].contains("gemini\\bin\\gemini"),
+                    "expected script path first, got: {:?}",
+                    stdio.args
+                );
+                assert_eq!(stdio.args[1], "--experimental-acp");
+            }
+            _ => panic!("expected stdio server"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
