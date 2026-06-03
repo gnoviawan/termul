@@ -1264,6 +1264,10 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+/// Maximum allowed search query length to prevent resource exhaustion via
+/// oversized input passed to ripgrep or the file-name walker.
+const MAX_SEARCH_QUERY_LEN: usize = 500;
+
 fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
     path_validation::validate_search_path(search_root, scope_root)
         .map(|path| path.to_string_lossy().to_string())
@@ -1339,6 +1343,29 @@ pub async fn search_content_stream(
                 scanned_files: 0,
                 failed_files: 0,
                 error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    if trimmed_query.len() > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] Search query rejected: length {} exceeds limit of {}",
+            trimmed_query.len(),
+            MAX_SEARCH_QUERY_LEN
+        );
+        let _ = app_handle.emit(
+            "search-content-done",
+            SearchContentDoneEvent {
+                search_id: request.search_id,
+                truncated: false,
+                scanned_files: 0,
+                failed_files: 0,
+                error: Some(format!(
+                    "Search query too long: {} characters (max {})",
+                    trimmed_query.len(),
+                    MAX_SEARCH_QUERY_LEN
+                )),
             },
         );
         return Ok(IpcResult::success(()));
@@ -1565,6 +1592,22 @@ pub async fn search_file_names(
             files: vec![],
             truncated: false,
         }));
+    }
+
+    if trimmed_query.len() > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] File name search query rejected: length {} exceeds limit of {}",
+            trimmed_query.len(),
+            MAX_SEARCH_QUERY_LEN
+        );
+        return Ok(IpcResult::error(
+            format!(
+                "Search query too long: {} characters (max {})",
+                trimmed_query.len(),
+                MAX_SEARCH_QUERY_LEN
+            ),
+            "QUERY_TOO_LONG",
+        ));
     }
 
     let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
