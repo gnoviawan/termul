@@ -3,10 +3,8 @@ import type { PixelBlastProps } from '../components/PixelBlast';
 export type FeatureId = '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09';
 
 export type FeatureVideo = {
-  /** H.264 MP4 source. Recorded at 4:3 (e.g. 1280x960), silent, looping. */
+  /** WebM source (VP9). Recorded at 4:3 (e.g. 1280x960), silent, looping. */
   src: string;
-  /** Optional WebM source for smaller payloads on supporting browsers. */
-  webm?: string;
   /** Optional poster image shown before the clip loads. */
   poster?: string;
 };
@@ -107,7 +105,7 @@ export const features: Feature[] = [
       'Open a fresh shell without breaking your flow',
     ],
     video: {
-      src: '/features/01-tabbed-interface.mp4',
+      src: '/features/01-tabbed-interface.webm',
     },
   },
   {
@@ -122,7 +120,7 @@ export const features: Feature[] = [
       'Run native WSL and Windows commands side by side',
     ],
     video: {
-      src: '/features/02-multiple-shells.mp4',
+      src: '/features/02-multiple-shells.webm',
     },
   },
   {
@@ -137,7 +135,7 @@ export const features: Feature[] = [
       'Per-project settings stay isolated and out of your way',
     ],
     video: {
-      src: '/features/03-project-workspaces.mp4',
+      src: '/features/03-project-workspaces.webm',
     },
   },
   {
@@ -152,7 +150,7 @@ export const features: Feature[] = [
       'Layouts persist, so your setup survives a restart',
     ],
     video: {
-      src: '/features/04-split-panes.mp4',
+      src: '/features/04-split-panes.webm',
     },
   },
   {
@@ -167,7 +165,7 @@ export const features: Feature[] = [
       'Mermaid diagrams render inline as you write',
     ],
     video: {
-      src: '/features/05-markdown-builtin-preview.mp4',
+      src: '/features/05-markdown-builtin-preview.webm',
     },
   },
   {
@@ -182,7 +180,7 @@ export const features: Feature[] = [
       'Export a shareable package instead of loose screenshots',
     ],
     video: {
-      src: '/features/06-browser-annotation.mp4',
+      src: '/features/06-browser-annotation.webm',
     },
   },
   {
@@ -197,7 +195,7 @@ export const features: Feature[] = [
       'Read-only history graph to trace how your branch evolved',
     ],
     video: {
-      src: '/features/07-git-panel.mp4',
+      src: '/features/07-git-panel.webm',
     },
   },
   {
@@ -212,7 +210,7 @@ export const features: Feature[] = [
       'A simplified flow that hides the worktree plumbing',
     ],
     video: {
-      src: '/features/08-git-worktree.mp4',
+      src: '/features/08-git-worktree.webm',
     },
   },
   {
@@ -227,7 +225,7 @@ export const features: Feature[] = [
       'Pin frequent commands for one-keystroke access',
     ],
     video: {
-      src: '/features/09-command-palette.mp4',
+      src: '/features/09-command-palette.webm',
     },
   },
 ];
