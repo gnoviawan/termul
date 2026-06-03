@@ -43,7 +43,7 @@ const footerColumns: { title: string; links: FooterLinkData[] }[] = [
 
 const Footer = () => {
   return (
-    <footer id="download" className="mt-20 border-t border-white/10 pt-20 pb-10 px-6 bg-black">
+    <footer id="download" className="mt-20 border-t border-border-subtle pt-20 pb-10 px-6 bg-background">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col items-center text-center mb-24">
           <SectionHeader
@@ -55,7 +55,7 @@ const Footer = () => {
           <ProductCta variant="footer" />
         </div>
         
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 border-t border-white/10 pt-12">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 border-t border-border-subtle pt-12">
           <div className="col-span-2 md:col-span-2">
             <Logo className="mb-6" textClassName="text-lg" />
             <p className="text-sm text-gray-500 max-w-xs leading-relaxed">

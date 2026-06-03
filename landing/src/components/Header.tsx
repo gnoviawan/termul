@@ -69,8 +69,8 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
         className={cn(
           "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between md:grid md:grid-cols-[1fr_auto_1fr] border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
           isScrolled
-            ? "bg-black/80 backdrop-blur-md border-white/10"
-            : "bg-black/0 border-white/0",
+            ? "bg-background/80 backdrop-blur-md border-border-subtle"
+            : "bg-background/0 border-transparent",
         )}
       >
         <div className="min-w-0 md:justify-self-start md:col-start-1">
@@ -160,13 +160,13 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
           aria-label="Close menu"
           onClick={closeMenu}
           className={cn(
-            "absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
+            "absolute inset-0 bg-pitch-black/60 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
             menuOpen ? "opacity-100" : "opacity-0",
           )}
         />
         <nav
           className={cn(
-            "absolute top-[72px] left-4 right-4 rounded-2xl border border-white/10 bg-[#0a0a0a]/95 backdrop-blur-xl p-2 shadow-2xl shadow-black/50",
+            "absolute top-[72px] left-4 right-4 rounded-2xl border border-border-subtle bg-graphite/95 backdrop-blur-xl p-2 shadow-2xl shadow-pitch-black/50",
             "transition-[opacity,transform] duration-200 ease-[var(--ease-out)]",
             menuOpen
               ? "opacity-100 translate-y-0"

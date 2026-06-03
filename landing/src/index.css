@@ -4,22 +4,49 @@
 @theme {
   --font-sans: "Neue Haas Grotesk Display Pro", Inter, "helvetica neue", helvetica, arial, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
-  
-  --color-background: #000000;
-  --color-foreground: #ffffff;
-  --color-muted: #1a1a1a;
-  --color-muted-foreground: #888888;
-  --color-accent: rgba(255, 255, 255, 0.06);
-  
-  --color-gray-900: #111111;
-  --color-gray-800: #222222;
-  --color-gray-700: #333333;
-  --color-gray-600: #444444;
-  --color-gray-500: #555555;
-  --color-gray-400: #666666;
-  --color-gray-300: #888888;
-  --color-gray-200: #aaaaaa;
-  --color-gray-100: #cccccc;
+
+  /* Brand palette */
+  --color-pitch-black: #08090a;
+  --color-graphite: #0f1011;
+  --color-deep-slate: #161718;
+  --color-charcoal-grey: #23252a;
+  --color-muted-ash: #323334;
+  --color-gunmetal: #383b3f;
+  --color-porcelain: #f7f8f8;
+  --color-light-steel: #d0d6e0;
+  --color-storm-cloud: #8a8f98;
+  --color-fog-grey: #62666d;
+  --color-alabaster: #e5e5e6;
+  --color-neon-lime: #e4f222;
+  --color-aether-blue: #5e6ad2;
+  --color-forest-green: #008d2c;
+  --color-cyan-spark: #02b8cc;
+  --color-emerald: #27a644;
+  --color-warning-red: #eb5757;
+  --color-deep-violet: #6366f1;
+  --color-amethyst: #8b5cf6;
+
+  /* Semantic aliases */
+  --color-background: var(--color-pitch-black);
+  --color-foreground: var(--color-porcelain);
+  --color-muted: var(--color-graphite);
+  --color-muted-foreground: var(--color-storm-cloud);
+  --color-accent: color-mix(in srgb, var(--color-muted-ash) 40%, transparent);
+  --color-border: var(--color-muted-ash);
+  --color-border-subtle: color-mix(in srgb, var(--color-porcelain) 10%, transparent);
+  --color-primary: var(--color-neon-lime);
+  --color-ring: var(--color-neon-lime);
+
+  /* Surface scale (maps legacy gray-* utilities to brand tokens) */
+  --color-gray-900: var(--color-deep-slate);
+  --color-gray-800: var(--color-charcoal-grey);
+  --color-gray-700: var(--color-muted-ash);
+  --color-gray-600: var(--color-gunmetal);
+  --color-gray-500: var(--color-fog-grey);
+  --color-gray-400: var(--color-storm-cloud);
+  --color-gray-300: var(--color-light-steel);
+  --color-gray-200: var(--color-alabaster);
+  --color-gray-100: var(--color-porcelain);
 }
 
 @layer base {
@@ -38,8 +65,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  
-  /* Custom easings from Emil's design engineering skill */
+
   :root {
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -49,12 +75,12 @@
     --os-size: 10px;
     --os-padding-perpendicular: 3px;
     --os-padding-axis: 8px;
-    --os-handle-bg: rgba(255, 255, 255, 0.32);
-    --os-handle-bg-hover: rgba(255, 255, 255, 0.54);
-    --os-handle-bg-active: rgba(255, 255, 255, 0.72);
+    --os-handle-bg: color-mix(in srgb, var(--color-light-steel) 32%, transparent);
+    --os-handle-bg-hover: color-mix(in srgb, var(--color-light-steel) 54%, transparent);
+    --os-handle-bg-active: color-mix(in srgb, var(--color-porcelain) 72%, transparent);
     --os-handle-border-radius: 999px;
     --os-track-bg: transparent;
-    --os-track-bg-hover: rgba(255, 255, 255, 0.04);
+    --os-track-bg-hover: color-mix(in srgb, var(--color-porcelain) 4%, transparent);
   }
 }
 
@@ -65,19 +91,19 @@
   .pressable:active {
     transform: scale(0.97);
   }
-  
+
   .glass {
-    background: rgba(255, 255, 255, 0.03);
+    background: color-mix(in srgb, var(--color-porcelain) 3%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--color-border-subtle);
   }
 
   .animate-in {
     opacity: 1;
     transform: translateY(0);
     transition: opacity 500ms var(--ease-out), transform 500ms var(--ease-out);
-    
+
     @starting-style {
       opacity: 0;
       transform: translateY(24px);

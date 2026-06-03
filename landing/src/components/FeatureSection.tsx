@@ -60,11 +60,11 @@ const FeatureSection = () => {
                   onClick={() => scrollToFeature(feature.id)}
                   className={`snap-center rounded-full px-4 py-2 font-mono text-xs tracking-wide whitespace-nowrap transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]
                     ${activeFeature === feature.id
-                      ? 'bg-white/10 text-white border border-white/10'
-                      : 'text-gray-500 border border-transparent hover:text-gray-300 hover:bg-white/5'
+                      ? 'bg-porcelain/10 text-foreground border border-border-subtle'
+                      : 'text-gray-500 border border-transparent hover:text-gray-300 hover:bg-porcelain/5'
                     }`}
                 >
-                  <span className={activeFeature === feature.id ? 'text-blue-400' : ''}>
+                  <span className={activeFeature === feature.id ? 'text-aether-blue' : ''}>
                     {feature.id}
                   </span>{' '}
                   {feature.navTitle}
@@ -75,7 +75,7 @@ const FeatureSection = () => {
 
           <div className="hidden lg:flex flex-col gap-1 relative max-h-[calc(100vh-12rem)] overflow-y-auto [scrollbar-width:thin]">
             <div
-              className="absolute left-0 right-0 bg-white/10 rounded-lg pointer-events-none"
+              className="absolute left-0 right-0 bg-porcelain/10 rounded-lg pointer-events-none"
               style={{
                 height: '44px',
                 transform: `translateY(${activeIndex * 48}px)`,
@@ -94,14 +94,14 @@ const FeatureSection = () => {
                 }}
                 className={`py-3 px-4 rounded-lg font-mono text-sm tracking-wide flex items-center gap-4 relative z-10 transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]
                   ${activeFeature === feature.id
-                    ? 'text-white'
+                    ? 'text-foreground'
                     : 'text-gray-500 hover:text-gray-300'
                   }`}
               >
                 <span
                   className={
                     activeFeature === feature.id
-                      ? 'text-blue-400 transition-colors duration-150 ease-[var(--ease-out)]'
+                      ? 'text-aether-blue transition-colors duration-150 ease-[var(--ease-out)]'
                       : 'transition-colors duration-150 ease-[var(--ease-out)]'
                   }
                 >
@@ -125,9 +125,9 @@ const FeatureSection = () => {
               }}
               className="scroll-mt-32"
             >
-              <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden flex flex-col">
+              <div className="rounded-2xl border border-border-subtle bg-porcelain/[0.02] overflow-hidden flex flex-col">
                 {/* Visual Header */}
-                <div className="aspect-[4/3] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
+                <div className="aspect-[4/3] w-full relative border-b border-border-subtle flex items-center justify-center overflow-hidden bg-pitch-black/40 isolate">
                   <img
                     src={featureBackgroundImage}
                     alt=""
@@ -149,7 +149,7 @@ const FeatureSection = () => {
                 <div className="p-8 sm:p-12 relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
 
-                  <h3 className="text-2xl sm:text-3xl font-medium mb-4 text-white">
+                  <h3 className="text-2xl sm:text-3xl font-medium mb-4 text-foreground">
                     {feature.title}
                   </h3>
                   <p className="text-gray-400 text-lg leading-relaxed">{feature.description}</p>

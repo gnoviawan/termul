@@ -4,10 +4,10 @@ export function FeatureVisualSessionPersistence() {
   return (
     <FeatureVisualFrameRoot>
       <FeatureVisualFrameWindow className="flex flex-col overflow-hidden">
-        <div className="h-8 bg-[#161616] border-b border-white/10 flex items-center px-4">
+        <div className="h-8 bg-deep-slate border-b border-white/10 flex items-center px-4">
           <div className="text-[10px] text-gray-400 font-medium tracking-wide">SNAPSHOT MANAGER</div>
         </div>
-        <div className="p-4 bg-[#0d0d0d] flex flex-col gap-2 min-h-[140px]">
+        <div className="p-4 bg-deep-slate flex flex-col gap-2 min-h-[140px]">
           <div className="bg-white/5 border border-blue-500/30 rounded p-3 flex justify-between items-center shadow-lg shadow-black">
             <div>
               <div className="text-xs text-white mb-0.5">Before Refactor</div>
