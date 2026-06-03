@@ -1079,13 +1079,14 @@ export function ProjectSidebar({
                 className="flex flex-col gap-1"
                 data-testid="grouped-projects-container"
               >
-                {visibleGroups.map(({ group, projects: gpProjects }) => {
+                {visibleGroups.map((groupEntry) => {
+                  const { group, projects: gpProjects } = groupEntry
                   const isCollapsed = group.isCollapsed
                   return (
                     <Reorder.Item
                       key={group.id}
-                      value={{ group, projects: gpProjects }}
-                      drag={isSearching ? false : undefined}
+                      value={groupEntry}
+                      drag={isSearching ? false : 'y'}
                       layout="position"
                       className="list-none"
                     >
@@ -1169,7 +1170,7 @@ export function ProjectSidebar({
                                 <Reorder.Item
                                   key={project.id}
                                   value={project}
-                                  drag={isSearching ? false : undefined}
+                                  drag={isSearching ? false : 'y'}
                                   layout="position"
                                   className="list-none"
                                   whileDrag={{
@@ -1256,7 +1257,7 @@ export function ProjectSidebar({
                       <Reorder.Item
                         key={project.id}
                         value={project}
-                        drag={isSearching ? false : undefined}
+                        drag={isSearching ? false : 'y'}
                         layout="position"
                         className="list-none"
                         whileDrag={{
@@ -1706,7 +1707,7 @@ const ProjectItem = memo(function ProjectItem({
           }
         }}
         className={cn(
-          'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer',
+          'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
           isActive
             ? `${colors.border} bg-sidebar-accent`
             : `${colors.borderMuted} hover:bg-sidebar-accent/50`
