@@ -15,17 +15,19 @@ const MoreFeaturesSection = () => {
         descriptionClassName="mt-4"
       />
 
-      <div className="mt-16 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="mt-20 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {moreFeatures.map((feature) => (
           <div
             key={feature.title}
-            className="group rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition-colors duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-white/[0.04]"
+            className="group relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.02] p-8 shadow-2xl shadow-black/20 backdrop-blur-sm transition-[transform,border-color,background-color,box-shadow] duration-300 ease-[var(--ease-out)] hover:-translate-y-1 hover:border-white/20 hover:bg-white/[0.03] hover:shadow-black/40"
           >
-            <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-blue-400 transition-colors duration-200 ease-[var(--ease-out)] group-hover:border-white/20">
-              <HugeiconsIcon icon={feature.icon} className="h-5 w-5" />
+            <div className="absolute -right-20 -top-20 h-40 w-40 rounded-full bg-blue-500/10 blur-[50px] transition-opacity duration-300 group-hover:opacity-100 opacity-0 pointer-events-none" />
+            
+            <div className="relative z-10 mb-6 inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-blue-400 shadow-inner transition-[border-color,background-color,transform,color] duration-300 ease-[var(--ease-out)] group-hover:border-blue-500/30 group-hover:bg-blue-500/10 group-hover:scale-110 group-hover:text-blue-300">
+              <HugeiconsIcon icon={feature.icon} className="h-6 w-6" />
             </div>
-            <h3 className="mb-2 text-base font-medium text-white">{feature.title}</h3>
-            <p className="text-sm leading-relaxed text-gray-400">{feature.description}</p>
+            <h3 className="relative z-10 mb-3 text-lg font-medium text-white tracking-tight">{feature.title}</h3>
+            <p className="relative z-10 text-sm leading-relaxed text-gray-400">{feature.description}</p>
           </div>
         ))}
       </div>
