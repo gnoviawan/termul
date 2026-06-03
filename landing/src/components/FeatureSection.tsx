@@ -1,18 +1,10 @@
-import { lazy, Suspense, useState, useEffect, useRef } from 'react';
-import { HugeiconsIcon } from '@hugeicons/react';
-import { Tick01Icon } from '@hugeicons/core-free-icons';
+import { useState, useEffect, useRef } from 'react';
 
 import { useReducedMotion } from '../lib/useReducedMotion';
-import {
-  features,
-  pixelBlastDefaults,
-  featurePixelBlastProps,
-} from '../data/features';
+import { features, featureBackgroundImage } from '../data/features';
 import { FeatureVisual } from './feature-visuals';
 import { SectionHeader } from './SectionHeader';
 import { FeatureVideo } from './FeatureVideo';
-
-const PixelBlast = lazy(() => import('./PixelBlast'));
 
 const FeatureSection = () => {
   const [activeFeature, setActiveFeature] = useState('01');
@@ -136,29 +128,12 @@ const FeatureSection = () => {
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden flex flex-col">
                 {/* Visual Header */}
                 <div className="aspect-[4/3] w-full relative border-b border-white/10 flex items-center justify-center overflow-hidden bg-black/40 isolate">
-                  <Suspense
-                    fallback={
-                      <div
-                        className="absolute inset-0 z-0 bg-gradient-to-br from-black/50 to-black/20"
-                        aria-hidden
-                      />
-                    }
-                  >
-                    {!reducedMotion && (
-                      <div className="absolute inset-0 z-0" aria-hidden>
-                        <PixelBlast
-                          {...pixelBlastDefaults}
-                          {...featurePixelBlastProps[feature.id]}
-                        />
-                      </div>
-                    )}
-                    {reducedMotion && (
-                      <div
-                        className="absolute inset-0 z-0 bg-gradient-to-br from-white/[0.04] to-transparent"
-                        aria-hidden
-                      />
-                    )}
-                  </Suspense>
+                  <img
+                    src={featureBackgroundImage}
+                    alt=""
+                    aria-hidden
+                    className="absolute inset-0 z-0 w-full h-full object-cover pointer-events-none"
+                  />
                   {!reducedMotion && feature.video ? (
                     <FeatureVideo
                       id={feature.id}
@@ -178,17 +153,6 @@ const FeatureSection = () => {
                     {feature.title}
                   </h3>
                   <p className="text-gray-400 text-lg leading-relaxed">{feature.description}</p>
-                  <ul className="mt-6 flex flex-col gap-2.5">
-                    {feature.bullets.map((bullet) => (
-                      <li key={bullet} className="flex items-start gap-3 text-gray-400">
-                        <HugeiconsIcon
-                          icon={Tick01Icon}
-                          className="w-4 h-4 text-blue-400 mt-0.5 shrink-0"
-                        />
-                        <span className="leading-relaxed">{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
                 </div>
               </div>
             </div>
