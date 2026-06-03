@@ -47,7 +47,13 @@ body:
     id: logs
     attributes:
       label: Logs, Errors, or Screenshots
-      description: Paste relevant logs or add screenshots/videos if helpful.
+      description: |
+        Paste relevant logs or add screenshots/videos if helpful.
+
+        Termul writes a log file you can attach. Find it via **Help → Reveal Log File** in the app, or open the folder directly:
+        - Windows: `%LOCALAPPDATA%\com.termul-manager.app\logs\termul.log`
+        - macOS: `~/Library/Logs/com.termul-manager.app/termul.log`
+        - Linux: `~/.local/share/com.termul-manager.app/logs/termul.log`
       render: shell
 
   - type: textarea

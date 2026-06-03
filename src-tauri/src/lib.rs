@@ -2,6 +2,7 @@
 mod browser_tab_manager;
 mod commands;
 mod agent_registry;
+mod logging;
 mod migrations;
 mod path_validation;
 mod pty;
@@ -35,6 +36,7 @@ const MENU_ID_ZOOM_IN: &str = "view-zoom-in";
 const MENU_ID_ZOOM_OUT: &str = "view-zoom-out";
 const MENU_ID_TOGGLE_FULLSCREEN: &str = "view-toggle-fullscreen";
 const MENU_ID_LEARN_MORE: &str = "help-learn-more";
+const MENU_ID_REVEAL_LOGS: &str = "help-reveal-logs";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
@@ -518,10 +520,13 @@ fn build_app_menu<R: tauri::Runtime>(
             .accelerator("CmdOrCtrl+Shift+U")
             .build(app)?;
     let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
+    let reveal_logs =
+        MenuItemBuilder::with_id(MENU_ID_REVEAL_LOGS, "Reveal Log File").build(app)?;
 
     let help_menu = SubmenuBuilder::new(app, "Help")
         .item(&check_for_updates)
         .separator()
+        .item(&reveal_logs)
         .item(&learn_more)
         .build()?;
 
@@ -586,11 +591,37 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
         if let Err(error) = open_external_url(LEARN_MORE_URL) {
             log::error!("Failed to open Learn More link from menu: {}", error);
         }
+    } else if event.id() == MENU_ID_REVEAL_LOGS {
+        if let Err(error) = reveal_log_dir(app) {
+            log::error!("Failed to reveal log directory from menu: {}", error);
+        }
     }
+}
+
+/// Open the OS log directory (where the rotated log file lives) in the system
+/// file manager so users can locate and attach it to bug reports (issue #244).
+fn reveal_log_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("could not resolve log directory: {}", e))?;
+
+    // The plugin creates the directory lazily on first write; ensure it exists
+    // so revealing it never fails on a fresh install that hasn't logged yet.
+    if !log_dir.exists() {
+        std::fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("could not create log directory: {}", e))?;
+    }
+
+    open_external_url(&log_dir.to_string_lossy())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the panic hook before anything can panic so Rust panics are
+    // captured to the log file with a backtrace (issue #244).
+    logging::install_panic_hook();
+
     let builder = tauri::Builder::default();
 
     // Native menu bar:
@@ -608,6 +639,9 @@ pub fn run() {
     let builder = builder.on_menu_event(handle_menu_event);
 
     let mut builder = builder
+        // Logging must be registered first so the global logger is installed
+        // before any other plugin or setup code emits a log line.
+        .plugin(logging::build_log_plugin())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
@@ -625,6 +659,10 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Startup diagnostic banner (issue #244): version, OS/arch, build
+            // channel, session id, and resolved log path on a single line.
+            logging::log_startup_banner(&handle);
 
             // macOS: Enable overlay title bar for native traffic lights.
             // Window starts hidden (visible: false), so we set this before show().
@@ -849,6 +887,8 @@ pub fn run() {
             commands::remote_server_stop,
             commands::remote_server_status,
             commands::remote_publish_projects,
+            // Frontend error forwarding (issue #244)
+            commands::log_frontend_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

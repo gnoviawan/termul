@@ -27,6 +27,7 @@ tauri-plugin-mcp-bridge = "0.9"
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -63,7 +64,6 @@ keyring = "3.6"
 
 # Logging
 log = "0.4"
-env_logger = { version = "0.11", default-features = false }
 
 # Remote terminal server (embedded Axum HTTP + WebSocket)
 # Reuses the existing tokio + hyper 1.x + tower stack already in the dep tree.

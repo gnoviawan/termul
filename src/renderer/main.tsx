@@ -36,6 +36,7 @@
 
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { installGlobalErrorForwarding } from './lib/log-api'
 import TauriApp from './TauriApp'
 import './index.css'
 
@@ -56,6 +57,15 @@ function isTauriContext(): boolean {
  * - Tauri context: Use TauriApp with window state management
  * - Browser/dev context: Use App with browser-safe hooks
  */
-const AppComponent = isTauriContext() ? TauriApp : App
+const isTauri = isTauriContext()
+
+// Forward uncaught renderer errors + unhandled rejections to the backend log
+// file so production crashes are diagnosable (issue #244). Tauri-only: the
+// browser/dev fallback has no backend command to call.
+if (isTauri) {
+  installGlobalErrorForwarding()
+}
+
+const AppComponent = isTauri ? TauriApp : App
 
 createRoot(document.getElementById('root')!).render(<AppComponent />)

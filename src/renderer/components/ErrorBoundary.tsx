@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { logFrontendError } from '@/lib/log-api'
 import { ErrorFallback } from './ErrorFallback'
 
 interface ErrorBoundaryProps {
@@ -38,6 +39,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const ctx = this.props.context ?? 'Unknown'
     console.error(`[ErrorBoundary:${ctx}] Rendering error:`, error)
     console.error(`[ErrorBoundary:${ctx}] Component stack:`, errorInfo.componentStack)
+    void logFrontendError({
+      source: `ErrorBoundary:${ctx}`,
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack ?? undefined
+    })
   }
 
   private handleRetry = (): void => {
