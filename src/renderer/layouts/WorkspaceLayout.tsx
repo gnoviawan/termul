@@ -17,6 +17,7 @@ import { ResizeEdges } from '@/components/ResizeEdges'
 import { StatusBar } from '@/components/StatusBar'
 import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
 import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
+import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import {
@@ -56,6 +57,7 @@ import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
+  useColorTheme,
   useConfirmTerminalClose,
   useDefaultShell,
   useMaxTerminalsPerProject,
@@ -88,6 +90,7 @@ import {
   useTerminalStore,
   useTerminals
 } from '@/stores/terminal-store'
+import { useThemePickerStore } from '@/stores/theme-picker-store'
 import {
   editorTabId,
   findPaneById,
@@ -642,7 +645,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
     },
     [shortcuts]
   )
+
   const fontSize = useTerminalFontSize()
+  const colorTheme = useColorTheme()
+
+  const handleOpenThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    useThemePickerStore.getState().open(colorTheme)
+  }, [colorTheme])
+
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
@@ -887,6 +900,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
+      // Color theme picker (Ctrl+Alt+T)
+      if (matchesShortcut(e, getActiveKey('colorThemePicker'))) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleOpenThemePicker()
+        return
+      }
+
       // New project (Ctrl+N)
       if (matchesShortcut(e, getActiveKey('newProject'))) {
         e.preventDefault()
@@ -1007,7 +1028,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     handleNewBrowserTab,
     updatePanelVisibility,
     isExplorerVisible,
-    isSidebarVisible
+    isSidebarVisible,
+    handleOpenThemePicker
   ])
 
   useEffect(() => {
@@ -1446,6 +1468,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateProject={addProject}
       />
 
+      <ThemePicker />
+
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
@@ -1465,6 +1489,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onOpenAppPreferences={handleOpenAppPreferences}
         onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
         onOpenShortcutMenu={handleOpenShortcutMenu}
+        onOpenThemePicker={handleOpenThemePicker}
         onSSHConnect={handleSSHConnect}
         sshProfiles={sshProfiles.map((p) => ({
           id: p.id,

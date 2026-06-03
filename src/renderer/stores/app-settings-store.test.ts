@@ -105,7 +105,8 @@ describe('app-settings-store', () => {
         sidebarVisible: false,
         fileExplorerVisible: true,
         sshPanelVisible: true,
-        remoteBindMode: 'localhost' as const
+        remoteBindMode: 'localhost' as const,
+        colorTheme: 'dracula'
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -136,7 +137,8 @@ describe('app-settings-store', () => {
           sidebarVisible: false,
           fileExplorerVisible: false,
           sshPanelVisible: false,
-          remoteBindMode: 'all' as const
+          remoteBindMode: 'all' as const,
+          colorTheme: 'nord'
         },
         isLoaded: true
       })

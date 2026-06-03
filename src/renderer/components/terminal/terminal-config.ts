@@ -1,4 +1,5 @@
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
+import { getActiveTerminalTheme } from '@/lib/themes'
 
 // Resize debounce delay in milliseconds - prevents flooding PTY with resize events during drag
 export const RESIZE_DEBOUNCE_MS = 50
@@ -8,31 +9,7 @@ export const RESIZE_DEBOUNCE_MS = 50
 // behavior (e.g., correct line wrapping calculations).
 export const CONPTY_MIN_BUILD_NUMBER = 21376
 
-export const TERMINAL_THEME: ITheme = {
-  background: '#1e1e1e',
-  foreground: '#d4d4d4',
-  cursor: '#ffffff',
-  cursorAccent: '#000000',
-  selectionBackground: '#264f78',
-  selectionForeground: '#ffffff',
-  selectionInactiveBackground: '#3a3d41',
-  black: '#000000',
-  red: '#cd3131',
-  green: '#0dbc79',
-  yellow: '#e5e510',
-  blue: '#2472c8',
-  magenta: '#bc3fbc',
-  cyan: '#11a8cd',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
-  brightWhite: '#ffffff'
-}
+export const TERMINAL_THEME: ITheme = getActiveTerminalTheme()
 
 export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   // Cross-platform monospace stack:

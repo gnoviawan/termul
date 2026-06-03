@@ -50,12 +50,15 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     onOpenAppPreferences: vi.fn(),
     onOpenCommandHistory: vi.fn(),
     onOpenShortcutMenu: vi.fn(),
-    getShortcutLabel: (id) =>
-      ({
+    getShortcutLabel: (id) => {
+      const labels: Record<string, string> = {
         newTerminal: 'Ctrl+T',
         newBrowserTab: 'Ctrl+Shift+N',
-        commandHistory: 'Ctrl+R'
-      })[id],
+        commandHistory: 'Ctrl+R',
+        colorThemePicker: 'Ctrl+Alt+T'
+      }
+      return labels[id]
+    },
     getProjectShortcutLabel: (index) => `Ctrl+${index + 1}`,
     ...overrides
   }
@@ -110,12 +113,15 @@ describe('CommandPalette', () => {
 
   it('uses resolved shortcut labels supplied by the shell', () => {
     renderPalette({
-      getShortcutLabel: (id) =>
-        ({
+      getShortcutLabel: (id) => {
+        const labels: Record<string, string> = {
           newTerminal: 'Alt+T',
           newBrowserTab: 'Alt+B',
-          commandHistory: 'Alt+H'
-        })[id],
+          commandHistory: 'Alt+H',
+          colorThemePicker: 'Alt+Shift+T'
+        }
+        return labels[id]
+      },
       getProjectShortcutLabel: (index) => `Alt+${index + 1}`
     })
 

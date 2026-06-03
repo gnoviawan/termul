@@ -5,6 +5,7 @@ import {
   Download,
   ExternalLink,
   Keyboard,
+  Palette,
   RotateCcw,
   X
 } from 'lucide-react'
@@ -21,8 +22,10 @@ import {
 import { shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { getColorThemeDefinition } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import {
+  useColorTheme,
   useConfirmTerminalClose,
   useDefaultProjectColor,
   useDefaultShell,
@@ -36,6 +39,7 @@ import {
   useTerminalUrlOpenMode
 } from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { useThemePickerStore } from '@/stores/theme-picker-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
@@ -62,6 +66,8 @@ export default function AppPreferences(): React.JSX.Element {
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
+  const colorTheme = useColorTheme()
+  const activeThemeName = getColorThemeDefinition(colorTheme).name
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -218,6 +224,40 @@ export default function AppPreferences(): React.JSX.Element {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-8 pb-32">
           <div className="max-w-4xl mx-auto space-y-12">
+            {/* UI color theme */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <h2 className="text-lg font-medium text-foreground">Color Theme</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Preview how each theme looks across the app, terminal, and editor.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-4">
+                  <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">Current theme</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{activeThemeName}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        useThemePickerStore.getState().open(colorTheme)
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform duration-150 ease-[var(--ease-out)] hover:opacity-90 active:scale-[0.97] shrink-0"
+                    >
+                      <Palette size={14} aria-hidden="true" />
+                      Browse themes…
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Opens a floating picker over your workspace. Hover to preview instantly; press
+                    Enter or click to apply. Esc cancels.
+                  </p>
+                </div>
+              </div>
+            </section>
+
             {/* Terminal Appearance Section */}
             <section>
               <div className="flex items-start gap-6 border-b border-border pb-8">

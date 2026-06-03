@@ -103,6 +103,13 @@ export function getRegistrySize(): number {
   return terminalRegistry.size
 }
 
+/** Invoke callback for every registered xterm instance (e.g. live theme preview). */
+export function forEachTerminal(callback: (terminal: Terminal) => void): void {
+  for (const terminal of terminalRegistry.values()) {
+    callback(terminal)
+  }
+}
+
 /**
  * Clear all registered terminals (for testing)
  */

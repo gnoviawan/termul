@@ -1,21 +1,28 @@
 import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import mermaid from 'mermaid'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { COLOR_THEME_CHANGED_EVENT } from '@/lib/themes'
 
 function useIsDark(): boolean {
   const [isDark, setIsDark] = useState(document.documentElement.classList.contains('dark'))
 
   useEffect(() => {
-    const observer = new MutationObserver(() => {
+    const sync = (): void => {
       setIsDark(document.documentElement.classList.contains('dark'))
-    })
+    }
 
+    const observer = new MutationObserver(sync)
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class']
     })
 
-    return () => observer.disconnect()
+    window.addEventListener(COLOR_THEME_CHANGED_EVENT, sync)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, sync)
+    }
   }, [])
 
   return isDark
