@@ -1079,12 +1079,13 @@ export function ProjectSidebar({
                 className="flex flex-col gap-1"
                 data-testid="grouped-projects-container"
               >
-                {visibleGroups.map(({ group, projects: gpProjects }) => {
+                {visibleGroups.map((groupEntry) => {
+                  const { group, projects: gpProjects } = groupEntry
                   const isCollapsed = group.isCollapsed
                   return (
                     <Reorder.Item
                       key={group.id}
-                      value={{ group, projects: gpProjects }}
+                      value={groupEntry}
                       drag={isSearching ? false : undefined}
                       layout="position"
                       className="list-none"
