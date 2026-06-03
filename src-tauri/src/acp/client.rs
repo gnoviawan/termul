@@ -200,16 +200,33 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 content: chunk.content,
             },
         ),
-        SessionUpdate::AgentMessageChunk(chunk) => events::emit(
-            app,
-            events::EVENT_MESSAGE_CHUNK,
-            MessageChunkEvent {
-                agent_id: agent_id.clone(),
-                session_id,
-                role: ChunkRole::Agent,
-                content: chunk.content,
-            },
-        ),
+        SessionUpdate::AgentMessageChunk(chunk) => {
+            let preview = match &chunk.content {
+                agent_client_protocol::schema::ContentBlock::Text(text) => {
+                    let t: &str = text.text.as_ref();
+                    if t.len() > 40 {
+                        format!("{}…", &t[..40])
+                    } else {
+                        t.to_string()
+                    }
+                }
+                other => format!("{other:?}"),
+            };
+            log::info!(
+                "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
+                session_id.0
+            );
+            events::emit(
+                app,
+                events::EVENT_MESSAGE_CHUNK,
+                MessageChunkEvent {
+                    agent_id: agent_id.clone(),
+                    session_id,
+                    role: ChunkRole::Agent,
+                    content: chunk.content,
+                },
+            )
+        }
         SessionUpdate::AgentThoughtChunk(chunk) => events::emit(
             app,
             events::EVENT_MESSAGE_CHUNK,

@@ -86,7 +86,15 @@ export interface AcpSession {
   cwd: string
   status: SessionStatus
   title: string | null
+  /** True while a prompt turn is in flight (UI spinners, cancel). */
   activeTurn: boolean
+  /**
+   * Non-null while this session may still accept streamed chunks for the
+   * current turn. Cleared on a deferred macrotask after completion so chunk
+   * events that lose the IPC race against `acp_send_prompt` / `prompt_complete`
+   * are not dropped.
+   */
+  openTurnId: string | null
   modes: SessionModeState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
@@ -191,6 +199,37 @@ function newId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`
 }
 
+/** Index of the last user message in a thread, or -1 if none. */
+function lastUserIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return i
+  }
+  return -1
+}
+
+/**
+ * True when `messages` ends with an in-progress assistant reply to the latest
+ * user message. Covers late chunks delivered after `finalizeStreaming` cleared
+ * `streaming` but before the UI turn fully closed.
+ */
+function hasActiveAssistantTail(messages: ChatMessage[], role: MessageRole): boolean {
+  if (role !== 'agent' && role !== 'thought') return false
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== role) return false
+  if (last.streaming) return true
+  const userIdx = lastUserIndex(messages)
+  if (userIdx === -1) return false
+  return messages.length - 1 > userIdx
+}
+
+/** Whether a chunk may open a new message (not coalesced into the previous one). */
+function mayStartChunkMessage(session: AcpSession, messages: ChatMessage[], role: MessageRole): boolean {
+  if (session.openTurnId) return true
+  const last = messages[messages.length - 1]
+  if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
+  return false
+}
+
 /** Append text to a ContentBlock array, coalescing into a trailing text block. */
 function appendBlocks(existing: ContentBlock[], incoming: ContentBlock): ContentBlock[] {
   if (incoming.type === 'text') {
@@ -253,6 +292,45 @@ function dropPermissionsForAgent(
     if (next[id].agentId === agentId) delete next[id]
   }
   return next
+}
+
+type TurnEndSetter = (
+  partial:
+    | AcpState
+    | Partial<AcpState>
+    | ((state: AcpState) => AcpState | Partial<AcpState>),
+  replace?: false
+) => void
+
+/**
+ * End the current turn after the macrotask queue drains so streamed
+ * `acp:message_chunk` events delivered after `acp_send_prompt` / `acp:prompt_complete`
+ * are still accepted. Idempotent when the turn is already closed.
+ */
+function scheduleTurnEnd(
+  set: TurnEndSetter,
+  sessionId: SessionId,
+  stopReason?: StopReason
+): void {
+  setTimeout(() => {
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.openTurnId) return {}
+      const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
+      return {
+        messages: finalizeStreaming(s.messages, sessionId),
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            openTurnId: null,
+            activeTurn: false,
+            lastError: note ?? current.lastError
+          }
+        }
+      }
+    })
+  }, 0)
 }
 
 /**
@@ -348,7 +426,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === agentId) {
-          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
+          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
         }
       }
       return {
@@ -378,6 +456,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             status: existing?.status === 'closed' ? 'closed' : 'active',
             title: existing?.title ?? null,
             activeTurn: existing?.activeTurn ?? false,
+            openTurnId: existing?.openTurnId ?? null,
             modes: outcome.modes ?? existing?.modes ?? null,
             configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
@@ -406,7 +485,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const sessions = { ...s.sessions }
       if (sessions[sessionId]) {
-        sessions[sessionId] = { ...sessions[sessionId], status: 'closed', activeTurn: false }
+        sessions[sessionId] = {
+          ...sessions[sessionId],
+          status: 'closed',
+          activeTurn: false,
+          openTurnId: null
+        }
       }
       return {
         sessions,
@@ -560,6 +644,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           status: 'closed',
           title: meta.title,
           activeTurn: false,
+          openTurnId: null,
           modes: null,
           configOptions: [],
           lastError: null,
@@ -600,7 +685,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // reflects the deletion instead of showing stale content.
       const sessions = { ...s.sessions }
       if (sessions[id]) {
-        sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
+        sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
       }
       return { sessionIndex: next, sessions }
     })
@@ -646,7 +731,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     if (session.status === 'closed') throw new Error('session is closed')
-    if (session.activeTurn) throw new Error('a prompt turn is already in progress')
+    if (session.openTurnId) throw new Error('a prompt turn is already in progress')
+    const openTurnId = newId('turn')
     // optimistic user message + mark turn active
     const userMessage: ChatMessage = {
       id: newId('msg'),
@@ -659,36 +745,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
       sessions: {
         ...s.sessions,
-        [sessionId]: { ...s.sessions[sessionId], activeTurn: true, lastError: null }
+        [sessionId]: {
+          ...s.sessions[sessionId],
+          activeTurn: true,
+          openTurnId,
+          lastError: null
+        }
       }
     }))
     try {
       const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
-      // The resolved StopReason is authoritative completion. Finalize here even
-      // if no prompt_complete event arrives, so the turn can never get stuck.
-      // Idempotent with _onPromptComplete.
-      set((s) => {
-        const current = s.sessions[sessionId]
-        if (!current) return {}
-        const note = noteForStopReason(stopReason)
-        return {
-          messages: finalizeStreaming(s.messages, sessionId),
-          sessions: {
-            ...s.sessions,
-            [sessionId]: {
-              ...current,
-              activeTurn: false,
-              lastError: note ?? current.lastError
-            }
-          }
-        }
-      })
+      // Command reply vs streamed chunks have no ordering guarantee; defer turn
+      // end to a macrotask so chunk listeners run first. Idempotent with
+      // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
+      scheduleTurnEnd(set, sessionId, stopReason)
     } catch (err) {
       set((s) => ({
         messages: finalizeStreaming(s.messages, sessionId),
         sessions: {
           ...s.sessions,
-          [sessionId]: { ...s.sessions[sessionId], activeTurn: false, lastError: String(err) }
+          [sessionId]: {
+            ...s.sessions[sessionId],
+            activeTurn: false,
+            openTurnId: null,
+            lastError: String(err)
+          }
         }
       }))
       throw err
@@ -801,6 +882,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             status: 'active',
             title: null,
             activeTurn: false,
+            openTurnId: null,
             modes: e.modes ?? null,
             configOptions: e.configOptions ?? [],
             lastError: null,
@@ -818,19 +900,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (!session || session.status === 'closed') return {}
       const list = s.messages[e.sessionId] ?? []
       const last = list[list.length - 1]
-      // Attach to the trailing streaming message of the same role.
-      if (last && last.role === e.role && last.streaming) {
-        const updated: ChatMessage = { ...last, blocks: appendBlocks(last.blocks, e.content) }
+      const role = e.role as MessageRole
+      // Attach to the trailing assistant/user message for this turn (including
+      // chunks that arrive after streaming was finalized but IPC lagged).
+      if (last && last.role === role && (last.streaming || hasActiveAssistantTail(list, role))) {
+        const updated: ChatMessage = {
+          ...last,
+          blocks: appendBlocks(last.blocks, e.content),
+          streaming: true
+        }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
       }
-      // Don't resurrect a finalized turn: only start a NEW streaming message when
-      // a turn is actually active (guards against late chunks after completion).
-      if (!session.activeTurn) return {}
+      if (!mayStartChunkMessage(session, list, role)) return {}
       // Ignore an empty leading text chunk (avoids a flashing empty bubble).
       if (e.content.type === 'text' && !(e.content.text ?? '').length) return {}
       const message: ChatMessage = {
         id: newId('msg'),
-        role: e.role,
+        role,
         blocks: [e.content],
         streaming: true,
         timestamp: Date.now()
@@ -909,7 +995,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }),
 
-  _onPromptComplete: (e) =>
+  _onPromptComplete: (e) => {
     set((s) => {
       const messages = finalizeStreaming(s.messages, e.sessionId)
       const session = s.sessions[e.sessionId]
@@ -925,12 +1011,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...s.sessions,
           [e.sessionId]: {
             ...session,
-            activeTurn: false,
             lastError: note ?? session.lastError
           }
         }
       }
-    }),
+    })
+    scheduleTurnEnd(set, e.sessionId, e.stopReason)
+  },
 
   _onAgentError: (e) =>
     set((s) => {
@@ -940,7 +1027,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           agentStatus,
           sessions: {
             ...s.sessions,
-            [e.sessionId]: { ...s.sessions[e.sessionId], lastError: e.message, activeTurn: false }
+            [e.sessionId]: {
+              ...s.sessions[e.sessionId],
+              lastError: e.message,
+              activeTurn: false,
+              openTurnId: null
+            }
           }
         }
       }
@@ -962,7 +1054,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
-          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false }
+          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
           affected.push(id)
         }
       }
@@ -989,7 +1081,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         pendingPermissions,
         sessions: {
           ...s.sessions,
-          [e.sessionId]: { ...session, status: 'closed', activeTurn: false }
+          [e.sessionId]: { ...session, status: 'closed', activeTurn: false, openTurnId: null }
         }
       }
     })
@@ -1016,36 +1108,58 @@ export function initAcpEventListeners(): () => void {
     }
   }
   listenersInitialized = true
-  const s = useAcpStore.getState()
   teardown = [
-    acpApi.onEvent<AgentSpawnedEvent>(ACP_EVENTS.agentSpawned, s._onAgentSpawned),
-    acpApi.onEvent<SessionCreatedEvent>(ACP_EVENTS.sessionCreated, s._onSessionCreated),
-    acpApi.onEvent<MessageChunkEvent>(ACP_EVENTS.messageChunk, s._onMessageChunk),
-    acpApi.onEvent<ToolCallEvent>(ACP_EVENTS.toolCall, s._onToolCall),
-    acpApi.onEvent<ToolCallUpdateEvent>(ACP_EVENTS.toolCallUpdate, s._onToolCallUpdate),
-    acpApi.onEvent<PlanUpdateEvent>(ACP_EVENTS.planUpdate, s._onPlanUpdate),
-    acpApi.onEvent<CommandsUpdateEvent>(ACP_EVENTS.commandsUpdate, s._onCommandsUpdate),
-    acpApi.onEvent<ModeUpdateEvent>(ACP_EVENTS.modeUpdate, s._onModeUpdate),
-    acpApi.onEvent<ConfigOptionsUpdateEvent>(
-      ACP_EVENTS.configOptionsUpdate,
-      s._onConfigOptionsUpdate
+    acpApi.onEvent<AgentSpawnedEvent>(ACP_EVENTS.agentSpawned, (e) =>
+      useAcpStore.getState()._onAgentSpawned(e)
     ),
-    acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, s._onPermissionRequest),
-    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, s._onPromptComplete),
+    acpApi.onEvent<SessionCreatedEvent>(ACP_EVENTS.sessionCreated, (e) =>
+      useAcpStore.getState()._onSessionCreated(e)
+    ),
+    acpApi.onEvent<MessageChunkEvent>(ACP_EVENTS.messageChunk, (e) =>
+      useAcpStore.getState()._onMessageChunk(e)
+    ),
+    acpApi.onEvent<ToolCallEvent>(ACP_EVENTS.toolCall, (e) =>
+      useAcpStore.getState()._onToolCall(e)
+    ),
+    acpApi.onEvent<ToolCallUpdateEvent>(ACP_EVENTS.toolCallUpdate, (e) =>
+      useAcpStore.getState()._onToolCallUpdate(e)
+    ),
+    acpApi.onEvent<PlanUpdateEvent>(ACP_EVENTS.planUpdate, (e) =>
+      useAcpStore.getState()._onPlanUpdate(e)
+    ),
+    acpApi.onEvent<CommandsUpdateEvent>(ACP_EVENTS.commandsUpdate, (e) =>
+      useAcpStore.getState()._onCommandsUpdate(e)
+    ),
+    acpApi.onEvent<ModeUpdateEvent>(ACP_EVENTS.modeUpdate, (e) =>
+      useAcpStore.getState()._onModeUpdate(e)
+    ),
+    acpApi.onEvent<ConfigOptionsUpdateEvent>(ACP_EVENTS.configOptionsUpdate, (e) =>
+      useAcpStore.getState()._onConfigOptionsUpdate(e)
+    ),
+    acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
+      useAcpStore.getState()._onPermissionRequest(e)
+    ),
+    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e) =>
+      useAcpStore.getState()._onPromptComplete(e)
+    ),
     acpApi.onEvent<AgentErrorEvent>(ACP_EVENTS.agentError, (e) => {
-      s._onAgentError(e)
+      useAcpStore.getState()._onAgentError(e)
       toast.error(e.message || 'Agent error')
     }),
     acpApi.onEvent<AuthRequiredEvent>(ACP_EVENTS.authRequired, (e) => {
-      s._onAuthRequired(e)
+      useAcpStore.getState()._onAuthRequired(e)
       toast.warning(
         e.message
           ? `Authentication required: ${e.message}`
           : 'This agent requires authentication to continue.'
       )
     }),
-    acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, s._onAgentDisconnected),
-    acpApi.onEvent<SessionClosedEvent>(ACP_EVENTS.sessionClosed, s._onSessionClosed)
+    acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, (e) =>
+      useAcpStore.getState()._onAgentDisconnected(e)
+    ),
+    acpApi.onEvent<SessionClosedEvent>(ACP_EVENTS.sessionClosed, (e) =>
+      useAcpStore.getState()._onSessionClosed(e)
+    )
   ]
   return () => {
     teardown.forEach((fn) => fn())

@@ -53,6 +53,16 @@ const FRESH = {
   pendingPermissions: {}
 }
 
+/**
+ * Drain deferred turn-end callbacks (`setTimeout(0)`), which run after streamed
+ * chunk handlers so macrotask-delivered chunks are not dropped.
+ */
+async function flushTurnEnd(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 function seedSession(sessionId: string, agentId: string, activeTurn = true): void {
   useAcpStore.setState({
     sessions: {
@@ -63,6 +73,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
         status: 'active',
         title: null,
         activeTurn,
+        openTurnId: activeTurn ? 'seed-turn' : null,
         modes: null,
         configOptions: [],
         lastError: null,
@@ -152,7 +163,7 @@ describe('acp-store', () => {
     expect(msgs[1].role).toBe('agent')
   })
 
-  it('prompt_complete clears the active turn and finalizes the streaming message', () => {
+  it('prompt_complete clears the active turn and finalizes the streaming message', async () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()
     store._onMessageChunk({
@@ -162,9 +173,13 @@ describe('acp-store', () => {
       content: { type: 'text', text: 'done' }
     })
     useAcpStore.setState((s) => ({
-      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], activeTurn: true } }
+      sessions: {
+        ...s.sessions,
+        s1: { ...s.sessions['s1'], activeTurn: true, openTurnId: 'turn' }
+      }
     }))
     store._onPromptComplete({ agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' })
+    await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
     expect(useAcpStore.getState().messages['s1'][0].streaming).toBe(false)
   })
@@ -200,6 +215,7 @@ describe('acp-store', () => {
           status: 'active',
           title: null,
           activeTurn: false,
+          openTurnId: null,
           modes: null,
           configOptions: [],
           lastError: null,
@@ -212,6 +228,7 @@ describe('acp-store', () => {
           status: 'active',
           title: null,
           activeTurn: false,
+          openTurnId: null,
           modes: null,
           configOptions: [],
           lastError: null,
@@ -314,7 +331,8 @@ describe('acp-store', () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
     await useAcpStore.getState().sendPrompt('s1', 'hello')
-    // no _onPromptComplete fired; the resolved StopReason must clear the turn
+    // no _onPromptComplete fired; the deferred safety-net must clear the turn
+    await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
@@ -322,7 +340,113 @@ describe('acp-store', () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('max_tokens')
     await useAcpStore.getState().sendPrompt('s1', 'hello')
+    await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/token limit/i)
+  })
+
+  it('does not drop streamed chunks when the command reply wins the race', async () => {
+    // Reproduces the Cursor blank-reply bug: the `acp_send_prompt` reply
+    // resolves and finalizes BEFORE the streamed chunk events are processed.
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
+    const store = useAcpStore.getState()
+    // Send the prompt (marks the turn active) but do not yet await completion.
+    const done = store.sendPrompt('s1', 'hi')
+    await Promise.resolve()
+    // Chunks stream in while the turn is active (as real events would).
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'Hi' }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: ' there' }
+    })
+    await done
+    await flushTurnEnd()
+    const msgs = useAcpStore.getState().messages['s1']
+    // user message + the streamed agent message (not dropped)
+    const agentMsg = msgs.find((m) => m.role === 'agent')
+    expect(agentMsg).toBeDefined()
+    expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'Hi there' })
+    expect(agentMsg?.streaming).toBe(false)
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('_onPromptComplete finalizes the turn before the deferred command reply runs', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
+    const store = useAcpStore.getState()
+    const done = store.sendPrompt('s1', 'hi')
+    await Promise.resolve()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'done' }
+    })
+    store._onPromptComplete({ agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' })
+    expect(useAcpStore.getState().sessions['s1'].openTurnId).not.toBeNull()
+    await done
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+    const agentMsg = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
+    expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'done' })
+    expect(agentMsg?.streaming).toBe(false)
+  })
+
+  it('coalesces chunks that arrive after the turn is finalized', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
+    const store = useAcpStore.getState()
+    const done = store.sendPrompt('s1', 'hi')
+    await Promise.resolve()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'Hello' }
+    })
+    store._onPromptComplete({ agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' })
+    await flushTurnEnd()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: ' world' }
+    })
+    await done
+    const agentMsg = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
+    expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'Hello world' })
+  })
+
+  it('does not drop chunks when prompt_complete is processed before them', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
+    const store = useAcpStore.getState()
+    const done = store.sendPrompt('s1', 'hi')
+    await Promise.resolve()
+    store._onPromptComplete({ agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'Hi' }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: ' there' }
+    })
+    await done
+    await flushTurnEnd()
+    const agentMsg = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
+    expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'Hi there' })
   })
 
   it('rejects sendPrompt on a closed session', async () => {
@@ -378,7 +502,10 @@ describe('acp-store', () => {
   it('ignores an empty leading text chunk', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.setState((s) => ({
-      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], activeTurn: true } }
+      sessions: {
+        ...s.sessions,
+        s1: { ...s.sessions['s1'], activeTurn: true, openTurnId: 'turn' }
+      }
     }))
     useAcpStore.getState()._onMessageChunk({
       agentId: 'agent-1',
@@ -400,6 +527,7 @@ describe('acp-store', () => {
           status: 'active',
           title: null,
           activeTurn: true,
+          openTurnId: 'turn',
           modes: null,
           configOptions: [],
           lastError: 'early error',

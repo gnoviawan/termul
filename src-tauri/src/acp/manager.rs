@@ -758,19 +758,34 @@ async fn drive_connection(
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
     // errors, so it is logged verbatim. stdin/stdout carry the JSON-RPC protocol
     // trace which can include `authenticate` payloads (API keys, OAuth tokens),
-    // so those are redacted to direction + byte length — enough to confirm
-    // streaming/traffic without writing secrets to disk.
+    // so by default those are redacted to direction + byte length — enough to
+    // confirm streaming/traffic without writing secrets to disk.
+    //
+    // Set `TERMUL_ACP_TRACE_RAW=1` to log the full stdin/stdout JSON-RPC bodies
+    // (diagnostics only — may write secrets to the log; never enable in normal
+    // use). Combine with a debug log level to see the trace.
     let debug_agent_id = agent_id.clone();
+    let trace_raw = std::env::var("TERMUL_ACP_TRACE_RAW")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server()).with_debug(
         move |line: &str, direction: LineDirection| match direction {
             LineDirection::Stderr => {
                 log::debug!("[acp] {debug_agent_id} stderr {line}");
             }
             LineDirection::Stdin => {
-                log::debug!("[acp] {debug_agent_id} -> ({} bytes)", line.len());
+                if trace_raw {
+                    log::debug!("[acp] {debug_agent_id} -> {line}");
+                } else {
+                    log::debug!("[acp] {debug_agent_id} -> ({} bytes)", line.len());
+                }
             }
             LineDirection::Stdout => {
-                log::debug!("[acp] {debug_agent_id} <- ({} bytes)", line.len());
+                if trace_raw {
+                    log::debug!("[acp] {debug_agent_id} <- {line}");
+                } else {
+                    log::debug!("[acp] {debug_agent_id} <- ({} bytes)", line.len());
+                }
             }
         },
     );
