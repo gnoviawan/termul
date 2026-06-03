@@ -32,6 +32,7 @@ export interface ProjectState {
   moveProjectToGroup: (projectId: string, targetGroupId: string | null, index?: number) => void
   reorderGroups: (groupIds: string[]) => void
   reorderProjectInGroup: (groupId: string, projectIds: string[]) => void
+  updateGroup: (id: string, updates: Partial<ProjectGroup>) => void
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -131,8 +132,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         .map((id) => projectMap.get(id))
         .filter((p): p is Project => p !== undefined)
 
-      // Combine reordered active projects with archived projects
-      return { projects: [...reorderedActive, ...archivedProjects] }
+      // Preserve active projects that were not in the reordered list (e.g. grouped projects)
+      const reorderedIdsSet = new Set(activeProjectIds)
+      const remainingActive = activeProjects.filter((p) => !reorderedIdsSet.has(p.id))
+
+      // Combine reordered active projects, remaining active projects, and archived projects
+      return { projects: [...reorderedActive, ...remainingActive, ...archivedProjects] }
     })
   },
 
@@ -255,13 +260,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const reorderedGroups = groupIds
         .map((id) => groupMap.get(id))
         .filter((g): g is ProjectGroup => g !== undefined)
-      return { groups: reorderedGroups }
+
+      // Preserve groups that were not in the reordered list
+      const reorderedIdsSet = new Set(groupIds)
+      const remainingGroups = state.groups.filter((g) => !reorderedIdsSet.has(g.id))
+
+      return { groups: [...reorderedGroups, ...remainingGroups] }
     })
   },
 
   reorderProjectInGroup: (groupId: string, projectIds: string[]): void => {
     set((state) => ({
       groups: state.groups.map((g) => (g.id === groupId ? { ...g, projectIds } : g))
+    }))
+  },
+
+  updateGroup: (id: string, updates: Partial<ProjectGroup>): void => {
+    set((state) => ({
+      groups: state.groups.map((g) => (g.id === id ? { ...g, ...updates } : g))
     }))
   }
 }))
@@ -309,6 +325,7 @@ export function useProjectActions(): Pick<
   | 'moveProjectToGroup'
   | 'reorderGroups'
   | 'reorderProjectInGroup'
+  | 'updateGroup'
 > {
   return useProjectStore(
     useShallow((state) => ({
@@ -329,7 +346,8 @@ export function useProjectActions(): Pick<
       toggleGroupCollapse: state.toggleGroupCollapse,
       moveProjectToGroup: state.moveProjectToGroup,
       reorderGroups: state.reorderGroups,
-      reorderProjectInGroup: state.reorderProjectInGroup
+      reorderProjectInGroup: state.reorderProjectInGroup,
+      updateGroup: state.updateGroup
     }))
   )
 }

@@ -66,7 +66,8 @@ interface ColorPickerState {
   isOpen: boolean
   x: number
   y: number
-  projectId: string
+  targetId: string
+  targetType: 'project' | 'group'
 }
 
 interface DeleteConfirmState {
@@ -140,7 +141,8 @@ export function ProjectSidebar({
     toggleGroupCollapse,
     moveProjectToGroup,
     reorderGroups,
-    reorderProjectInGroup
+    reorderProjectInGroup,
+    updateGroup
   } = useProjectActions()
   const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked)
   const storeGroups = useProjectStore((state) => state.groups)
@@ -219,8 +221,39 @@ export function ProjectSidebar({
     isOpen: false,
     x: 0,
     y: 0,
-    projectId: ''
+    targetId: '',
+    targetType: 'project'
   })
+
+  const handleOpenColorPicker = useCallback(
+    (targetId: string, targetType: 'project' | 'group', x: number, y: number): void => {
+      setColorPicker({
+        isOpen: true,
+        x,
+        y,
+        targetId,
+        targetType
+      })
+    },
+    []
+  )
+
+  const closeColorPicker = useCallback((): void => {
+    setColorPicker((prev) => ({ ...prev, isOpen: false }))
+  }, [])
+
+  const handleColorChange = useCallback(
+    (color: ProjectColor): void => {
+      if (colorPicker.targetId) {
+        if (colorPicker.targetType === 'project') {
+          onUpdateProject(colorPicker.targetId, { color })
+        } else if (colorPicker.targetType === 'group') {
+          updateGroup(colorPicker.targetId, { color })
+        }
+      }
+    },
+    [colorPicker.targetId, colorPicker.targetType, onUpdateProject, updateGroup]
+  )
 
   // Delete confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
@@ -402,6 +435,12 @@ export function ProjectSidebar({
           onClick: () => handleStartRenameGroup(groupId)
         },
         {
+          label: 'Change Color',
+          icon: <Palette size={14} />,
+          onClick: () =>
+            handleOpenColorPicker(groupId, 'group', groupContextMenu.x, groupContextMenu.y)
+        },
+        {
           label: 'Add Project',
           icon: <Plus size={14} />,
           submenu: addProjectSubmenu,
@@ -432,7 +471,10 @@ export function ProjectSidebar({
       projects,
       groups,
       moveProjectToGroup,
-      handleAddNewProjectToGroup
+      handleAddNewProjectToGroup,
+      handleOpenColorPicker,
+      groupContextMenu.x,
+      groupContextMenu.y
     ]
   )
 
@@ -629,28 +671,6 @@ export function ProjectSidebar({
     setEditName('')
   }, [])
 
-  const handleOpenColorPicker = useCallback((projectId: string, x: number, y: number): void => {
-    setColorPicker({
-      isOpen: true,
-      x,
-      y,
-      projectId
-    })
-  }, [])
-
-  const closeColorPicker = useCallback((): void => {
-    setColorPicker((prev) => ({ ...prev, isOpen: false }))
-  }, [])
-
-  const handleColorChange = useCallback(
-    (color: ProjectColor): void => {
-      if (colorPicker.projectId) {
-        onUpdateProject(colorPicker.projectId, { color })
-      }
-    },
-    [colorPicker.projectId, onUpdateProject]
-  )
-
   const handleConfirmDelete = useCallback(
     (projectId: string): void => {
       const project = projects.find((p) => p.id === projectId)
@@ -774,7 +794,7 @@ export function ProjectSidebar({
         {
           label: 'Change Color',
           icon: <Palette size={14} />,
-          onClick: () => handleOpenColorPicker(projectId, contextMenu.x, contextMenu.y)
+          onClick: () => handleOpenColorPicker(projectId, 'project', contextMenu.x, contextMenu.y)
         }
       ]
 
@@ -935,7 +955,10 @@ export function ProjectSidebar({
     ]
   )
 
-  const colorPickerProject = projects.find((p) => p.id === colorPicker.projectId)
+  const colorPickerTarget =
+    colorPicker.targetType === 'project'
+      ? projects.find((p) => p.id === colorPicker.targetId)
+      : groups.find((g) => g.id === colorPicker.targetId)
 
   // Split active and archived projects
   const activeProjects = useMemo(() => projects.filter((p) => !p.isArchived), [projects])
@@ -1184,7 +1207,12 @@ export function ProjectSidebar({
                               <ChevronDown size={12} className="text-muted-foreground" />
                             )}
                           </span>
-                          <span className="mr-1.5 flex-shrink-0 inline-flex items-center text-primary/80">
+                          <span
+                            className={cn(
+                              'mr-1.5 flex-shrink-0 inline-flex items-center',
+                              group.color ? getColorClasses(group.color).text : 'text-primary/80'
+                            )}
+                          >
                             {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
                           </span>
                           {editingGroupId === group.id ? (
@@ -1222,7 +1250,7 @@ export function ProjectSidebar({
                         </div>
 
                         {/* Projects in Group */}
-                        {!isCollapsed && gpProjects.length > 0 && (
+                        {(!isCollapsed || isSearching) && gpProjects.length > 0 && (
                           <Reorder.Group
                             axis="y"
                             values={gpProjects}
@@ -1234,6 +1262,7 @@ export function ProjectSidebar({
                               )
                             }}
                             className="pl-4 flex flex-col"
+                            data-group-container-id={group.id}
                           >
                             {gpProjects.map((project) => {
                               const hasActivity = projectActivityIds.includes(project.id)
@@ -1255,9 +1284,12 @@ export function ProjectSidebar({
                                       info.point.x,
                                       info.point.y
                                     )
+                                    const container = element?.closest('[data-group-container-id]')
                                     const folderHeader = element?.closest('[data-group-id]')
                                     const groupId =
-                                      folderHeader?.getAttribute('data-group-id') || null
+                                      container?.getAttribute('data-group-container-id') ||
+                                      folderHeader?.getAttribute('data-group-id') ||
+                                      null
                                     if (groupId !== activeDragOverGroupId) {
                                       setActiveDragOverGroupId(groupId)
                                       activeDragOverGroupIdRef.current = groupId
@@ -1369,8 +1401,12 @@ export function ProjectSidebar({
                         }}
                         onDrag={(_event, info) => {
                           const element = document.elementFromPoint(info.point.x, info.point.y)
+                          const container = element?.closest('[data-group-container-id]')
                           const folderHeader = element?.closest('[data-group-id]')
-                          const groupId = folderHeader?.getAttribute('data-group-id') || null
+                          const groupId =
+                            container?.getAttribute('data-group-container-id') ||
+                            folderHeader?.getAttribute('data-group-id') ||
+                            null
                           if (groupId !== activeDragOverGroupId) {
                             setActiveDragOverGroupId(groupId)
                             activeDragOverGroupIdRef.current = groupId
@@ -1555,11 +1591,11 @@ export function ProjectSidebar({
       )}
 
       {/* Color Picker Popover */}
-      {colorPicker.isOpen && colorPickerProject && (
+      {colorPicker.isOpen && colorPickerTarget && (
         <ColorPickerPopover
           x={colorPicker.x}
           y={colorPicker.y}
-          currentColor={colorPickerProject.color}
+          currentColor={colorPickerTarget.color || 'blue'}
           onSelectColor={handleColorChange}
           onClose={closeColorPicker}
         />
