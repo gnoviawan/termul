@@ -53,7 +53,7 @@ export function TestimonialSubmitPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 shadow-2xl shadow-black/30 sm:p-8"
+          className="rounded-3xl border border-white/10 bg-white/[0.02] p-6 shadow-2xl shadow-black/40 backdrop-blur-md sm:p-8"
         >
           <div className="hidden" aria-hidden="true">
             <label>
@@ -72,7 +72,7 @@ export function TestimonialSubmitPage() {
                 maxLength={500}
                 rows={6}
                 placeholder="Termul helps me..."
-                className="resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                className="resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
               />
             </label>
 
@@ -83,7 +83,7 @@ export function TestimonialSubmitPage() {
                   name="name"
                   required
                   maxLength={80}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
                   placeholder="Alex Chen"
                 />
               </label>
@@ -93,7 +93,7 @@ export function TestimonialSubmitPage() {
                   name="role"
                   required
                   maxLength={120}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
                   placeholder="Staff Engineer"
                 />
               </label>
@@ -108,7 +108,7 @@ export function TestimonialSubmitPage() {
                   name="avatar"
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/gif"
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-2.5 text-sm text-gray-300 file:mr-3 file:rounded-full file:border-0 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-black"
+                  className="cursor-pointer rounded-full border border-white/10 bg-black/40 py-2 pl-2 pr-4 text-sm text-gray-300 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus-within:border-white/30 focus-within:bg-white/[0.03] focus-within:ring-4 focus-within:ring-white/5 file:mr-3 file:cursor-pointer file:rounded-full file:border-0 file:bg-white/10 file:px-4 file:py-1.5 file:text-sm file:font-medium file:text-white file:transition-colors file:hover:bg-white/20"
                 />
               </label>
               <label className="grid gap-2">
@@ -119,7 +119,7 @@ export function TestimonialSubmitPage() {
                   name="avatarUrl"
                   type="url"
                   maxLength={500}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
                   placeholder="https://..."
                 />
               </label>
@@ -139,8 +139,8 @@ export function TestimonialSubmitPage() {
                   aria-live="polite"
                   className={
                     status === 'success'
-                      ? 'text-sm text-green-300'
-                      : 'text-sm text-rose-300'
+                      ? 'text-sm text-green-300 animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
+                      : 'text-sm text-rose-300 animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
                   }
                 >
                   {message}
