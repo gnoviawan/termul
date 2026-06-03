@@ -1,7 +1,10 @@
-import { Send, Square } from 'lucide-react'
+import { ArrowUp, Square } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { AgentIcon } from '@/components/agents/AgentIcon'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import type { AcpSession } from '@/stores/acp-store'
+import { ConfigChip, ModeChip } from './AgentHeader'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import {
   applyCommandToInput,
@@ -12,6 +15,8 @@ import {
 } from './slash-menu-model'
 
 interface ChatInputBarProps {
+  /** Active session — drives the agent icon and selector chips. */
+  session: AcpSession
   /** Whether a prompt turn is currently active (disables send, enables cancel). */
   busy: boolean
   /** Whether the session is closed/disconnected (fully disables input). */
@@ -29,6 +34,7 @@ interface ChatInputBarProps {
 }
 
 export function ChatInputBar({
+  session,
   busy,
   disabled,
   onSend,
@@ -39,6 +45,8 @@ export function ChatInputBar({
   onSetConfig,
   onSetMode
 }: ChatInputBarProps): React.JSX.Element {
+  const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
+  const hasConfigOptions = usableConfigOptions.length > 0
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
@@ -135,48 +143,79 @@ export function ChatInputBar({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
+  const canSend = !disabled && value.trim().length > 0
+  const agentName = session.title ?? `Agent ${session.agentId.slice(0, 8)}`
+
   return (
-    <div className="relative flex items-end gap-2 border-t border-border/60 bg-card/40 p-2">
-      {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleInput}
-        onKeyDown={handleKeyDown}
-        disabled={disabled}
-        rows={1}
-        placeholder={disabled ? 'Session closed' : 'Type a message, or / for commands…'}
-        className={cn(
-          'flex-1 resize-none rounded-md border border-border/60 bg-background px-3 py-2 text-sm',
-          'placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40',
-          'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
-        )}
-      />
-      {busy ? (
-        <button
-          type="button"
-          onClick={onCancel}
-          title="Cancel turn"
-          aria-label="Cancel turn"
-          className="flex h-9 w-9 items-center justify-center rounded-md bg-secondary text-foreground hover:bg-secondary/80"
-        >
-          <Square size={14} />
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={submit}
-          disabled={disabled || value.trim().length === 0}
-          title="Send"
-          aria-label="Send message"
-          className={cn(
-            'flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground',
-            'hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50'
-          )}
-        >
-          <Send size={14} />
-        </button>
-      )}
+    <div className="px-5 pb-3.5 pt-3">
+      <div className="relative mx-auto w-full max-w-3xl overflow-hidden rounded-2xl bg-secondary/40">
+        {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
+        <div className="px-4 pb-1.5 pt-3.5">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleInput}
+            onKeyDown={handleKeyDown}
+            disabled={disabled}
+            rows={1}
+            placeholder={disabled ? 'Session closed' : 'Ask anything… (/ for commands)'}
+            className={cn(
+              'w-full resize-none bg-transparent text-sm leading-relaxed',
+              'placeholder:text-muted-foreground focus:outline-none',
+              'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
+            )}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] pl-1.5 pr-2 text-xs text-foreground/80">
+              <AgentIcon agentId={session.agentId} className="h-5 w-5" />
+              <span className="max-w-[140px] truncate">{agentName}</span>
+            </span>
+            {hasConfigOptions ? (
+              usableConfigOptions.map((option) => (
+                <ConfigChip
+                  key={option.id}
+                  option={option}
+                  disabled={disabled}
+                  onSelect={(valueId) => onSetConfig(option.id, valueId)}
+                />
+              ))
+            ) : (
+              <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
+            )}
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {busy ? (
+              <button
+                type="button"
+                onClick={onCancel}
+                title="Cancel turn"
+                aria-label="Cancel turn"
+                className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!canSend}
+                title="Send"
+                aria-label="Send message"
+                className={cn(
+                  'flex h-[34px] w-[34px] items-center justify-center rounded-full transition-colors',
+                  canSend
+                    ? 'bg-foreground text-background hover:bg-foreground/90'
+                    : 'bg-foreground/20 text-background/70 cursor-not-allowed'
+                )}
+              >
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

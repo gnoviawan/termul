@@ -41,13 +41,13 @@ export function ChatMessageList({ messages, children }: ChatMessageListProps): R
   }
 
   return (
-    <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
-      <div className="divide-y divide-border/40">
+    <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="mx-auto w-full max-w-3xl">
         {messages.map((m) => (
           <ChatMessage key={m.id} message={m} />
         ))}
+        {children}
       </div>
-      {children}
     </div>
   )
 }

@@ -87,12 +87,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <AgentHeader
-        session={session}
-        agentStatus={agentStatus}
-        onSetConfig={handleSetConfig}
-        onSetMode={handleSetMode}
-      />
+      <AgentHeader session={session} agentStatus={agentStatus} />
       {session.lastError && (
         <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1 text-[11px] text-red-400">
           {session.lastError}
@@ -125,6 +120,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         ))}
       </ChatMessageList>
       <ChatInputBar
+        session={session}
         busy={session.activeTurn}
         disabled={isClosed || Boolean(pendingAuth)}
         onSend={handleSend}

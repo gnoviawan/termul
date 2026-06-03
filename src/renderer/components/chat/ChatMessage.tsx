@@ -1,22 +1,26 @@
-import { Bot, Brain, User } from 'lucide-react'
-import { memo } from 'react'
+import { Bot, User } from 'lucide-react'
+import { memo, useMemo } from 'react'
 import type { ContentBlock } from '@/lib/acp-api'
+import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 
-/** Render a single content block. Only text is fully rendered in P1. */
-function renderBlock(block: ContentBlock, key: number): React.JSX.Element {
-  if (block.type === 'text') {
-    return (
-      <span key={key} className="whitespace-pre-wrap break-words">
-        {block.text ?? ''}
-      </span>
-    )
-  }
+/** Concatenate the text of all text blocks; note any non-text block inline. */
+function blocksToText(blocks: ContentBlock[]): string {
+  return blocks
+    .map((b) => (b.type === 'text' ? (b.text ?? '') : `\n\n\`[${b.type}]\`\n\n`))
+    .join('')
+}
+
+/** Agent reply rendered as sanitized markdown prose. */
+function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
+  const html = useMemo(() => renderChatMarkdown(blocksToText(blocks)), [blocks])
   return (
-    <span key={key} className="text-muted-foreground italic">
-      [{block.type}]
-    </span>
+    <div
+      className="chat-prose text-sm leading-relaxed text-foreground"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }
 
@@ -25,29 +29,46 @@ interface ChatMessageProps {
 }
 
 function ChatMessageComponent({ message }: ChatMessageProps): React.JSX.Element {
-  const isUser = message.role === 'user'
-  const isThought = message.role === 'thought'
+  // Thought: collapsible, de-emphasized.
+  if (message.role === 'thought') {
+    const text = blocksToText(message.blocks)
+    const lines = text.split('\n').filter((l) => l.trim().length > 0).length
+    return (
+      <details className="mx-4 my-1 border-l-2 border-border/70 pl-3">
+        <summary className="cursor-pointer list-none text-[11px] italic text-muted-foreground marker:hidden">
+          Thinking{lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
+          {message.streaming && '…'}
+        </summary>
+        <div className="mt-1 whitespace-pre-wrap break-words text-xs italic text-muted-foreground">
+          {text}
+        </div>
+      </details>
+    )
+  }
 
-  const Icon = isUser ? User : isThought ? Brain : Bot
-  const label = isUser ? 'You' : isThought ? 'Thinking' : 'Agent'
+  const isUser = message.role === 'user'
 
   return (
-    <div className={cn('flex flex-col gap-1 px-4 py-3', isThought && 'opacity-70')}>
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-        <Icon size={12} />
-        <span>{label}</span>
+    <div className="px-4 py-3">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        {isUser ? <User size={12} /> : <Bot size={12} />}
+        <span>{isUser ? 'You' : 'Agent'}</span>
         {message.streaming && (
           <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
         )}
       </div>
-      <div
-        className={cn(
-          'text-sm leading-relaxed text-foreground',
-          isThought && 'italic text-muted-foreground'
-        )}
-      >
-        {message.blocks.map((b, i) => renderBlock(b, i))}
-      </div>
+      {isUser ? (
+        <div
+          className={cn(
+            'rounded-lg bg-primary/[0.08] px-4 py-3 text-sm leading-relaxed text-foreground',
+            'whitespace-pre-wrap break-words'
+          )}
+        >
+          {blocksToText(message.blocks)}
+        </div>
+      ) : (
+        <AgentProse blocks={message.blocks} />
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
-import { Bot, ChevronDown, Circle } from 'lucide-react'
+import { ChevronDown, Circle } from 'lucide-react'
+import { AgentIcon } from '@/components/agents/AgentIcon'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -7,8 +8,6 @@ import type { AcpSession, AgentStatus } from '@/stores/acp-store'
 interface AgentHeaderProps {
   session: AcpSession
   agentStatus: AgentStatus | undefined
-  onSetConfig: (configId: string, valueId: string) => void
-  onSetMode: (modeId: string) => void
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -20,7 +19,7 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 /** A popover selector for one config option. */
-function ConfigChip({
+export function ConfigChip({
   option,
   disabled,
   onSelect
@@ -36,13 +35,13 @@ function ConfigChip({
         <button
           type="button"
           disabled={disabled}
-          className="flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[11px] hover:bg-secondary/80 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {current?.name ?? option.name}
-          <ChevronDown size={10} />
+          <ChevronDown size={11} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56 p-1">
+      <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           {option.name}
         </div>
@@ -68,7 +67,7 @@ function ConfigChip({
 }
 
 /** A popover selector for the legacy modes API. */
-function ModeChip({
+export function ModeChip({
   session,
   disabled,
   onSelect
@@ -86,13 +85,13 @@ function ModeChip({
         <button
           type="button"
           disabled={disabled}
-          className="flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[11px] hover:bg-secondary/80 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {current?.name ?? 'Mode'}
-          <ChevronDown size={10} />
+          <ChevronDown size={11} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56 p-1">
+      <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           Mode
         </div>
@@ -122,20 +121,13 @@ function ModeChip({
  * mode/model selectors. Config options supersede the legacy modes API
  * (ADR-003.4): when configOptions exist, the legacy mode chip is not shown.
  */
-export function AgentHeader({
-  session,
-  agentStatus,
-  onSetConfig,
-  onSetMode
-}: AgentHeaderProps): React.JSX.Element {
+export function AgentHeader({ session, agentStatus }: AgentHeaderProps): React.JSX.Element {
   const isClosed = session.status === 'closed'
   const effectiveStatus: AgentStatus | undefined = isClosed ? 'error' : agentStatus
-  const usableConfigOptions = session.configOptions.filter((o) => o.options.length > 0)
-  const hasConfigOptions = usableConfigOptions.length > 0
 
   return (
-    <div className="flex items-center gap-2 border-b border-border/60 bg-card/60 px-3 py-1.5">
-      <Bot size={14} className="text-primary" />
+    <div className="flex items-center gap-2 bg-transparent px-3 py-1.5">
+      <AgentIcon agentId={session.agentId} className="h-3.5 w-3.5" />
       <span className="truncate text-xs font-medium text-foreground">
         {session.title ?? `Agent ${session.agentId.slice(0, 8)}`}
       </span>
@@ -149,21 +141,6 @@ export function AgentHeader({
       <span className="text-[11px] text-muted-foreground">
         {isClosed ? 'closed' : (effectiveStatus ?? 'idle')}
       </span>
-
-      <div className="ml-auto flex items-center gap-2">
-        {hasConfigOptions ? (
-          usableConfigOptions.map((option) => (
-            <ConfigChip
-              key={option.id}
-              option={option}
-              disabled={isClosed}
-              onSelect={(valueId) => onSetConfig(option.id, valueId)}
-            />
-          ))
-        ) : (
-          <ModeChip session={session} disabled={isClosed} onSelect={onSetMode} />
-        )}
-      </div>
     </div>
   )
 }
