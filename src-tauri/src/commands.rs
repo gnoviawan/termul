@@ -1720,7 +1720,7 @@ pub async fn search_file_names_stream(
         let mut truncated = false;
         let batch_size = 10;
 
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             let normalized = line.replace('\\', "/");
             files.push(normalized);
 
@@ -1751,7 +1751,7 @@ pub async fn search_file_names_stream(
         }
 
         // Determine error from exit status / stderr
-        let error = if exit_status.map_or(false, |s| !s.success()) {
+        let error = if exit_status.is_some_and(|s| !s.success()) {
             let mut stderr_text = String::new();
             if let Some(stderr_reader) = stderr {
                 let _ = BufReader::new(stderr_reader).read_to_string(&mut stderr_text);
