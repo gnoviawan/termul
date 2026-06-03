@@ -461,31 +461,53 @@ export function createTauriFilesystemApi(): FilesystemApi {
       return () => cleanupTauriListener(unlisten)
     },
 
-    async searchFileNames(scopeRoot: string, rootPath: string, query: string) {
+    async searchFileNamesStreamStart(searchId: string, scopeRoot: string, rootPath: string, query: string) {
       try {
-        const response = await invoke<{
-          success: boolean
-          data?: { files: string[]; truncated: boolean }
-          error?: string
-          code?: string
-        }>('search_file_names', {
-          request: { scopeRoot, rootPath, query }
-        })
-        if (!response?.success || !response.data) {
+        const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+          'search_file_names_stream',
+          { request: { searchId, scopeRoot, rootPath, query } }
+        )
+        if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to search file names',
-            code: response?.code ?? 'SEARCH_FILENAME_ERROR'
+            error: response?.error ?? 'Failed to start file names stream',
+            code: response?.code ?? 'SEARCH_FILENAMES_STREAM_ERROR'
           }
         }
-        return { success: true as const, data: response.data }
+        return { success: true as const, data: undefined }
       } catch (err) {
-        return {
-          success: false as const,
-          error: String(err),
-          code: 'SEARCH_FILENAME_ERROR'
-        }
+        return { success: false as const, error: String(err), code: 'SEARCH_FILENAMES_STREAM_ERROR' }
       }
+    },
+
+    onSearchFileNamesBatch(callback: (event: { searchId: string; files: string[]; truncated: boolean }) => void) {
+      if (!isTauriContext()) return () => {}
+      let unlisten: Promise<UnlistenFn> | undefined
+      try {
+        unlisten = listen<{
+          searchId: string
+          files: string[]
+          truncated: boolean
+        }>('search-file-names-batch', ({ payload }) => callback(payload))
+      } catch {
+        return () => {}
+      }
+      return () => cleanupTauriListener(unlisten)
+    },
+
+    onSearchFileNamesDone(callback: (event: { searchId: string; truncated: boolean; totalFiles: number }) => void) {
+      if (!isTauriContext()) return () => {}
+      let unlisten: Promise<UnlistenFn> | undefined
+      try {
+        unlisten = listen<{
+          searchId: string
+          truncated: boolean
+          totalFiles: number
+        }>('search-file-names-done', ({ payload }) => callback(payload))
+      } catch {
+        return () => {}
+      }
+      return () => cleanupTauriListener(unlisten)
     },
 
     onSearchContentDone(callback) {

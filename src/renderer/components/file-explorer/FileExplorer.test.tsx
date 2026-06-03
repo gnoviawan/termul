@@ -42,7 +42,7 @@ const mockExplorerState = {
     filePath: string
     matches: Array<{ lineNumber: number; lineText: string }>
   }>,
-  searchFileNameMatches: [] as string[],
+  searchFileNameMatches: [] as string[] | null,
   searchLoading: false,
   searchError: null as string | null,
   searchTruncated: false,
@@ -231,7 +231,24 @@ describe('FileExplorer', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Files 1/i }))
 
     expect(screen.getByRole('tab', { name: /Files 1/i })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText('term-search.ts')).toBeInTheDocument()
+    expect(screen.getByTitle('/project/src/term-search.ts')).toBeInTheDocument()
+  })
+
+  it('shows pending file-count indicator while filename matches are still loading', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchLoading = true
+    mockExplorerState.searchResults = [{
+      filePath: '/project/src/FileExplorer.tsx',
+      matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+    }]
+    mockExplorerState.searchFileNameMatches = null
+
+    render(<FileExplorer />)
+
+    expect(screen.getByRole('tab', { name: /Files …/i })).toBeInTheDocument()
   })
 
   it('opens file-name search results with existing editor behavior', async () => {
@@ -243,7 +260,7 @@ describe('FileExplorer', () => {
 
     render(<FileExplorer />)
 
-    fireEvent.click(screen.getByText('term-search.ts').closest('button')!)
+    fireEvent.click(screen.getByTitle('/project/src/term-search.ts')!)
 
     await waitFor(() => {
       expect(mockSelectPath).toHaveBeenCalledWith('/project/src/term-search.ts')

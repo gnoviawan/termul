@@ -385,11 +385,26 @@ export interface FilesystemApi {
       error?: string
     }) => void
   ) => () => void
-  searchFileNames: (
+  searchFileNamesStreamStart: (
+    searchId: string,
     scopeRoot: string,
     rootPath: string,
     query: string
-  ) => Promise<IpcResult<{ files: string[]; truncated: boolean }>>
+  ) => Promise<IpcResult<void>>
+  onSearchFileNamesBatch: (
+    callback: (event: {
+      searchId: string
+      files: string[]
+      truncated: boolean
+    }) => void
+  ) => () => void
+  onSearchFileNamesDone: (
+    callback: (event: {
+      searchId: string
+      truncated: boolean
+      totalFiles: number
+    }) => void
+  ) => () => void
   writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>
   createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>
   createDirectory: (dirPath: string) => Promise<IpcResult<void>>
