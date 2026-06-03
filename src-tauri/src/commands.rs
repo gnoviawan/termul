@@ -1143,6 +1143,8 @@ pub struct SearchFileNamesDoneEvent {
     pub search_id: String,
     pub truncated: bool,
     pub total_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1565,6 +1567,20 @@ pub async fn search_content_cancel(
     Ok(IpcResult::success(()))
 }
 
+#[tauri::command]
+pub async fn search_file_names_cancel(
+    request: SearchContentCancelRequest,
+) -> Result<IpcResult<()>, String> {
+    let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+    }
+    Ok(IpcResult::success(()))
+}
+
 
 #[tauri::command]
 pub async fn search_file_names_stream(
@@ -1580,6 +1596,7 @@ pub async fn search_file_names_stream(
                 search_id,
                 truncated: false,
                 total_files: 0,
+                error: None,
             },
         );
         return Ok(IpcResult::success(()));
@@ -1646,16 +1663,20 @@ pub async fn search_file_names_stream(
 
     let mut child = match rg_command.spawn() {
         Ok(c) => c,
-        Err(_) => {
+        Err(e) => {
             let _ = app_handle.emit(
                 "search-file-names-done",
                 SearchFileNamesDoneEvent {
                     search_id,
                     truncated: false,
                     total_files: 0,
+                    error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
                 },
             );
-            return Ok(IpcResult::success(()));
+            return Ok(IpcResult::error(
+                format!("rg spawn failed (path: {}): {}", rg_path, e),
+                "RG_SPAWN_FAILED",
+            ));
         }
     };
 
@@ -1669,11 +1690,22 @@ pub async fn search_file_names_stream(
                     search_id,
                     truncated: false,
                     total_files: 0,
+                    error: Some("failed to capture rg stdout".to_string()),
                 },
             );
-            return Ok(IpcResult::success(()));
+            return Ok(IpcResult::error(
+                "failed to capture rg stdout".to_string(),
+                "RG_STDOUT_FAILED",
+            ));
         }
     };
+
+    let child_handle = Arc::new(Mutex::new(child));
+    {
+        let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+        guard.insert(search_id.clone(), Arc::clone(&child_handle));
+    }
+    let child = child_handle;
 
     tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
@@ -1702,7 +1734,12 @@ pub async fn search_file_names_stream(
             }
         }
 
-        let _ = child.kill().ok();
+        if let Ok(mut c) = child.lock() {
+            let _ = c.try_wait().or_else(|_| c.wait().map(Some));
+        }
+        if let Ok(mut guard) = search_processes().lock() {
+            guard.remove(&search_id);
+        }
 
         // Final batch with all files
         let _ = app_handle.emit(
@@ -1720,6 +1757,7 @@ pub async fn search_file_names_stream(
                 search_id,
                 truncated,
                 total_files: files.len(),
+                error: None,
             },
         );
     });

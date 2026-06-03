@@ -839,6 +839,7 @@ pub fn run() {
             commands::search_content_stream,
             commands::search_content_cancel,
             commands::search_file_names_stream,
+            commands::search_file_names_cancel,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,

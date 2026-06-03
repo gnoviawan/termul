@@ -391,6 +391,7 @@ export interface FilesystemApi {
     rootPath: string,
     query: string
   ) => Promise<IpcResult<void>>
+  searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
     callback: (event: {
       searchId: string
@@ -403,6 +404,7 @@ export interface FilesystemApi {
       searchId: string
       truncated: boolean
       totalFiles: number
+      error?: string
     }) => void
   ) => () => void
   writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>

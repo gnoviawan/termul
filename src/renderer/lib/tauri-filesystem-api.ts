@@ -480,6 +480,25 @@ export function createTauriFilesystemApi(): FilesystemApi {
       }
     },
 
+    async searchFileNamesStreamCancel(searchId: string) {
+      try {
+        const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+          'search_file_names_cancel',
+          { request: { searchId } }
+        )
+        if (!response?.success) {
+          return {
+            success: false as const,
+            error: response?.error ?? 'Failed to cancel file names stream',
+            code: response?.code ?? 'SEARCH_FILENAMES_CANCEL_ERROR'
+          }
+        }
+        return { success: true as const, data: undefined }
+      } catch (err) {
+        return { success: false as const, error: String(err), code: 'SEARCH_FILENAMES_CANCEL_ERROR' }
+      }
+    },
+
     onSearchFileNamesBatch(callback: (event: { searchId: string; files: string[]; truncated: boolean }) => void) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
