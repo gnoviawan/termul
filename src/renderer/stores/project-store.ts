@@ -241,7 +241,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             } else {
               newProjectIds.push(projectId)
             }
-            return { ...g, projectIds: newProjectIds }
+            return { ...g, projectIds: newProjectIds, isCollapsed: false }
           }
           return g
         })

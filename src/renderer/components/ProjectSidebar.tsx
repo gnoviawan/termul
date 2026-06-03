@@ -131,6 +131,7 @@ export function ProjectSidebar({
   const navigate = useNavigate()
   const {
     selectProject,
+    addProject,
     setActiveWorktree,
     setWorktreeOperationLock,
     addGroup,
@@ -173,6 +174,9 @@ export function ProjectSidebar({
     y: 0,
     groupId: ''
   })
+
+  const [activeDragOverGroupId, setActiveDragOverGroupId] = useState<string | null>(null)
+  const activeDragOverGroupIdRef = useRef<string | null>(null)
 
   // Project search/filter query
   const [searchQuery, setSearchQuery] = useState('')
@@ -292,6 +296,32 @@ export function ProjectSidebar({
     [addGroup, moveProjectToGroup, newGroupModal.projectIdToMove]
   )
 
+  const handleAddNewProjectToGroup = useCallback(
+    async (groupId: string) => {
+      try {
+        const result = await dialogApi.selectDirectory()
+        if (result.success && result.data) {
+          const projectPath = result.data
+          const folderName = projectPath.split(/[\\/]/).pop() || 'New Project'
+          const newProject = addProject(folderName, 'blue', projectPath)
+          moveProjectToGroup(newProject.id, groupId)
+          toast({
+            title: 'Project created',
+            description: `Created project "${folderName}" and added to group.`
+          })
+        }
+      } catch (err) {
+        console.error('Failed to create project:', err)
+        toast({
+          title: 'Error',
+          description: 'Failed to create project from folder.',
+          variant: 'destructive'
+        })
+      }
+    },
+    [addProject, moveProjectToGroup]
+  )
+
   const handleGroupContextMenu = useCallback(
     (e: React.MouseEvent, groupId: string): void => {
       e.preventDefault()
@@ -347,11 +377,41 @@ export function ProjectSidebar({
 
   const getGroupMenuItems = useCallback(
     (groupId: string): ContextMenuItem[] => {
+      const activeProjects = projects.filter((p) => !p.isArchived)
+      const currentGroup = groups.find((g) => g.id === groupId)
+      const addProjectSubmenu: ContextMenuSubItem[] = [
+        ...activeProjects.map((p) => {
+          const isProjectInGroup = currentGroup?.projectIds.includes(p.id) ?? false
+          return {
+            label: p.name,
+            value: p.id,
+            isSelected: isProjectInGroup
+          }
+        }),
+        {
+          label: '+ Import Project...',
+          value: 'import-project',
+          isSelected: false
+        }
+      ]
+
       return [
         {
           label: 'Rename Group',
           icon: <Edit2 size={14} />,
           onClick: () => handleStartRenameGroup(groupId)
+        },
+        {
+          label: 'Add Project',
+          icon: <Plus size={14} />,
+          submenu: addProjectSubmenu,
+          onSubmenuSelect: (projectId: string) => {
+            if (projectId === 'import-project') {
+              void handleAddNewProjectToGroup(groupId)
+            } else {
+              moveProjectToGroup(projectId, groupId)
+            }
+          }
         },
         {
           label: 'Delete Group (Keep Projects)',
@@ -366,7 +426,14 @@ export function ProjectSidebar({
         }
       ]
     },
-    [handleStartRenameGroup, handleConfirmDeleteGroup]
+    [
+      handleStartRenameGroup,
+      handleConfirmDeleteGroup,
+      projects,
+      groups,
+      moveProjectToGroup,
+      handleAddNewProjectToGroup
+    ]
   )
 
   const handleWorktreeSelect = useCallback(
@@ -1041,7 +1108,7 @@ export function ProjectSidebar({
       )}
 
       {/* Project List */}
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 overflow-y-auto py-1" data-group-id="root">
         {projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
             <p className="text-sm text-muted-foreground">No projects yet</p>
@@ -1103,7 +1170,12 @@ export function ProjectSidebar({
                               toggleGroupCollapse(group.id)
                             }
                           }}
-                          className="w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none"
+                          className={cn(
+                            'w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
+                            activeDragOverGroupId === group.id &&
+                              'bg-primary/20 border border-primary/50'
+                          )}
+                          data-group-id={group.id}
                         >
                           <span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
                             {isCollapsed ? (
@@ -1175,7 +1247,37 @@ export function ProjectSidebar({
                                   className="list-none"
                                   whileDrag={{
                                     scale: 1.02,
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                    pointerEvents: 'none'
+                                  }}
+                                  onDrag={(_event, info) => {
+                                    const element = document.elementFromPoint(
+                                      info.point.x,
+                                      info.point.y
+                                    )
+                                    const folderHeader = element?.closest('[data-group-id]')
+                                    const groupId =
+                                      folderHeader?.getAttribute('data-group-id') || null
+                                    if (groupId !== activeDragOverGroupId) {
+                                      setActiveDragOverGroupId(groupId)
+                                      activeDragOverGroupIdRef.current = groupId
+                                    }
+                                  }}
+                                  onDragEnd={() => {
+                                    const targetGroupId = activeDragOverGroupIdRef.current
+                                    if (targetGroupId) {
+                                      const nextGroupId =
+                                        targetGroupId === 'root' ? null : targetGroupId
+                                      const currentGroup = groups.find((g) =>
+                                        g.projectIds.includes(project.id)
+                                      )
+                                      const currentGroupId = currentGroup?.id ?? null
+                                      if (nextGroupId !== currentGroupId) {
+                                        moveProjectToGroup(project.id, nextGroupId)
+                                      }
+                                    }
+                                    setActiveDragOverGroupId(null)
+                                    activeDragOverGroupIdRef.current = null
                                   }}
                                 >
                                   <ProjectItem
@@ -1262,7 +1364,32 @@ export function ProjectSidebar({
                         className="list-none"
                         whileDrag={{
                           scale: 1.02,
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          pointerEvents: 'none'
+                        }}
+                        onDrag={(_event, info) => {
+                          const element = document.elementFromPoint(info.point.x, info.point.y)
+                          const folderHeader = element?.closest('[data-group-id]')
+                          const groupId = folderHeader?.getAttribute('data-group-id') || null
+                          if (groupId !== activeDragOverGroupId) {
+                            setActiveDragOverGroupId(groupId)
+                            activeDragOverGroupIdRef.current = groupId
+                          }
+                        }}
+                        onDragEnd={() => {
+                          const targetGroupId = activeDragOverGroupIdRef.current
+                          if (targetGroupId) {
+                            const nextGroupId = targetGroupId === 'root' ? null : targetGroupId
+                            const currentGroup = groups.find((g) =>
+                              g.projectIds.includes(project.id)
+                            )
+                            const currentGroupId = currentGroup?.id ?? null
+                            if (nextGroupId !== currentGroupId) {
+                              moveProjectToGroup(project.id, nextGroupId)
+                            }
+                          }
+                          setActiveDragOverGroupId(null)
+                          activeDragOverGroupIdRef.current = null
                         }}
                       >
                         <ProjectItem
