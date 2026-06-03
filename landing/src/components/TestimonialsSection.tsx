@@ -25,6 +25,10 @@ type DisplayTestimonial = {
   href?: string;
 };
 
+function dicebearAvatar(seed: string) {
+  return `https://api.dicebear.com/10.x/glass/svg?seed=${encodeURIComponent(seed)}`;
+}
+
 function fromApiTestimonial(testimonial: PublicTestimonial): DisplayTestimonial {
   return {
     id: `api:${testimonial.id}`,
@@ -140,7 +144,13 @@ function TestimonialsCard({
         <div className="flex items-center gap-2">
           <Avatar className="size-8 rounded-full">
             <AvatarImage alt={`${name}'s profile picture`} src={image} />
-            <AvatarFallback>{name.charAt(0)}</AvatarFallback>
+            <AvatarFallback>
+              <img
+                alt={`${name}'s profile picture`}
+                className="aspect-square h-full w-full object-cover"
+                src={dicebearAvatar(name)}
+              />
+            </AvatarFallback>
           </Avatar>
           <div className="flex flex-col py-2">
             <cite className="font-medium text-sm not-italic leading-5">
