@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 import { useReducedMotion } from '../lib/useReducedMotion';
+import { smoothScrollToElement } from '../lib/smooth-scroll';
 import { features, featureBackgroundImage } from '../data/features';
 import { FeatureVisual } from './feature-visuals';
 import { SectionHeader } from './SectionHeader';
@@ -33,7 +34,7 @@ const FeatureSection = () => {
   const scrollToFeature = (id: string) => {
     const target = document.getElementById(`feature-${id}`);
     if (target) {
-      target.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth' });
+      smoothScrollToElement(target, { offset: reducedMotion ? 96 : 112 });
     }
   };
 

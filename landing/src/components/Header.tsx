@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, GithubIcon, Menu01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "./Button";
@@ -6,6 +6,7 @@ import { Logo } from "./Logo";
 import { cn } from "../lib/utils";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
+import { smoothScrollToHash } from "../lib/smooth-scroll";
 
 export type HeaderProps = {
   /** Scroll offset of the real scroll container (e.g. OverlayScrollbars viewport). When omitted, uses `window`. */
@@ -53,6 +54,20 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
 
   const closeMenu = () => setMenuOpen(false);
 
+  const handleAnchorClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    href: string,
+  ) => {
+    if (!href.startsWith("#")) return;
+
+    event.preventDefault();
+    closeMenu();
+
+    if (smoothScrollToHash(href, { offset: 80 })) {
+      window.history.pushState(null, "", href);
+    }
+  };
+
   const linkClassName = cn(
     "transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
     isScrolled ? "hover:text-white" : "hover:text-black",
@@ -98,6 +113,11 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
               href={link.href}
               target={link.external ? "_blank" : undefined}
               rel={link.external ? "noreferrer" : undefined}
+              onClick={
+                link.external
+                  ? undefined
+                  : (event) => handleAnchorClick(event, link.href)
+              }
               className={linkClassName}
             >
               {link.label}
@@ -182,7 +202,13 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
               href={link.href}
               target={link.external ? "_blank" : undefined}
               rel={link.external ? "noreferrer" : undefined}
-              onClick={closeMenu}
+              onClick={(event) => {
+                if (link.external) {
+                  closeMenu();
+                  return;
+                }
+                handleAnchorClick(event, link.href);
+              }}
               className="flex items-center justify-between rounded-xl px-4 py-3.5 text-base text-gray-200 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-white/5 active:scale-[0.97]"
             >
               {link.label}

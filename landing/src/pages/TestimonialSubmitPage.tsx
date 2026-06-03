@@ -4,6 +4,13 @@ import { useSeoMeta } from '@unhead/react';
 import { Button } from '../components/Button';
 import { SectionHeader } from '../components/SectionHeader';
 import { submitTestimonial } from '../lib/testimonials-api';
+import {
+  testimonialFileInputClass,
+  testimonialInputClass,
+  testimonialLabelClass,
+  testimonialPanelInsetClass,
+  testimonialTextareaClass,
+} from '../lib/testimonial-ui';
 
 export function TestimonialSubmitPage() {
   const [status, setStatus] = useState<
@@ -53,7 +60,7 @@ export function TestimonialSubmitPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="rounded-3xl border border-white/10 bg-white/[0.02] p-6 shadow-2xl shadow-black/40 backdrop-blur-md sm:p-8"
+          className={`p-6 shadow-2xl shadow-pitch-black/40 backdrop-blur-md sm:p-8 ${testimonialPanelInsetClass}`}
         >
           <div className="hidden" aria-hidden="true">
             <label>
@@ -64,7 +71,7 @@ export function TestimonialSubmitPage() {
 
           <div className="grid gap-5">
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-white">Quote</span>
+              <span className={testimonialLabelClass}>Quote</span>
               <textarea
                 name="quote"
                 required
@@ -72,28 +79,28 @@ export function TestimonialSubmitPage() {
                 maxLength={500}
                 rows={6}
                 placeholder="Termul helps me..."
-                className="resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
+                className={testimonialTextareaClass}
               />
             </label>
 
             <div className="grid gap-5 sm:grid-cols-2">
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium text-white">Name</span>
+                <span className={testimonialLabelClass}>Name</span>
                 <input
                   name="name"
                   required
                   maxLength={80}
-                  className="w-full rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="Alex Chen"
                 />
               </label>
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium text-white">Role</span>
+                <span className={testimonialLabelClass}>Role</span>
                 <input
                   name="role"
                   required
                   maxLength={120}
-                  className="w-full rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="Staff Engineer"
                 />
               </label>
@@ -101,25 +108,21 @@ export function TestimonialSubmitPage() {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium text-white">
-                  Avatar upload
-                </span>
+                <span className={testimonialLabelClass}>Avatar upload</span>
                 <input
                   name="avatar"
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/gif"
-                  className="w-full min-w-0 cursor-pointer rounded-full border border-white/10 bg-black/40 py-2 pl-2 pr-4 text-sm text-gray-300 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus-within:border-white/30 focus-within:bg-white/[0.03] focus-within:ring-4 focus-within:ring-white/5 file:mr-3 file:cursor-pointer file:rounded-full file:border-0 file:bg-white/10 file:px-4 file:py-1.5 file:text-sm file:font-medium file:text-white file:transition-colors file:hover:bg-white/20"
+                  className={testimonialFileInputClass}
                 />
               </label>
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium text-white">
-                  Or avatar URL
-                </span>
+                <span className={testimonialLabelClass}>Or avatar URL</span>
                 <input
                   name="avatarUrl"
                   type="url"
                   maxLength={500}
-                  className="w-full rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[var(--ease-out)] hover:border-white/20 hover:bg-black/60 focus:border-white/30 focus:bg-white/[0.03] focus:ring-4 focus:ring-white/5 placeholder:text-gray-600"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="https://..."
                 />
               </label>
@@ -139,8 +142,8 @@ export function TestimonialSubmitPage() {
                   aria-live="polite"
                   className={
                     status === 'success'
-                      ? 'text-sm text-green-300 animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
-                      : 'text-sm text-rose-300 animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
+                      ? 'text-sm text-emerald animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
+                      : 'text-sm text-warning-red animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
                   }
                 >
                   {message}

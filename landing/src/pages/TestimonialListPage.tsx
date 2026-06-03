@@ -9,6 +9,11 @@ import {
   moderateTestimonial,
   type ModerationAction,
 } from '../lib/testimonials-api';
+import {
+  testimonialInputClass,
+  testimonialLabelClass,
+  testimonialPanelClass,
+} from '../lib/testimonial-ui';
 import type { AdminTestimonial, TestimonialStatus } from '../types/testimonials';
 
 const SESSION_TOKEN_KEY = 'termul:testimonial-admin-token';
@@ -19,15 +24,15 @@ const statusMeta: Record<
 > = {
   pending: {
     label: 'Pending review',
-    className: 'border-amber-400/20 bg-amber-400/10 text-amber-200',
+    className: 'border-aether-blue/20 bg-aether-blue/10 text-light-steel',
   },
   approved: {
     label: 'Approved',
-    className: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200',
+    className: 'border-emerald/20 bg-emerald/10 text-emerald',
   },
   rejected: {
     label: 'Rejected',
-    className: 'border-rose-400/20 bg-rose-400/10 text-rose-200',
+    className: 'border-warning-red/20 bg-warning-red/10 text-warning-red',
   },
 };
 
@@ -150,18 +155,16 @@ export function TestimonialListPage() {
         {!token ? (
           <form
             onSubmit={handleTokenSubmit}
-            className="max-w-xl rounded-3xl border border-white/10 bg-white/[0.03] p-6 sm:p-8"
+            className={`max-w-xl p-6 sm:p-8 ${testimonialPanelClass}`}
           >
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-white">
-                Admin token
-              </span>
+              <span className={testimonialLabelClass}>Admin token</span>
               <input
                 name="token"
                 required
                 type="password"
                 autoComplete="off"
-                className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                className={`${testimonialInputClass} focus:border-aether-blue/60 focus:ring-aether-blue/10`}
                 placeholder="Paste token"
               />
             </label>
@@ -172,11 +175,11 @@ export function TestimonialListPage() {
         ) : (
           <section className="grid gap-4">
             {status === 'loading' && (
-              <p className="text-sm text-gray-400">Loading submissions...</p>
+              <p className="text-sm text-muted-foreground">Loading submissions...</p>
             )}
-            {message && <p className="text-sm text-rose-300">{message}</p>}
+            {message && <p className="text-sm text-warning-red">{message}</p>}
             {testimonials.length === 0 && status !== 'loading' ? (
-              <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-gray-400">
+              <div className={`p-8 text-muted-foreground ${testimonialPanelClass}`}>
                 No testimonial submissions yet.
               </div>
             ) : (
@@ -211,7 +214,9 @@ function TestimonialModerationCard({
   const status = statusMeta[testimonial.status];
 
   return (
-    <article className="grid gap-5 rounded-3xl border border-white/10 bg-white/[0.03] p-5 transition-colors hover:border-white/20 sm:grid-cols-[auto_1fr] sm:p-6">
+    <article
+      className={`grid gap-5 p-5 transition-colors hover:border-porcelain/20 sm:grid-cols-[auto_1fr] sm:p-6 ${testimonialPanelClass}`}
+    >
       <AdminAvatar testimonial={testimonial} token={token} />
       <div className="grid gap-4">
         <div>
@@ -221,14 +226,14 @@ function TestimonialModerationCard({
             >
               {status.label}
             </span>
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted-foreground">
               {new Date(testimonial.createdAt).toLocaleString()}
             </span>
           </div>
-          <blockquote className="text-lg leading-relaxed text-white">
+          <blockquote className="text-lg leading-relaxed text-foreground">
             "{testimonial.quote}"
           </blockquote>
-          <p className="mt-3 text-sm text-gray-400">
+          <p className="mt-3 text-sm text-muted-foreground">
             {testimonial.name}, {testimonial.role}
           </p>
         </div>
@@ -316,7 +321,7 @@ function AdminAvatar({
 
   if (!imageUrl) {
     return (
-      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-gray-400">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border-subtle bg-porcelain/5 text-sm text-muted-foreground">
         {testimonial.name.charAt(0)}
       </div>
     );
@@ -326,7 +331,7 @@ function AdminAvatar({
     <img
       src={imageUrl}
       alt={`${testimonial.name}'s avatar`}
-      className="h-14 w-14 rounded-full border border-white/10 object-cover"
+      className="h-14 w-14 rounded-full border border-border-subtle object-cover"
       loading="lazy"
     />
   );
