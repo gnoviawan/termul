@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import type { AvailableCommand, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
@@ -6,9 +6,9 @@ import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentHeader } from './AgentHeader'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { buildTimeline } from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
-import { ToolCallCard } from './ToolCallCard'
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
@@ -75,6 +75,13 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     [setMode, sessionId]
   )
 
+  const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
+  // Show the typing indicator while a turn is active but no agent text has
+  // streamed yet (a trailing agent message means text is already rendering).
+  const lastMessage = messages[messages.length - 1]
+  const hasAgentTextTail = lastMessage?.role === 'agent'
+  const showTyping = Boolean(session?.activeTurn) && !hasAgentTextTail
+
   if (!session) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -114,11 +121,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         </div>
       )}
       <PlanPanel entries={plan} />
-      <ChatMessageList messages={messages}>
-        {toolCalls.map((tc) => (
-          <ToolCallCard key={tc.toolCallId} toolCall={tc} />
-        ))}
-      </ChatMessageList>
+      <ChatMessageList items={timeline} agentId={session.agentId} showTyping={showTyping} />
       <ChatInputBar
         session={session}
         busy={session.activeTurn}

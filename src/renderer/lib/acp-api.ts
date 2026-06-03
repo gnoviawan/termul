@@ -113,6 +113,8 @@ export interface ToolCall {
   content?: ToolCallContent[]
   rawInput?: unknown
   rawOutput?: unknown
+  /** Client-side arrival time (stamped in the store for timeline ordering). */
+  timestamp?: number
   [k: string]: unknown
 }
 

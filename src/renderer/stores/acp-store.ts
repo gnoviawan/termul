@@ -13,6 +13,7 @@
 
 import { toast } from 'sonner'
 import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   type StoredAgentConfig,
@@ -922,12 +923,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onToolCall: (e) =>
-    set((s) => ({
-      toolCalls: {
-        ...s.toolCalls,
-        [e.sessionId]: [...(s.toolCalls[e.sessionId] ?? []), e.toolCall]
+    set((s) => {
+      // Stamp arrival time (unless already present) so the UI can interleave
+      // tool calls with messages on a single chronological timeline.
+      const stamped =
+        typeof e.toolCall.timestamp === 'number'
+          ? e.toolCall
+          : { ...e.toolCall, timestamp: Date.now() }
+      return {
+        toolCalls: {
+          ...s.toolCalls,
+          [e.sessionId]: [...(s.toolCalls[e.sessionId] ?? []), stamped]
+        }
       }
-    })),
+    }),
 
   _onToolCallUpdate: (e) =>
     set((s) => {
@@ -1176,3 +1185,27 @@ export const useAcpMessages = (sessionId: SessionId | null): ChatMessage[] =>
   useAcpStore((s) => (sessionId ? (s.messages[sessionId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES))
 
 const EMPTY_MESSAGES: ChatMessage[] = []
+
+export interface AgentIdentity {
+  /** Human-friendly agent name (e.g. "Cursor"), or null when unresolved. */
+  name: string | null
+  /** Template id used to resolve the agent icon, when known. */
+  templateId: string | null
+}
+
+/**
+ * Resolve the configured agent's display name + template (for icon) behind a
+ * live session, via the configToLiveAgent mapping. Falls back to nulls when the
+ * session was opened from history without a matching live config.
+ */
+export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
+  if (!agentId) return { name: null, templateId: null }
+  const configId = Object.keys(state.configToLiveAgent).find(
+    (cid) => state.configToLiveAgent[cid] === agentId
+  )
+  const config = configId ? state.agentConfigs.find((c) => c.id === configId) : undefined
+  return { name: config?.name ?? null, templateId: config?.templateId ?? null }
+}
+
+export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
+  useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))

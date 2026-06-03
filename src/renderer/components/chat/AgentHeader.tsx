@@ -1,9 +1,9 @@
 import { ChevronDown, Circle } from 'lucide-react'
-import { AgentIcon } from '@/components/agents/AgentIcon'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession, AgentStatus } from '@/stores/acp-store'
+import { AgentBadge } from './AgentBadge'
 
 interface AgentHeaderProps {
   session: AcpSession
@@ -127,10 +127,12 @@ export function AgentHeader({ session, agentStatus }: AgentHeaderProps): React.J
 
   return (
     <div className="flex items-center gap-2 bg-transparent px-3 py-1.5">
-      <AgentIcon agentId={session.agentId} className="h-3.5 w-3.5" />
-      <span className="truncate text-xs font-medium text-foreground">
-        {session.title ?? `Agent ${session.agentId.slice(0, 8)}`}
-      </span>
+      <AgentBadge
+        agentId={session.agentId}
+        fallbackName={session.title ?? undefined}
+        iconSize={14}
+        className="truncate text-xs font-medium text-foreground"
+      />
       <Circle
         size={8}
         className={cn(

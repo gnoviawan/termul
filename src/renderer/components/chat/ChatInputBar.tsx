@@ -1,9 +1,9 @@
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowUp, ChevronDown, Square } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
-import { AgentIcon } from '@/components/agents/AgentIcon'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
+import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import {
@@ -144,7 +144,6 @@ export function ChatInputBar({
   }, [])
 
   const canSend = !disabled && value.trim().length > 0
-  const agentName = session.title ?? `Agent ${session.agentId.slice(0, 8)}`
 
   return (
     <div className="px-5 pb-3.5 pt-3">
@@ -168,9 +167,9 @@ export function ChatInputBar({
         </div>
         <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] pl-1.5 pr-2 text-xs text-foreground/80">
-              <AgentIcon agentId={session.agentId} className="h-5 w-5" />
-              <span className="max-w-[140px] truncate">{agentName}</span>
+            <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
+              <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
+              <ChevronDown size={11} className="text-muted-foreground" />
             </span>
             {hasConfigOptions ? (
               usableConfigOptions.map((option) => (

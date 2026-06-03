@@ -1,9 +1,10 @@
-import { Bot, User } from 'lucide-react'
+import { User } from 'lucide-react'
 import { memo, useMemo } from 'react'
-import type { ContentBlock } from '@/lib/acp-api'
+import type { AgentId, ContentBlock } from '@/lib/acp-api'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { AgentBadge } from './AgentBadge'
 
 /** Concatenate the text of all text blocks; note any non-text block inline. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -26,9 +27,10 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
 
 interface ChatMessageProps {
   message: ChatMessageType
+  agentId: AgentId
 }
 
-function ChatMessageComponent({ message }: ChatMessageProps): React.JSX.Element {
+function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX.Element {
   // Thought: collapsible, de-emphasized.
   if (message.role === 'thought') {
     const text = blocksToText(message.blocks)
@@ -51,8 +53,14 @@ function ChatMessageComponent({ message }: ChatMessageProps): React.JSX.Element 
   return (
     <div className="px-4 py-3">
       <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-        {isUser ? <User size={12} /> : <Bot size={12} />}
-        <span>{isUser ? 'You' : 'Agent'}</span>
+        {isUser ? (
+          <>
+            <User size={12} />
+            <span>You</span>
+          </>
+        ) : (
+          <AgentBadge agentId={agentId} iconSize={12} />
+        )}
         {message.streaming && (
           <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
         )}
