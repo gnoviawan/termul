@@ -2295,7 +2295,10 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
         let _ = std::fs::remove_file(&cleanup_script);
     });
 
-    log::info!("[SSH] Created askpass helper at {:?}", script_path);
+    // Path includes the OS temp dir (often the username); keep it out of the
+    // user-attachable info log (issue #244 AC#6). Full path stays at debug.
+    log::info!("[SSH] Created askpass helper");
+    log::debug!("[SSH] Askpass helper path: {:?}", script_path);
     Ok(IpcResult::success(
         script_path.to_string_lossy().to_string(),
     ))
@@ -2506,6 +2509,70 @@ pub async fn git_get_commit_context(
     crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
+/// Cap on any single renderer-supplied field to keep one forwarded error from
+/// ballooning the log file.
+const MAX_FRONTEND_FIELD_LEN: usize = 4096;
+
+/// Sanitize untrusted renderer text for single-line logging: escape newlines
+/// and control characters so a crafted error message/stack cannot forge
+/// additional, authoritative-looking log lines (log injection), and truncate
+/// to a sane bound.
+fn sanitize_log_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len().min(MAX_FRONTEND_FIELD_LEN));
+    for ch in value.chars().take(MAX_FRONTEND_FIELD_LEN) {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Strip other C0 control chars (incl. ESC) that could corrupt or
+            // spoof terminal/log output; keep everything else verbatim.
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    if value.chars().count() > MAX_FRONTEND_FIELD_LEN {
+        out.push_str("…[truncated]");
+    }
+    out
+}
+
+/// Forward a renderer-side error to the backend log file (issue #244).
+///
+/// Global `window.onerror` / `onunhandledrejection` handlers and the React
+/// ErrorBoundary route through this so frontend failures survive a closed
+/// production DevTools console and land in the same rotated log file as the
+/// Rust logs. `level` accepts "error" (default) or "warn". All renderer-supplied
+/// fields are sanitized to prevent log injection.
+#[tauri::command]
+pub fn log_frontend_error(
+    level: Option<String>,
+    message: String,
+    source: Option<String>,
+    stack: Option<String>,
+    component_stack: Option<String>,
+) -> Result<(), String> {
+    let context = sanitize_log_field(&source.unwrap_or_else(|| "renderer".to_string()));
+    let message = sanitize_log_field(&message);
+    let stack_part = stack
+        .map(|s| format!(" | stack: {}", sanitize_log_field(&s)))
+        .unwrap_or_default();
+    let component_part = component_stack
+        .map(|s| format!(" | component stack: {}", sanitize_log_field(&s)))
+        .unwrap_or_default();
+
+    let line = format!(
+        "[frontend] [{}] {}{}{}",
+        context, message, stack_part, component_part
+    );
+
+    match level.as_deref() {
+        Some("warn") => log::warn!("{}", line),
+        _ => log::error!("{}", line),
+    }
+
+    Ok(())
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {
@@ -2527,5 +2594,28 @@ mod tests {
         assert!(result.data.is_none());
         assert_eq!(result.error, Some("test error".to_string()));
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
+    }
+
+    #[test]
+    fn sanitize_log_field_escapes_newlines_and_strips_controls() {
+        // Newlines/CR/tab are escaped so injected content stays on one line.
+        let forged = "oops\n[startup] termul forged line\r\tend";
+        let cleaned = sanitize_log_field(forged);
+        assert!(!cleaned.contains('\n'));
+        assert!(!cleaned.contains('\r'));
+        assert!(!cleaned.contains('\t'));
+        assert!(cleaned.contains("\\n[startup]"));
+
+        // ESC and other C0 control chars are dropped entirely.
+        let with_esc = "a\u{1b}[31mred\u{0007}b";
+        assert_eq!(sanitize_log_field(with_esc), "a[31mredb");
+    }
+
+    #[test]
+    fn sanitize_log_field_truncates_oversized_input() {
+        let huge = "x".repeat(MAX_FRONTEND_FIELD_LEN + 100);
+        let cleaned = sanitize_log_field(&huge);
+        assert!(cleaned.ends_with("…[truncated]"));
+        assert!(cleaned.chars().count() <= MAX_FRONTEND_FIELD_LEN + "…[truncated]".chars().count());
     }
 }
