@@ -80,6 +80,7 @@ export function ColorPickerPopover({
           const colors = getColorClasses(color)
           return (
             <button
+              type="button"
               key={color}
               onClick={() => {
                 onSelectColor(color)

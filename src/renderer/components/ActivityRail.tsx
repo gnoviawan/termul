@@ -117,6 +117,7 @@ export function ActivityRail({
       <div className="w-6 h-px bg-border/60 my-1" aria-hidden="true" />
 
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation()
           onOpenCommandPalette?.()
@@ -130,6 +131,7 @@ export function ActivityRail({
       </button>
 
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation()
           onOpenGitChanges?.()
@@ -146,6 +148,7 @@ export function ActivityRail({
       </button>
 
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation()
           onOpenGitHistory?.()
@@ -162,6 +165,7 @@ export function ActivityRail({
       </button>
 
       <button
+        type="button"
         onClick={(e) => {
           void handleToggleSSHPanel(e)
         }}
@@ -178,6 +182,7 @@ export function ActivityRail({
 
       <div className="mt-auto flex flex-col items-center pb-1">
         <button
+          type="button"
           onClick={(e) => {
             void handleToggleSidebar(e)
           }}
@@ -193,6 +198,7 @@ export function ActivityRail({
         </button>
 
         <button
+          type="button"
           onClick={(e) => {
             void handleToggleFileExplorer(e)
           }}
@@ -214,6 +220,7 @@ export function ActivityRail({
         />
 
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation()
             navigate('/preferences')
