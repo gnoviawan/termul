@@ -9,7 +9,7 @@ use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
@@ -1157,10 +1157,15 @@ pub struct RgInfoResponse {
 }
 
 static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
+static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
 fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn filename_search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+    FILENAME_SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(target_os = "windows")]
@@ -1571,7 +1576,7 @@ pub async fn search_content_cancel(
 pub async fn search_file_names_cancel(
     request: SearchContentCancelRequest,
 ) -> Result<IpcResult<()>, String> {
-    let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+    let mut guard = filename_search_processes().lock().map_err(|e| e.to_string())?;
     if let Some(child_handle) = guard.remove(&request.search_id) {
         if let Ok(mut child) = child_handle.lock() {
             let _ = child.kill();
@@ -1658,7 +1663,7 @@ pub async fn search_file_names_stream(
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
-    rg_command.args(&args).stdout(Stdio::piped()).stderr(Stdio::null());
+    rg_command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
     configure_background_command(&mut rg_command);
 
     let mut child = match rg_command.spawn() {
@@ -1700,9 +1705,11 @@ pub async fn search_file_names_stream(
         }
     };
 
+    let stderr = child.stderr.take();
+
     let child_handle = Arc::new(Mutex::new(child));
     {
-        let mut guard = search_processes().lock().map_err(|e| e.to_string())?;
+        let mut guard = filename_search_processes().lock().map_err(|e| e.to_string())?;
         guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
     let child = child_handle;
@@ -1734,12 +1741,30 @@ pub async fn search_file_names_stream(
             }
         }
 
-        if let Ok(mut c) = child.lock() {
-            let _ = c.try_wait().or_else(|_| c.wait().map(Some));
-        }
-        if let Ok(mut guard) = search_processes().lock() {
+        let exit_status = if let Ok(mut c) = child.lock() {
+            c.try_wait().or_else(|_| c.wait().map(Some)).ok().flatten()
+        } else {
+            None
+        };
+        if let Ok(mut guard) = filename_search_processes().lock() {
             guard.remove(&search_id);
         }
+
+        // Determine error from exit status / stderr
+        let error = if exit_status.map_or(false, |s| !s.success()) {
+            let mut stderr_text = String::new();
+            if let Some(stderr_reader) = stderr {
+                let _ = BufReader::new(stderr_reader).read_to_string(&mut stderr_text);
+            }
+            let msg = if stderr_text.is_empty() {
+                format!("rg exited with status: {:?}", exit_status)
+            } else {
+                stderr_text.trim().to_string()
+            };
+            Some(msg)
+        } else {
+            None
+        };
 
         // Final batch with all files
         let _ = app_handle.emit(
@@ -1757,7 +1782,7 @@ pub async fn search_file_names_stream(
                 search_id,
                 truncated,
                 total_files: files.len(),
-                error: None,
+                error,
             },
         );
     });
