@@ -1,6 +1,6 @@
-import { useEffect, useCallback } from 'react'
-import { useCommandHistoryStore, CommandHistoryEntry } from '@/stores/command-history-store'
+import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { type CommandHistoryEntry, useCommandHistoryStore } from '@/stores/command-history-store'
 
 export const COMMAND_HISTORY_KEY = (projectId: string) => `projects/${projectId}/command-history`
 
@@ -23,8 +23,7 @@ export function useCommandHistoryLoader(projectId: string | null): void {
     }
     load()
     // Only run on projectId change, not on entries change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, setHistory])
+  }, [projectId, setHistory, entries.filter])
 }
 
 export function useSaveCommandHistory(projectId: string | null): () => Promise<void> {

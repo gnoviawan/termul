@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/plugin-store', () => ({
   Store: {
@@ -8,11 +8,11 @@ vi.mock('@tauri-apps/plugin-store', () => ({
 
 import { Store } from '@tauri-apps/plugin-store'
 import {
-  getSkippedVersion,
-  skipVersion,
+  _resetVersionSkipStoreForTesting,
   clearSkippedVersion,
+  getSkippedVersion,
   isVersionSkipped,
-  _resetVersionSkipStoreForTesting
+  skipVersion
 } from '../tauri-version-skip'
 
 const mockStore = {

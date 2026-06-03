@@ -1,13 +1,13 @@
-import { useEffect, useCallback } from 'react'
-import { useSnapshotActions, useSnapshots } from '@/stores/snapshot-store'
-import { persistenceApi, terminalApi } from '@/lib/api'
-import { useTerminalStore } from '@/stores/terminal-store'
-import { useProjectStore } from '@/stores/project-store'
-import { getTerminal } from '@/utils/terminal-registry'
+import { useCallback, useEffect } from 'react'
+import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
-import type { PersistedTerminal, PersistedSnapshot } from '../../shared/types/persistence.types'
-import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
+import { useProjectStore } from '@/stores/project-store'
+import { useSnapshotActions } from '@/stores/snapshot-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type { Snapshot } from '@/types/project'
+import { getTerminal } from '@/utils/terminal-registry'
+import type { PersistedSnapshot, PersistedTerminal } from '../../shared/types/persistence.types'
+import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
 
 // Hook to load snapshots when project changes
 export function useSnapshotLoader(): void {
@@ -175,4 +175,4 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
 }
 
 // Re-export for convenience
-export { useSnapshots, useSnapshotActions, useSnapshotLoading } from '@/stores/snapshot-store'
+export { useSnapshotActions, useSnapshotLoading, useSnapshots } from '@/stores/snapshot-store'

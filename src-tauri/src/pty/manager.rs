@@ -72,6 +72,220 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri::ipc::{Channel, Response};
+
+/// ADR-004.2: Result of resolving a program path, possibly with leading argv
+/// entries that must be prepended before the user-supplied args (e.g. when a
+/// `.cmd` npm shim is rewritten to `node.exe <script>`).
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedProgram {
+    /// Absolute path to the executable (always a PE image on Windows).
+    pub program: String,
+    /// Extra argv entries to insert before the user's args.
+    /// E.g. `["C:\...\node_modules\opencode\bin\opencode"]` when the
+    /// binary is `node.exe` and the script is the npm shim target.
+    pub prepend_args: Vec<String>,
+}
+
+impl ResolvedProgram {
+    pub fn new(program: String) -> Self {
+        Self {
+            program,
+            prepend_args: Vec::new(),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    pub fn with_args(program: String, args: Vec<String>) -> Self {
+        Self {
+            program,
+            prepend_args: args,
+        }
+    }
+}
+
+/// ADR-004.2: Returns true if a Windows file path points to a directly-
+/// executable PE image (`.exe`, `.com`, `.scr` only). Anything else
+/// (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, ...) cannot be handed to
+/// `CreateProcessW` and would surface as `os error 193`.
+#[cfg(target_os = "windows")]
+pub(super) fn is_directly_executable_windows(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    // Strip a trailing quote pair if the caller supplied a quoted form.
+    let trimmed = lower.trim_end_matches('"');
+    matches!(
+        std::path::Path::new(trimmed)
+            .extension()
+            .and_then(|e| e.to_str()),
+        Some("exe") | Some("com") | Some("scr")
+    )
+}
+
+/// ADR-004.2, Windows-only: Parse an npm `.cmd` shim and extract the
+/// underlying `node.exe` + script path so the spawn can run the PE image
+/// directly instead of handing the non-executable `.cmd` to CreateProcessW.
+///
+/// npm on Windows installs CLI tools as thin batch wrappers whose last line is:
+///   "<node.exe>" "<script>" %*
+/// We extract both paths, resolve `%dp0%` / `%~dp0` to the shim's directory,
+/// and return `ResolvedProgram { program: "node.exe", prepend_args: ["<script>"] }`.
+#[cfg(target_os = "windows")]
+pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    let content = std::fs::read_to_string(shim_path).ok()?;
+    let shim_dir = std::path::Path::new(shim_path).parent()?;
+
+    // Find the last line that contains a command invocation pattern:
+    //   "<executable>" "<script>" %*
+    // or equivalently with %_prog% resolved.
+    // We look for lines containing both `"%dp0%` (or `")` and `%*`.
+    for line in content.lines().rev() {
+        let line = line.trim();
+        if !line.contains("%*") {
+            continue;
+        }
+        if !line.contains("\"") {
+            continue;
+        }
+        // Extract quoted strings: "..."
+        let quotes: Vec<&str> = line.split('"').collect();
+        // The invocation pattern uses two quoted paths:
+        //   index 1 = executable (node.exe path)
+        //   index 3 = script path
+        if quotes.len() < 5 {
+            continue;
+        }
+        let raw_exe = quotes[1].trim();
+        let raw_script = quotes[3].trim();
+        if raw_exe.is_empty() || raw_script.is_empty() {
+            continue;
+        }
+
+        // Resolve %dp0% / %~dp0 / %~dp0% to the shim's directory,
+        // and %_prog% to node.exe (either <dir>/node.exe or bare "node"
+        // when the node executable is on PATH).
+        let resolve_dp0 = |val: &str| -> String {
+            let resolved = val.replace("%dp0%", shim_dir.to_str().unwrap_or("."));
+            let resolved = resolved.replace("%~dp0", shim_dir.to_str().unwrap_or("."));
+            let resolved = resolved.replace("%~dp0%", shim_dir.to_str().unwrap_or("."));
+            resolved.replace('"', "")
+        };
+
+        let exe_path_str = resolve_dp0(raw_exe);
+        // Handle %_prog%: check for node.exe in the shim directory first.
+        let exe_path_str = if exe_path_str == "%_prog%" {
+            let local_node = shim_dir.join("node.exe");
+            if local_node.exists() {
+                local_node.to_string_lossy().to_string()
+            } else if let Some(path) = resolve_executable_from_path("node.exe") {
+                path
+            } else {
+                continue;
+            }
+        } else {
+            exe_path_str
+        };
+        let script_path_str = resolve_dp0(raw_script);
+
+        let exe_path = std::path::Path::new(&exe_path_str);
+        let script_path = std::path::Path::new(&script_path_str);
+
+        // The executable must exist and be a directly-executable image.
+        if !exe_path.exists() || !is_directly_executable_windows(&exe_path_str) {
+            continue;
+        }
+        // The script should exist (not strictly required but a good check).
+        if !script_path.exists() {
+            continue;
+        }
+
+        return Some(ResolvedProgram::with_args(
+            exe_path_str,
+            vec![script_path_str],
+        ));
+    }
+
+    None
+}
+
+/// Windows-only: parse a `.cmd`/`.bat` shim that delegates to PowerShell, e.g.
+/// Cursor Agent's `cursor-agent.cmd` which runs `powershell.exe -File script.ps1`.
+#[cfg(target_os = "windows")]
+pub(super) fn parse_powershell_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    let content = std::fs::read_to_string(shim_path).ok()?;
+    let shim_dir = std::path::Path::new(shim_path).parent()?;
+
+    let resolve_batch_token = |raw: &str| -> String {
+        let shim_dir_str = shim_dir.to_str().unwrap_or(".");
+        let system_root =
+            env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        raw.replace("%SystemRoot%", &system_root)
+            .replace("%SYSTEMROOT%", &system_root)
+            .replace("%SCRIPT_DIR%", shim_dir_str)
+            .replace("%~dp0", shim_dir_str)
+            .replace("%~dp0%", shim_dir_str)
+            .replace("%dp0%", shim_dir_str)
+            .trim_matches('"')
+            .to_string()
+    };
+
+    for line in content.lines().rev() {
+        let line = line.trim();
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("powershell") || !lower.contains("-file") {
+            continue;
+        }
+
+        let ps_exe_token = line
+            .split_whitespace()
+            .find(|t| t.to_ascii_lowercase().contains("powershell.exe"))?;
+        let ps_exe = resolve_batch_token(ps_exe_token);
+        if !std::path::Path::new(&ps_exe).exists()
+            || !is_directly_executable_windows(&ps_exe)
+        {
+            continue;
+        }
+
+        let file_flag = "-file";
+        let file_idx = lower.find(file_flag)?;
+        let after_file = line[file_idx + file_flag.len()..].trim();
+        let script_raw = if let Some(start) = after_file.find('"') {
+            let rest = &after_file[start + 1..];
+            let end = rest.find('"')?;
+            &rest[..end]
+        } else {
+            after_file.split_whitespace().next()?
+        };
+        let script_path = resolve_batch_token(script_raw);
+        if !std::path::Path::new(&script_path).exists() {
+            continue;
+        }
+
+        let mut prepend_args: Vec<String> = Vec::new();
+        for token in line.split_whitespace() {
+            let token_clean = token.trim_matches('"');
+            if token_clean.eq_ignore_ascii_case("-file") {
+                prepend_args.push("-File".to_string());
+                prepend_args.push(script_path.clone());
+                break;
+            }
+            if token_clean.to_ascii_lowercase().contains("powershell.exe") {
+                continue;
+            }
+            if !token_clean.is_empty() {
+                prepend_args.push(resolve_batch_token(token_clean));
+            }
+        }
+
+        return Some(ResolvedProgram::with_args(ps_exe, prepend_args));
+    }
+
+    None
+}
+
+/// Try npm-node shim parsing first, then PowerShell-wrapper shims.
+#[cfg(target_os = "windows")]
+fn try_parse_windows_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
+    parse_npm_cmd_shim(shim_path).or_else(|| parse_powershell_cmd_shim(shim_path))
+}
+
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "windows")]
@@ -140,7 +354,7 @@ pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
 pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
 pub const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
 
-/// Public information about a spawned terminal
+/// Public info emitted to renderer on spawn (also forwarded to ws clients)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalInfo {
@@ -152,6 +366,17 @@ pub struct TerminalInfo {
     pub rows: u16,
 }
 
+/// Broadcast channel capacity (number of buffered output batches per terminal).
+/// Each batch is up to READ_BUF (16KB) bytes. 1024 slots ≈ 16MB max buffered output.
+/// Slow receivers will receive `RecvError::Lagged` — acceptable; they miss bytes
+/// rather than back-pressuring the PTY.
+const TERM_BROADCAST_CAPACITY: usize = 1024;
+
+/// Maximum scrollback bytes retained per terminal for remote-client replay.
+/// 256 KiB ≈ several screenfuls of history; bounded so memory stays predictable
+/// even for very chatty terminals. Oldest bytes are evicted first.
+pub const SCROLLBACK_CAP: usize = 256 * 1024;
+
 /// Options for spawning a new terminal
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +386,16 @@ pub struct SpawnOptions {
     pub env: Option<HashMap<String, String>>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    // ADR-004.2: terminal-native agent launch.
+    // When `program` is Some, the PTY runs that executable directly with `args`
+    // as discrete argv entries, bypassing shell resolution and shell quoting of
+    // the prompt. When `program` is None, spawn behavior is unchanged.
+    #[serde(default)]
+    pub program: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl Default for SpawnOptions {
@@ -171,6 +406,9 @@ impl Default for SpawnOptions {
             env: None,
             cols: Some(80),
             rows: Some(24),
+            program: None,
+            args: None,
+            kind: None,
         }
     }
 }
@@ -191,6 +429,15 @@ pub struct TerminalInstance {
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
+    /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
+    /// Each flusher batch is sent as a `Vec<u8>` message. Tauri frontend keeps using
+    /// its dedicated Channel — this field is only consumed by the remote module.
+    pub broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
+    /// Rolling scrollback buffer of recent raw PTY output (VT100 bytes).
+    /// Replayed to remote web clients on connect so they see prior output
+    /// (persistence + parity with the desktop terminal). Capped at
+    /// `SCROLLBACK_CAP` bytes; oldest bytes are dropped first.
+    pub scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -234,6 +481,29 @@ impl TerminalInstance {
     /// Returns when the terminal became orphaned, if ever.
     pub fn orphan_since(&self) -> Option<Instant> {
         *self.orphan_since.read()
+    }
+
+    /// Subscribe to live PTY output. Returns a receiver that yields raw byte batches.
+    /// Use this from the remote WebSocket module to forward output to web clients.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.broadcast_tx.subscribe()
+    }
+
+    /// Atomically snapshot the current scrollback AND subscribe to the live
+    /// broadcast, under the scrollback write lock.
+    ///
+    /// Holding the lock across both operations guarantees no output is lost or
+    /// duplicated at the seam: any batch appended to scrollback before this call
+    /// is in the returned snapshot, and any batch after is delivered via the
+    /// receiver. The flusher takes the same lock when appending, so the two
+    /// cannot interleave.
+    pub fn subscribe_with_backlog(
+        &self,
+    ) -> (Vec<u8>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
+        let guard = self.scrollback.write();
+        let rx = self.broadcast_tx.subscribe();
+        let snapshot: Vec<u8> = guard.iter().copied().collect();
+        (snapshot, rx)
     }
 }
 
@@ -474,12 +744,30 @@ impl PtyManager {
 
         let id = self.generate_id();
 
-        // Resolve shell path
-        let shell_path = if let Some(shell) = &options.shell {
-            self.resolve_shell_path(shell)?
+        // ADR-004.2: Resolve the program to run. When `program` is set we run
+        // that executable directly (terminal-native agent launch); otherwise we
+        // resolve a login shell exactly as before. `program == None` keeps the
+        // shell path byte-for-byte identical to prior behavior.
+        let resolved = if let Some(program) = &options.program {
+            self.resolve_program_path(program)?
+        } else if let Some(shell) = &options.shell {
+            ResolvedProgram::new(self.resolve_shell_path(shell)?)
         } else {
-            self.get_default_shell()?
+            ResolvedProgram::new(self.get_default_shell()?)
         };
+        // Merge prepend_args (from npm .cmd shim rewriting) with user args.
+        // User args apply only for agent/program spawns, not shell spawns.
+        let user_args = if options.program.is_some() {
+            options.args.clone().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let program_args: Vec<String> = resolved
+            .prepend_args
+            .into_iter()
+            .chain(user_args)
+            .collect();
+        let shell_path = resolved.program;
 
         // Resolve working directory
         let cwd = if let Some(cwd) = &options.cwd {
@@ -501,8 +789,13 @@ impl PtyManager {
         // On Windows, use our custom ConPTY implementation to avoid console window
         #[cfg(target_os = "windows")]
         {
-            // Quote the shell path if it contains spaces
-            let shell_escaped = if shell_path.contains(' ') {
+            // ADR-004.2: In agent mode, build the command line from a discrete
+            // argv array via the audited quoting helper — the prompt is passed as
+            // a single argument and is never shell-interpolated. In shell mode,
+            // preserve the existing shell-escaping behavior verbatim.
+            let shell_escaped = if options.program.is_some() {
+                crate::pty::windows::build_windows_command_line(&shell_path, &program_args)
+            } else if shell_path.contains(' ') {
                 format!(
                     "\"{}\" {}",
                     shell_path,
@@ -545,6 +838,8 @@ impl PtyManager {
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
+                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -562,10 +857,12 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_broadcast = instance.broadcast_tx.clone();
+            let flusher_scrollback = instance.scrollback.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
             });
 
             // Spawn reader thread
@@ -626,6 +923,13 @@ impl PtyManager {
                 .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
             let mut cmd = CommandBuilder::new(&shell_path);
+            // ADR-004.2: In agent mode, append the argv tail as discrete
+            // arguments. portable-pty passes argv without a shell, so the prompt
+            // is delivered verbatim with no shell interpolation. In shell mode
+            // `program_args` is empty and this loop is a no-op.
+            for arg in &program_args {
+                cmd.arg(arg);
+            }
             for (key, value) in &env {
                 cmd.env(key, value);
             }
@@ -664,6 +968,8 @@ impl PtyManager {
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
+                broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
+                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -677,10 +983,12 @@ impl PtyManager {
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
+            let flusher_broadcast = instance.broadcast_tx.clone();
+            let flusher_scrollback = instance.scrollback.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_channel, flusher_id);
+                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
             });
 
             // Spawn reader thread
@@ -837,80 +1145,76 @@ impl PtyManager {
     /// ADR-002.3: Flusher thread — batched Channel output at FLUSH_INTERVAL.
     /// Takes pending buffer via std::mem::take every 4ms and sends via binary channel.
     /// If on_data is None, skips sending (just drains).
+    ///
+    /// broadcast_tx: per-terminal broadcast channel. When present, each flushed
+    /// batch is also sent so remote WebSocket clients receive live output.
+    /// Send failures are ignored (no active remote subscribers is normal).
+    ///
+    /// scrollback: rolling history buffer. Each batch is appended (under its
+    /// write lock, capped at `SCROLLBACK_CAP`) BEFORE broadcasting, so a remote
+    /// client calling `subscribe_with_backlog` sees a consistent seam between
+    /// replayed history and live output.
     fn flusher_loop(
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
+        broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
+        scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
         on_data: Option<Channel<Response>>,
         terminal_id: String,
     ) {
         let id = terminal_id;
         log::info!("[PTY {}] Flusher thread starting", id);
 
-        if on_data.is_none() {
-            // No binary channel — read and discard flusher
-            loop {
-                std::thread::sleep(FLUSH_INTERVAL);
-                if done_flag.load(Ordering::Acquire) {
-                    break;
-                }
-                // Drain pending buffer silently
-                if let Ok(mut guard) = pending_buf.lock() {
-                    guard.clear();
-                }
-            }
-            // Final drain
-            if let Ok(mut guard) = pending_buf.lock() {
-                guard.clear();
-            }
-            log::info!("[PTY {}] Flusher thread ended (no channel)", id);
-            return;
-        }
+        let channel_ref: Option<&Channel<Response>> = on_data.as_ref();
 
-        let channel = on_data.unwrap();
+        // Append a batch to the capped scrollback ring buffer (oldest bytes evicted first).
+        fn push_scrollback(buf: &Arc<RwLock<std::collections::VecDeque<u8>>>, data: &[u8]) {
+            let mut guard = buf.write();
+            guard.extend(data.iter().copied());
+            let overflow = guard.len().saturating_sub(SCROLLBACK_CAP);
+            if overflow > 0 {
+                guard.drain(0..overflow);
+            }
+        }
 
         loop {
             std::thread::sleep(FLUSH_INTERVAL);
 
-            if done_flag.load(Ordering::Acquire) {
-                // One final flush before exiting
-                let chunk = match pending_buf.lock() {
-                    Ok(mut guard) => {
-                        if guard.is_empty() {
-                            None
-                        } else {
-                            Some(std::mem::take(&mut *guard))
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
-                        break;
-                    }
-                };
-                if let Some(data) = chunk {
-                    if let Err(e) = channel.send(Response::new(data)) {
-                        log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
-                    }
-                }
-                break;
-            }
-
             let chunk = match pending_buf.lock() {
-                Ok(mut guard) => {
-                    if guard.is_empty() {
-                        continue;
-                    }
-                    Some(std::mem::take(&mut *guard))
-                }
-                Err(e) => {
-                    log::error!("[PTY {}] Flusher mutex poisoned: {}", id, e);
-                    break;
-                }
+                Ok(mut guard) if !guard.is_empty() => Some(std::mem::take(&mut *guard)),
+                _ => None,
             };
 
             if let Some(data) = chunk {
-                if let Err(e) = channel.send(Response::new(data)) {
-                    log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                // Record into scrollback FIRST so subscribe_with_backlog sees a clean seam.
+                push_scrollback(&scrollback, &data);
+
+                // Broadcast to remote WebSocket subscribers (best-effort; ignore Lagged/NoReceivers)
+                let _ = broadcast_tx.send(data.clone());
+
+                // Forward to Tauri frontend channel (may be None for detached terminals)
+                if let Some(ch) = channel_ref {
+                    if let Err(e) = ch.send(Response::new(data)) {
+                        log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                    }
                 }
+            }
+
+            if done_flag.load(Ordering::Acquire) {
+                // One final broadcast of anything still buffered
+                if let Ok(mut guard) = pending_buf.lock() {
+                    if !guard.is_empty() {
+                        let final_data = std::mem::take(&mut *guard);
+                        push_scrollback(&scrollback, &final_data);
+                        let _ = broadcast_tx.send(final_data.clone());
+                        if let Some(ch) = channel_ref {
+                            if let Err(e) = ch.send(Response::new(final_data)) {
+                                log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                            }
+                        }
+                    }
+                }
+                break;
             }
         }
 
@@ -1165,6 +1469,100 @@ impl PtyManager {
         {
             Ok(env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()))
         }
+    }
+
+    /// ADR-004.2: Resolve a program (agent binary) to an absolute, existing
+    /// path. Reuses the same PATH/`which` resolution as shell lookup so agents
+    /// like `claude`, `codex`, or `gemini` resolve off the user's PATH.
+    ///
+    /// On Windows, npm installs CLI tools as `.cmd` batch wrappers around
+    /// `node.exe`. Since `CreateProcessW` cannot execute `.cmd` directly (os
+    /// error 193), we detect this pattern, parse the `.cmd` shim, and rewrite
+    /// the spawn to `node.exe <script>`. If no rewriting is possible, returns an
+    /// error rather than launching an unresolved name (defense in depth).
+    fn resolve_program_path(&self, program: &str) -> Result<ResolvedProgram, String> {
+        let trimmed = program.trim();
+        if trimmed.is_empty() {
+            return Err("Agent program is empty".to_string());
+        }
+
+        // Explicit path: must exist as given.
+        if trimmed.contains('/') || trimmed.contains('\\') {
+            if Path::new(trimmed).exists() {
+                #[cfg(target_os = "windows")]
+                {
+                    if !is_directly_executable_windows(trimmed) {
+                        if let Some(resolved) = try_parse_windows_cmd_shim(trimmed) {
+                            return Ok(resolved);
+                        }
+                        let shim_ext = Path::new(trimmed)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_ascii_lowercase());
+                        if shim_ext.as_deref() == Some("cmd") || shim_ext.as_deref() == Some("bat") {
+                            return Err(format!(
+                                "Agent program '{}' is a batch shim that could not be parsed (ADR-004.2)",
+                                trimmed
+                            ));
+                        }
+                        return Err(format!(
+                            "Agent program '{}' is not a directly-executable image (.exe/.com/.scr); \
+                             batch scripts and PowerShell scripts are not supported (ADR-004.2)",
+                            trimmed
+                        ));
+                    }
+                }
+                return Ok(ResolvedProgram::new(trimmed.to_string()));
+            }
+            return Err(format!("Agent program not found: {}", trimmed));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // 1. Try directly-executable image extensions (PE images that
+            //    CreateProcessW can launch).
+            const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
+            for ext in WIN_EXECUTABLE_EXTS {
+                let candidate = format!("{}{}", trimmed, ext);
+                if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
+                    if is_directly_executable_windows(&abs_path) {
+                        return Ok(ResolvedProgram::new(abs_path));
+                    }
+                }
+            }
+
+            // 2. No PE image found. Try .cmd/.bat shim parsing (npm node or
+            //    PowerShell wrappers) and rewrite to a directly-executable image.
+            for shim_ext in [".cmd", ".bat"] {
+                let candidate = format!("{}{}", trimmed, shim_ext);
+                if let Some(abs_path) = self.get_absolute_shell_path(&candidate) {
+                    if let Some(resolved) = try_parse_windows_cmd_shim(&abs_path) {
+                        return Ok(resolved);
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(output) = std::process::Command::new("which").arg(trimmed).output() {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let first_line = stdout.lines().next().unwrap_or("").trim();
+                    if !first_line.is_empty() {
+                        return Ok(ResolvedProgram::new(first_line.to_string()));
+                    }
+                }
+            }
+            for prefix in ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin"] {
+                let candidate = format!("{}/{}", prefix, trimmed);
+                if Path::new(&candidate).exists() {
+                    return Ok(ResolvedProgram::new(candidate));
+                }
+            }
+        }
+
+        Err(format!("Agent program not found on PATH: {}", trimmed))
     }
 
     /// Resolve a shell name to its full path
@@ -1446,7 +1844,7 @@ impl PtyManager {
 #[derive(Debug)]
 struct WindowsConPtyChild {
     pid: u32,
-    process_handle: *mut std::ffi::c_void,
+    process_handle: *mut winapi::ctypes::c_void,
 }
 
 #[cfg(target_os = "windows")]
@@ -1527,7 +1925,7 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
     }
 
     fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync + 'static> {
-        let mut dup: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut dup: *mut winapi::ctypes::c_void = std::ptr::null_mut();
         unsafe {
             let ok = winapi::um::handleapi::DuplicateHandle(
                 winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -1614,13 +2012,221 @@ impl portable_pty::Child for WindowsConPtyChild {
     }
 
     fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
-        Some(self.process_handle)
+        Some(self.process_handle as *mut std::ffi::c_void)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn directly_executable_windows_accepts_only_image_formats() {
+        // The exact list we accept — anything else will be rejected by
+        // resolve_program_path before it can reach CreateProcessW and surface
+        // as os error 193.
+        for ok in [
+            r"C:\bin\claude.exe",
+            r"C:\bin\codex.exe",
+            r"C:/bin/cursor.com",
+            r"C:\bin\agent.scr",
+            r"C:\bin\sub\path\agent.exe",
+            r#"C:\bin\"quoted".exe"#, // trailing quote tolerated
+        ] {
+            assert!(
+                is_directly_executable_windows(ok),
+                "expected accepted: {}",
+                ok
+            );
+        }
+        for bad in [
+            r"C:\bin\nodot",
+            r"C:\bin\opencode.cmd",
+            r"C:\bin\agent.bat",
+            r"C:\bin\script.ps1",
+            r"C:\bin\hello.vbs",
+            r"C:\bin\runner.js",
+            r"C:\bin\thing.exe.cmd", // .cmd wins, rejected
+        ] {
+            assert!(
+                !is_directly_executable_windows(bad),
+                "expected rejected: {}",
+                bad
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn directly_executable_windows_composite_suffix_does_not_match() {
+        // A file like `agent.cmd.exe` is a .exe, so it IS accepted — but
+        // `agent.cmd.txt` is not. Make sure we look at the last extension only.
+        assert!(is_directly_executable_windows(r"C:\bin\agent.cmd.exe"));
+        assert!(!is_directly_executable_windows(r"C:\bin\agent.exe.cmd"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_npm_cmd_shim_rewrites_to_node_script() {
+        // Write a simulated npm .cmd shim matching the real opencode.cmd format
+        // that nvm-windows generates.
+        let dir = std::env::temp_dir().join("termul-test-cmd-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a fake node.exe (just a marker — parser only checks existence
+        // + extension via is_directly_executable_windows).
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        // Create the target script file.
+        std::fs::create_dir_all(dir.join("node_modules\\opencode-ai\\bin"))
+            .unwrap();
+        std::fs::write(dir.join("node_modules\\opencode-ai\\bin\\opencode"), b"")
+            .unwrap();
+
+        let shim_path = dir.join("opencode.cmd");
+        let shim_content = "@ECHO off\r\n".to_owned()
+            + "GOTO start\r\n"
+            + ":find_dp0\r\n"
+            + "SET dp0=%~dp0\r\n"
+            + "EXIT /b\r\n"
+            + ":start\r\n"
+            + "SETLOCAL\r\n"
+            + "CALL :find_dp0\r\n"
+            + "\r\n"
+            + "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\opencode-ai\\bin\\opencode\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_npm_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse the shim");
+        let resolved = resolved.unwrap();
+
+        // The executable should be node.exe in the same directory as the shim.
+        assert!(
+            resolved.program.ends_with("node.exe"),
+            "expected node.exe, got: {}",
+            resolved.program
+        );
+        // The script path should be the opencode-ai bin entry.
+        assert_eq!(resolved.prepend_args.len(), 1);
+        assert!(
+            resolved.prepend_args[0].contains("opencode-ai\\bin\\opencode"),
+            "expected script path containing opencode-ai bin, got: {}",
+            resolved.prepend_args[0]
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_powershell_cmd_shim_rewrites_cursor_agent_style() {
+        let dir = std::env::temp_dir().join("termul-test-ps-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ps_exe = dir.join("powershell.exe");
+        std::fs::write(&ps_exe, b"MZ").unwrap();
+        let script = dir.join("cursor-agent.ps1");
+        std::fs::write(&script, b"# stub").unwrap();
+
+        let ps_exe_str = ps_exe.to_string_lossy();
+        let script_str = script.to_string_lossy();
+        let shim_path = dir.join("cursor-agent.cmd");
+        let shim_content = format!(
+            "@echo off\r\n{ps} -NoProfile -ExecutionPolicy Bypass -File \"{script}\" %*\r\n",
+            ps = ps_exe_str,
+            script = script_str,
+        );
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_powershell_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse PowerShell shim");
+        let resolved = resolved.unwrap();
+        assert!(
+            resolved.program.ends_with("powershell.exe"),
+            "expected powershell.exe, got: {}",
+            resolved.program
+        );
+        assert!(
+            resolved.prepend_args.iter().any(|a| a.ends_with("cursor-agent.ps1")),
+            "expected -File script in prepend_args: {:?}",
+            resolved.prepend_args
+        );
+        assert!(
+            resolved.prepend_args.iter().any(|a| a == "-NoProfile"),
+            "expected -NoProfile flag: {:?}",
+            resolved.prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn win_agent_resolution_skips_extensionless_before_pe() {
+        let dir = std::env::temp_dir().join("termul-test-pe-resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join("claude"), b"not a pe image").unwrap();
+        std::fs::write(dir.join("claude.exe"), b"MZ").unwrap();
+
+        let trimmed = "claude";
+        const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
+        let mut resolved_path: Option<String> = None;
+        for ext in WIN_EXECUTABLE_EXTS {
+            let candidate = dir.join(format!("{}{}", trimmed, ext));
+            if !candidate.exists() {
+                continue;
+            }
+            let abs_path = candidate.to_string_lossy().to_string();
+            if is_directly_executable_windows(&abs_path) {
+                resolved_path = Some(abs_path);
+                break;
+            }
+        }
+
+        let resolved_path =
+            resolved_path.expect("should resolve to claude.exe after skipping extensionless shim");
+        assert!(
+            resolved_path.ends_with("claude.exe"),
+            "expected claude.exe, got: {}",
+            resolved_path
+        );
+        assert!(
+            !is_directly_executable_windows(&dir.join("claude").to_string_lossy()),
+            "extensionless claude must not be treated as PE"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn try_parse_windows_cmd_shim_prefers_npm_over_powershell() {
+        let dir = std::env::temp_dir().join("termul-test-shim-priority");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\pkg\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\pkg\\bin\\tool"), b"").unwrap();
+
+        let shim_path = dir.join("tool.cmd");
+        let shim_content = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            endLocal & goto #_undefined_# 2>NUL || \"%_prog%\" \"%dp0%\\node_modules\\pkg\\bin\\tool\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = try_parse_windows_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some());
+        assert!(
+            resolved.unwrap().program.ends_with("node.exe"),
+            "npm shim should resolve to node.exe"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_spawn_options_default() {

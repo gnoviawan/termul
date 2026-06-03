@@ -1,9 +1,9 @@
+import type { ActivePortForward, PortForwardConfig, SSHConnection } from '@shared/types/ssh.types'
+import { ArrowRightLeft, Circle, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { ArrowRightLeft, Plus, Trash2, Circle } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import type { SSHConnection, PortForwardConfig, ActivePortForward } from '@shared/types/ssh.types'
-import { useSSHActions } from '@/stores/ssh-store'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+import { useSSHActions } from '@/stores/ssh-store'
 
 interface PortForwardPanelProps {
   connection: SSHConnection
@@ -20,8 +20,14 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
     const lp = Number(localPort)
     const rp = Number(remotePort)
 
-    if (!Number.isInteger(lp) || lp < 1 || lp > 65535 ||
-        !Number.isInteger(rp) || rp < 1 || rp > 65535) {
+    if (
+      !Number.isInteger(lp) ||
+      lp < 1 ||
+      lp > 65535 ||
+      !Number.isInteger(rp) ||
+      rp < 1 ||
+      rp > 65535
+    ) {
       toast.error('Invalid port numbers')
       return
     }
@@ -32,7 +38,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
       localPort: lp,
       remoteHost: remoteHost || 'localhost',
       remotePort: rp,
-      autoStart: false,
+      autoStart: false
     }
 
     const success = await startPortForward(connection.id, config)

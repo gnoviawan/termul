@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
-import { AnnotationExportModal } from './AnnotationExportModal'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Annotation } from '@/stores/annotation-store'
+import { AnnotationExportModal } from './AnnotationExportModal'
 
 // Mock the clipboard API
 const mockWriteText = vi.fn().mockResolvedValue({ success: true })
 
 vi.mock('@/lib/clipboard-api', () => ({
   clipboardApi: {
-    writeText: (...args: unknown[]) => mockWriteText(...args),
-  },
+    writeText: (...args: unknown[]) => mockWriteText(...args)
+  }
 }))
 
 const baseAnnotation: Annotation = {
@@ -26,7 +26,7 @@ const baseAnnotation: Annotation = {
     selectorConfidence: 'unique-class',
     attributes: {
       class: 'btn-primary',
-      'data-testid': 'submit-button',
+      'data-testid': 'submit-button'
     },
     textContent: 'Submit now',
     textTruncated: false,
@@ -34,8 +34,8 @@ const baseAnnotation: Annotation = {
       x: 10,
       y: 20,
       width: 120,
-      height: 36,
-    },
+      height: 36
+    }
   },
   intent: 'question',
   severity: 'suggestion',
@@ -44,7 +44,7 @@ const baseAnnotation: Annotation = {
   viewportHeight: 900,
   schemaVersion: 1,
   createdAt: 1715000000000,
-  updatedAt: 1715000000000,
+  updatedAt: 1715000000000
 }
 
 /** Select the AFS tab in the export modal. Radix TabsTrigger listens to mouseDown. */
@@ -81,7 +81,7 @@ describe('AnnotationExportModal', () => {
         open={true}
         onOpenChange={onOpenChange}
         annotations={[baseAnnotation]}
-      />,
+      />
     )
 
     expect(screen.getByRole('tab', { name: 'Markdown' })).toBeDefined()
@@ -95,7 +95,7 @@ describe('AnnotationExportModal', () => {
         open={true}
         onOpenChange={onOpenChange}
         annotations={[baseAnnotation]}
-      />,
+      />
     )
 
     selectAfsTab()
@@ -118,7 +118,7 @@ describe('AnnotationExportModal', () => {
         open={true}
         onOpenChange={onOpenChange}
         annotations={[baseAnnotation]}
-      />,
+      />
     )
 
     selectAfsTab()
@@ -141,7 +141,7 @@ describe('AnnotationExportModal', () => {
         open={true}
         onOpenChange={onOpenChange}
         annotations={[baseAnnotation]}
-      />,
+      />
     )
 
     // Start on Markdown
@@ -178,13 +178,7 @@ describe('AnnotationExportModal', () => {
   })
 
   it('wraps empty annotations list in valid AFS envelope', () => {
-    render(
-      <AnnotationExportModal
-        open={true}
-        onOpenChange={onOpenChange}
-        annotations={[]}
-      />,
-    )
+    render(<AnnotationExportModal open={true} onOpenChange={onOpenChange} annotations={[]} />)
 
     selectAfsTab()
 

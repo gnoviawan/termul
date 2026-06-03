@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
-import type { ProjectColor } from '@/types/project'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
+import type { ProjectColor } from '@/types/project'
 
 interface ColorPickerPopoverProps {
   x: number

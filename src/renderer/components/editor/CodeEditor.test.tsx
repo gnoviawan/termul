@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CodeEditor } from './CodeEditor'
 
 const mockFocus = vi.fn()
@@ -20,15 +20,16 @@ vi.mock('@/hooks/use-codemirror', () => ({
 }))
 
 vi.mock('@/stores/toc-settings-store', () => ({
-  useTocSettingsStore: (selector: (state: unknown) => unknown) => selector({
-    isLoaded: true,
-    loadFailed: false,
-    settings: {
-      isVisible: false,
-      width: 280
-    },
-    setWidth: vi.fn()
-  })
+  useTocSettingsStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      isLoaded: true,
+      loadFailed: false,
+      settings: {
+        isVisible: false,
+        width: 280
+      },
+      setWidth: vi.fn()
+    })
 }))
 
 describe('CodeEditor', () => {
@@ -101,6 +102,8 @@ describe('CodeEditor', () => {
 
     expect(mockScrollToLine).toHaveBeenCalledWith(7, 'needle')
     expect(mockScrollToLine).toHaveBeenCalledTimes(1)
-    expect((global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine).toBeUndefined()
+    expect(
+      (global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
+    ).toBeUndefined()
   })
 })

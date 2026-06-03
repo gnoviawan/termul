@@ -1,13 +1,14 @@
-import { useEffect, useCallback, useRef } from 'react'
-import { useProjectStore } from '@/stores/project-store'
+import { useCallback, useEffect, useRef } from 'react'
 import { persistenceApi, secureStorageApi, worktreeApi } from '@/lib/api'
-import { PersistenceKeys } from '../../shared/types/persistence.types'
+import { useProjectStore } from '@/stores/project-store'
+import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
-  PersistedProjectData,
   PersistedProject,
+  PersistedProjectData,
+  PersistedProjectGroup,
   PersistedWorktree
 } from '../../shared/types/persistence.types'
-import type { Project, ProjectColor, EnvVariable, Worktree } from '@/types/project'
+import { PersistenceKeys } from '../../shared/types/persistence.types'
 
 const REDACTED_VALUE = '[REDACTED]'
 type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
@@ -29,10 +30,7 @@ async function deleteSecretEntry(projectId: string, envKey: string): Promise<voi
   const deleteResult = await secureStorageApi.deleteSecret(storageKey)
 
   if (!deleteResult.success) {
-    console.warn(
-      `Failed to delete secret ${envKey} for project ${projectId}:`,
-      deleteResult.error
-    )
+    console.warn(`Failed to delete secret ${envKey} for project ${projectId}:`, deleteResult.error)
   }
 }
 
@@ -203,7 +201,7 @@ function toPersistedWorktree(worktree: Worktree): PersistedWorktree {
     name: worktree.name,
     branch: worktree.branch,
     path: worktree.path,
-    createdAt: worktree.createdAt,
+    createdAt: worktree.createdAt
   }
 }
 
@@ -213,7 +211,7 @@ function fromPersistedWorktree(persisted: PersistedWorktree): Worktree {
     name: persisted.name,
     branch: persisted.branch,
     path: persisted.path,
-    createdAt: persisted.createdAt,
+    createdAt: persisted.createdAt
   }
 }
 
@@ -235,7 +233,7 @@ async function toPersistedProject(
     envVars: redactedEnvVars,
     worktrees: project.worktrees?.map(toPersistedWorktree),
     activeWorktreeId: project.activeWorktreeId,
-    isGitRepo: project.isGitRepo,
+    isGitRepo: project.isGitRepo
   }
 }
 
@@ -243,7 +241,8 @@ async function persistProjectsSnapshot(
   projects: Project[],
   activeProjectId: string,
   writeProjects: (key: string, data: PersistedProjectData) => Promise<unknown>,
-  previousProjects?: ProjectSnapshot[]
+  previousProjects?: ProjectSnapshot[],
+  groups?: ProjectGroup[]
 ): Promise<void> {
   const previousProjectsSnapshot = previousProjects ?? (await getPersistedProjectsSnapshot())
   await cleanupRemovedProjects(previousProjectsSnapshot, projects)
@@ -258,6 +257,7 @@ async function persistProjectsSnapshot(
   )
   const data: PersistedProjectData = {
     projects: persistedProjects,
+    groups: groups as PersistedProjectGroup[],
     activeProjectId,
     updatedAt: new Date().toISOString()
   }
@@ -279,7 +279,7 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
     envVars: loadedEnvVars,
     worktrees: persisted.worktrees?.map(fromPersistedWorktree),
     activeWorktreeId: persisted.activeWorktreeId,
-    isGitRepo: persisted.isGitRepo,
+    isGitRepo: persisted.isGitRepo
   }
 }
 
@@ -323,9 +323,11 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
         name: gitWt.name,
         branch: gitWt.branch,
         path: gitWt.path,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
       })
-      console.debug(`[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`)
+      console.debug(
+        `[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`
+      )
       changed = true
     }
   }
@@ -336,7 +338,9 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
   for (const storedWt of storedWorktrees) {
     if (!gitByPath.has(storedWt.path)) {
       staleIds.push(storedWt.id)
-      console.debug(`[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`)
+      console.debug(
+        `[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`
+      )
       changed = true
     }
   }
@@ -351,7 +355,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
 
     useProjectStore.getState().updateProject(project.id, {
       worktrees: finalList,
-      activeWorktreeId: newActiveId,
+      activeWorktreeId: newActiveId
     })
   }
 }
@@ -377,9 +381,9 @@ export function useWorktreeReconciler(): void {
 
     // Periodic reconciliation every 60s for active project
     const interval = setInterval(() => {
-      const currentProject = useProjectStore.getState().projects.find(
-        (p) => p.id === activeProjectId
-      )
+      const currentProject = useProjectStore
+        .getState()
+        .projects.find((p) => p.id === activeProjectId)
       if (currentProject?.path) {
         reconcileProjectWorktrees(currentProject)
       }
@@ -405,21 +409,17 @@ export function useProjectsLoader(): void {
 
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await persistenceApi.read<PersistedProjectData>(
-        PersistenceKeys.projects
-      )
+      const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
       if (result.success && result.data) {
         // Load projects with secrets from secure storage
-        const projects = await Promise.all(
-          result.data.projects.map(fromPersistedProject)
-        )
+        const projects = await Promise.all(result.data.projects.map(fromPersistedProject))
         // Validate activeProjectId exists in projects
         const validActiveId = projects.some((p) => p.id === result.data.activeProjectId)
           ? result.data.activeProjectId
           : projects.length > 0
             ? projects[0].id
             : ''
-        setProjects(projects, validActiveId)
+        setProjects(projects, validActiveId, result.data.groups as ProjectGroup[])
 
         // Reconcile all projects against git in parallel after loading
         for (const project of projects) {
@@ -454,9 +454,10 @@ export function useProjectsAutoSave(): void {
         return
       }
 
-      // Only save if projects or activeProjectId changed
+      // Only save if projects, groups or activeProjectId changed
       if (
         state.projects === prevState.projects &&
+        state.groups === prevState.groups &&
         state.activeProjectId === prevState.activeProjectId
       ) {
         return
@@ -467,11 +468,11 @@ export function useProjectsAutoSave(): void {
         state.projects,
         state.activeProjectId,
         persistenceApi.writeDebounced,
-        prevState.projects
-      )
-        .catch((err: unknown) => {
-          console.error('Failed to auto-save projects:', err)
-        })
+        prevState.projects,
+        state.groups
+      ).catch((err: unknown) => {
+        console.error('Failed to auto-save projects:', err)
+      })
     })
 
     return () => {
@@ -482,15 +483,27 @@ export function useProjectsAutoSave(): void {
 
 export function usePersistProjects(): () => Promise<void> {
   return useCallback(async () => {
-    const { projects, activeProjectId } = useProjectStore.getState()
-    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.writeDebounced)
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(
+      projects,
+      activeProjectId,
+      persistenceApi.writeDebounced,
+      undefined,
+      groups
+    )
   }, [])
 }
 
 export function usePersistProjectsImmediate(): () => Promise<void> {
   return useCallback(async () => {
-    const { projects, activeProjectId } = useProjectStore.getState()
-    await persistProjectsSnapshot(projects, activeProjectId, persistenceApi.write)
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
+    await persistProjectsSnapshot(
+      projects,
+      activeProjectId,
+      persistenceApi.write,
+      undefined,
+      groups
+    )
   }, [])
 }
 
@@ -514,12 +527,13 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     ])
 
     // Persist the updated projects list
-    const { projects, activeProjectId } = useProjectStore.getState()
+    const { projects, activeProjectId, groups } = useProjectStore.getState()
     const persistedProjects = await Promise.all(
       projects.map((project) => toPersistedProject(project))
     )
     const data: PersistedProjectData = {
       projects: persistedProjects,
+      groups: groups as PersistedProjectGroup[],
       activeProjectId,
       updatedAt: new Date().toISOString()
     }

@@ -9,8 +9,8 @@
  *   const result = await filesystemApi.readFile('/path/to/file')
  */
 
-import { createTauriFilesystemApi } from './tauri-filesystem-api'
 import type { FilesystemApi } from '@shared/types/ipc.types'
+import { createTauriFilesystemApi } from './tauri-filesystem-api'
 
 /**
  * Singleton FilesystemApi instance

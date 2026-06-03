@@ -46,16 +46,22 @@ export function exportAnnotationsToMarkdown(annotations: Annotation[], level: Ou
   if (level === 'compact') {
     annotations.forEach((a, i) => {
       if (a.type === 'region' && a.geometry.type === 'rect') {
-        lines.push(`${i + 1}. ${formatRect(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`)
+        lines.push(
+          `${i + 1}. ${formatRect(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`
+        )
       } else if (a.type === 'element' && a.geometry.type === 'element') {
-        lines.push(`${i + 1}. ${formatElementCompact(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`)
+        lines.push(
+          `${i + 1}. ${formatElementCompact(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`
+        )
       } else {
         lines.push(`${i + 1}. note > ${escapeMarkdown(a.description || '(no comment)')}`)
       }
     })
   } else if (level === 'standard') {
     annotations.forEach((a, i) => {
-      lines.push(`${i + 1}. **[${a.intent}]** *${a.severity}* — ${escapeMarkdown(a.description || '(no description)')}`)
+      lines.push(
+        `${i + 1}. **[${a.intent}]** *${a.severity}* — ${escapeMarkdown(a.description || '(no description)')}`
+      )
       if (a.type === 'region' && a.geometry.type === 'rect') {
         lines.push(`   Region: ${formatRect(a.geometry)}`)
       } else if (a.type === 'element' && a.geometry.type === 'element') {
@@ -117,8 +123,8 @@ export function exportAnnotationsToJson(annotations: Annotation[]): string {
       viewportWidth: a.viewportWidth,
       viewportHeight: a.viewportHeight,
       createdAt: a.createdAt,
-      updatedAt: a.updatedAt,
-    })),
+      updatedAt: a.updatedAt
+    }))
   }
   return JSON.stringify(payload, null, 2)
 }
@@ -126,11 +132,23 @@ export function exportAnnotationsToJson(annotations: Annotation[]): string {
 // ── AFS (Agentation Format Schema) adapter ──────────────────────────────
 // AFS-unsupported fields that MUST be absent from output:
 const AFS_UNSUPPORTED_FIELDS = new Set([
-  'status', 'thread', 'resolvedBy', 'resolvedAt',
-  'reactComponents', 'cssClasses', 'computedStyles',
-  'accessibility', 'nearbyText', 'selectedText',
-  'isFixed', 'isMultiSelect', 'fullPath', 'nearbyElements',
-  'kind', 'placement', 'rearrange',
+  'status',
+  'thread',
+  'resolvedBy',
+  'resolvedAt',
+  'reactComponents',
+  'cssClasses',
+  'computedStyles',
+  'accessibility',
+  'nearbyText',
+  'selectedText',
+  'isFixed',
+  'isMultiSelect',
+  'fullPath',
+  'nearbyElements',
+  'kind',
+  'placement',
+  'rearrange'
 ])
 
 export function exportAnnotationsToAfsJson(annotations: Annotation[]): string {
@@ -145,7 +163,7 @@ function mapAnnotationToAfs(a: Annotation): Record<string, unknown> {
     timestamp: a.createdAt,
     url: a.url,
     intent: a.intent,
-    severity: a.severity,
+    severity: a.severity
   }
 
   if (a.type === 'element' && a.geometry.type === 'element') {

@@ -1,10 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { ProjectSidebar } from './ProjectSidebar'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
+import { ProjectSidebar } from './ProjectSidebar'
 
-const { mockGetAvailableShells, mockSpawnTerminalInPane, mockActivateAndOpenTerminal, mockUseProjectsWithActivity, mockUseProjectsWithErrors } = vi.hoisted(() => ({
+const {
+  mockGetAvailableShells,
+  mockSpawnTerminalInPane,
+  mockActivateAndOpenTerminal,
+  mockUseProjectsWithActivity,
+  mockUseProjectsWithErrors
+} = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
   mockSpawnTerminalInPane: vi.fn(),
   mockActivateAndOpenTerminal: vi.fn(),
@@ -18,7 +25,10 @@ vi.mock('@/lib/api', () => ({
   },
   worktreeApi: {
     list: vi.fn().mockResolvedValue({ success: true, data: [] }),
-    checkDirty: vi.fn().mockResolvedValue({ success: true, data: { modified: 0, staged: 0, untracked: 0, hasChanges: false } }),
+    checkDirty: vi.fn().mockResolvedValue({
+      success: true,
+      data: { modified: 0, staged: 0, untracked: 0, hasChanges: false }
+    }),
     ensureSymlinks: vi.fn().mockResolvedValue({ success: true, data: [] }),
     remove: vi.fn().mockResolvedValue({ success: true })
   },
@@ -93,6 +103,12 @@ const renderWithRouter = (props = {}) => {
       <ProjectSidebar {...defaultProps} {...props} />
     </MemoryRouter>
   )
+}
+
+// Worktrees are collapsed by default and only expand via the chevron, so tests
+// that assert on worktree rows must open the section first.
+const expandWorktrees = () => {
+  fireEvent.click(screen.getByLabelText('Expand worktrees'))
 }
 
 describe('ProjectSidebar Context Menu', () => {
@@ -256,16 +272,6 @@ describe('ProjectSidebar', () => {
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
-  it('should render project avatars with first letter', () => {
-    renderWithRouter()
-
-    const activeProjectsContainer = screen.getByTestId('active-projects-container')
-    const avatars = within(activeProjectsContainer).getAllByTestId('project-avatar-letter')
-    const letters = avatars.map((avatar) => avatar.textContent)
-
-    expect(letters).toStrictEqual(['P', 'P'])
-  })
-
   it('should call onSelectProject when project is clicked', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
@@ -322,31 +328,8 @@ describe('ProjectSidebar', () => {
     ]
     renderWithRouter({ projects: projectsWithEmptyName })
 
-    // Should show fallback character '?' for empty name
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('?')
-  })
-
-  it('should extract first alphabetic character for emoji project names', () => {
-    const projectsWithEmoji: Project[] = [
-      { id: '1', name: '🚀Rocket', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmoji })
-
-    // Should extract 'R' from Rocket, not the emoji
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('R')
-  })
-
-  it('should preserve emoji-only project names in avatar fallback', () => {
-    const projectsWithEmojiOnlyName: Project[] = [
-      { id: '1', name: '🚀', color: 'blue', gitBranch: 'main' }
-    ]
-    renderWithRouter({ projects: projectsWithEmojiOnlyName })
-
-    // Should keep full emoji grapheme as fallback, not a surrogate fragment
-    const avatar = screen.getByTestId('project-avatar-letter')
-    expect(avatar).toHaveTextContent('🚀')
+    // Empty-named project still renders its row without crashing.
+    expect(screen.getByTestId('active-projects-container')).toBeInTheDocument()
   })
 })
 
@@ -554,6 +537,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('shows the worktree name but not the branch chip on the row face', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     // Name is shown
     expect(screen.getByText('try-new-hero')).toBeInTheDocument()
@@ -563,6 +547,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('keeps the branch available via the row tooltip', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     const row = screen.getByLabelText('Worktree try-new-hero on feature/try-new-hero')
     expect(row).toHaveAttribute('title', expect.stringContaining('feature/try-new-hero'))
@@ -570,15 +555,15 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('exposes an accessible "Open terminal" button on the worktree row', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
-    expect(
-      screen.getByLabelText('Open terminal in try-new-hero')
-    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Open terminal in try-new-hero')).toBeInTheDocument()
   })
 
   it('opens a terminal in the worktree when the terminal button is clicked, without triggering row select', async () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1', onSelectProject })
+    expandWorktrees()
 
     fireEvent.click(screen.getByLabelText('Open terminal in try-new-hero'))
 
@@ -591,6 +576,7 @@ describe('ProjectSidebar Worktree Row', () => {
 
   it('does not trigger row select when activating the terminal button via keyboard', () => {
     renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
+    expandWorktrees()
 
     const termButton = screen.getByLabelText('Open terminal in try-new-hero')
     // Enter on the nested terminal button must not bubble to the row's onKeyDown select
@@ -782,11 +768,13 @@ describe('ProjectSidebar Worktree Search', () => {
 
   it('shows a worktree search box with an icon once there are 10+ worktrees', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
     expect(screen.getByLabelText('Search worktrees')).toBeInTheDocument()
   })
 
   it('shows a clear button only after typing, and clears on click', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
 
     const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
     expect(screen.queryByLabelText('Clear worktree search')).not.toBeInTheDocument()
@@ -800,11 +788,58 @@ describe('ProjectSidebar Worktree Search', () => {
 
   it('clears the worktree query on Escape', () => {
     renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
+    expandWorktrees()
 
     const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'worktree-3' } })
     fireEvent.keyDown(input, { key: 'Escape' })
 
     expect(input.value).toBe('')
+  })
+})
+
+describe('ProjectSidebar Folder Grouping', () => {
+  beforeEach(() => {
+    // Reset groups in the store before each test
+    useProjectStore.setState({ groups: [] })
+  })
+
+  it('should render active projects grouped under folder section when groups are configured', () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: false
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    // Folder header should be visible
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Project One (id: 1) should be nested inside the folder
+    expect(screen.getByText('Project One')).toBeInTheDocument()
+  })
+
+  it('should hide folder contents when group is collapsed', async () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: true
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    expect(screen.getByText('My Folder')).toBeInTheDocument()
+    // Since it is collapsed, Project One should NOT be rendered
+    expect(screen.queryByText('Project One')).not.toBeInTheDocument()
   })
 })

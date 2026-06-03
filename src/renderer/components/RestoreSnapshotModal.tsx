@@ -1,6 +1,6 @@
-import { useEffect, useCallback, KeyboardEvent } from 'react'
-import { X, AlertTriangle, RotateCcw } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useEffect } from 'react'
 import type { Snapshot } from '@/types/project'
 
 interface RestoreSnapshotModalProps {

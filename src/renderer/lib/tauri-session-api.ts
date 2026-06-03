@@ -11,13 +11,9 @@
  * - Clear session
  */
 
-import { Store } from '@tauri-apps/plugin-store'
-import type {
-  IpcResult,
-  SessionData,
-  SessionApi
-} from '@shared/types/ipc.types'
+import type { IpcResult, SessionApi, SessionData } from '@shared/types/ipc.types'
 import { IpcErrorCodes } from '@shared/types/ipc.types'
+import { Store } from '@tauri-apps/plugin-store'
 
 // ============================================================================
 // Constants
@@ -284,7 +280,7 @@ async function hasSession(): Promise<IpcResult<boolean>> {
 // Auto-save (internal)
 // ============================================================================
 
-function autoSave(sessionData: SessionData): void {
+function _autoSave(sessionData: SessionData): void {
   // Store pending data for flush
   pendingAutoSaveData = sessionData
 

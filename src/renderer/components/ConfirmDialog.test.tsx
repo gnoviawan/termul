@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { ConfirmDialog } from './ConfirmDialog'
 
 describe('ConfirmDialog', () => {
@@ -52,9 +52,7 @@ describe('ConfirmDialog', () => {
   })
 
   it('should use custom button labels', () => {
-    render(
-      <ConfirmDialog {...defaultProps} confirmLabel="Delete" cancelLabel="Keep" />
-    )
+    render(<ConfirmDialog {...defaultProps} confirmLabel="Delete" cancelLabel="Keep" />)
 
     expect(screen.getByText('Delete')).toBeInTheDocument()
     expect(screen.getByText('Keep')).toBeInTheDocument()

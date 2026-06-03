@@ -2,9 +2,11 @@ use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManage
 use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
+use crate::path_validation;
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
+use crate::remote;
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitStatus, GitTracker, GitStatusDetail};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
@@ -33,6 +35,38 @@ fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Resu
         ));
     }
     Ok(())
+}
+
+/// Validate and canonicalize a project path to prevent path traversal attacks.
+/// Returns the canonicalized path or an error if the path is invalid or inaccessible.
+fn validate_project_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+    
+    // Canonicalize to resolve symlinks and relative paths
+    let canonical = path_buf.canonicalize().map_err(|e| {
+        log::warn!(
+            "[Security] Path validation failed for '{}': {}",
+            path,
+            e
+        );
+        format!("Invalid or inaccessible path: {}", e)
+    })?;
+    
+    log::debug!("[Security] Path validated: {} -> {:?}", path, canonical);
+    Ok(canonical)
+}
+
+/// Macro to validate a path and convert it to a String, returning early with an IpcResult error if validation fails.
+macro_rules! validate_and_stringify {
+    ($path:expr) => {
+        match validate_project_path($path) {
+            Ok(validated) => match validated.to_str() {
+                Some(s) => s.to_string(),
+                None => return Ok(IpcResult::error("Path contains invalid UTF-8", "INVALID_PATH_ENCODING")),
+            },
+            Err(e) => return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED")),
+        }
+    };
 }
 
 /// IPC Result pattern
@@ -240,6 +274,24 @@ pub async fn terminal_set_visibility(
     Ok(IpcResult::success(()))
 }
 
+// ==================== Agent Registry Commands ====================
+
+/// ADR-004.6: Fetch the ACP Registry catalog for agent IDENTITY & DISCOVERY
+/// only (id, name, description, website, icon). Opt-in and read-only; runs from
+/// the Rust side, caches on disk, and degrades to cache/empty on failure. The
+/// returned entries deliberately omit `distribution` so they can never be used
+/// to derive a terminal-native launch command.
+#[tauri::command]
+pub async fn agent_registry_fetch(
+    app: AppHandle,
+    force_refresh: Option<bool>,
+) -> Result<IpcResult<crate::agent_registry::AcpRegistryCatalog>, String> {
+    match crate::agent_registry::fetch_acp_registry(&app, force_refresh.unwrap_or(false)).await {
+        Ok(catalog) => Ok(IpcResult::success(catalog)),
+        Err(e) => Ok(IpcResult::error(e, "AGENT_REGISTRY_FETCH_FAILED")),
+    }
+}
+
 // ==================== Worktree Commands ====================
 
 /// List all worktrees for a git repo at the given path.
@@ -248,7 +300,8 @@ pub async fn terminal_set_visibility(
 pub async fn worktree_list(
     project_path: String,
 ) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
-    match WorktreeManager::list(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::list(&validated_path) {
         Ok(entries) => {
             let infos: Vec<WorktreeInfo> = entries
                 .into_iter()
@@ -275,8 +328,9 @@ pub async fn worktree_create(
     start_ref: Option<String>,
     target_path: Option<String>,
 ) -> Result<IpcResult<WorktreeInfo>, String> {
+    let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::create(
-        &project_path,
+        &validated_path,
         &name,
         &branch,
         is_new_branch,
@@ -300,7 +354,13 @@ pub async fn worktree_remove(
     worktree_path: String,
     force: bool,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::remove(&project_path, &worktree_path, force) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::remove(
+        &validated_project,
+        &validated_worktree,
+        force,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -311,7 +371,8 @@ pub async fn worktree_remove(
 pub async fn worktree_branches(
     project_path: String,
 ) -> Result<IpcResult<Vec<BranchInfo>>, String> {
-    match WorktreeManager::branches(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::branches(&validated_path) {
         Ok(entries) => {
             let infos: Vec<BranchInfo> = entries
                 .into_iter()
@@ -333,7 +394,8 @@ pub async fn worktree_branches(
 pub async fn worktree_check_dirty(
     worktree_path: String,
 ) -> Result<IpcResult<DirtyStatus>, String> {
-    match WorktreeManager::check_dirty(&worktree_path) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::check_dirty(&validated_path) {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -346,7 +408,8 @@ pub async fn worktree_remove_all_managed(
     project_path: String,
     worktrees_json: String,
 ) -> Result<IpcResult<Vec<RemoveResult>>, String> {
-    match WorktreeManager::remove_all_managed(&project_path, &worktrees_json) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::remove_all_managed(&validated_path, &worktrees_json) {
         Ok(results) => Ok(IpcResult::success(results)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -358,7 +421,8 @@ pub async fn worktree_remove_all_managed(
 pub async fn worktree_parse_gitignore(
     project_path: String,
 ) -> Result<IpcResult<Vec<GitignoreDirInfo>>, String> {
-    match WorktreeManager::parse_gitignore_dirs(&project_path) {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::parse_gitignore_dirs(&validated_path) {
         Ok(dirs) => {
             let infos: Vec<GitignoreDirInfo> = dirs
                 .into_iter()
@@ -381,6 +445,8 @@ pub async fn worktree_create_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
     let dirs: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -390,7 +456,11 @@ pub async fn worktree_create_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::create_symlinks(&project_path, &worktree_path, &dirs);
+    let results = WorktreeManager::create_symlinks(
+        &validated_project,
+        &validated_worktree,
+        &dirs,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -411,6 +481,8 @@ pub async fn worktree_ensure_symlinks(
     worktree_path: String,
     symlink_dirs: String,
 ) -> Result<IpcResult<Vec<SymlinkResultInfo>>, String> {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
     let dirs2: Vec<String> = match serde_json::from_str(&symlink_dirs) {
         Ok(dirs) => dirs,
         Err(e) => {
@@ -420,7 +492,11 @@ pub async fn worktree_ensure_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::ensure_symlinks(&project_path, &worktree_path, &dirs2);
+    let results = WorktreeManager::ensure_symlinks(
+        &validated_project,
+        &validated_worktree,
+        &dirs2,
+    );
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -439,7 +515,12 @@ pub async fn worktree_archive(
     project_path: String,
     worktree_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::archive(&project_path, &worktree_path) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::archive(
+        &validated_project,
+        &validated_worktree,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -451,7 +532,12 @@ pub async fn worktree_restore(
     project_path: String,
     archive_path: String,
 ) -> Result<IpcResult<()>, String> {
-    match WorktreeManager::restore(&project_path, &archive_path) {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_archive = validate_and_stringify!(&archive_path);
+    match WorktreeManager::restore(
+        &validated_project,
+        &validated_archive,
+    ) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -463,7 +549,8 @@ pub async fn worktree_merge_preview(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<MergePreviewInfo>, String> {
-    match WorktreeManager::merge_preview(&worktree_path, &target_branch) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::merge_preview(&validated_path, &target_branch) {
         Ok(preview) => {
             let info = MergePreviewInfo {
                 direction: preview.direction,
@@ -491,7 +578,8 @@ pub async fn worktree_merge_execute(
     worktree_path: String,
     target_branch: String,
 ) -> Result<IpcResult<String>, String> {
-    match WorktreeManager::merge_execute(&worktree_path, &target_branch) {
+    let validated_path = validate_and_stringify!(&worktree_path);
+    match WorktreeManager::merge_execute(&validated_path, &target_branch) {
         Ok(result) => Ok(IpcResult::success(result)),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -993,6 +1081,7 @@ pub struct FileSearchResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
 }
@@ -1000,6 +1089,7 @@ pub struct SearchContentRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentStreamRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
     pub search_id: String,
@@ -1033,6 +1123,7 @@ pub struct SearchContentDoneEvent {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesRequest {
+    pub scope_root: String,
     pub root_path: String,
     pub query: String,
 }
@@ -1173,6 +1264,11 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
+    path_validation::validate_search_path(search_root, scope_root)
+        .map(|path| path.to_string_lossy().to_string())
+}
+
 fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
@@ -1248,9 +1344,32 @@ pub async fn search_content_stream(
         return Ok(IpcResult::success(()));
     }
 
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(
+                "[Security] File search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
+                request.root_path,
+                e
+            );
+            let _ = app_handle.emit(
+                "search-content-done",
+                SearchContentDoneEvent {
+                    search_id: request.search_id,
+                    truncated: false,
+                    scanned_files: 0,
+                    failed_files: 0,
+                    error: Some(format!("Invalid search path: {}", e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
+        }
+    };
+
     let max_files_with_matches: usize = 100;
     let max_matches_per_file: usize = 30;
-    let args = build_search_args(&trimmed_query, &request.root_path, max_matches_per_file);
+    let args = build_search_args(&trimmed_query, &validated_root, max_matches_per_file);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -1448,7 +1567,23 @@ pub async fn search_file_names(
         }));
     }
 
-    let mut stack = vec![request.root_path];
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(
+                "[Security] File name search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
+                request.root_path,
+                e
+            );
+            return Ok(IpcResult::error(
+                format!("Invalid search path: {}", e),
+                "PATH_VALIDATION_FAILED",
+            ));
+        }
+    };
+
+    let mut stack = vec![validated_root];
     let mut matches: Vec<String> = Vec::new();
     let mut truncated = false;
     let max_files = 100;
@@ -1531,7 +1666,23 @@ pub async fn search_content(
     let max_files_with_matches: usize = 100;
     let max_matches_per_file: usize = 30;
 
-    let args = build_search_args(trimmed_query, &request.root_path, max_matches_per_file);
+    let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!(
+                "[Security] Content search rejected: scope='{}' root='{}': {}",
+                request.scope_root,
+                request.root_path,
+                e
+            );
+            return Ok(IpcResult::error(
+                format!("Invalid search path: {}", e),
+                "PATH_VALIDATION_FAILED",
+            ));
+        }
+    };
+
+    let args = build_search_args(trimmed_query, &validated_root, max_matches_per_file);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -2144,7 +2295,10 @@ pub async fn ssh_create_askpass(password: String) -> Result<IpcResult<String>, S
         let _ = std::fs::remove_file(&cleanup_script);
     });
 
-    log::info!("[SSH] Created askpass helper at {:?}", script_path);
+    // Path includes the OS temp dir (often the username); keep it out of the
+    // user-attachable info log (issue #244 AC#6). Full path stays at debug.
+    log::info!("[SSH] Created askpass helper");
+    log::debug!("[SSH] Askpass helper path: {:?}", script_path);
     Ok(IpcResult::success(
         script_path.to_string_lossy().to_string(),
     ))
@@ -2208,6 +2362,61 @@ pub async fn sftp_create_file(
     }
 }
 
+// ==================== Remote Server Commands ====================
+
+/// Start the remote terminal server
+#[tauri::command]
+pub async fn remote_server_start(
+    app_handle: AppHandle,
+    pty_manager: State<'_, Arc<PtyManager>>,
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    bind_mode: Option<String>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    let bind_mode = bind_mode
+        .as_deref()
+        .and_then(remote::server::RemoteBindMode::parse)
+        .unwrap_or(remote::server::RemoteBindMode::Localhost);
+    match remote_state
+        .start(pty_manager.inner().clone(), app_handle, bind_mode)
+        .await
+    {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
+    }
+}
+
+/// Stop the remote terminal server
+#[tauri::command]
+pub async fn remote_server_stop(
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    match remote_state.stop().await {
+        Ok(status) => Ok(IpcResult::success(status)),
+        Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
+    }
+}
+
+/// Get remote server status
+#[tauri::command]
+pub async fn remote_server_status(
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<remote::RemoteStatus>, String> {
+    Ok(IpcResult::success(remote_state.status()))
+}
+
+/// Publish the renderer's project → terminal tree to the remote server.
+///
+/// The web client reads this tree from `GET /api/projects`. The renderer should
+/// call this whenever its projects/terminals change (and once on server start).
+#[tauri::command]
+pub async fn remote_publish_projects(
+    tree: remote::ProjectTree,
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<()>, String> {
+    remote_state.registry.replace(tree);
+    Ok(IpcResult::success(()))
+}
+
 // ==================== Git Commands ====================
 
 /// Get git status for a repository
@@ -2250,6 +2459,120 @@ pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
 }
 
+/// Read commit history for the repository at `cwd` as structured rows for the
+/// history/graph view. `limit` caps the number of commits (clamped backend-side;
+/// defaults to 200). Read-only.
+#[tauri::command]
+pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+}
+
+/// Create a commit from the staged index. `amend` rewrites HEAD instead of
+/// adding a new commit. The message is passed via a temp file, not `-m`.
+#[tauri::command]
+pub async fn git_commit(
+    cwd: String,
+    summary: String,
+    description: Option<String>,
+    amend: Option<bool>,
+) -> Result<(), String> {
+    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
+    // for up to the network timeout), so run it on the blocking thread pool
+    // instead of the async executor.
+    let description = description.unwrap_or_default();
+    let amend = amend.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
+    })
+    .await
+    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// Push the current branch to `origin`, setting upstream when none exists.
+#[tauri::command]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    // git_push_current performs a network push (up to the network timeout), so
+    // run it on the blocking thread pool instead of the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_push_current(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git push task failed: {e}"))?
+}
+
+/// Get commit-footer context: branch, upstream, ahead/behind, staged count,
+/// and the last commit's subject/body (for prefilling an amend).
+#[tauri::command]
+pub async fn git_get_commit_context(
+    cwd: String,
+) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
+    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
+}
+
+/// Cap on any single renderer-supplied field to keep one forwarded error from
+/// ballooning the log file.
+const MAX_FRONTEND_FIELD_LEN: usize = 4096;
+
+/// Sanitize untrusted renderer text for single-line logging: escape newlines
+/// and control characters so a crafted error message/stack cannot forge
+/// additional, authoritative-looking log lines (log injection), and truncate
+/// to a sane bound.
+fn sanitize_log_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len().min(MAX_FRONTEND_FIELD_LEN));
+    for ch in value.chars().take(MAX_FRONTEND_FIELD_LEN) {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Strip other C0 control chars (incl. ESC) that could corrupt or
+            // spoof terminal/log output; keep everything else verbatim.
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    if value.chars().count() > MAX_FRONTEND_FIELD_LEN {
+        out.push_str("…[truncated]");
+    }
+    out
+}
+
+/// Forward a renderer-side error to the backend log file (issue #244).
+///
+/// Global `window.onerror` / `onunhandledrejection` handlers and the React
+/// ErrorBoundary route through this so frontend failures survive a closed
+/// production DevTools console and land in the same rotated log file as the
+/// Rust logs. `level` accepts "error" (default) or "warn". All renderer-supplied
+/// fields are sanitized to prevent log injection.
+#[tauri::command]
+pub fn log_frontend_error(
+    level: Option<String>,
+    message: String,
+    source: Option<String>,
+    stack: Option<String>,
+    component_stack: Option<String>,
+) -> Result<(), String> {
+    let context = sanitize_log_field(&source.unwrap_or_else(|| "renderer".to_string()));
+    let message = sanitize_log_field(&message);
+    let stack_part = stack
+        .map(|s| format!(" | stack: {}", sanitize_log_field(&s)))
+        .unwrap_or_default();
+    let component_part = component_stack
+        .map(|s| format!(" | component stack: {}", sanitize_log_field(&s)))
+        .unwrap_or_default();
+
+    let line = format!(
+        "[frontend] [{}] {}{}{}",
+        context, message, stack_part, component_part
+    );
+
+    match level.as_deref() {
+        Some("warn") => log::warn!("{}", line),
+        _ => log::error!("{}", line),
+    }
+
+    Ok(())
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {
@@ -2271,5 +2594,28 @@ mod tests {
         assert!(result.data.is_none());
         assert_eq!(result.error, Some("test error".to_string()));
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
+    }
+
+    #[test]
+    fn sanitize_log_field_escapes_newlines_and_strips_controls() {
+        // Newlines/CR/tab are escaped so injected content stays on one line.
+        let forged = "oops\n[startup] termul forged line\r\tend";
+        let cleaned = sanitize_log_field(forged);
+        assert!(!cleaned.contains('\n'));
+        assert!(!cleaned.contains('\r'));
+        assert!(!cleaned.contains('\t'));
+        assert!(cleaned.contains("\\n[startup]"));
+
+        // ESC and other C0 control chars are dropped entirely.
+        let with_esc = "a\u{1b}[31mred\u{0007}b";
+        assert_eq!(sanitize_log_field(with_esc), "a[31mredb");
+    }
+
+    #[test]
+    fn sanitize_log_field_truncates_oversized_input() {
+        let huge = "x".repeat(MAX_FRONTEND_FIELD_LEN + 100);
+        let cleaned = sanitize_log_field(&huge);
+        assert!(cleaned.ends_with("…[truncated]"));
+        assert!(cleaned.chars().count() <= MAX_FRONTEND_FIELD_LEN + "…[truncated]".chars().count());
     }
 }

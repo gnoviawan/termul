@@ -1,7 +1,9 @@
+import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
+
 export function FeatureVisualSessionPersistence() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[85%] max-w-sm bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden">
+    <FeatureVisualFrameRoot>
+      <FeatureVisualFrameWindow className="flex flex-col overflow-hidden">
         <div className="h-8 bg-[#161616] border-b border-white/10 flex items-center px-4">
           <div className="text-[10px] text-gray-400 font-medium tracking-wide">SNAPSHOT MANAGER</div>
         </div>
@@ -22,7 +24,7 @@ export function FeatureVisualSessionPersistence() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </FeatureVisualFrameWindow>
+    </FeatureVisualFrameRoot>
   );
 }

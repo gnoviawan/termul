@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { useProjectStore } from './project-store'
 
 describe('project-store', () => {
@@ -305,6 +305,24 @@ describe('project-store', () => {
 
       expect(project?.envVars).toEqual(envVars)
       expect(project?.name).toBe('New Name')
+    })
+  })
+
+  describe('removeGroup', () => {
+    it('should update activeProjectId when deleting a group with active project', () => {
+      // Set up a group containing project '1'
+      useProjectStore.setState({
+        groups: [{ id: 'group1', name: 'My Group', projectIds: ['1'], isCollapsed: false }],
+        activeProjectId: '1'
+      })
+
+      const { removeGroup } = useProjectStore.getState()
+      removeGroup('group1', true)
+
+      const { projects, activeProjectId } = useProjectStore.getState()
+      // Project '1' is deleted, so project '2' should be the active one
+      expect(projects.find((p) => p.id === '1')).toBeUndefined()
+      expect(activeProjectId).toBe('2')
     })
   })
 })

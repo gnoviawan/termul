@@ -11,11 +11,15 @@ const Drawer = ({
 )
 Drawer.displayName = 'Drawer'
 
-const DrawerTrigger: React.ComponentType<React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Trigger>> = DrawerPrimitive.Trigger
+const DrawerTrigger: React.ComponentType<
+  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Trigger>
+> = DrawerPrimitive.Trigger
 
 const DrawerPortal = DrawerPrimitive.Portal
 
-const DrawerClose: React.ComponentType<React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Close>> = DrawerPrimitive.Close
+const DrawerClose: React.ComponentType<
+  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Close>
+> = DrawerPrimitive.Close
 
 const DrawerOverlay = React.forwardRef<
   React.ElementRef<typeof DrawerPrimitive.Overlay>,
@@ -90,13 +94,13 @@ DrawerDescription.displayName = DrawerPrimitive.Description.displayName
 
 export {
   Drawer,
-  DrawerPortal,
-  DrawerOverlay,
-  DrawerTrigger,
   DrawerClose,
   DrawerContent,
-  DrawerHeader,
+  DrawerDescription,
   DrawerFooter,
+  DrawerHeader,
+  DrawerOverlay,
+  DrawerPortal,
   DrawerTitle,
-  DrawerDescription
+  DrawerTrigger
 }

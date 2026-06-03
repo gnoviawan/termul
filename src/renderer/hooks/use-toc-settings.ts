@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import type { TocSettings } from '@/types/settings'
 import { DEFAULT_TOC_SETTINGS, TOC_SETTINGS_KEY } from '@/types/settings'
-import { useTocSettingsStore } from '@/stores/toc-settings-store'
 
 let loadPromise: Promise<void> | null = null
 let hasSubscribedToPersistence = false

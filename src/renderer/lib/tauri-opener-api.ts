@@ -7,8 +7,8 @@
  * Uses @tauri-apps/plugin-opener for cross-platform file operations.
  */
 
-import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { IpcResult } from '@shared/types/ipc.types'
+import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 
 export interface OpenerApi {
   openWithExternalApp: (path: string) => Promise<IpcResult<void>>

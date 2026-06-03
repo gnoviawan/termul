@@ -1,6 +1,6 @@
-import { useEffect, useCallback, KeyboardEvent } from 'react'
-import { X, Trash2 } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Trash2, X } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useEffect } from 'react'
 import type { Snapshot } from '@/types/project'
 
 interface DeleteSnapshotModalProps {
@@ -93,9 +93,7 @@ export function DeleteSnapshotModal({
                 <span className="font-semibold">&quot;{snapshot.name}&quot;</span>?
               </p>
 
-              <p className="text-sm text-muted-foreground">
-                This action cannot be undone.
-              </p>
+              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
             </div>
 
             {/* Footer */}

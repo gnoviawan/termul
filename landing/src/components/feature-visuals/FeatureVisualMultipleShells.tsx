@@ -1,10 +1,11 @@
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Tick01Icon } from '@hugeicons/core-free-icons';
+import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
 
 export function FeatureVisualMultipleShells() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[85%] max-w-sm bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden">
+    <FeatureVisualFrameRoot>
+      <FeatureVisualFrameWindow className="flex flex-col overflow-hidden">
         <div className="p-2 border-b border-white/10 bg-[#161616]">
           <div className="bg-[#0a0a0a] border border-white/10 rounded p-2 flex items-center justify-between text-xs text-gray-300">
             <span className="flex items-center gap-2">
@@ -31,7 +32,7 @@ export function FeatureVisualMultipleShells() {
             <span className="w-2 h-2 rounded-full bg-yellow-400 opacity-50"></span> Git Bash
           </div>
         </div>
-      </div>
-    </div>
+      </FeatureVisualFrameWindow>
+    </FeatureVisualFrameRoot>
   );
 }

@@ -1,9 +1,10 @@
 import { AppleLogo, LinuxLogo, WindowsLogo } from '../OsBrandIcons';
+import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
 
 export function FeatureVisualCrossPlatform() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[85%] max-w-sm bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden">
+    <FeatureVisualFrameRoot>
+      <FeatureVisualFrameWindow className="flex flex-col overflow-hidden">
         <div className="h-8 bg-gradient-to-r from-gray-800 to-gray-900 border-b border-white/10 flex items-center px-3 gap-2">
           <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
           <div className="w-2.5 h-2.5 rounded-full bg-yellow-500"></div>
@@ -34,7 +35,7 @@ export function FeatureVisualCrossPlatform() {
             Tauri 2.0 Engine
           </div>
         </div>
-      </div>
-    </div>
+      </FeatureVisualFrameWindow>
+    </FeatureVisualFrameRoot>
   );
 }

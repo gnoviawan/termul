@@ -3,24 +3,23 @@
  * Tests the unified API exports and singleton pattern
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  terminalApi,
-  clipboardApi,
-  systemApi,
-  persistenceApi,
-  windowApi,
-  keyboardApi,
-  visibilityApi,
-  filesystemApi,
-  dialogApi,
-  shellApi,
-  sessionApi,
-  dataMigrationApi,
   addRendererRef,
-  removeRendererRef
+  clipboardApi,
+  dataMigrationApi,
+  dialogApi,
+  filesystemApi,
+  keyboardApi,
+  persistenceApi,
+  removeRendererRef,
+  sessionApi,
+  shellApi,
+  systemApi,
+  terminalApi,
+  visibilityApi,
+  windowApi
 } from '../api'
-import type { IpcResult } from '@shared/types/ipc.types'
 
 // Mock all Tauri dependencies BEFORE importing
 vi.mock('@tauri-apps/api/core', () => ({
@@ -327,15 +326,9 @@ describe('API Bridge (api.ts)', () => {
 
     it('sessionApi should implement all canonical SessionApi methods', () => {
       // These are the canonical method names from SessionApi interface
-      const canonicalMethods = [
-        'save',
-        'restore',
-        'clear',
-        'flush',
-        'hasSession'
-      ]
+      const canonicalMethods = ['save', 'restore', 'clear', 'flush', 'hasSession']
 
-      canonicalMethods.forEach(method => {
+      canonicalMethods.forEach((method) => {
         expect(typeof sessionApi[method as keyof typeof sessionApi]).toBe('function')
       })
     })

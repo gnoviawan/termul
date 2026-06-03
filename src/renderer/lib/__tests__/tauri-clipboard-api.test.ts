@@ -3,7 +3,7 @@
  * Tests the tauriClipboardApi implementation using Tauri plugin-clipboard-manager
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock @tauri-apps/plugin-clipboard-manager BEFORE importing
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({

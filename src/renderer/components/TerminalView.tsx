@@ -1,5 +1,5 @@
-import type { Terminal, TerminalLine } from '@/types/project'
 import { cn } from '@/lib/utils'
+import type { Terminal, TerminalLine } from '@/types/project'
 
 interface TerminalViewProps {
   terminal: Terminal

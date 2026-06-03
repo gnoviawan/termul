@@ -1,9 +1,9 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import { PaneDndProvider, usePaneDnd } from './use-pane-dnd'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEditorStore } from '@/stores/editor-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
+import { PaneDndProvider, usePaneDnd } from './use-pane-dnd'
 
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: {

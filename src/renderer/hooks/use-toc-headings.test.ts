@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
 import { renderHook } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 import { filterTocHeadings, parseMarkdownHeadings, useTocHeadings } from './use-toc-headings'
 
 describe('use-toc-headings', () => {
   it('parses markdown headings with levels and line numbers', () => {
-    const headings = parseMarkdownHeadings(['# Title', 'text', '## Section', '### Subsection'].join('\n'))
+    const headings = parseMarkdownHeadings(
+      ['# Title', 'text', '## Section', '### Subsection'].join('\n')
+    )
 
     expect(headings).toEqual([
       { id: 'heading-line-1', level: 1, text: 'Title', line: 1 },
@@ -33,9 +35,9 @@ describe('use-toc-headings', () => {
   })
 
   it('ignores non-heading lines and headings inside fenced code blocks', () => {
-    expect(parseMarkdownHeadings('plain text\n- list item\n```md\n# Hidden\n```\n# Visible')).toEqual([
-      { id: 'heading-line-6', level: 1, text: 'Visible', line: 6 }
-    ])
+    expect(
+      parseMarkdownHeadings('plain text\n- list item\n```md\n# Hidden\n```\n# Visible')
+    ).toEqual([{ id: 'heading-line-6', level: 1, text: 'Visible', line: 6 }])
   })
 
   it('filters headings by max level', () => {

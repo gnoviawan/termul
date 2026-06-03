@@ -1,18 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { ActivityRail } from './ActivityRail'
-import { useSidebarStore } from '@/stores/sidebar-store'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { useSSHPanelStore } from '@/stores/ssh-panel-store'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { useSidebarStore } from '@/stores/sidebar-store'
+import { useSSHPanelStore } from '@/stores/ssh-panel-store'
+import { ActivityRail } from './ActivityRail'
 
-const { mockUpdatePanelVisibility, mockToastError, mockNavigate, platformState } = vi.hoisted(() => ({
-  mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
-  mockToastError: vi.fn(),
-  mockNavigate: vi.fn(),
-  platformState: { isMac: false }
-}))
+const { mockUpdatePanelVisibility, mockToastError, mockNavigate, platformState } = vi.hoisted(
+  () => ({
+    mockUpdatePanelVisibility: vi.fn(() => Promise.resolve()),
+    mockToastError: vi.fn(),
+    mockNavigate: vi.fn(),
+    platformState: { isMac: false }
+  })
+)
 
 vi.mock('sonner', () => ({
   toast: {
@@ -109,9 +111,7 @@ describe('ActivityRail', () => {
   it('exposes the keyboard shortcuts trigger', () => {
     renderRail()
 
-    expect(
-      screen.getByRole('button', { name: 'Open keyboard shortcuts menu' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open keyboard shortcuts menu' })).toBeInTheDocument()
   })
 
   it('renders the Termul brand mark', () => {

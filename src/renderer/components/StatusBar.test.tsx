@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { StatusBar } from './StatusBar'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
-import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import type { Project } from '@/types/project'
+import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
+import { StatusBar } from './StatusBar'
 
 // Mock the terminal store
 vi.mock('@/stores/terminal-store', () => ({
@@ -22,12 +22,29 @@ vi.mock('@/stores/terminal-store', () => ({
   }))
 }))
 
+// Mock remote status store (StatusBar hosts RemoteAccessPopover)
+vi.mock('@/stores/remote-status-store', () => ({
+  useRemoteStatus: vi.fn(() => null),
+  useRemoteStatusStore: vi.fn(() => ({ setStatus: vi.fn() }))
+}))
+
+vi.mock('@/lib/api', () => ({
+  remoteServerApi: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    status: vi.fn()
+  },
+  openerApi: {
+    openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  }
+}))
+
 // Mock the home directory hook
 vi.mock('@/hooks/use-cwd', () => ({
   useHomeDirectory: vi.fn(() => '/home/user'),
   formatPath: vi.fn((path: string, homeDir: string) => {
     if (path.startsWith(homeDir)) {
-      return '~' + path.slice(homeDir.length)
+      return `~${path.slice(homeDir.length)}`
     }
     return path
   })
@@ -176,6 +193,20 @@ describe('StatusBar', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
       expect(screen.getByLabelText('Context bar settings')).toBeDefined()
+    })
+  })
+
+  describe('remote access popover', () => {
+    it('should render the remote terminal access trigger', () => {
+      renderWithProviders(<StatusBar project={mockProject} />)
+
+      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+    })
+
+    it('should render remote trigger without an active project', () => {
+      renderWithProviders(<StatusBar project={undefined} />)
+
+      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
     })
   })
 })

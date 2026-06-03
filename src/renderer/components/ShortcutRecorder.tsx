@@ -1,9 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
 import { RotateCcw } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  normalizeKeyEvent,
+  findConflictingShortcut,
   formatKeyForDisplay,
-  findConflictingShortcut
+  normalizeKeyEvent
 } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
 
@@ -47,7 +47,10 @@ export function ShortcutRecorder({
       const normalized = normalizeKeyEvent(e)
 
       // Ignore if only modifiers pressed
-      if (!normalized || normalized.split('+').every((p) => ['ctrl', 'cmd', 'meta', 'alt', 'shift'].includes(p))) {
+      if (
+        !normalized ||
+        normalized.split('+').every((p) => ['ctrl', 'cmd', 'meta', 'alt', 'shift'].includes(p))
+      ) {
         return
       }
 
@@ -125,9 +128,7 @@ export function ShortcutRecorder({
             <div className="truncate text-xs font-medium text-secondary-foreground">
               {shortcut.label}
             </div>
-            <div className="truncate text-[11px] text-muted-foreground">
-              {shortcut.description}
-            </div>
+            <div className="truncate text-[11px] text-muted-foreground">{shortcut.description}</div>
           </div>
 
           {isCustomized && (

@@ -70,6 +70,7 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 
   return (
     <style
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: injects static theme CSS from a controlled config (shadcn/ui)
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(
@@ -319,9 +320,9 @@ function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key:
 
 export {
   ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
   ChartLegend,
   ChartLegendContent,
-  ChartStyle
+  ChartStyle,
+  ChartTooltip,
+  ChartTooltipContent
 }

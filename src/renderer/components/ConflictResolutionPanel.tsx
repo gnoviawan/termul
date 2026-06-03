@@ -7,14 +7,14 @@
  * - Summary view of remaining conflicts
  */
 
-import { useState, useCallback } from 'react'
-import { CheckCircle2, Circle, Loader2, AlertTriangle, FileCode } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from 'lucide-react'
+import { useCallback, useState } from 'react'
 import {
-  createConflictState,
-  updateFileStatus,
-  getUnresolvedFiles,
   type ConflictResolutionState,
+  createConflictState,
   type FileResolutionStatus,
+  getUnresolvedFiles,
+  updateFileStatus
 } from '@/lib/conflict-tracking'
 import { cn } from '@/lib/utils'
 
@@ -33,7 +33,7 @@ export function ConflictResolutionPanel({
   conflictFiles,
   sourceBranch,
   targetBranch,
-  onAllResolved,
+  onAllResolved
 }: ConflictResolutionPanelProps) {
   const [state, setState] = useState<ConflictResolutionState>(() =>
     createConflictState(conflictFiles)
@@ -106,10 +106,7 @@ export function ConflictResolutionPanel({
             >
               <StatusIcon
                 size={12}
-                className={cn(
-                  'flex-shrink-0',
-                  file.status === 'resolving' && 'animate-spin'
-                )}
+                className={cn('flex-shrink-0', file.status === 'resolving' && 'animate-spin')}
               />
               <FileCode size={10} className="flex-shrink-0 opacity-60" />
               <span className="flex-1 truncate">{file.filePath}</span>
@@ -145,9 +142,7 @@ export function ConflictResolutionPanel({
         <div className="text-center py-4">
           <CheckCircle2 size={24} className="mx-auto mb-2 text-green-500" />
           <p className="text-xs font-medium text-foreground">All conflicts resolved!</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">
-            Ready to complete the merge.
-          </p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Ready to complete the merge.</p>
         </div>
       )}
     </div>

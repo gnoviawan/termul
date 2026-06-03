@@ -1,5 +1,5 @@
-import { Store } from '@tauri-apps/plugin-store'
 import type { IpcResult } from '@shared/types/ipc.types'
+import { Store } from '@tauri-apps/plugin-store'
 
 const STORE_FILE = 'termul-data.json'
 const DEBOUNCE_MS = 500
@@ -26,11 +26,10 @@ function createSuccessResult(): IpcResult<void> {
   return { success: true, data: undefined }
 }
 
-function resolvePendingResolvers(
-  resolvers: PendingWriteResolver[],
-  result: IpcResult<void>
-): void {
-  resolvers.forEach((resolve) => resolve(result))
+function resolvePendingResolvers(resolvers: PendingWriteResolver[], result: IpcResult<void>): void {
+  resolvers.forEach((resolve) => {
+    resolve(result)
+  })
 }
 
 async function getStore(): Promise<Store> {

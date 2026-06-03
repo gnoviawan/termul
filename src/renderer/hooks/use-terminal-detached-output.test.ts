@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalDetachedOutput } from './use-terminal-detached-output'
 
 const { mockOnData, mockAppendTranscript, mockFindTerminalByPtyId } = vi.hoisted(() => ({

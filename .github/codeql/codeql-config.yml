@@ -1,0 +1,5 @@
+# Maintainer-only asset sync scripts are not part of the shipped app surface.
+# They validate network payloads before writing; CodeQL still flags raw fetch→write.
+name: termul-codeql
+paths-ignore:
+  - scripts/sync-acp-icons.mjs

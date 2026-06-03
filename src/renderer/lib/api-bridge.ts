@@ -5,10 +5,10 @@
  *   import { persistenceApi, systemApi } from '@/lib/api-bridge'
  */
 
-import { tauriPersistenceApi } from './tauri-persistence-api'
-import { tauriFilesystemApi } from './tauri-filesystem-api'
-import { tauriDialogApi } from './tauri-dialog-api'
 import { tauriClipboardApi } from './tauri-clipboard-api'
+import { tauriDialogApi } from './tauri-dialog-api'
+import { tauriFilesystemApi } from './tauri-filesystem-api'
+import { tauriPersistenceApi } from './tauri-persistence-api'
 import { tauriSystemApi } from './tauri-system-api'
 import { tauriWindowApi } from './tauri-window-api'
 
@@ -49,18 +49,17 @@ export const systemApi = tauriSystemApi
 export const windowApi = tauriWindowApi
 
 /**
- * Re-export all APIs for convenience
- */
-export {
-  tauriPersistenceApi,
-  tauriFilesystemApi,
-  tauriDialogApi,
-  tauriClipboardApi,
-  tauriSystemApi,
-  tauriWindowApi
-}
-
-/**
  * Type exports
  */
 export type { IpcResult } from '@shared/types/ipc.types'
+/**
+ * Re-export all APIs for convenience
+ */
+export {
+  tauriClipboardApi,
+  tauriDialogApi,
+  tauriFilesystemApi,
+  tauriPersistenceApi,
+  tauriSystemApi,
+  tauriWindowApi
+}

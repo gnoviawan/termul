@@ -1,6 +1,6 @@
-import { useEffect, useCallback } from 'react'
-import { usePinnedCommandsStore } from '@/stores/pinned-commands-store'
+import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { usePinnedCommandsStore } from '@/stores/pinned-commands-store'
 
 export const PINNED_COMMANDS_KEY = 'settings/pinned-commands'
 

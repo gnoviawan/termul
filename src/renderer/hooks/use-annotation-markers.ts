@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react'
-import { useAnnotationStore, normalizeUrl } from '@/stores/annotation-store'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import {
   browserTabInjectAnnotationMarkers,
   browserTabUpdateAnnotationMarkerSelection,
-  onBrowserTabAnnotationMarkerClicked,
-  onBrowserTabLoaded,
   type MarkerAnnotation,
+  onBrowserTabAnnotationMarkerClicked,
+  onBrowserTabLoaded
 } from '@/lib/browser-api'
+import { useAnnotationStore } from '@/stores/annotation-store'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 export function useAnnotationMarkers(
   browserTabId: string,
@@ -18,9 +18,7 @@ export function useAnnotationMarkers(
     (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
   )
 
-  const annotations = useAnnotationStore((state) =>
-    state.annotationsByUrl.get(normalizedUrl)
-  )
+  const annotations = useAnnotationStore((state) => state.annotationsByUrl.get(normalizedUrl))
   const selectedId = useAnnotationStore(
     (state) => state.selectedAnnotationIdByUrl.get(normalizedUrl) ?? null
   )
@@ -68,7 +66,7 @@ export function useAnnotationMarkers(
             x: a.geometry.x,
             y: a.geometry.y,
             width: a.geometry.width,
-            height: a.geometry.height,
+            height: a.geometry.height
           }
         }
         if (a.type === 'element' && a.geometry.type === 'element') {
@@ -84,8 +82,8 @@ export function useAnnotationMarkers(
               x: a.geometry.boundingBox.x,
               y: a.geometry.boundingBox.y,
               width: a.geometry.boundingBox.width,
-              height: a.geometry.boundingBox.height,
-            },
+              height: a.geometry.boundingBox.height
+            }
           }
         }
         return {
@@ -94,7 +92,7 @@ export function useAnnotationMarkers(
           x: 0,
           y: 0,
           width: 0,
-          height: 0,
+          height: 0
         }
       })
 

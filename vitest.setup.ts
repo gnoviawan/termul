@@ -109,4 +109,3 @@ vi.mock('react-virtuoso', () => {
 
   return { Virtuoso: VirtuosoComponent }
 })
-

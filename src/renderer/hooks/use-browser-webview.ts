@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   browserTabCreate,
   browserTabDestroy,
@@ -6,8 +6,8 @@ import {
   browserTabNavigate,
   browserTabResize,
   browserTabShow,
-  onBrowserTabNavigated,
   onBrowserTabLoaded,
+  onBrowserTabNavigated
 } from '@/lib/browser-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
@@ -90,11 +90,15 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
           createdRef.current = true
           if (visibilityRef.current) {
             browserTabShow(browserTabId)
-              .then((r) => { if (!r.success) console.error('[BrowserWebview] show failed:', r.error) })
+              .then((r) => {
+                if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+              })
               .catch(console.error)
           } else {
             browserTabHide(browserTabId)
-              .then((r) => { if (!r.success) console.error('[BrowserWebview] hide failed:', r.error) })
+              .then((r) => {
+                if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+              })
               .catch(console.error)
           }
         } else {
@@ -131,11 +135,15 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     if (isVisible) {
       updateBounds()
       browserTabShow(browserTabId)
-        .then((r) => { if (!r.success) console.error('[BrowserWebview] show failed:', r.error) })
+        .then((r) => {
+          if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+        })
         .catch(console.error)
     } else {
       browserTabHide(browserTabId)
-        .then((r) => { if (!r.success) console.error('[BrowserWebview] hide failed:', r.error) })
+        .then((r) => {
+          if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+        })
         .catch(console.error)
     }
   }, [isVisible, browserTabId, updateBounds])

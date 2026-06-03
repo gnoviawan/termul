@@ -70,7 +70,11 @@ describe('file-path-links parsing', () => {
   })
 
   it('does not extract file links from URL host/path fragments', () => {
-    const links = buildTerminalPathLinks('See https://example.com/src/App.tsx for details', 1, vi.fn())
+    const links = buildTerminalPathLinks(
+      'See https://example.com/src/App.tsx for details',
+      1,
+      vi.fn()
+    )
 
     expect(links).toEqual([])
   })

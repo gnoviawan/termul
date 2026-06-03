@@ -3,7 +3,7 @@
  * Tests the data migration API using Tauri IPC invoke
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock @tauri-apps/api/core BEFORE importing the module under test
 vi.mock('@tauri-apps/api/core', () => ({
@@ -11,17 +11,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
-import {
-  createTauriDataMigrationApi,
-  MigrationErrorCodes
-} from '../tauri-data-migration-api'
 import type {
+  MigrationInfo,
   MigrationRecord,
   MigrationResult,
-  MigrationInfo,
   SchemaVersion
 } from '../tauri-data-migration-api'
-import type { IpcResult } from '@shared/types/ipc.types'
+import { createTauriDataMigrationApi, MigrationErrorCodes } from '../tauri-data-migration-api'
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>
 
@@ -614,10 +610,7 @@ describe('tauriDataMigrationApi', () => {
 
       await api.rollback('1.2.0')
 
-      expect(mockInvoke).toHaveBeenCalledWith(
-        'data_migration_rollback',
-        { version: '1.2.0' }
-      )
+      expect(mockInvoke).toHaveBeenCalledWith('data_migration_rollback', { version: '1.2.0' })
     })
 
     it('should include version in payload without wrapping', async () => {
@@ -654,7 +647,7 @@ describe('tauriDataMigrationApi', () => {
         await api.rollback(version)
 
         const invokeCall = mockInvoke.mock.calls.find(
-          call => call[0] === 'data_migration_rollback'
+          (call) => call[0] === 'data_migration_rollback'
         )
         expect(invokeCall).toBeDefined()
       }
@@ -780,7 +773,7 @@ describe('tauriDataMigrationApi', () => {
         'rollback'
       ]
 
-      canonicalMethods.forEach(method => {
+      canonicalMethods.forEach((method) => {
         expect(typeof api[method as keyof typeof api]).toBe('function')
       })
     })

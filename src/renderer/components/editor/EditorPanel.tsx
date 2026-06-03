@@ -1,26 +1,23 @@
 import { useCallback } from 'react'
-import { CodeEditor } from './CodeEditor'
-import { MarkdownEditor } from './MarkdownEditor'
-import { EditorToolbar } from './EditorToolbar'
-import { useEditorStore } from '@/stores/editor-store'
-import type { EditorFileState } from '@/stores/editor-store'
 import { useTocSettings } from '@/hooks/use-toc-settings'
+import type { EditorFileState } from '@/stores/editor-store'
+import { useEditorStore } from '@/stores/editor-store'
+import { CodeEditor } from './CodeEditor'
+import { EditorToolbar } from './EditorToolbar'
+import { MarkdownEditor } from './MarkdownEditor'
 
 interface EditorPanelProps {
   filePath: string
   isVisible: boolean
 }
 
-export function EditorPanel({
-  filePath,
-  isVisible
-}: EditorPanelProps): React.JSX.Element {
+export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JSX.Element {
   // Intentionally invoked for side effects: loads and persists shared TOC settings.
   useTocSettings()
 
-  const fileState = useEditorStore(
-    (state) => state.openFiles.get(filePath)
-  ) as EditorFileState | undefined
+  const fileState = useEditorStore((state) => state.openFiles.get(filePath)) as
+    | EditorFileState
+    | undefined
 
   const { updateContent, setViewMode, updateCursorPosition, updateScrollTop } =
     useEditorStore.getState()

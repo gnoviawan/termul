@@ -1,19 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  isTerminalRestoreInProgress,
+  saveTerminalLayout,
   serializeTerminalsForProject,
   setTerminalRestoreInProgress,
-  isTerminalRestoreInProgress,
-  syncScrollbackToStore,
-  saveTerminalLayout
+  syncScrollbackToStore
 } from './useTerminalAutoSave'
 
 const { mockRecordTerminalContinuityEvent } = vi.hoisted(() => ({
   mockRecordTerminalContinuityEvent: vi.fn()
 }))
-import { extractScrollback } from '../utils/terminal-registry'
-import { useTerminalStore } from '../stores/terminal-store'
+
 import type { Terminal } from '@/types/project'
 import type { PersistedTerminal } from '../../shared/types/persistence.types'
+import { useTerminalStore } from '../stores/terminal-store'
+import { extractScrollback } from '../utils/terminal-registry'
 
 // Mock terminal-registry
 vi.mock('../utils/terminal-registry', () => ({

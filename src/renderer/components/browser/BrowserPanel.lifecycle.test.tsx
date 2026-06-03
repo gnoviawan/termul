@@ -1,22 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, act } from '@testing-library/react'
-import { BrowserPanel } from './BrowserPanel'
+import { act, render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { browserTabInjectAnnotation, browserTabRemoveAnnotationOverlay } from '@/lib/browser-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import {
-  browserTabInjectAnnotation,
-  browserTabRemoveAnnotationOverlay,
-} from '@/lib/browser-api'
+import { BrowserPanel } from './BrowserPanel'
 
 // Isolate the annotation lifecycle effects from the webview/marker/capture hooks
 // and heavy child components.
 vi.mock('@/hooks/use-browser-webview', () => ({
-  useBrowserWebview: () => ({ containerRef: { current: null } }),
+  useBrowserWebview: () => ({ containerRef: { current: null } })
 }))
 vi.mock('@/hooks/use-annotation-capture', () => ({
-  useAnnotationCapture: () => {},
+  useAnnotationCapture: () => {}
 }))
 vi.mock('@/hooks/use-annotation-markers', () => ({
-  useAnnotationMarkers: () => {},
+  useAnnotationMarkers: () => {}
 }))
 vi.mock('./BrowserControls', () => ({ BrowserControls: () => null }))
 vi.mock('./AnnotationPanel', () => ({ AnnotationPanel: () => null }))
@@ -29,7 +26,7 @@ vi.mock('@/lib/browser-api', () => ({
   browserTabHide: vi.fn().mockResolvedValue({ success: true }),
   browserTabShow: vi.fn().mockResolvedValue({ success: true }),
   onBrowserTabTitleChanged: vi.fn(() => ({ unlisten: vi.fn() })),
-  onBrowserTabLoaded: vi.fn(() => ({ unlisten: vi.fn() })),
+  onBrowserTabLoaded: vi.fn(() => ({ unlisten: vi.fn() }))
 }))
 
 const mockInject = browserTabInjectAnnotation as ReturnType<typeof vi.fn>
@@ -112,7 +109,7 @@ describe('BrowserPanel annotation lifecycle serialization (Finding A)', () => {
   })
 
   it('removes the overlay and does not re-inject when annotation mode turns off', async () => {
-    const { rerender } = render(<BrowserPanel browserTabId={TAB} isVisible={true} />)
+    render(<BrowserPanel browserTabId={TAB} isVisible={true} />)
     await flush()
     expect(mockInject).toHaveBeenCalledTimes(1)
 

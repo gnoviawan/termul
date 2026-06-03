@@ -7,26 +7,26 @@
  * @see MigrationApi - The canonical interface this implements
  */
 
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import type {
   IpcResult,
   MigrationApi,
+  MigrationInfo,
   MigrationRecord,
   MigrationResult,
   MigrationRunResult,
-  SchemaVersion,
-  MigrationInfo,
-  RollbackRequest
+  RollbackRequest,
+  SchemaVersion
 } from '@shared/types/ipc.types'
+import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 // Re-export types from the canonical contract for convenience
 export type {
+  MigrationInfo,
   MigrationRecord,
   MigrationResult,
   MigrationRunResult,
-  SchemaVersion,
-  MigrationInfo,
-  RollbackRequest
+  RollbackRequest,
+  SchemaVersion
 }
 
 // Migration error codes (aligned with canonical contract)
@@ -39,8 +39,7 @@ export const MigrationErrorCodes = {
   ROLLBACK_FAILED: 'ROLLBACK_FAILED'
 } as const
 
-export type MigrationErrorCode =
-  (typeof MigrationErrorCodes)[keyof typeof MigrationErrorCodes]
+export type MigrationErrorCode = (typeof MigrationErrorCodes)[keyof typeof MigrationErrorCodes]
 
 /**
  * IPC Command names for data migration
@@ -191,11 +190,13 @@ export function createTauriDataMigrationApi(): MigrationApi {
             partialResults: extendedResult.partialResults
           }
         })
-        .catch((error): MigrationRunResult => ({
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-          code: MigrationErrorCodes.MIGRATION_EXECUTION_FAILED
-        }))
+        .catch(
+          (error): MigrationRunResult => ({
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+            code: MigrationErrorCodes.MIGRATION_EXECUTION_FAILED
+          })
+        )
     },
 
     /**

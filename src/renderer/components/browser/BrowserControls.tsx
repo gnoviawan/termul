@@ -1,60 +1,61 @@
-import { useCallback, useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
-import { useBrowserSessionStore } from "@/stores/browser-session-store";
-import { browserTabGoBack, browserTabGoForward, browserTabOpenDevtools, browserTabReload } from "@/lib/browser-api";
-import { ArrowLeft, ArrowRight, Bug, RotateCcw, Globe, Loader2, Pencil } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, Pencil, RotateCcw } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  browserTabGoBack,
+  browserTabGoForward,
+  browserTabOpenDevtools,
+  browserTabReload
+} from '@/lib/browser-api'
+import { cn } from '@/lib/utils'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserControlsProps {
-  browserTabId: string;
+  browserTabId: string
 }
 
-export function BrowserControls({
-  browserTabId,
-}: BrowserControlsProps): React.JSX.Element {
-  const tabUrl = useBrowserSessionStore(
-    (state) => state.tabs.get(browserTabId)?.url ?? ''
-  );
+export function BrowserControls({ browserTabId }: BrowserControlsProps): React.JSX.Element {
+  const tabUrl = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url ?? '')
   const tabLoading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
-  );
+  )
   const tabAnnotationMode = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
-  );
-  const [inputUrl, setInputUrl] = useState(tabUrl || "");
+  )
+  const [inputUrl, setInputUrl] = useState(tabUrl || '')
 
   // Sync inputUrl with store URL changes (e.g. from real-time sync)
   useEffect(() => {
     if (tabUrl) {
-      setInputUrl(tabUrl);
+      setInputUrl(tabUrl)
     }
-  }, [tabUrl]);
+  }, [tabUrl])
 
   const handleNavigate = useCallback(() => {
-    let url = inputUrl.trim();
-    if (!url) return;
+    let url = inputUrl.trim()
+    if (!url) return
     if (!/^https?:\/\//i.test(url) && !/^about:/i.test(url)) {
-      url = "https://" + url;
+      url = `https://${url}`
     }
-    useBrowserSessionStore.getState().updateUrl(browserTabId, url);
-  }, [browserTabId, inputUrl]);
+    useBrowserSessionStore.getState().updateUrl(browserTabId, url)
+  }, [browserTabId, inputUrl])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        handleNavigate();
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        handleNavigate()
       }
     },
     [handleNavigate]
-  );
+  )
 
   const handleToggleAnnotationMode = useCallback(() => {
-    const currentMode = tabAnnotationMode;
-    useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode);
-  }, [browserTabId, tabAnnotationMode]);
+    const currentMode = tabAnnotationMode
+    useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode)
+  }, [browserTabId, tabAnnotationMode])
 
-  if (!tabUrl) return <></>;
+  if (!tabUrl) return <></>
 
   return (
     <div className="flex flex-col shrink-0">
@@ -115,21 +116,21 @@ export function BrowserControls({
               onClick={handleToggleAnnotationMode}
               aria-pressed={tabAnnotationMode}
               className={cn(
-                "p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95",
+                'p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95',
                 tabAnnotationMode
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20"
-                  : "hover:bg-secondary text-muted-foreground hover:text-foreground"
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20'
+                  : 'hover:bg-secondary text-muted-foreground hover:text-foreground'
               )}
-              aria-label={tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+              aria-label={tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
             >
               <Pencil size={14} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {tabAnnotationMode ? "Disable annotation mode" : "Enable annotation mode"}
+            {tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
           </TooltipContent>
         </Tooltip>
       </div>
     </div>
-  );
+  )
 }

@@ -1,6 +1,4 @@
-import { Settings2, List } from 'lucide-react'
-import type { TocHeading } from '@/hooks/use-toc-headings'
-import { cn } from '@/lib/utils'
+import { List, Settings2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -9,6 +7,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import type { TocHeading } from '@/hooks/use-toc-headings'
+import { cn } from '@/lib/utils'
 
 const HEADING_LEVEL_OPTIONS = [1, 2, 3, 4, 5, 6]
 

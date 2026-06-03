@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useContextBarSettingsStore } from './context-bar-settings-store'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
+import { useContextBarSettingsStore } from './context-bar-settings-store'
 
 describe('context-bar-settings-store', () => {
   beforeEach(() => {

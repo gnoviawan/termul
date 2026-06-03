@@ -9,8 +9,8 @@
  *   const result = await clipboardApi.readText()
  */
 
-import { tauriClipboardApi } from './tauri-clipboard-api'
 import type { ClipboardApi } from '@shared/types/ipc.types'
+import { tauriClipboardApi } from './tauri-clipboard-api'
 
 /**
  * Singleton ClipboardApi instance

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { ContextMenu } from './ContextMenu'
 
 describe('ContextMenu', () => {
@@ -50,7 +50,9 @@ describe('ContextMenu', () => {
   })
 
   it('should render icons when provided', () => {
-    const items = [{ label: 'With Icon', onClick: vi.fn(), icon: <span data-testid="icon">X</span> }]
+    const items = [
+      { label: 'With Icon', onClick: vi.fn(), icon: <span data-testid="icon">X</span> }
+    ]
 
     render(<ContextMenu items={items} x={100} y={100} onClose={vi.fn()} />)
 

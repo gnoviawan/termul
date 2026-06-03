@@ -15,9 +15,9 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import {
-  TERMINAL_DEDICATED_BROWSER_TAB_ID,
   openTerminalUrl,
-  openTerminalUrlInDedicatedBrowser
+  openTerminalUrlInDedicatedBrowser,
+  TERMINAL_DEDICATED_BROWSER_TAB_ID
 } from './terminal-url-navigation'
 
 describe('terminal-url-navigation', () => {
@@ -102,9 +102,9 @@ describe('terminal-url-navigation', () => {
   })
 
   it('always creates a dedicated Termul browser tab helper tab id', async () => {
-    const randomUuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
-      '00000000-0000-4000-8000-000000000001'
-    )
+    const randomUuidSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValue('00000000-0000-4000-8000-000000000001')
 
     await openTerminalUrlInDedicatedBrowser('https://example.com')
 

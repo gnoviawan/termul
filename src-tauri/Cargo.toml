@@ -1,6 +1,6 @@
 [package]
 name = "termul-manager"
-version = "0.3.8"
+version = "0.4.2"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
@@ -27,9 +27,14 @@ tauri-plugin-mcp-bridge = "0.9"
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
+
+# ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
+# only). rustls-tls matches the backend already pulled in by the updater plugin.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
 
 # PTY and async runtime
 portable-pty = "0.9"
@@ -58,15 +63,46 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # without a full Perl module setup; see README SSH development notes.
 ssh2 = "0.9"
 
-# Secure storage (OS keychain for secure credential storage)
+# Secure storage (OS keychain for secure credential storage).
+# IMPORTANT: keyring selects its backend at COMPILE TIME via cargo features.
+# Without an OS-backend feature it silently falls back to an in-memory mock
+# store, so set_password "succeeds" but get_password always returns NoEntry
+# (credentials never persist). Enable the native backend per OS below.
 keyring = "3.6"
 
 # Logging
 log = "0.4"
-env_logger = { version = "0.11", default-features = false }
+
+# Remote terminal server (embedded Axum HTTP + WebSocket)
+# Reuses the existing tokio + hyper 1.x + tower stack already in the dep tree.
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+
+# Cryptographic random generation for auth tokens
+getrandom = "0.2"
+
+# Structured logging for remote server
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
+tower = { version = "0.5", features = ["util"] }
+
+# --- OS keychain backends for `keyring` (see note on the keyring dep above) ---
+# Windows Credential Manager
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
+# macOS Keychain
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+# Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
+# don't require a system OpenSSL/Perl build toolchain.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

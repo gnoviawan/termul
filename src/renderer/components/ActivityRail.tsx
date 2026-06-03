@@ -1,13 +1,22 @@
-import { PanelLeft, PanelRight, SlidersHorizontal, FolderKanban, GitBranch, Network, MessageSquarePlus } from 'lucide-react'
-import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
-import { TermulMark } from '@/components/TermulMark'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { useSidebarVisible } from '@/stores/sidebar-store'
-import { useFileExplorerVisible } from '@/stores/file-explorer-store'
-import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
-import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
+import {
+  FolderKanban,
+  GitBranch,
+  History,
+  MessageSquarePlus,
+  Network,
+  PanelLeft,
+  PanelRight,
+  SlidersHorizontal
+} from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { TermulMark } from '@/components/TermulMark'
+import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
+import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
+import { useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useSidebarVisible } from '@/stores/sidebar-store'
+import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 
 const railButtonClass =
   'w-12 h-11 flex items-center justify-center hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
@@ -25,6 +34,10 @@ interface ActivityRailProps {
   onOpenAgentChat?: () => void
   /** Whether a new agent chat can currently be started (active project has a path). */
   canOpenAgentChat?: boolean
+  /** Opens a git history (commit graph) tab in the active pane. */
+  onOpenGitHistory?: () => void
+  /** Whether a git history tab can currently be opened (active project has a path). */
+  canOpenGitHistory?: boolean
 }
 
 /**
@@ -50,7 +63,9 @@ export function ActivityRail({
   onOpenGitChanges,
   canOpenGitChanges = false,
   onOpenAgentChat,
-  canOpenAgentChat = false
+  canOpenAgentChat = false,
+  onOpenGitHistory,
+  canOpenGitHistory = false
 }: ActivityRailProps = {}): React.JSX.Element {
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
@@ -68,12 +83,16 @@ export function ActivityRail({
     }
   }
 
-  const handleToggleFileExplorer = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
+  const handleToggleFileExplorer = async (
+    e: React.MouseEvent<HTMLButtonElement>
+  ): Promise<void> => {
     e.stopPropagation()
     try {
       await updatePanelVisibility('fileExplorerVisible', !isExplorerVisible)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update file explorer visibility')
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to update file explorer visibility'
+      )
     }
   }
 
@@ -151,6 +170,22 @@ export function ActivityRail({
 
       <button
         onClick={(e) => {
+          e.stopPropagation()
+          onOpenGitHistory?.()
+        }}
+        className={railButtonClass}
+        title={canOpenGitHistory ? 'Git history' : 'Git history (open a project first)'}
+        aria-label="Open git history"
+        disabled={!onOpenGitHistory || !canOpenGitHistory}
+      >
+        <History
+          size={18}
+          className={canOpenGitHistory ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        onClick={(e) => {
           void handleToggleSSHPanel(e)
         }}
         className={railButtonClass}
@@ -213,7 +248,9 @@ export function ActivityRail({
         >
           <SlidersHorizontal
             size={18}
-            className={location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'}
+            className={
+              location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'
+            }
           />
         </button>
       </div>

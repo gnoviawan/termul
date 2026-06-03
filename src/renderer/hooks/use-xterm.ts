@@ -1,8 +1,8 @@
-import { useRef, useCallback, useEffect } from 'react'
-import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { Terminal } from '@xterm/xterm'
+import { useCallback, useEffect, useRef } from 'react'
 import { TERMINAL_THEME } from '../components/terminal/terminal-config'
 
 export interface UseXtermOptions {
@@ -12,7 +12,7 @@ export interface UseXtermOptions {
   fontFamily?: string
   scrollback?: number
   /** Renderer preference: "auto" | "webgl" | "dom". Defaults to "webgl". */
-  renderer?: "auto" | "webgl" | "dom"
+  renderer?: 'auto' | 'webgl' | 'dom'
 }
 
 export interface UseXtermReturn {
@@ -37,7 +37,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
     fontSize = 14,
     fontFamily = 'Menlo, Monaco, "Courier New", monospace',
     scrollback = 10000,
-    renderer = "webgl"
+    renderer = 'webgl'
   } = options
 
   const terminalRef = useRef<Terminal | null>(null)
@@ -112,7 +112,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
 
     terminal.open(containerRef.current)
 
-    if (renderer !== "dom") {
+    if (renderer !== 'dom') {
       try {
         const webglAddon = new WebglAddon()
         webglAddon.onContextLoss(() => {
@@ -143,7 +143,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [fontFamily, fontSize, scrollback, onData, onResize])
+  }, [fontFamily, fontSize, scrollback, onData, onResize, renderer])
 
   return {
     terminalRef,

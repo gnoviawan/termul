@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
-import TauriApp from './TauriApp'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
+import TauriApp from './TauriApp'
 
 const { mockPersistenceRead } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn()
@@ -16,7 +16,11 @@ vi.mock('@/lib/api', () => ({
   },
   sessionApi: {
     hasSession: vi.fn(async () => ({ success: true, data: false })),
-    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    restore: vi.fn(async () => ({
+      success: false,
+      error: 'No session',
+      code: 'SESSION_NOT_FOUND'
+    })),
     save: vi.fn(),
     clear: vi.fn(),
     flush: vi.fn()

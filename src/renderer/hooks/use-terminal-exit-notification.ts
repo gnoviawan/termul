@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
 import { terminalApi } from '@/lib/api'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
-import { useTerminalStore } from '@/stores/terminal-store'
 import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 /**
  * Maximum length for notification title and body before truncation.
@@ -14,10 +14,13 @@ const MAX_NOTIFICATION_TEXT_LENGTH = 64
  * Truncate and sanitize a string for use in OS notifications.
  * Removes newlines and limits length to prevent overflow or spoofed formatting.
  */
-function sanitizeNotificationText(text: string, maxLength: number = MAX_NOTIFICATION_TEXT_LENGTH): string {
+function sanitizeNotificationText(
+  text: string,
+  maxLength: number = MAX_NOTIFICATION_TEXT_LENGTH
+): string {
   const sanitized = text.replace(/[\r\n]+/g, ' ').trim()
   if (sanitized.length <= maxLength) return sanitized
-  return sanitized.slice(0, maxLength - 1) + '…'
+  return `${sanitized.slice(0, maxLength - 1)}…`
 }
 
 /**
@@ -49,24 +52,18 @@ export function useTerminalExitNotification(): void {
           ? document.hasFocus()
           : !terminal.isAppHidden
       const isViewingThisTerminal =
-        terminalState.activeTerminalId === terminal.id &&
-        windowFocused &&
-        !terminal.isAppHidden
+        terminalState.activeTerminalId === terminal.id && windowFocused && !terminal.isAppHidden
       if (!isViewingThisTerminal) {
         terminalState.setTerminalNeedsAttention(terminal.id, true)
       }
 
-      const project = useProjectStore
-        .getState()
-        .projects.find((p) => p.id === terminal.projectId)
+      const project = useProjectStore.getState().projects.find((p) => p.id === terminal.projectId)
 
       const title = sanitizeNotificationText(project?.name ?? 'Termul')
       const terminalName = sanitizeNotificationText(terminal.name)
 
       const body =
-        exitCode === 0
-          ? `${terminalName} — DONE`
-          : `${terminalName} — Failed (exit ${exitCode})`
+        exitCode === 0 ? `${terminalName} — DONE` : `${terminalName} — Failed (exit ${exitCode})`
 
       sendDesktopNotification(title, body)
     })

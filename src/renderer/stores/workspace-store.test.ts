@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useWorkspaceStore, flattenSameDirection, normalizePaneTree } from './workspace-store'
-import type { WorkspaceState } from './workspace-store'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
+import type { WorkspaceState } from './workspace-store'
+import { flattenSameDirection, useWorkspaceStore } from './workspace-store'
 
 function createEditorTab(id: string): { type: 'editor'; id: string; filePath: string } {
   return {
@@ -11,7 +11,11 @@ function createEditorTab(id: string): { type: 'editor'; id: string; filePath: st
   }
 }
 
-function createTerminalTab(terminalId: string): { type: 'terminal'; id: string; terminalId: string } {
+function createTerminalTab(terminalId: string): {
+  type: 'terminal'
+  id: string
+  terminalId: string
+} {
   return {
     type: 'terminal',
     id: `term-${terminalId}`,
@@ -160,7 +164,7 @@ describe('workspace-store split/move invariants', () => {
     store.splitPane('pane-root', 'horizontal', terminalB, 'right')
 
     const split = useWorkspaceStore.getState().root as SplitNode
-    const left = split.children[0] as LeafNode
+    const _left = split.children[0] as LeafNode
     const right = split.children[1] as LeafNode
 
     store.setActiveTab(right.id, terminalB.id)
@@ -173,9 +177,7 @@ describe('workspace-store split/move invariants', () => {
     const remappedLeft = remappedSplit.children[0] as LeafNode
     const remappedRight = remappedSplit.children[1] as LeafNode
 
-    expect(remappedLeft.tabs).toEqual([
-      { type: 'terminal', id: 'term-new-a', terminalId: 'new-a' }
-    ])
+    expect(remappedLeft.tabs).toEqual([{ type: 'terminal', id: 'term-new-a', terminalId: 'new-a' }])
     expect(remappedRight.tabs).toEqual([
       { type: 'terminal', id: 'term-new-b', terminalId: 'new-b' }
     ])
@@ -297,7 +299,12 @@ describe('workspace-store split/move invariants', () => {
     const rightPane = split.children[1] as LeafNode
     store.togglePaneFullscreen(rightPane.id)
 
-    store.loadProjectWorkspace({ type: 'leaf', id: 'replacement-pane', tabs: [], activeTabId: null })
+    store.loadProjectWorkspace({
+      type: 'leaf',
+      id: 'replacement-pane',
+      tabs: [],
+      activeTabId: null
+    })
     expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
 
     // After loading a single-pane workspace, fullscreen is a no-op
@@ -404,7 +411,7 @@ describe('workspace-store same-direction collapse (ADR-002.6)', () => {
     // Should be a flat group of 3, not nested
     expect(split.direction).toBe('horizontal')
     expect(split.children.length).toBe(3)
-    expect(split.children.every(c => c.type === 'leaf')).toBe(true)
+    expect(split.children.every((c) => c.type === 'leaf')).toBe(true)
     expect(split.sizes.length).toBe(3)
     // Sizes should sum to ~100
     const sizeSum = split.sizes.reduce((a, b) => a + b, 0)
@@ -460,7 +467,7 @@ describe('workspace-store same-direction collapse (ADR-002.6)', () => {
     const root = useWorkspaceStore.getState().root as SplitNode
     expect(root.direction).toBe('horizontal')
     expect(root.children.length).toBe(4)
-    expect(root.children.every(c => c.type === 'leaf')).toBe(true)
+    expect(root.children.every((c) => c.type === 'leaf')).toBe(true)
     expect(root.sizes.length).toBe(4)
     const sizeSum = root.sizes.reduce((a, b) => a + b, 0)
     expect(Math.abs(sizeSum - 100)).toBeLessThan(1)

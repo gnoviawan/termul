@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
 
@@ -90,9 +90,28 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProjectId: () => activeProject.id,
   useProjectActions: () => mockProjectActions,
   useProjectStore: Object.assign(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (selector?: any) => selector ? selector({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) : { projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false },
-    { getState: () => ({ projects: [activeProject], activeProjectId: activeProject.id, isLoaded: true, isWorktreeOperationLocked: false }) }
+    (selector?: any) =>
+      selector
+        ? selector({
+            projects: [activeProject],
+            activeProjectId: activeProject.id,
+            isLoaded: true,
+            isWorktreeOperationLocked: false
+          })
+        : {
+            projects: [activeProject],
+            activeProjectId: activeProject.id,
+            isLoaded: true,
+            isWorktreeOperationLocked: false
+          },
+    {
+      getState: () => ({
+        projects: [activeProject],
+        activeProjectId: activeProject.id,
+        isLoaded: true,
+        isWorktreeOperationLocked: false
+      })
+    }
   )
 }))
 
@@ -234,6 +253,10 @@ vi.mock('@/components/CommandPalette', () => ({
   CommandPalette: () => null
 }))
 
+vi.mock('@/lib/agents/custom-agents', () => ({
+  loadCustomAgents: vi.fn(async () => [])
+}))
+
 vi.mock('@/components/CommandHistoryModal', () => ({
   CommandHistoryModal: () => null
 }))
@@ -290,10 +313,17 @@ vi.mock('@/lib/api', () => ({
   },
   sessionApi: {
     hasSession: vi.fn(async () => ({ success: true, data: false })),
-    restore: vi.fn(async () => ({ success: false, error: 'No session', code: 'SESSION_NOT_FOUND' })),
+    restore: vi.fn(async () => ({
+      success: false,
+      error: 'No session',
+      code: 'SESSION_NOT_FOUND'
+    })),
     save: vi.fn(),
     clear: vi.fn(),
     flush: vi.fn()
+  },
+  sshApi: {
+    onConnectionStatusChanged: vi.fn(() => vi.fn())
   }
 }))
 
@@ -343,9 +373,7 @@ describe('WorkspaceLayout close persistence', () => {
 
   it('flushes pending persistence writes after saving all dirty files', async () => {
     mockEditorStoreState.getDirtyFileCount.mockReset()
-    mockEditorStoreState.getDirtyFileCount
-      .mockReturnValueOnce(2)
-      .mockReturnValueOnce(0)
+    mockEditorStoreState.getDirtyFileCount.mockReturnValueOnce(2).mockReturnValueOnce(0)
 
     renderLayout()
 

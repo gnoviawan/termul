@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
+import { Outlet } from 'react-router';
+
 import Header from './components/Header';
-import Hero from './components/Hero';
-import FeatureSection from './components/FeatureSection';
 import Footer from './components/Footer';
 import { ScrollContainer } from './components/ScrollContainer';
 
@@ -21,10 +21,7 @@ export function App() {
           Skip to content
         </a>
         <Header scrollTop={scrollTop} />
-        <main id="main-content">
-          <Hero />
-          <FeatureSection />
-        </main>
+        <Outlet />
         <Footer />
       </div>
     </ScrollContainer>

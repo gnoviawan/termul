@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { ContextBarSettingsPopover } from './ContextBarSettingsPopover'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
+import { ContextBarSettingsPopover } from './ContextBarSettingsPopover'
 
 const { mockUpdateContextBarSetting } = vi.hoisted(() => ({
   mockUpdateContextBarSetting: vi.fn()
@@ -24,9 +24,7 @@ describe('ContextBarSettingsPopover', () => {
   it('renders the context bar settings popover trigger', () => {
     render(<ContextBarSettingsPopover />)
 
-    expect(
-      screen.getByRole('button', { name: 'Context bar settings' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Context bar settings' })).toBeInTheDocument()
   })
 
   it('opens the popover and dispatches updates for each switch', () => {

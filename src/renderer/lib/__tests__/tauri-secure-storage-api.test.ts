@@ -1,14 +1,14 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))
 
 import {
-  tauriSecureStorageApi,
+  _resetSecureStorageForTesting,
   createTauriSecureStorageApi,
-  _resetSecureStorageForTesting
+  tauriSecureStorageApi
 } from '../tauri-secure-storage-api'
 
 describe('tauri-secure-storage-api', () => {
