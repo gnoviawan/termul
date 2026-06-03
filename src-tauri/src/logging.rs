@@ -75,9 +75,9 @@ fn parse_level(token: &str) -> Option<LevelFilter> {
 /// parse it to preserve the documented override behavior:
 /// - `RUST_LOG=trace` → global trace.
 /// - `RUST_LOG=off` → global off (logging genuinely disabled).
-/// - `RUST_LOG=termul_manager=debug` → only that module at debug; everything
+/// - `RUST_LOG=termul_manager_lib=debug` → only that module at debug; everything
 ///   else stays at the floor (no third-party crate flooding).
-/// - `RUST_LOG=hyper=warn,termul_manager=trace` → each module scoped
+/// - `RUST_LOG=hyper=warn,termul_manager_lib=trace` → each module scoped
 ///   independently.
 ///
 /// When `RUST_LOG` is unset or names no bare level, the global stays at the

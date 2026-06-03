@@ -4,7 +4,7 @@
 fn main() {
     // Seed a default RUST_LOG so module-level overrides keep working, e.g.:
     //   RUST_LOG=trace npm run dev
-    //   RUST_LOG=termul_manager=debug npm run dev
+    //   RUST_LOG=termul_manager_lib=debug npm run dev
     // The global logger itself (file sink in release, console in debug) is
     // installed by tauri-plugin-log inside `run()`; its level floor is set
     // there (info in release, debug in debug builds).
