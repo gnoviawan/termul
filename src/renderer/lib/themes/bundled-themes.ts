@@ -239,5 +239,8 @@ export const DEFAULT_COLOR_THEME_ID = 'termul'
 export const COLOR_THEME_LIST = Object.values(BUNDLED_COLOR_THEMES)
 
 export function getColorThemeDefinition(themeId: string): ColorThemeDefinition {
-  return BUNDLED_COLOR_THEMES[themeId] ?? BUNDLED_COLOR_THEMES[DEFAULT_COLOR_THEME_ID]
+  if (!Object.prototype.hasOwnProperty.call(BUNDLED_COLOR_THEMES, themeId)) {
+    return BUNDLED_COLOR_THEMES[DEFAULT_COLOR_THEME_ID]
+  }
+  return BUNDLED_COLOR_THEMES[themeId]
 }

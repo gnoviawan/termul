@@ -13,7 +13,13 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createTermulTheme } from '@/components/editor/codemirror-theme'
 import { requestSaveEditorFile } from '@/lib/editor-save'
-import { COLOR_THEME_CHANGED_EVENT, type ColorThemeChangedDetail } from '@/lib/themes'
+import {
+  COLOR_THEME_CHANGED_EVENT,
+  type ColorThemeChangedDetail,
+  getColorThemeDefinition,
+  getLastAppliedColorThemeId,
+  resolveSyntaxColors
+} from '@/lib/themes'
 
 // Cache loaded language extensions
 const languageCache = new Map<string, Extension>()
@@ -134,7 +140,9 @@ export function useCodeMirror(
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
-  const syntaxColorsRef = useRef<ColorThemeChangedDetail['syntax'] | null>(null)
+  const syntaxColorsRef = useRef<ColorThemeChangedDetail['syntax'] | null>(
+    resolveSyntaxColors(getColorThemeDefinition(getLastAppliedColorThemeId()))
+  )
   const pendingRestoreTokenRef = useRef<symbol | null>(null)
   const filePathRef = useRef(options.filePath)
 

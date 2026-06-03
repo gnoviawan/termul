@@ -41,8 +41,8 @@ function applyCssVariables(palette: ThemePalette): void {
     '--secondary-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
     '--muted': hexToHslComponents(muted),
     '--muted-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.5)),
-    '--accent': hexToHslComponents(palette.primary),
-    '--accent-foreground': hexToHslComponents(lightenHex(palette.primary, 0.95)),
+    '--accent': hexToHslComponents(palette.accent),
+    '--accent-foreground': hexToHslComponents(lightenHex(palette.accent, 0.95)),
     '--destructive': hexToHslComponents(palette.error),
     '--destructive-foreground': hexToHslComponents('#ffffff'),
     '--border': hexToHslComponents(border),
@@ -128,7 +128,7 @@ export function getActiveTerminalTheme(): ITheme {
 }
 
 export function isKnownColorThemeId(themeId: string): boolean {
-  return themeId in BUNDLED_COLOR_THEMES
+  return Object.prototype.hasOwnProperty.call(BUNDLED_COLOR_THEMES, themeId)
 }
 
 /** @internal for tests */

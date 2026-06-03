@@ -5,6 +5,7 @@ import { Terminal } from '@xterm/xterm'
 import { memo, useEffect, useRef } from 'react'
 import { DEFAULT_TERMINAL_OPTIONS } from '@/components/terminal/terminal-config'
 import type { PoolSlot } from '@/components/terminal/terminal-renderer-pool'
+import { getActiveTerminalTheme } from '@/lib/themes'
 import '@xterm/xterm/css/xterm.css'
 
 export interface XTerminalProps {
@@ -18,10 +19,13 @@ export interface XTerminalProps {
   renderer?: 'auto' | 'webgl' | 'dom'
 }
 
-const TERMINAL_OPTIONS = {
-  ...DEFAULT_TERMINAL_OPTIONS,
-  // Deliberate overrides: XTerminal always converts EOL to LF for compatibility
-  convertEol: true
+function getXTerminalOptions() {
+  return {
+    ...DEFAULT_TERMINAL_OPTIONS,
+    theme: getActiveTerminalTheme(),
+    // Deliberate overrides: XTerminal always converts EOL to LF for compatibility
+    convertEol: true
+  }
 }
 
 function XTerminalComponent({
@@ -54,7 +58,7 @@ function XTerminalComponent({
       containerRef.current.appendChild(poolSlot.host)
     } else {
       // Create a new terminal as before
-      terminal = new Terminal(TERMINAL_OPTIONS)
+      terminal = new Terminal(getXTerminalOptions())
       terminalRef.current = terminal
 
       fitAddon = new FitAddon()

@@ -17,6 +17,8 @@ export interface ThemePalette {
 export type ThemeSyntaxOverrides = Partial<{
   'syntax-comment': string
   'syntax-keyword': string
+  'syntax-function': string
+  'syntax-tag': string
   'syntax-string': string
   'syntax-primitive': string
   'syntax-variable': string

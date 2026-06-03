@@ -1,4 +1,4 @@
-import type { ITerminalOptions, ITheme } from '@xterm/xterm'
+import type { ITerminalOptions } from '@xterm/xterm'
 import { getActiveTerminalTheme } from '@/lib/themes'
 
 // Resize debounce delay in milliseconds - prevents flooding PTY with resize events during drag
@@ -9,8 +9,6 @@ export const RESIZE_DEBOUNCE_MS = 50
 // behavior (e.g., correct line wrapping calculations).
 export const CONPTY_MIN_BUILD_NUMBER = 21376
 
-export const TERMINAL_THEME: ITheme = getActiveTerminalTheme()
-
 export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   // Cross-platform monospace stack:
   // - JetBrains Mono Variable: bundled via @fontsource-variable, available everywhere.
@@ -20,7 +18,6 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
     '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
   fontSize: 14,
   lineHeight: 1.2,
-  theme: TERMINAL_THEME,
   cursorBlink: true,
   cursorStyle: 'block',
   allowTransparency: false,
@@ -40,7 +37,8 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
  */
 export function getTerminalOptions(platform: string): ITerminalOptions {
   const baseOptions: ITerminalOptions = {
-    ...DEFAULT_TERMINAL_OPTIONS
+    ...DEFAULT_TERMINAL_OPTIONS,
+    theme: getActiveTerminalTheme()
   }
 
   if (platform.startsWith('Win')) {

@@ -61,14 +61,37 @@ export function ThemePicker(): React.JSX.Element | null {
     setQuery('')
   }, [cancel])
 
+  const scrollFocusedIntoView = useCallback((index: number) => {
+    const list = listRef.current
+    if (!list) return
+    const child = list.children[index]
+    if (child instanceof HTMLElement) {
+      child.scrollIntoView({ block: 'nearest' })
+    }
+  }, [])
+
+  const wasOpenRef = useRef(false)
+
   useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      const highlightedIndex = highlightedThemeId
+        ? filteredThemes.findIndex((theme) => theme.id === highlightedThemeId)
+        : 0
+      setFocusIndex(highlightedIndex >= 0 ? highlightedIndex : 0)
+    }
+    wasOpenRef.current = isOpen
+
     if (!isOpen) return
-    setFocusIndex(0)
     const frame = requestAnimationFrame(() => {
       inputRef.current?.focus()
     })
     return () => cancelAnimationFrame(frame)
-  }, [isOpen])
+  }, [filteredThemes, highlightedThemeId, isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    scrollFocusedIntoView(focusIndex)
+  }, [focusIndex, isOpen, scrollFocusedIntoView])
 
   useEffect(() => {
     if (!isOpen) return
@@ -87,6 +110,7 @@ export function ThemePicker(): React.JSX.Element | null {
         setFocusIndex(next)
         const theme = filteredThemes[next]
         if (theme) preview(theme.id)
+        scrollFocusedIntoView(next)
         return
       }
 
@@ -96,21 +120,31 @@ export function ThemePicker(): React.JSX.Element | null {
         setFocusIndex(next)
         const theme = filteredThemes[next]
         if (theme) preview(theme.id)
+        scrollFocusedIntoView(next)
         return
       }
 
       if (event.key === 'Enter') {
         event.preventDefault()
-        const theme = filteredThemes[focusIndex]
-        if (theme) {
-          void confirmTheme(theme.id)
+        const themeId = highlightedThemeId ?? filteredThemes[focusIndex]?.id
+        if (themeId) {
+          void confirmTheme(themeId)
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [confirmTheme, filteredThemes, focusIndex, handleCancel, isOpen, preview])
+  }, [
+    confirmTheme,
+    filteredThemes,
+    focusIndex,
+    handleCancel,
+    highlightedThemeId,
+    isOpen,
+    preview,
+    scrollFocusedIntoView
+  ])
 
   useEffect(() => {
     if (focusIndex >= filteredThemes.length) {
