@@ -71,11 +71,11 @@ function TypingIndicator({ agentId }: { agentId: AgentId }): React.JSX.Element {
       <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
         <AgentBadge agentId={agentId} iconSize={12} />
       </div>
-      <div className="flex items-center gap-1" aria-label="Agent is typing">
+      <output className="flex items-center gap-1" aria-label="Agent is typing">
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.3s] motion-reduce:animate-none" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.15s] motion-reduce:animate-none" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 motion-reduce:animate-none" />
-      </div>
+      </output>
     </div>
   )
 }
