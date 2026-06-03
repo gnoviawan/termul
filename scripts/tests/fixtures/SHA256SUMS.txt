@@ -1,0 +1,3 @@
+191863824bffdea37c1437bc4a4f322a09a36424f555f7fa22763aff9ceaa137  Termul.Manager_1.2.3_aarch64.dmg
+191863824bffdea37c1437bc4a4f322a09a36424f555f7fa22763aff9ceaa137  Termul.Manager_1.2.3_x64.dmg
+4cae876b65694a88a7ea63f586de4c2f01a775d29c7d76cfd5f513a77b418681  Termul.Manager_1.2.3_amd64.AppImage
