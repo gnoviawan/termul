@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TitleBar } from './TitleBar'
 
 const { mockWindowApi, platformState, maximizeRef } = vi.hoisted(() => ({

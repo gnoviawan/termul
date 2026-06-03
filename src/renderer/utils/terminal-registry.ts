@@ -89,7 +89,7 @@ export function restoreScrollback(terminal: Terminal, scrollback: string[]): voi
   try {
     // Join lines with newlines and write to terminal
     // This restores the visual content without executing commands
-    const content = scrollback.join('\r\n') + '\r\n'
+    const content = `${scrollback.join('\r\n')}\r\n`
     terminal.write(content)
   } catch (err) {
     console.error('Failed to restore scrollback:', err)
@@ -117,7 +117,7 @@ export function clearRegistry(): void {
  */
 export function captureScrollPosition(terminalId: string): void {
   const terminal = terminalRegistry.get(terminalId)
-  if (terminal && terminal.buffer?.active) {
+  if (terminal?.buffer?.active) {
     const viewportY = terminal.buffer.active.viewportY
     scrollPositionCache.set(terminalId, viewportY)
   }

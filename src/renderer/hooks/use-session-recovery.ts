@@ -1,8 +1,8 @@
+import type { SessionData, TerminalSession, WorkspaceState } from '@shared/types/ipc.types'
 import { useEffect, useRef } from 'react'
 import { sessionApi } from '@/lib/api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import type { SessionData, TerminalSession, WorkspaceState } from '@shared/types/ipc.types'
 
 const SESSION_SAVE_DEBOUNCE_MS = 2000
 const SESSION_SAVE_INTERVAL_MS = 15000

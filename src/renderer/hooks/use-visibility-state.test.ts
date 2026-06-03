@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVisibilityState } from './use-visibility-state'
 
 const {
@@ -98,9 +98,7 @@ describe('useVisibilityState', () => {
       expect(mockSetAppHidden).toHaveBeenCalledWith(true)
     })
 
-    expect(
-      mockSetVisibilityState.mock.calls.some((call) => call[0 as number] === false)
-    ).toBe(true)
+    expect(mockSetVisibilityState.mock.calls.some((call) => call[0 as number] === false)).toBe(true)
   })
 
   it('schedules hidden-state maintenance while the app stays hidden', () => {
@@ -133,9 +131,7 @@ describe('useVisibilityState', () => {
       expect(mockSetAppHidden).toHaveBeenCalledWith(true)
     })
 
-    expect(
-      mockSetVisibilityState.mock.calls.some((call) => call[0 as number] === false)
-    ).toBe(true)
+    expect(mockSetVisibilityState.mock.calls.some((call) => call[0 as number] === false)).toBe(true)
   })
 
   it('does not emit an initial visible pulse before minimized state is known', async () => {

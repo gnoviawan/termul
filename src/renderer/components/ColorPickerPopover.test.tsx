@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { ColorPickerPopover } from './ColorPickerPopover'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import type { ProjectColor } from '@/types/project'
+import { ColorPickerPopover } from './ColorPickerPopover'
 
 describe('ColorPickerPopover', () => {
   const defaultProps = {
@@ -24,13 +24,7 @@ describe('ColorPickerPopover', () => {
   it('should call onSelectColor and onClose when color is selected', () => {
     const onSelectColor = vi.fn()
     const onClose = vi.fn()
-    render(
-      <ColorPickerPopover
-        {...defaultProps}
-        onSelectColor={onSelectColor}
-        onClose={onClose}
-      />
-    )
+    render(<ColorPickerPopover {...defaultProps} onSelectColor={onSelectColor} onClose={onClose} />)
 
     // Click the first color button
     const buttons = screen.getAllByRole('button')

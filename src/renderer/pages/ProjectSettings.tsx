@@ -1,21 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
-import { Settings, Save, Info, Plus, X, ChevronDown, Upload, Link2, RefreshCw } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { NewProjectModal } from '@/components/NewProjectModal'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
-import {
-  useProjects,
-  useActiveProject,
-  useActiveProjectId,
-  useProjectActions
-} from '@/stores/project-store'
-import { availableColors, getColorClasses } from '@/lib/colors'
-import type { ProjectColor, EnvVariable } from '@/types/project'
 import type { DetectedShells } from '@shared/types/ipc.types'
-import { cn } from '@/lib/utils'
+import { ChevronDown, Info, Link2, Plus, RefreshCw, Save, Settings, Upload, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { NewProjectModal } from '@/components/NewProjectModal'
 import { Skeleton } from '@/components/ui/skeleton'
-import { dialogApi, shellApi, filesystemApi, worktreeApi } from '@/lib/api'
-import { parseEnvFile, mergeEnvVars } from '@/lib/env-parser'
+import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
+import { availableColors, getColorClasses } from '@/lib/colors'
+import { mergeEnvVars, parseEnvFile } from '@/lib/env-parser'
+import { cn } from '@/lib/utils'
+import { useActiveProject, useActiveProjectId, useProjectActions } from '@/stores/project-store'
+import type { EnvVariable, ProjectColor } from '@/types/project'
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
@@ -23,10 +18,7 @@ export default function ProjectSettings() {
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
-  const {
-    addProject,
-    updateProject
-  } = useProjectActions()
+  const { addProject, updateProject } = useProjectActions()
 
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
@@ -134,8 +126,7 @@ export default function ProjectSettings() {
     // Keyed on project identity only: this must run once per project selection and
     // not re-fire when other activeProject fields change (which would re-parse and
     // fight user edits).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject?.id, activeProject?.path, activeProject?.isGitRepo])
+  }, [activeProject?.id, activeProject?.path, activeProject?.isGitRepo, activeProject])
 
   const handleSave = () => {
     if (activeProject) {
@@ -147,9 +138,7 @@ export default function ProjectSettings() {
         .filter((envVar) => envVar.key !== '')
 
       // Normalize symlinkDirs: trim whitespace and remove empty/whitespace-only entries
-      const normalizedSymlinkDirs = symlinkDirs
-        .map((d) => d.trim())
-        .filter((d) => d.length > 0)
+      const normalizedSymlinkDirs = symlinkDirs.map((d) => d.trim()).filter((d) => d.length > 0)
 
       updateProject(activeProject.id, {
         name: projectName,
@@ -157,7 +146,7 @@ export default function ProjectSettings() {
         path: rootPath,
         envVars: normalizedEnvVars,
         defaultShell: shell,
-        symlinkDirs: normalizedSymlinkDirs,
+        symlinkDirs: normalizedSymlinkDirs
       })
       setEnvVars(normalizedEnvVars)
       setSymlinkDirs(normalizedSymlinkDirs)
@@ -198,13 +187,13 @@ export default function ProjectSettings() {
     try {
       const result = await worktreeApi.parseGitignore(activeProject.path)
       if (result.success && result.data) {
-        const existing = new Set(symlinkDirs.filter(d => d !== ''))
+        const existing = new Set(symlinkDirs.filter((d) => d !== ''))
         const newDirs = result.data
-          .filter(d => d.exists && !existing.has(d.dirName))
-          .map(d => d.dirName)
+          .filter((d) => d.exists && !existing.has(d.dirName))
+          .map((d) => d.dirName)
         if (newDirs.length > 0) {
           // Merge: add new dirs that aren't already in the list
-          setSymlinkDirs([...symlinkDirs.filter(d => d !== ''), ...newDirs])
+          setSymlinkDirs([...symlinkDirs.filter((d) => d !== ''), ...newDirs])
           setHasChanges(true)
         }
       }
@@ -266,8 +255,11 @@ export default function ProjectSettings() {
         .slice(0, 3)
         .map((l) => `Line ${l.line}: ${l.content}`)
         .join('\n')
-      const moreCount = parseResult.invalidLines.length > 3 ? ` (+${parseResult.invalidLines.length - 3} more)` : ''
-      setImportWarnings(`Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`)
+      const moreCount =
+        parseResult.invalidLines.length > 3 ? ` (+${parseResult.invalidLines.length - 3} more)` : ''
+      setImportWarnings(
+        `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
+      )
     }
   }
 
@@ -404,7 +396,8 @@ export default function ProjectSettings() {
                 <div className="w-1/3 pt-1">
                   <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Secrets and config injected into your shell session. Secret values are cleared on app restart until secure storage is added.
+                    Secrets and config injected into your shell session. Secret values are cleared
+                    on app restart until secure storage is added.
                   </p>
                   <button
                     onClick={addEnvVar}
@@ -418,11 +411,11 @@ export default function ProjectSettings() {
                   >
                     <Upload size={14} className="mr-1" /> Import from .env
                   </button>
-                  {importError && (
-                    <p className="mt-2 text-xs text-destructive">{importError}</p>
-                  )}
+                  {importError && <p className="mt-2 text-xs text-destructive">{importError}</p>}
                   {importWarnings && (
-                    <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">{importWarnings}</p>
+                    <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">
+                      {importWarnings}
+                    </p>
                   )}
                 </div>
                 <div className="w-2/3">
@@ -559,7 +552,10 @@ export default function ProjectSettings() {
                 <div className="w-1/3 pt-1">
                   <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Directories to symlink from the project root into worktrees. This allows shared dependencies (like <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>) across worktrees without reinstalling.
+                    Directories to symlink from the project root into worktrees. This allows shared
+                    dependencies (like{' '}
+                    <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>)
+                    across worktrees without reinstalling.
                   </p>
                   <div className="mt-4 space-y-2">
                     <button
@@ -567,7 +563,10 @@ export default function ProjectSettings() {
                       disabled={symlinkLoading || !activeProject?.isGitRepo}
                       className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <RefreshCw size={14} className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`} />
+                      <RefreshCw
+                        size={14}
+                        className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`}
+                      />
                       Sync from .gitignore
                     </button>
                     <button
@@ -582,7 +581,8 @@ export default function ProjectSettings() {
                   <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
                     {symlinkDirs.length === 0 ? (
                       <p className="text-xs text-muted-foreground text-center py-4">
-                        No symlink directories configured. Click "Sync from .gitignore" to auto-detect.
+                        No symlink directories configured. Click "Sync from .gitignore" to
+                        auto-detect.
                       </p>
                     ) : (
                       symlinkDirs.map((dir, index) => (
@@ -615,15 +615,20 @@ export default function ProjectSettings() {
                 <div className="w-1/3 pt-1">
                   <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Power-user workflow settings for incident response and rapid worktree operations.
+                    Power-user workflow settings for incident response and rapid worktree
+                    operations.
                   </p>
                 </div>
                 <div className="w-2/3">
                   <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-foreground">Skip Confirmation Dialogs</p>
-                        <p className="text-xs text-muted-foreground">Bypass non-essential prompts during worktree operations.</p>
+                        <p className="text-sm font-medium text-foreground">
+                          Skip Confirmation Dialogs
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Bypass non-essential prompts during worktree operations.
+                        </p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -640,8 +645,12 @@ export default function ProjectSettings() {
                     </div>
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-foreground">Skip .gitignore Selection</p>
-                        <p className="text-xs text-muted-foreground">Use default symlink settings when creating worktrees.</p>
+                        <p className="text-sm font-medium text-foreground">
+                          Skip .gitignore Selection
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Use default symlink settings when creating worktrees.
+                        </p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -657,7 +666,9 @@ export default function ProjectSettings() {
                       </label>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-foreground mb-1">Default Branch Prefix</label>
+                      <label className="block text-sm font-medium text-foreground mb-1">
+                        Default Branch Prefix
+                      </label>
                       <input
                         type="text"
                         value={defaultBranchPrefix}
@@ -668,7 +679,9 @@ export default function ProjectSettings() {
                         placeholder="feature/"
                         className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                       />
-                      <p className="text-xs text-muted-foreground mt-1">Prefix for new branch naming (e.g. "feature/", "hotfix/").</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Prefix for new branch naming (e.g. "feature/", "hotfix/").
+                      </p>
                     </div>
                   </div>
                 </div>

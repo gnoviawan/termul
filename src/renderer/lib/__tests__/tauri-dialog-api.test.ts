@@ -3,7 +3,7 @@
  * Tests the tauriDialogApi implementation using Tauri plugin-dialog
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock @tauri-apps/plugin-dialog BEFORE importing
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   confirm: vi.fn(async () => true)
 }))
 
-import { open, save, message, confirm } from '@tauri-apps/plugin-dialog'
+import { confirm, message, open, save } from '@tauri-apps/plugin-dialog'
 import { tauriDialogApi } from '../tauri-dialog-api'
 
 const mockOpen = open as ReturnType<typeof vi.fn>
@@ -169,7 +169,7 @@ describe('tauriDialogApi', () => {
       expect(result).toBe(true)
       expect(mockConfirm).toHaveBeenCalledWith('Are you sure?', {
         title: 'Konfirmasi',
-        kind: 'warning',
+        kind: 'warning'
       })
     })
 
@@ -194,7 +194,7 @@ describe('tauriDialogApi', () => {
       await tauriDialogApi.showMessage('Test message')
 
       expect(mockMessage).toHaveBeenCalledWith('Test message', {
-        title: 'Info',
+        title: 'Info'
       })
     })
 
@@ -202,7 +202,7 @@ describe('tauriDialogApi', () => {
       await tauriDialogApi.showMessage('Test message', 'Custom Title')
 
       expect(mockMessage).toHaveBeenCalledWith('Test message', {
-        title: 'Custom Title',
+        title: 'Custom Title'
       })
     })
   })

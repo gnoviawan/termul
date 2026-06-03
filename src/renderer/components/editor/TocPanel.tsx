@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { TableOfContents } from './TableOfContents'
-import { useTocHeadings, filterTocHeadings, type TocHeading } from '@/hooks/use-toc-headings'
 import { useBlockNoteActiveHeading, useCodeMirrorActiveHeading } from '@/hooks/use-active-heading'
-import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import type { VisibleLineRange } from '@/hooks/use-codemirror'
+import { filterTocHeadings, type TocHeading, useTocHeadings } from '@/hooks/use-toc-headings'
+import { useTocSettingsStore } from '@/stores/toc-settings-store'
+import { TableOfContents } from './TableOfContents'
 
 interface BlockNoteTocApi {
   getHeadings: () => TocHeading[]

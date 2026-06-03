@@ -17,9 +17,9 @@
  * - Keyboard: Global shortcuts, hotkeys
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
-import { readFileSync, existsSync } from 'fs'
-import { join } from 'path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 
 // Type definitions for our test data
 interface DomainCheck {
@@ -99,7 +99,7 @@ function apiBridgeUsesTauriAdapter(exportName: string, tauriAdapterFile: string)
         adapterContent.includes(`from './${tauriAdapterFile}'`) ||
         adapterContent.includes(`from "./${tauriAdapterFile}"`) ||
         adapterContent.includes('createTauri') ||
-        adapterContent.includes('tauri' + exportName.charAt(0).toUpperCase() + exportName.slice(1)) // e.g., tauriSessionApi
+        adapterContent.includes(`tauri${exportName.charAt(0).toUpperCase()}${exportName.slice(1)}`) // e.g., tauriSessionApi
       )
     }
   }
@@ -111,7 +111,8 @@ function apiBridgeUsesTauriAdapter(exportName: string, tauriAdapterFile: string)
 
   // Remove .ts extension for import check
   const adapterFileWithoutExt = tauriAdapterFile.replace('.ts', '')
-  const hasTauriImport = content.includes(`from './${adapterFileWithoutExt}'`) ||
+  const hasTauriImport =
+    content.includes(`from './${adapterFileWithoutExt}'`) ||
     content.includes(`from "./${adapterFileWithoutExt}"`)
 
   return hasTauriImport
@@ -187,7 +188,10 @@ describe('Parity Checklist Automation', () => {
           // Check it exports the factory function
           if (domain.adapterExportName) {
             expect(
-              fileContains(domain.tauriAdapterFile, new RegExp(`export\\s+(const|function)\\s+\\b${domain.adapterExportName}\\b`)),
+              fileContains(
+                domain.tauriAdapterFile,
+                new RegExp(`export\\s+(const|function)\\s+\\b${domain.adapterExportName}\\b`)
+              ),
               `${domain.tauriAdapterFile} should export ${domain.adapterExportName}`
             ).toBe(true)
           }
@@ -209,10 +213,9 @@ describe('Parity Checklist Automation', () => {
         })
 
         it(`Verified: Test file exists at ${domain.testFile}`, () => {
-          expect(
-            testFileExists(domain.testFile),
-            `Test file ${domain.testFile} should exist`
-          ).toBe(true)
+          expect(testFileExists(domain.testFile), `Test file ${domain.testFile} should exist`).toBe(
+            true
+          )
         })
       })
     }
@@ -231,7 +234,10 @@ describe('Parity Checklist Automation', () => {
           // Check it exports the factory function
           if (domain.adapterExportName) {
             expect(
-              fileContains(domain.tauriAdapterFile, new RegExp(`export\\s+(const|function)\\s+\\b${domain.adapterExportName}\\b`)),
+              fileContains(
+                domain.tauriAdapterFile,
+                new RegExp(`export\\s+(const|function)\\s+\\b${domain.adapterExportName}\\b`)
+              ),
               `${domain.tauriAdapterFile} should export ${domain.adapterExportName}`
             ).toBe(true)
           }
@@ -256,7 +262,9 @@ describe('Parity Checklist Automation', () => {
           // P1 tests are optional (warn but don't fail)
           const testExists = testFileExists(domain.testFile)
           if (!testExists) {
-            console.warn(`[WARN] ${domain.domain}: Test file ${domain.testFile} not found (P1 - recommended but not required)`)
+            console.warn(
+              `[WARN] ${domain.domain}: Test file ${domain.testFile} not found (P1 - recommended but not required)`
+            )
           }
           // For P1, we just log a warning but the test passes
           expect(true).toBe(true)
@@ -285,7 +293,9 @@ describe('Parity Checklist Automation', () => {
       const apiContent = readFileSync(apiPath, 'utf-8')
 
       const hasTauriImport = apiContent.includes("from './tauri-data-migration-api'")
-      const hasCreateTauriApi = apiContent.includes('export const dataMigrationApi = createTauriDataMigrationApi()')
+      const hasCreateTauriApi = apiContent.includes(
+        'export const dataMigrationApi = createTauriDataMigrationApi()'
+      )
       const hasElectronFallback = apiContent.includes("from './data-migration-api'")
 
       expect(
@@ -297,7 +307,12 @@ describe('Parity Checklist Automation', () => {
 
   describe('Summary Report', () => {
     it('should generate parity summary', () => {
-      const results: Array<{ domain: string; implemented: boolean; wired: boolean; tested: boolean }> = []
+      const results: Array<{
+        domain: string
+        implemented: boolean
+        wired: boolean
+        tested: boolean
+      }> = []
 
       for (const domain of ALL_DOMAINS) {
         const implemented = fileExists(domain.tauriAdapterFile)
@@ -316,8 +331,8 @@ describe('Parity Checklist Automation', () => {
       console.table(results)
 
       // All P0 domains must be fully implemented, wired, and tested
-      const p0Results = results.filter(r => P0_DOMAINS.some(d => d.domain === r.domain))
-      const p0Complete = p0Results.every(r => r.implemented && r.wired && r.tested)
+      const p0Results = results.filter((r) => P0_DOMAINS.some((d) => d.domain === r.domain))
+      const p0Complete = p0Results.every((r) => r.implemented && r.wired && r.tested)
 
       expect(p0Complete, 'All P0 domains must be fully implemented, wired, and tested').toBe(true)
     })

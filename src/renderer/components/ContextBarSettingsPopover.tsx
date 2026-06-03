@@ -1,8 +1,8 @@
 import { Settings } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'
+import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import type { ContextBarSettings } from '@/types/settings'
 
 interface SettingToggleProps {

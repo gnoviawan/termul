@@ -60,8 +60,8 @@ jobs:
       - name: Install Bun dependencies
         run: bun install --frozen-lockfile
 
-      - name: Lint
-        run: bun run lint
+      - name: Biome (lint + format + imports)
+        run: bun run ci
 
       - name: Typecheck
         run: bun run typecheck

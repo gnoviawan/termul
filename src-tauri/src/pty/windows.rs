@@ -2,10 +2,93 @@
 //!
 //! This module provides Windows-specific PTY spawning functionality using ConPTY.
 
-use std::ffi::c_void;
 use std::fs::File;
+use winapi::ctypes::c_void;
 use std::mem::{size_of, MaybeUninit};
 use std::os::windows::io::FromRawHandle;
+
+/// ADR-004.2: Build a Windows command-line string from an argv array using the
+/// `CommandLineToArgvW` escaping rules.
+///
+/// ConPTY ultimately consumes a single command-*line* string (via
+/// `CreateProcessW`). To launch an agent safely we must convert a discrete argv
+/// array into that string ourselves rather than concatenating user text into a
+/// shell command line. This is the ONE audited quoting site for the
+/// terminal-native agent launcher; do not hand-roll quoting elsewhere.
+///
+/// The algorithm is the inverse of `CommandLineToArgvW` (see Daniel Colascione,
+/// "Everybody quotes command line arguments the wrong way"):
+/// - An argument is quoted when it is empty or contains a space, tab, newline,
+///   vertical tab, or double-quote.
+/// - Backslashes are literal unless they immediately precede a double-quote (or
+///   the closing quote of a quoted argument), in which case each backslash in
+///   that run is doubled.
+/// - Embedded double-quotes are escaped as `\"`.
+///
+/// Because the resulting string is handed to `CreateProcessW` directly (never to
+/// `cmd.exe /c`), `cmd` metacharacters (`&`, `|`, `^`, `%`) are not interpreted.
+pub fn build_windows_command_line(program: &str, args: &[String]) -> String {
+    let mut cmdline = String::new();
+    append_quoted_arg(&mut cmdline, program);
+    for arg in args {
+        cmdline.push(' ');
+        append_quoted_arg(&mut cmdline, arg);
+    }
+    cmdline
+}
+
+fn arg_needs_quoting(arg: &str) -> bool {
+    arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"'))
+}
+
+fn append_quoted_arg(cmdline: &mut String, arg: &str) {
+    if !arg_needs_quoting(arg) {
+        cmdline.push_str(arg);
+        return;
+    }
+
+    cmdline.push('"');
+
+    let mut chars = arg.chars().peekable();
+    loop {
+        let mut backslashes = 0usize;
+        while matches!(chars.peek(), Some('\\')) {
+            chars.next();
+            backslashes += 1;
+        }
+
+        match chars.next() {
+            None => {
+                // End of argument: backslashes precede the closing quote, so
+                // double them to keep them literal.
+                for _ in 0..backslashes * 2 {
+                    cmdline.push('\\');
+                }
+                break;
+            }
+            Some('"') => {
+                // Backslashes precede a literal quote: double them, then escape
+                // the quote itself.
+                for _ in 0..backslashes * 2 + 1 {
+                    cmdline.push('\\');
+                }
+                cmdline.push('"');
+            }
+            Some(c) => {
+                // Backslashes not before a quote stay literal.
+                for _ in 0..backslashes {
+                    cmdline.push('\\');
+                }
+                cmdline.push(c);
+            }
+        }
+    }
+
+    cmdline.push('"');
+}
 
 /// ConPTY handles owned for a terminal lifecycle.
 pub struct ConPtyHandles {
@@ -306,13 +389,132 @@ pub fn spawn_conpty(
         CloseHandle(output_write);
 
         // 9. Create reader and writer from our pipe ends
-        let reader = Box::new(File::from_raw_handle(output_read)) as Box<dyn std::io::Read + Send>;
-        let writer = Box::new(File::from_raw_handle(input_write)) as Box<dyn std::io::Write + Send>;
+        // std:: uses its own c_void; winapi handles must be cast at the boundary.
+        let reader = Box::new(File::from_raw_handle(output_read as *mut std::ffi::c_void))
+            as Box<dyn std::io::Read + Send>;
+        let writer = Box::new(File::from_raw_handle(input_write as *mut std::ffi::c_void))
+            as Box<dyn std::io::Write + Send>;
 
         let conpty_handles = ConPtyHandles { hpcon };
 
         CloseHandle(pi.hThread);
 
         Ok((reader, writer, pi.dwProcessId, pi.hProcess, conpty_handles))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_windows_command_line;
+
+    fn cmdline(program: &str, args: &[&str]) -> String {
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        build_windows_command_line(program, &owned)
+    }
+
+    #[test]
+    fn no_args_returns_program_only() {
+        assert_eq!(cmdline("claude", &[]), "claude");
+    }
+
+    #[test]
+    fn simple_arg_not_quoted() {
+        assert_eq!(cmdline("claude", &["hello"]), "claude hello");
+    }
+
+    #[test]
+    fn arg_with_space_is_quoted() {
+        assert_eq!(
+            cmdline("claude", &["explain this project"]),
+            "claude \"explain this project\""
+        );
+    }
+
+    #[test]
+    fn empty_arg_is_quoted() {
+        assert_eq!(cmdline("claude", &[""]), "claude \"\"");
+    }
+
+    #[test]
+    fn embedded_double_quote_is_escaped() {
+        // Prompt: say "hi"  ->  "say \"hi\""
+        assert_eq!(
+            cmdline("claude", &["say \"hi\""]),
+            "claude \"say \\\"hi\\\"\""
+        );
+    }
+
+    #[test]
+    fn trailing_backslash_in_quoted_arg_is_doubled() {
+        // Prompt: C:\path with space\  ->  the trailing backslash before the
+        // closing quote must be doubled so it is not read as escaping the quote.
+        assert_eq!(
+            cmdline("claude", &["C:\\path with space\\"]),
+            "claude \"C:\\path with space\\\\\""
+        );
+    }
+
+    #[test]
+    fn backslashes_before_quote_are_doubled_plus_escaped_quote() {
+        // Input: a\\"b  (two backslashes then a quote)
+        // Expected inside quotes: a\\\\\"b -> four backslashes + escaped quote
+        assert_eq!(
+            cmdline("p", &["a\\\\\"b"]),
+            "p \"a\\\\\\\\\\\"b\""
+        );
+    }
+
+    #[test]
+    fn interior_backslashes_stay_literal_when_quoted() {
+        // Backslashes not adjacent to a quote are literal even inside quotes.
+        assert_eq!(
+            cmdline("p", &["a\\b c"]),
+            "p \"a\\b c\""
+        );
+    }
+
+    #[test]
+    fn shell_metacharacters_are_not_interpreted_just_passed_through() {
+        // No cmd.exe wrapper, so these stay literal. They contain no spaces/quotes,
+        // so they are not even quoted — CreateProcessW never interprets them.
+        assert_eq!(cmdline("claude", &["a&&b|c^d%e"]), "claude a&&b|c^d%e");
+    }
+
+    #[test]
+    fn dangerous_prompt_with_space_and_metachars_is_single_quoted_arg() {
+        // The classic injection attempt becomes ONE quoted argument.
+        let out = cmdline("claude", &["; rm -rf ~ #"]);
+        assert_eq!(out, "claude \"; rm -rf ~ #\"");
+    }
+
+    #[test]
+    fn newline_in_arg_forces_quoting() {
+        assert_eq!(cmdline("p", &["line1\nline2"]), "p \"line1\nline2\"");
+    }
+
+    #[test]
+    fn tab_in_arg_forces_quoting() {
+        assert_eq!(cmdline("p", &["a\tb"]), "p \"a\tb\"");
+    }
+
+    #[test]
+    fn program_with_space_is_quoted() {
+        assert_eq!(
+            cmdline("C:\\Program Files\\agent.exe", &["go"]),
+            "\"C:\\Program Files\\agent.exe\" go"
+        );
+    }
+
+    #[test]
+    fn multiple_args_joined_with_single_spaces() {
+        assert_eq!(
+            cmdline("gemini", &["-i", "query text"]),
+            "gemini -i \"query text\""
+        );
+    }
+
+    #[test]
+    fn non_ascii_arg_passes_through() {
+        assert_eq!(cmdline("p", &["caf\u{e9} \u{2014} test"]), "p \"caf\u{e9} \u{2014} test\"");
     }
 }

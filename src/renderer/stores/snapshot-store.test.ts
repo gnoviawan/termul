@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PersistedSnapshotList } from '../../shared/types/persistence.types'
 
 const { mockPersistence } = vi.hoisted(() => ({
@@ -22,10 +22,10 @@ vi.mock('./project-store', () => ({
 }))
 
 import {
-  useSnapshotStore,
-  useSnapshots,
   useSnapshotActions,
-  useSnapshotLoading
+  useSnapshotLoading,
+  useSnapshotStore,
+  useSnapshots
 } from './snapshot-store'
 
 beforeEach(() => {
@@ -76,9 +76,7 @@ describe('snapshot-store', () => {
           'Test Snapshot',
           'A test description',
           'project-123',
-          [
-            { id: 'term-1', name: 'Terminal 1', shell: 'powershell', cwd: '/home' }
-          ],
+          [{ id: 'term-1', name: 'Terminal 1', shell: 'powershell', cwd: '/home' }],
           'term-1'
         )
       })
@@ -195,13 +193,7 @@ describe('snapshot-store', () => {
       const { result } = renderHook(() => useSnapshotActions())
 
       await act(async () => {
-        await result.current.createSnapshot(
-          'New Snapshot',
-          undefined,
-          'project-789',
-          [],
-          null
-        )
+        await result.current.createSnapshot('New Snapshot', undefined, 'project-789', [], null)
       })
 
       expect(mockPersistence.write).toHaveBeenCalledWith(

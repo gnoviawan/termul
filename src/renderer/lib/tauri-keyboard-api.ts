@@ -1,5 +1,5 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { KeyboardApi, KeyboardShortcutCallback } from '@shared/types/ipc.types'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 /**

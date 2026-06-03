@@ -1,38 +1,33 @@
-export {
-  useProjectStore,
-  useActiveProject,
-  useProjects,
-  useActiveProjectId,
-  useProjectActions
-} from './project-store'
-
 export type { ProjectState } from './project-store'
-
 export {
-  useTerminalStore,
-  useTerminals,
+  useActiveProject,
+  useActiveProjectId,
+  useProjectActions,
+  useProjectStore,
+  useProjects
+} from './project-store'
+export type { TerminalState } from './terminal-store'
+export {
   useActiveTerminal,
   useActiveTerminalId,
-  useTerminalActions
+  useTerminalActions,
+  useTerminalStore,
+  useTerminals
 } from './terminal-store'
-
-export type { TerminalState } from './terminal-store'
-
+export type { UpdaterStoreState } from './updater-store'
 export {
-  useUpdaterStore,
-  useUpdateAvailable,
-  useUpdateVersion,
-  useUpdateDownloaded,
+  useAutoUpdateEnabled,
   useDownloadProgress,
   useIsChecking,
   useIsDownloading,
-  useUpdaterError,
   useLastChecked,
-  useAutoUpdateEnabled,
   useSkippedVersion,
-  useUpdaterState,
+  useUpdateAvailable,
+  useUpdateDownloaded,
   useUpdaterActions,
-  useUpdaterInternalActions
+  useUpdaterError,
+  useUpdaterInternalActions,
+  useUpdaterState,
+  useUpdaterStore,
+  useUpdateVersion
 } from './updater-store'
-
-export type { UpdaterStoreState } from './updater-store'

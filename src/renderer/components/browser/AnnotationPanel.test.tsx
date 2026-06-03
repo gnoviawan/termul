@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { AnnotationPanel } from './AnnotationPanel'
+import { fireEvent, render, screen } from '@testing-library/react'
+import type React from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useAnnotationStore, normalizeUrl, type Annotation } from '@/stores/annotation-store'
+import { normalizeUrl, useAnnotationStore } from '@/stores/annotation-store'
+import { AnnotationPanel } from './AnnotationPanel'
 
 // Mock scrollIntoView for jsdom
 Element.prototype.scrollIntoView = vi.fn()
@@ -31,7 +31,7 @@ function addRegionAnnotation(url: string, tabId: string, description = 'Test reg
     severity: 'blocking',
     description,
     viewportWidth: 1920,
-    viewportHeight: 1080,
+    viewportHeight: 1080
   })
 }
 
@@ -52,13 +52,13 @@ function addElementAnnotation(url: string, tabId: string, description = 'Test el
       attributes: { id: 'submit-btn', class: 'btn-primary' },
       textContent: 'Submit',
       textTruncated: false,
-      boundingBox: { x: 50, y: 60, width: 120, height: 40 },
+      boundingBox: { x: 50, y: 60, width: 120, height: 40 }
     },
     intent: 'change',
     severity: 'important',
     description,
     viewportWidth: 1920,
-    viewportHeight: 1080,
+    viewportHeight: 1080
   })
 }
 
@@ -69,14 +69,14 @@ const DEFAULT_PROPS = {
   onExitAnnotationMode: () => {},
   onChangeAnnotationSubMode: () => {},
   onAddNote: () => {},
-  onExport: () => {},
+  onExport: () => {}
 }
 
 describe('AnnotationPanel', () => {
   beforeEach(() => {
     useAnnotationStore.setState({
       annotationsByUrl: new Map(),
-      selectedAnnotationIdByUrl: new Map(),
+      selectedAnnotationIdByUrl: new Map()
     })
   })
 
@@ -88,9 +88,7 @@ describe('AnnotationPanel', () => {
 
     it('shows session-scoped notice', () => {
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
-      expect(
-        screen.getByText(/Session-scoped/i)
-      ).toBeInTheDocument()
+      expect(screen.getByText(/Session-scoped/i)).toBeInTheDocument()
     })
   })
 
@@ -147,9 +145,7 @@ describe('AnnotationPanel', () => {
           annotationOverlayAvailable={false}
         />
       )
-      expect(
-        screen.getByLabelText('Select unavailable on this page')
-      ).toBeInTheDocument()
+      expect(screen.getByLabelText('Select unavailable on this page')).toBeInTheDocument()
     })
 
     it('calls onChangeAnnotationSubMode when Draw button is clicked', () => {
@@ -213,9 +209,7 @@ describe('AnnotationPanel', () => {
       // At least one should be the badge (not the tooltip portal content)
       expect(intentElements.length).toBeGreaterThanOrEqual(1)
       // Filter to ensure we find the badge element specifically
-      const badgeElement = intentElements.find(
-        el => el.classList.contains('bg-red-100')
-      )
+      const badgeElement = intentElements.find((el) => el.classList.contains('bg-red-100'))
       expect(badgeElement).toBeTruthy()
     })
 
@@ -226,7 +220,7 @@ describe('AnnotationPanel', () => {
       expect(severityElements.length).toBeGreaterThanOrEqual(1)
       // The severity label is a <span> with capitalize class
       const labelElement = severityElements.find(
-        el => el.tagName === 'SPAN' && el.classList.contains('capitalize')
+        (el) => el.tagName === 'SPAN' && el.classList.contains('capitalize')
       )
       expect(labelElement).toBeTruthy()
     })
@@ -240,17 +234,10 @@ describe('AnnotationPanel', () => {
 
   describe('selected state', () => {
     it('applies ring styling to selected card', () => {
-      const annotation = addRegionAnnotation(
-        DEFAULT_PROPS.url,
-        'tab-1',
-        'Selected card'
-      )
+      const annotation = addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Selected card')
       useAnnotationStore
         .getState()
-        .setSelectedAnnotationId(
-          normalizeUrl(DEFAULT_PROPS.url),
-          annotation.id
-        )
+        .setSelectedAnnotationId(normalizeUrl(DEFAULT_PROPS.url), annotation.id)
 
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
 
@@ -260,11 +247,7 @@ describe('AnnotationPanel', () => {
     })
 
     it('sets selected id on card click', () => {
-      const annotation = addRegionAnnotation(
-        DEFAULT_PROPS.url,
-        'tab-1',
-        'Click me'
-      )
+      const annotation = addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Click me')
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
 
       const card = screen.getByText('Click me').closest('div[class*="cursor-pointer"]')
@@ -279,7 +262,7 @@ describe('AnnotationPanel', () => {
 
     it('does not apply ring to unselected cards', () => {
       const ann1 = addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Card A')
-      const ann2 = addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Card B')
+      const _ann2 = addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Card B')
       useAnnotationStore
         .getState()
         .setSelectedAnnotationId(normalizeUrl(DEFAULT_PROPS.url), ann1.id)
@@ -299,16 +282,12 @@ describe('AnnotationPanel', () => {
   describe('exit button', () => {
     it('renders exit annotation mode button', () => {
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
-      expect(
-        screen.getByLabelText('Exit annotation mode')
-      ).toBeInTheDocument()
+      expect(screen.getByLabelText('Exit annotation mode')).toBeInTheDocument()
     })
 
     it('calls onExitAnnotationMode when exit button is clicked', () => {
       const onExit = vi.fn()
-      renderWithProvider(
-        <AnnotationPanel {...DEFAULT_PROPS} onExitAnnotationMode={onExit} />
-      )
+      renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} onExitAnnotationMode={onExit} />)
       fireEvent.click(screen.getByLabelText('Exit annotation mode'))
       expect(onExit).toHaveBeenCalledOnce()
     })
@@ -324,9 +303,7 @@ describe('AnnotationPanel', () => {
       const deleteBtn = screen.getByTitle('Delete annotation')
       fireEvent.click(deleteBtn)
 
-      const annotations = useAnnotationStore
-        .getState()
-        .getAnnotationsForUrl(DEFAULT_PROPS.url)
+      const annotations = useAnnotationStore.getState().getAnnotationsForUrl(DEFAULT_PROPS.url)
       expect(annotations).toHaveLength(0)
     })
   })

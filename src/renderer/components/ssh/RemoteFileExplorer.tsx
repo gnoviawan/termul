@@ -1,38 +1,30 @@
-import { useState, useCallback, useEffect } from 'react'
-import {
-  Folder,
-  File,
-  Link2,
-  Download,
-  Upload,
-  Trash2,
-  FolderPlus,
-  RefreshCw,
-  ChevronRight,
-  ChevronDown,
-  Loader2,
-} from 'lucide-react'
-import { cn } from '@/lib/utils'
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  File,
+  Folder,
+  FolderPlus,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Trash2
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { sshApi } from '@/lib/api'
 import { dialogApi } from '@/lib/dialog-api'
-import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 
 interface RemoteFileExplorerProps {
   connectionId: string
   initialPath?: string
 }
 
-interface TreeNode {
-  entry: SFTPEntry
-  children?: TreeNode[]
-  isExpanded: boolean
-  isLoading: boolean
-}
-
 export function RemoteFileExplorer({
   connectionId,
-  initialPath = '/',
+  initialPath = '/'
 }: RemoteFileExplorerProps): React.JSX.Element {
   const [currentPath, setCurrentPath] = useState(initialPath)
   const [entries, setEntries] = useState<SFTPEntry[]>([])
@@ -87,7 +79,9 @@ export function RemoteFileExplorer({
           toast.error(`Permission denied: ${dirPath}`)
         }
       } catch (error) {
-        toast.error(`Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          `Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`
+        )
       } finally {
         setLoadingDirs((prev) => {
           const next = new Set(prev)
@@ -102,7 +96,7 @@ export function RemoteFileExplorer({
   const handleDownload = async (entry: SFTPEntry) => {
     const saveResult = await dialogApi.selectFile({
       title: `Save ${entry.name}`,
-      filters: [{ name: 'All Files', extensions: ['*'] }],
+      filters: [{ name: 'All Files', extensions: ['*'] }]
     })
     if (!saveResult.success) {
       if (saveResult.code !== 'CANCELLED') toast.error(`Save dialog failed: ${saveResult.error}`)
@@ -131,9 +125,7 @@ export function RemoteFileExplorer({
     const name = prompt('Directory name:')
     if (!name) return
 
-    const newPath = currentPath.endsWith('/')
-      ? `${currentPath}${name}`
-      : `${currentPath}/${name}`
+    const newPath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
 
     const result = await sshApi.sftpMkdir(connectionId, newPath)
     if (result.success) {
@@ -178,7 +170,7 @@ export function RemoteFileExplorer({
       <div key={entry.path}>
         <div
           className={cn(
-            'flex items-center gap-1 px-2 py-0.5 hover:bg-accent/50 cursor-pointer group text-xs',
+            'flex items-center gap-1 px-2 py-0.5 hover:bg-accent/50 cursor-pointer group text-xs'
           )}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           onClick={() => {
@@ -200,7 +192,12 @@ export function RemoteFileExplorer({
           {!isDir && <span className="w-3.5" />}
 
           {/* Icon */}
-          <Icon className={cn('h-3.5 w-3.5 flex-shrink-0', isDir ? 'text-blue-400' : 'text-muted-foreground')} />
+          <Icon
+            className={cn(
+              'h-3.5 w-3.5 flex-shrink-0',
+              isDir ? 'text-blue-400' : 'text-muted-foreground'
+            )}
+          />
 
           {/* Name */}
           <span className="flex-1 truncate">{entry.name}</span>
@@ -214,7 +211,10 @@ export function RemoteFileExplorer({
           <div className="hidden group-hover:flex items-center gap-0.5">
             {!isDir && (
               <button
-                onClick={(e) => { e.stopPropagation(); handleDownload(entry) }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleDownload(entry)
+                }}
                 className="p-0.5 rounded hover:bg-accent"
                 title="Download"
               >
@@ -222,7 +222,10 @@ export function RemoteFileExplorer({
               </button>
             )}
             <button
-              onClick={(e) => { e.stopPropagation(); handleDelete(entry) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleDelete(entry)
+              }}
               className="p-0.5 rounded hover:bg-destructive/20"
               title="Delete"
             >

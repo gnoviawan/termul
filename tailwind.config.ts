@@ -3,9 +3,7 @@ import tailwindcssAnimate from 'tailwindcss-animate'
 
 export default {
   darkMode: ['class'],
-  content: [
-    './src/renderer/**/*.{ts,tsx}'
-  ],
+  content: ['./src/renderer/**/*.{ts,tsx}'],
   prefix: '',
   theme: {
     container: {

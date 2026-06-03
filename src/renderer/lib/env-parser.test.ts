@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { parseEnvFile, mergeEnvVars, resolveEnvForSpawn } from './env-parser'
+import { describe, expect, it } from 'vitest'
 import type { EnvVariable } from '@/types/project'
+import { mergeEnvVars, parseEnvFile, resolveEnvForSpawn } from './env-parser'
 
 describe('env-parser', () => {
   describe('parseEnvFile', () => {
@@ -106,15 +106,13 @@ describe('env-parser', () => {
       const result = mergeEnvVars(existing, imported)
 
       expect(result).toHaveLength(3)
-      expect(result.find(v => v.key === 'KEY1')?.value).toBe('old1')
-      expect(result.find(v => v.key === 'KEY2')?.value).toBe('new2')
-      expect(result.find(v => v.key === 'KEY3')?.value).toBe('new3')
+      expect(result.find((v) => v.key === 'KEY1')?.value).toBe('old1')
+      expect(result.find((v) => v.key === 'KEY2')?.value).toBe('new2')
+      expect(result.find((v) => v.key === 'KEY3')?.value).toBe('new3')
     })
 
     it('should handle empty existing array', () => {
-      const imported: EnvVariable[] = [
-        { key: 'KEY', value: 'value' }
-      ]
+      const imported: EnvVariable[] = [{ key: 'KEY', value: 'value' }]
 
       const result = mergeEnvVars([], imported)
 
@@ -123,9 +121,7 @@ describe('env-parser', () => {
     })
 
     it('should handle empty imported array', () => {
-      const existing: EnvVariable[] = [
-        { key: 'KEY', value: 'value' }
-      ]
+      const existing: EnvVariable[] = [{ key: 'KEY', value: 'value' }]
 
       const result = mergeEnvVars(existing, [])
 
@@ -134,12 +130,8 @@ describe('env-parser', () => {
     })
 
     it('should preserve isSecret flag from imported vars', () => {
-      const existing: EnvVariable[] = [
-        { key: 'KEY', value: 'old' }
-      ]
-      const imported: EnvVariable[] = [
-        { key: 'KEY', value: 'new', isSecret: true }
-      ]
+      const existing: EnvVariable[] = [{ key: 'KEY', value: 'old' }]
+      const imported: EnvVariable[] = [{ key: 'KEY', value: 'new', isSecret: true }]
 
       const result = mergeEnvVars(existing, imported)
 
@@ -190,9 +182,7 @@ describe('env-parser', () => {
     })
 
     it('should expand $VAR references against inherited env', () => {
-      const envVars: EnvVariable[] = [
-        { key: 'PATH_PREFIX', value: '$HOME/projects' }
-      ]
+      const envVars: EnvVariable[] = [{ key: 'PATH_PREFIX', value: '$HOME/projects' }]
       const inheritedEnv = { HOME: '/Users/test' }
 
       const result = resolveEnvForSpawn(envVars, inheritedEnv)
@@ -200,10 +190,10 @@ describe('env-parser', () => {
       expect(result.env.PATH_PREFIX).toBe('/Users/test/projects')
     })
 
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder text under test
     it('should expand ${VAR} references', () => {
-      const envVars: EnvVariable[] = [
-        { key: 'FULL_PATH', value: '${HOME}/workspace' }
-      ]
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder text under test
+      const envVars: EnvVariable[] = [{ key: 'FULL_PATH', value: '${HOME}/workspace' }]
       const inheritedEnv = { HOME: '/Users/test' }
 
       const result = resolveEnvForSpawn(envVars, inheritedEnv)
@@ -212,9 +202,7 @@ describe('env-parser', () => {
     })
 
     it('should expand %VAR% references (Windows style)', () => {
-      const envVars: EnvVariable[] = [
-        { key: 'FULL_PATH', value: '%USERPROFILE%\\workspace' }
-      ]
+      const envVars: EnvVariable[] = [{ key: 'FULL_PATH', value: '%USERPROFILE%\\workspace' }]
       const inheritedEnv = { USERPROFILE: 'C:\\Users\\test' }
 
       const result = resolveEnvForSpawn(envVars, inheritedEnv)
@@ -223,9 +211,7 @@ describe('env-parser', () => {
     })
 
     it('should replace missing var references with empty string', () => {
-      const envVars: EnvVariable[] = [
-        { key: 'PATH', value: '$UNDEFINED_VAR/path' }
-      ]
+      const envVars: EnvVariable[] = [{ key: 'PATH', value: '$UNDEFINED_VAR/path' }]
 
       const result = resolveEnvForSpawn(envVars, {})
 

@@ -1,8 +1,12 @@
 // Module declarations
 mod browser_tab_manager;
 mod commands;
+mod agent_registry;
+mod logging;
 mod migrations;
+mod path_validation;
 mod pty;
+mod remote;
 mod secure_storage;
 mod shell_paths;
 mod ssh;
@@ -12,6 +16,7 @@ mod worktree;
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
+use remote::RemoteServerState;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
@@ -31,6 +36,7 @@ const MENU_ID_ZOOM_IN: &str = "view-zoom-in";
 const MENU_ID_ZOOM_OUT: &str = "view-zoom-out";
 const MENU_ID_TOGGLE_FULLSCREEN: &str = "view-toggle-fullscreen";
 const MENU_ID_LEARN_MORE: &str = "help-learn-more";
+const MENU_ID_REVEAL_LOGS: &str = "help-reveal-logs";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
@@ -514,10 +520,13 @@ fn build_app_menu<R: tauri::Runtime>(
             .accelerator("CmdOrCtrl+Shift+U")
             .build(app)?;
     let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
+    let reveal_logs =
+        MenuItemBuilder::with_id(MENU_ID_REVEAL_LOGS, "Reveal Log File").build(app)?;
 
     let help_menu = SubmenuBuilder::new(app, "Help")
         .item(&check_for_updates)
         .separator()
+        .item(&reveal_logs)
         .item(&learn_more)
         .build()?;
 
@@ -582,11 +591,37 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
         if let Err(error) = open_external_url(LEARN_MORE_URL) {
             log::error!("Failed to open Learn More link from menu: {}", error);
         }
+    } else if event.id() == MENU_ID_REVEAL_LOGS {
+        if let Err(error) = reveal_log_dir(app) {
+            log::error!("Failed to reveal log directory from menu: {}", error);
+        }
     }
+}
+
+/// Open the OS log directory (where the rotated log file lives) in the system
+/// file manager so users can locate and attach it to bug reports (issue #244).
+fn reveal_log_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("could not resolve log directory: {}", e))?;
+
+    // The plugin creates the directory lazily on first write; ensure it exists
+    // so revealing it never fails on a fresh install that hasn't logged yet.
+    if !log_dir.exists() {
+        std::fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("could not create log directory: {}", e))?;
+    }
+
+    open_external_url(&log_dir.to_string_lossy())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the panic hook before anything can panic so Rust panics are
+    // captured to the log file with a backtrace (issue #244).
+    logging::install_panic_hook();
+
     let builder = tauri::Builder::default();
 
     // Native menu bar:
@@ -604,6 +639,9 @@ pub fn run() {
     let builder = builder.on_menu_event(handle_menu_event);
 
     let mut builder = builder
+        // Logging must be registered first so the global logger is installed
+        // before any other plugin or setup code emits a log line.
+        .plugin(logging::build_log_plugin())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
@@ -621,6 +659,10 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Startup diagnostic banner (issue #244): version, OS/arch, build
+            // channel, session id, and resolved log path on a single line.
+            logging::log_startup_banner(&handle);
 
             // macOS: Enable overlay title bar for native traffic lights.
             // Window starts hidden (visible: false), so we set this before show().
@@ -684,6 +726,10 @@ pub fn run() {
             // Create Migration Manager
             let migration_manager = Arc::new(MigrationManager::new(handle.clone()));
             app.manage(migration_manager.clone());
+
+            // Create Remote Server State
+            let remote_state = Arc::new(RemoteServerState::new());
+            app.manage(remote_state);
 
             // Register default migrations
             register_default_migrations(migration_manager.as_ref());
@@ -749,6 +795,8 @@ pub fn run() {
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
             commands::terminal_set_visibility,
+            // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
+            commands::agent_registry_fetch,
             // Browser tab commands
             commands::browser_tab_create,
             commands::browser_tab_navigate,
@@ -834,6 +882,13 @@ pub fn run() {
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
             secure_storage::secure_storage_delete,
+            // Remote server commands
+            commands::remote_server_start,
+            commands::remote_server_stop,
+            commands::remote_server_status,
+            commands::remote_publish_projects,
+            // Frontend error forwarding (issue #244)
+            commands::log_frontend_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -849,6 +904,9 @@ pub fn run() {
             let ssh_manager = app_handle
                 .try_state::<Arc<ssh::SSHManager>>()
                 .map(|state| state.inner().clone());
+            let remote_state = app_handle
+                .try_state::<Arc<RemoteServerState>>()
+                .map(|state| state.inner().clone());
 
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
@@ -860,6 +918,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(ssh_manager) = ssh_manager {
                         ssh_manager.shutdown().await;
+                    }
+                    if let Some(remote_state) = remote_state {
+                        let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
                     if let Some(browser_tab_manager) = browser_tab_manager {
@@ -873,6 +934,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(ssh_manager) = ssh_manager {
                         ssh_manager.shutdown().await;
+                    }
+                    if let Some(remote_state) = remote_state {
+                        let _ = remote_state.stop().await;
                     }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();

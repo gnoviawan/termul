@@ -9,8 +9,8 @@
  *   const result = await shellApi.getAvailableShells()
  */
 
-import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
-import type { ShellApi, IpcResult, DetectedShells } from '@shared/types/ipc.types'
+import type { DetectedShells, IpcResult, ShellApi } from '@shared/types/ipc.types'
+import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
  * IPC Command name for shell detection

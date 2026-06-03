@@ -1,13 +1,11 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hoisted mock factories
-const { mockIsPermissionGranted, mockRequestPermission, mockSendNotification } = vi.hoisted(
-  () => ({
-    mockIsPermissionGranted: vi.fn(),
-    mockRequestPermission: vi.fn(),
-    mockSendNotification: vi.fn()
-  })
-)
+const { mockIsPermissionGranted, mockRequestPermission, mockSendNotification } = vi.hoisted(() => ({
+  mockIsPermissionGranted: vi.fn(),
+  mockRequestPermission: vi.fn(),
+  mockSendNotification: vi.fn()
+}))
 
 vi.mock('@tauri-apps/plugin-notification', () => ({
   isPermissionGranted: mockIsPermissionGranted,

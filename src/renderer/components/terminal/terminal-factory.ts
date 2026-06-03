@@ -9,13 +9,13 @@
  * use-xterm) should route their construction through this factory.
  */
 
-import { Terminal } from "@xterm/xterm";
-import type { ITerminalOptions } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { getTerminalOptions } from "./terminal-config";
+import { FitAddon } from '@xterm/addon-fit'
+import { SearchAddon } from '@xterm/addon-search'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
+import type { ITerminalOptions } from '@xterm/xterm'
+import { Terminal } from '@xterm/xterm'
+import { getTerminalOptions } from './terminal-config'
 
 /**
  * Renderer preference type for xterm 6.x.
@@ -27,15 +27,15 @@ import { getTerminalOptions } from "./terminal-config";
  * Note: "canvas" was removed in xterm 6.0; persisted "canvas" values are
  * migrated to "dom" at settings load time.
  */
-export type RendererPreference = "auto" | "webgl" | "dom";
+export type RendererPreference = 'auto' | 'webgl' | 'dom'
 
 export interface TerminalFactory {
-	createTerminal(options?: Partial<ITerminalOptions>): Terminal;
-	createFitAddon(): FitAddon;
-	createSearchAddon(): SearchAddon;
-	createWebLinksAddon(): WebLinksAddon;
-	createWebglAddon(): WebglAddon;
-	shouldUseWebglRenderer(preference: RendererPreference): boolean;
+  createTerminal(options?: Partial<ITerminalOptions>): Terminal
+  createFitAddon(): FitAddon
+  createSearchAddon(): SearchAddon
+  createWebLinksAddon(): WebLinksAddon
+  createWebglAddon(): WebglAddon
+  shouldUseWebglRenderer(preference: RendererPreference): boolean
 }
 
 /**
@@ -47,26 +47,24 @@ export interface TerminalFactory {
  *                    explicit value in tests to avoid navigator dependency.
  */
 function createTerminal(
-	overrides?: Partial<ITerminalOptions>,
-	platform: string = typeof navigator !== "undefined" ? navigator.platform : "",
+  overrides?: Partial<ITerminalOptions>,
+  platform: string = typeof navigator !== 'undefined' ? navigator.platform : ''
 ): Terminal {
-	const baseOptions = getTerminalOptions(platform);
-	const options: ITerminalOptions = overrides
-		? { ...baseOptions, ...overrides }
-		: baseOptions;
-	return new Terminal(options);
+  const baseOptions = getTerminalOptions(platform)
+  const options: ITerminalOptions = overrides ? { ...baseOptions, ...overrides } : baseOptions
+  return new Terminal(options)
 }
 
 function createFitAddon(): FitAddon {
-	return new FitAddon();
+  return new FitAddon()
 }
 
 function createSearchAddon(): SearchAddon {
-	return new SearchAddon();
+  return new SearchAddon()
 }
 
 function createWebLinksAddon(): WebLinksAddon {
-	return new WebLinksAddon();
+  return new WebLinksAddon()
 }
 
 /**
@@ -77,7 +75,7 @@ function createWebLinksAddon(): WebLinksAddon {
  * creates the instance.
  */
 function createWebglAddon(): WebglAddon {
-	return new WebglAddon();
+  return new WebglAddon()
 }
 
 /**
@@ -87,15 +85,15 @@ function createWebglAddon(): WebglAddon {
  * - "dom" → false (skip WebGL entirely, rely on built-in DOM renderer)
  */
 function shouldUseWebglRenderer(preference: RendererPreference): boolean {
-	return preference !== "dom";
+  return preference !== 'dom'
 }
 
 /** Singleton factory instance. */
 export const terminalFactory: TerminalFactory = {
-	createTerminal,
-	createFitAddon,
-	createSearchAddon,
-	createWebLinksAddon,
-	createWebglAddon,
-	shouldUseWebglRenderer,
-};
+  createTerminal,
+  createFitAddon,
+  createSearchAddon,
+  createWebLinksAddon,
+  createWebglAddon,
+  shouldUseWebglRenderer
+}

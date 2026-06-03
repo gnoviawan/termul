@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FileExplorer } from './FileExplorer'
 
 const mockToggleDirectory = vi.fn()
@@ -29,7 +29,10 @@ const mockRemoveTab = vi.fn()
 
 const mockExplorerState = {
   rootPath: null as string | null,
-  directoryContents: new Map<string, Array<{ path: string; name: string; type: 'file' | 'directory' }>>(),
+  directoryContents: new Map<
+    string,
+    Array<{ path: string; name: string; type: 'file' | 'directory' }>
+  >(),
   isVisible: true,
   rootLoadError: null as null | { message: string; code?: string },
   selectedPaths: new Set<string>(),
@@ -100,7 +103,7 @@ vi.mock('@/stores/workspace-store', () => ({
       removeTab: mockRemoveTab
     }))
   },
-  editorTabId: (path: string) => 'edit-' + path
+  editorTabId: (path: string) => `edit-${path}`
 }))
 
 vi.mock('./FileTreeNode', () => ({
@@ -169,10 +172,13 @@ describe('FileExplorer', () => {
   it('renders tree nodes once root entries are available', () => {
     mockExplorerState.rootPath = '/project'
     mockExplorerState.directoryContents = new Map([
-      ['/project', [
-        { path: '/project/src', name: 'src', type: 'directory' },
-        { path: '/project/index.ts', name: 'index.ts', type: 'file' }
-      ]]
+      [
+        '/project',
+        [
+          { path: '/project/src', name: 'src', type: 'directory' },
+          { path: '/project/index.ts', name: 'index.ts', type: 'file' }
+        ]
+      ]
     ])
 
     render(<FileExplorer />)
@@ -194,7 +200,9 @@ describe('FileExplorer', () => {
     expect(screen.getByLabelText('Search files and content')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Search files and content…')).toBeInTheDocument()
     expect(screen.getByText('Keep typing to start searching')).toBeInTheDocument()
-    expect(screen.getByText('Type at least 2 characters to search file names and content.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Type at least 2 characters to search file names and content.')
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
     expect(screen.getAllByTestId('tree-node').length).toBeGreaterThan(0)
   })
@@ -204,10 +212,12 @@ describe('FileExplorer', () => {
     mockExplorerState.directoryContents = new Map([['/project', []]])
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
     mockExplorerState.searchFileNameMatches = ['/project/src/term-search.ts']
 
     render(<FileExplorer />)
@@ -248,10 +258,12 @@ describe('FileExplorer', () => {
     mockExplorerState.directoryContents = new Map([['/project', []]])
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [{ lineNumber: 27, lineText: 'const term = createExplorerSearch();' }]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 27, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
 
     render(<FileExplorer />)
 
@@ -265,7 +277,17 @@ describe('FileExplorer', () => {
       expect(mockOpenFile).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockAddEditorTab).toHaveBeenCalledWith('/project/src/FileExplorer.tsx')
       expect(mockUpdateCursorPosition).toHaveBeenCalledWith('/project/src/FileExplorer.tsx', 27, 1)
-      expect((window as unknown as { __termulPendingRevealLine?: { filePath: string; lineNumber: number; searchTerm?: string } }).__termulPendingRevealLine).toEqual({
+      expect(
+        (
+          window as unknown as {
+            __termulPendingRevealLine?: {
+              filePath: string
+              lineNumber: number
+              searchTerm?: string
+            }
+          }
+        ).__termulPendingRevealLine
+      ).toEqual({
         filePath: '/project/src/FileExplorer.tsx',
         lineNumber: 27,
         searchTerm: 'term'
@@ -285,8 +307,14 @@ describe('FileExplorer', () => {
     render(<FileExplorer />)
 
     expect(screen.getByText('No matches for “term”')).toBeInTheDocument()
-    expect(screen.getByText('Try a different term or a shorter phrase to broaden the search.')).toBeInTheDocument()
-    expect(screen.getByText('Results were truncated for performance. 3 files were skipped. Scanned 42 files.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Try a different term or a shorter phrase to broaden the search.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Results were truncated for performance. 3 files were skipped. Scanned 42 files.'
+      )
+    ).toBeInTheDocument()
   })
 
   it('renders loading and error search states', () => {
@@ -312,17 +340,21 @@ describe('FileExplorer', () => {
     mockExplorerState.directoryContents = new Map([['/project', []]])
     mockExplorerState.searchQuery = 'terminal'
     mockExplorerState.searchLastCompletedQuery = 'term'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
     mockExplorerState.searchFileNameMatches = ['/project/src/term-search.ts']
     mockExplorerState.searchLoading = true
 
     render(<FileExplorer />)
 
     expect(screen.getByText('Searching for “terminal”…')).toBeInTheDocument()
-    expect(screen.getByText('Finishing the latest search before showing refreshed matches.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Finishing the latest search before showing refreshed matches.')
+    ).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /Content 1/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: /Files 1/i }))
@@ -336,15 +368,21 @@ describe('FileExplorer', () => {
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
     mockExplorerState.searchError = 'Some files timed out'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
 
     render(<FileExplorer />)
 
     expect(screen.getByText('Partial results for “term”')).toBeInTheDocument()
-    expect(screen.getByText('Some files timed out Showing the matches that were found before the search stopped.')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Some files timed out Showing the matches that were found before the search stopped.'
+      )
+    ).toBeInTheDocument()
     expect(screen.getByText('FileExplorer.tsx')).toBeInTheDocument()
   })
 
@@ -353,14 +391,16 @@ describe('FileExplorer', () => {
     mockExplorerState.directoryContents = new Map([['/project', []]])
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/ThreeMatches.tsx',
-      matches: [
-        { lineNumber: 10, lineText: 'term first' },
-        { lineNumber: 11, lineText: 'term second' },
-        { lineNumber: 12, lineText: 'term third' }
-      ]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/ThreeMatches.tsx',
+        matches: [
+          { lineNumber: 10, lineText: 'term first' },
+          { lineNumber: 11, lineText: 'term second' },
+          { lineNumber: 12, lineText: 'term third' }
+        ]
+      }
+    ]
 
     render(<FileExplorer />)
 
@@ -373,15 +413,17 @@ describe('FileExplorer', () => {
     mockExplorerState.directoryContents = new Map([['/project', []]])
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [
-        { lineNumber: 10, lineText: 'term first' },
-        { lineNumber: 11, lineText: 'term second' },
-        { lineNumber: 12, lineText: 'term third' },
-        { lineNumber: 13, lineText: 'term fourth' }
-      ]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [
+          { lineNumber: 10, lineText: 'term first' },
+          { lineNumber: 11, lineText: 'term second' },
+          { lineNumber: 12, lineText: 'term third' },
+          { lineNumber: 13, lineText: 'term fourth' }
+        ]
+      }
+    ]
 
     render(<FileExplorer />)
 
@@ -390,7 +432,9 @@ describe('FileExplorer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show 1 more' }))
 
-    expect(screen.getByText((_, element) => element?.textContent === 'term fourth')).toBeInTheDocument()
+    expect(
+      screen.getByText((_, element) => element?.textContent === 'term fourth')
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument()
   })
 })

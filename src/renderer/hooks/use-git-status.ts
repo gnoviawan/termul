@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react'
-import { useTerminalStore } from '@/stores/terminal-store'
-import { terminalApi } from '@/lib/api'
 import type { GitStatus } from '@shared/types/ipc.types'
+import { useEffect, useRef } from 'react'
+import { terminalApi } from '@/lib/api'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 /**
  * Hook to subscribe to git status changes for terminals
@@ -14,15 +14,13 @@ export function useGitStatus(): void {
 
   useEffect(() => {
     // Subscribe to git status changed events from main process
-    const cleanup = terminalApi.onGitStatusChanged(
-      (ptyId: string, status: GitStatus | null) => {
-        // Look up terminal by ptyId and update using store id
-        const terminal = findTerminalByPtyId(ptyId)
-        if (terminal) {
-          updateTerminalGitStatus(terminal.id, status)
-        }
+    const cleanup = terminalApi.onGitStatusChanged((ptyId: string, status: GitStatus | null) => {
+      // Look up terminal by ptyId and update using store id
+      const terminal = findTerminalByPtyId(ptyId)
+      if (terminal) {
+        updateTerminalGitStatus(terminal.id, status)
       }
-    )
+    })
 
     cleanupRef.current = cleanup
 

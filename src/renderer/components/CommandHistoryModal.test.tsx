@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { CommandHistoryModal } from './CommandHistoryModal'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import type { CommandHistoryEntry } from '@/stores/command-history-store'
+import { CommandHistoryModal } from './CommandHistoryModal'
 
 describe('CommandHistoryModal', () => {
   const mockEntries: CommandHistoryEntry[] = [

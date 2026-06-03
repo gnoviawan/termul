@@ -52,9 +52,7 @@ describe('tauri-terminal-api', () => {
     const unlistenA = vi.fn()
     const unlistenB = vi.fn()
 
-    mockListen
-      .mockResolvedValueOnce(unlistenA)
-      .mockResolvedValueOnce(unlistenB)
+    mockListen.mockResolvedValueOnce(unlistenA).mockResolvedValueOnce(unlistenB)
 
     const { createTauriTerminalApi } = await import('../tauri-terminal-api')
     const api = createTauriTerminalApi()

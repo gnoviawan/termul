@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { terminalApi } from '@/lib/api'
-import { useTerminalStore, MAX_TRANSCRIPT_CHARS } from '@/stores/terminal-store'
+import { MAX_TRANSCRIPT_CHARS, useTerminalStore } from '@/stores/terminal-store'
 
 const IS_DEV = import.meta.env.DEV
 
@@ -17,7 +17,7 @@ function logTranscriptStats(ptyId: string, dataLen: number, totalTranscriptLen: 
   if (kb > 0 && Math.floor(kb / 100) !== Math.floor(prevKb / 100)) {
     console.debug(
       `[MemTrack] transcript pty=${ptyId.slice(0, 12)} size=${kb}KB ` +
-      `(${(totalTranscriptLen / MAX_TRANSCRIPT_CHARS * 100).toFixed(1)}% of cap)`
+        `(${((totalTranscriptLen / MAX_TRANSCRIPT_CHARS) * 100).toFixed(1)}% of cap)`
     )
   }
 }

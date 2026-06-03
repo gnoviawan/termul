@@ -1,20 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
 import type { IpcResult } from '@shared/types/ipc.types'
-import {
-  useAppSettingsLoader,
-  useResetAppSettings,
-  useUpdateAppSetting,
-  useUpdatePanelVisibility,
-  waitForPendingAppSettingsPersistence,
-  resetAppSettingsPersistenceQueueForTests
-} from './use-app-settings'
+import { renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
+import {
+  resetAppSettingsPersistenceQueueForTests,
+  useAppSettingsLoader,
+  useResetAppSettings,
+  useUpdateAppSetting,
+  useUpdatePanelVisibility,
+  waitForPendingAppSettingsPersistence
+} from './use-app-settings'
 
-const { mockPersistenceRead, mockPersistenceWrite, mockPersistenceWriteDebounced, mockUpdateOrphanDetection } = vi.hoisted(() => ({
+const {
+  mockPersistenceRead,
+  mockPersistenceWrite,
+  mockPersistenceWriteDebounced,
+  mockUpdateOrphanDetection
+} = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
   mockPersistenceWriteDebounced: vi.fn(),
@@ -218,9 +223,7 @@ describe('use-app-settings', () => {
     await result.current()
 
     expect(useSidebarStore.getState().isVisible).toBe(DEFAULT_APP_SETTINGS.sidebarVisible)
-    expect(useFileExplorerStore.getState().isVisible).toBe(
-      DEFAULT_APP_SETTINGS.fileExplorerVisible
-    )
+    expect(useFileExplorerStore.getState().isVisible).toBe(DEFAULT_APP_SETTINGS.fileExplorerVisible)
     expect(mockPersistenceWrite).toHaveBeenCalledWith(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
   })
 

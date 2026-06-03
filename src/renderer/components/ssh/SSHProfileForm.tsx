@@ -1,9 +1,9 @@
+import type { SSHAuthMethod, SSHProfile } from '@shared/types/ssh.types'
+import { FolderOpen, X } from 'lucide-react'
 import { useState } from 'react'
-import { X, FolderOpen } from 'lucide-react'
-import type { SSHProfile, SSHAuthMethod, PortForwardConfig } from '@shared/types/ssh.types'
-import { useSSHActions } from '@/stores/ssh-store'
 import { toast } from 'sonner'
 import { dialogApi } from '@/lib/api'
+import { useSSHActions } from '@/stores/ssh-store'
 
 interface SSHProfileFormProps {
   profile: SSHProfile | null
@@ -11,7 +11,11 @@ interface SSHProfileFormProps {
   onSaved: () => void
 }
 
-export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProps): React.JSX.Element {
+export function SSHProfileForm({
+  profile,
+  onClose,
+  onSaved
+}: SSHProfileFormProps): React.JSX.Element {
   const { saveProfile } = useSSHActions()
 
   const [name, setName] = useState(profile?.name ?? '')
@@ -29,7 +33,7 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
     try {
       const result = await dialogApi.selectFile({
         title: 'Select Private Key',
-        filters: [{ name: 'All Files', extensions: ['*'] }],
+        filters: [{ name: 'All Files', extensions: ['*'] }]
       })
       if (result.success) {
         setPrivateKeyPath(result.data)
@@ -72,7 +76,7 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
         lastConnected: profile?.lastConnected,
         importedFrom: profile?.importedFrom,
         hasStoredPassword: profile?.hasStoredPassword,
-        hasStoredPassphrase: profile?.hasStoredPassphrase,
+        hasStoredPassphrase: profile?.hasStoredPassphrase
       }
 
       const success = await saveProfile(profileData)
@@ -111,7 +115,6 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
               onChange={(e) => setName(e.target.value)}
               placeholder="My Server"
               className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
-              autoFocus
             />
           </div>
 
@@ -198,7 +201,9 @@ export function SSHProfileForm({ profile, onClose, onSaved }: SSHProfileFormProp
                 type="password"
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
-                placeholder={profile?.hasStoredPassphrase ? '••••••••' : 'Leave empty if no passphrase'}
+                placeholder={
+                  profile?.hasStoredPassphrase ? '••••••••' : 'Leave empty if no passphrase'
+                }
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
               {profile?.hasStoredPassphrase && (

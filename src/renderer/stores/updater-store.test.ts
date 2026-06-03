@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useUpdaterStore } from './updater-store'
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as tauriSafeUpdate from '@/lib/tauri-safe-update'
 import * as tauriUpdaterApi from '@/lib/tauri-updater-api'
 import * as tauriVersionSkip from '@/lib/tauri-version-skip'
+import { useUpdaterStore } from './updater-store'
 
 vi.mock('@/lib/tauri-updater-api', async () => {
   const actual =

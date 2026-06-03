@@ -1,37 +1,28 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
-import { useAnnotationMarkers } from './use-annotation-markers'
-import { useAnnotationStore } from '@/stores/annotation-store'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { act, renderHook } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   browserTabInjectAnnotationMarkers,
   browserTabUpdateAnnotationMarkerSelection,
   onBrowserTabAnnotationMarkerClicked,
-  onBrowserTabLoaded,
-  type MarkerAnnotation,
+  onBrowserTabLoaded
 } from '@/lib/browser-api'
+import { useAnnotationStore } from '@/stores/annotation-store'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useAnnotationMarkers } from './use-annotation-markers'
 
 // Mock all browser API functions
 vi.mock('@/lib/browser-api', () => ({
   browserTabInjectAnnotationMarkers: vi.fn().mockResolvedValue({ success: true }),
-  browserTabUpdateAnnotationMarkerSelection: vi
-    .fn()
-    .mockResolvedValue({ success: true }),
+  browserTabUpdateAnnotationMarkerSelection: vi.fn().mockResolvedValue({ success: true }),
   onBrowserTabAnnotationMarkerClicked: vi.fn(),
-  onBrowserTabLoaded: vi.fn(),
+  onBrowserTabLoaded: vi.fn()
 }))
 
-const mockOnMarkerClicked = onBrowserTabAnnotationMarkerClicked as ReturnType<
-  typeof vi.fn
->
+const mockOnMarkerClicked = onBrowserTabAnnotationMarkerClicked as ReturnType<typeof vi.fn>
 const mockOnBrowserTabLoaded = onBrowserTabLoaded as ReturnType<typeof vi.fn>
 
 // Helper to setup browser tab state
-function setupBrowserTab(
-  tabId: string,
-  annotationMode: boolean,
-  options?: { url?: string }
-) {
+function setupBrowserTab(tabId: string, annotationMode: boolean, options?: { url?: string }) {
   useBrowserSessionStore.getState().createTab(tabId, options?.url)
   if (annotationMode) {
     useBrowserSessionStore.getState().setAnnotationMode(tabId, true)
@@ -39,11 +30,7 @@ function setupBrowserTab(
 }
 
 // Helper to add a region annotation
-function addRegionAnnotation(
-  normalizedUrl: string,
-  tabId: string,
-  id = 'anno-1'
-) {
+function addRegionAnnotation(normalizedUrl: string, tabId: string, id = 'anno-1') {
   const store = useAnnotationStore.getState()
   // addAnnotation generates a random UUID, so we use the store directly to set data
   const annotations = store.annotationsByUrl.get(normalizedUrl) ?? []
@@ -64,8 +51,8 @@ function addRegionAnnotation(
       viewportHeight: 1080,
       schemaVersion: 1 as const,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-    },
+      updatedAt: Date.now()
+    }
   ]
   const next = new Map(store.annotationsByUrl)
   next.set(normalizedUrl, newAnnotations)
@@ -73,11 +60,7 @@ function addRegionAnnotation(
 }
 
 // Helper to add an element annotation
-function addElementAnnotation(
-  normalizedUrl: string,
-  tabId: string,
-  id = 'anno-elem'
-) {
+function _addElementAnnotation(normalizedUrl: string, tabId: string, id = 'anno-elem') {
   const store = useAnnotationStore.getState()
   const annotations = store.annotationsByUrl.get(normalizedUrl) ?? []
   const newAnnotations = [
@@ -97,7 +80,7 @@ function addElementAnnotation(
         attributes: { id: 'btn' },
         textContent: 'Click',
         textTruncated: false,
-        boundingBox: { x: 50, y: 60, width: 100, height: 40 },
+        boundingBox: { x: 50, y: 60, width: 100, height: 40 }
       },
       intent: 'fix' as const,
       severity: 'blocking' as const,
@@ -106,8 +89,8 @@ function addElementAnnotation(
       viewportHeight: 1080,
       schemaVersion: 1 as const,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-    },
+      updatedAt: Date.now()
+    }
   ]
   const next = new Map(store.annotationsByUrl)
   next.set(normalizedUrl, newAnnotations)
@@ -119,18 +102,18 @@ describe('useAnnotationMarkers', () => {
     // Reset stores
     useAnnotationStore.setState({
       annotationsByUrl: new Map(),
-      selectedAnnotationIdByUrl: new Map(),
+      selectedAnnotationIdByUrl: new Map()
     })
     useBrowserSessionStore.setState({ tabs: new Map() })
 
     // Reset mocks
     vi.clearAllMocks()
-    ;(
-      browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>
-    ).mockResolvedValue({ success: true })
-    ;(
-      browserTabUpdateAnnotationMarkerSelection as ReturnType<typeof vi.fn>
-    ).mockResolvedValue({ success: true })
+    ;(browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true
+    })
+    ;(browserTabUpdateAnnotationMarkerSelection as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true
+    })
 
     // Default mock for onMarkerClicked — returns a subscription object
     mockOnMarkerClicked.mockReturnValue({ unlisten: vi.fn() })
@@ -150,8 +133,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -190,8 +173,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -202,18 +185,16 @@ describe('useAnnotationMarkers', () => {
 
       // Clear previous calls
       vi.clearAllMocks()
-      ;(
-        browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({ success: true })
-      ;(
-        browserTabUpdateAnnotationMarkerSelection as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({ success: true })
+      ;(browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true
+      })
+      ;(browserTabUpdateAnnotationMarkerSelection as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true
+      })
 
       // Change selection only
       await act(async () => {
-        useAnnotationStore
-          .getState()
-          .setSelectedAnnotationId(normalizedUrl, 'anno-1')
+        useAnnotationStore.getState().setSelectedAnnotationId(normalizedUrl, 'anno-1')
         rerender({ tabId: 'tab-1', visible: true, url: normalizedUrl })
       })
 
@@ -221,9 +202,7 @@ describe('useAnnotationMarkers', () => {
         await new Promise((resolve) => requestAnimationFrame(resolve))
       })
 
-      expect(
-        browserTabUpdateAnnotationMarkerSelection
-      ).toHaveBeenCalledWith('tab-1', 'anno-1')
+      expect(browserTabUpdateAnnotationMarkerSelection).toHaveBeenCalledWith('tab-1', 'anno-1')
 
       unmount()
     })
@@ -241,8 +220,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -260,9 +239,7 @@ describe('useAnnotationMarkers', () => {
       })
 
       // Should have been called at most once (from the final state)
-      const injectCalls = (
-        browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>
-      ).mock.calls
+      const injectCalls = (browserTabInjectAnnotationMarkers as ReturnType<typeof vi.fn>).mock.calls
       expect(injectCalls.length).toBeLessThanOrEqual(1)
 
       unmount()
@@ -275,9 +252,7 @@ describe('useAnnotationMarkers', () => {
       const normalizedUrl = 'https://example.com'
 
       // Set a nonexistent selected annotation
-      useAnnotationStore
-        .getState()
-        .setSelectedAnnotationId(normalizedUrl, 'nonexistent')
+      useAnnotationStore.getState().setSelectedAnnotationId(normalizedUrl, 'nonexistent')
 
       const { rerender, unmount } = renderHook(
         ({ tabId, visible, url }: { tabId: string; visible: boolean; url: string }) =>
@@ -286,8 +261,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -302,9 +277,7 @@ describe('useAnnotationMarkers', () => {
       })
 
       // The stale ID should have been cleared
-      const selectedId = useAnnotationStore
-        .getState()
-        .selectedAnnotationIdByUrl.get(normalizedUrl)
+      const selectedId = useAnnotationStore.getState().selectedAnnotationIdByUrl.get(normalizedUrl)
       expect(selectedId).toBeNull() // or undefined, depending on if clearSelectedAnnotationId was called
 
       unmount()
@@ -318,9 +291,7 @@ describe('useAnnotationMarkers', () => {
         addRegionAnnotation(normalizedUrl, 'tab-1', 'anno-1')
       })
 
-      useAnnotationStore
-        .getState()
-        .setSelectedAnnotationId(normalizedUrl, 'anno-1')
+      useAnnotationStore.getState().setSelectedAnnotationId(normalizedUrl, 'anno-1')
 
       const { rerender, unmount } = renderHook(
         ({ tabId, visible, url }: { tabId: string; visible: boolean; url: string }) =>
@@ -329,8 +300,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -339,9 +310,7 @@ describe('useAnnotationMarkers', () => {
         rerender({ tabId: 'tab-1', visible: true, url: normalizedUrl })
       })
 
-      const selectedId = useAnnotationStore
-        .getState()
-        .selectedAnnotationIdByUrl.get(normalizedUrl)
+      const selectedId = useAnnotationStore.getState().selectedAnnotationIdByUrl.get(normalizedUrl)
       expect(selectedId).toBe('anno-1')
 
       unmount()
@@ -355,9 +324,7 @@ describe('useAnnotationMarkers', () => {
         addRegionAnnotation(normalizedUrl, 'tab-1', 'anno-1')
       })
 
-      useAnnotationStore
-        .getState()
-        .setSelectedAnnotationId(normalizedUrl, 'anno-1')
+      useAnnotationStore.getState().setSelectedAnnotationId(normalizedUrl, 'anno-1')
 
       const { rerender, unmount } = renderHook(
         ({ tabId, visible, url }: { tabId: string; visible: boolean; url: string }) =>
@@ -366,8 +333,8 @@ describe('useAnnotationMarkers', () => {
           initialProps: {
             tabId: 'tab-1',
             visible: true,
-            url: normalizedUrl,
-          },
+            url: normalizedUrl
+          }
         }
       )
 
@@ -377,9 +344,7 @@ describe('useAnnotationMarkers', () => {
         rerender({ tabId: 'tab-1', visible: true, url: normalizedUrl })
       })
 
-      const selectedId = useAnnotationStore
-        .getState()
-        .selectedAnnotationIdByUrl.get(normalizedUrl)
+      const selectedId = useAnnotationStore.getState().selectedAnnotationIdByUrl.get(normalizedUrl)
       expect(selectedId).toBeNull()
 
       unmount()
@@ -391,10 +356,7 @@ describe('useAnnotationMarkers', () => {
       setupBrowserTab('tab-1', false)
       const normalizedUrl = 'https://example.com'
 
-      const { unmount } = renderHook(
-        () => useAnnotationMarkers('tab-1', true, normalizedUrl),
-        {}
-      )
+      const { unmount } = renderHook(() => useAnnotationMarkers('tab-1', true, normalizedUrl), {})
 
       await act(async () => {
         await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -411,10 +373,7 @@ describe('useAnnotationMarkers', () => {
 
       addRegionAnnotation(normalizedUrl, 'tab-1', 'anno-1')
 
-      const { unmount } = renderHook(
-        () => useAnnotationMarkers('tab-1', false, normalizedUrl),
-        {}
-      )
+      const { unmount } = renderHook(() => useAnnotationMarkers('tab-1', false, normalizedUrl), {})
 
       await act(async () => {
         await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -429,10 +388,7 @@ describe('useAnnotationMarkers', () => {
       setupBrowserTab('tab-1', true)
       const normalizedUrl = 'https://example.com'
 
-      const { unmount } = renderHook(
-        () => useAnnotationMarkers('tab-1', true, normalizedUrl),
-        {}
-      )
+      const { unmount } = renderHook(() => useAnnotationMarkers('tab-1', true, normalizedUrl), {})
 
       expect(mockOnMarkerClicked).toHaveBeenCalled()
 
@@ -450,7 +406,9 @@ describe('useAnnotationMarkers', () => {
       })
 
       // Capture the callback that the hook registered
-      let capturedCallback: ((payload: { browserTabId: string; annotationId: string }) => void) | null = null
+      let capturedCallback:
+        | ((payload: { browserTabId: string; annotationId: string }) => void)
+        | null = null
       mockOnMarkerClicked.mockImplementation(
         (cb: (payload: { browserTabId: string; annotationId: string }) => void) => {
           capturedCallback = cb
@@ -458,10 +416,7 @@ describe('useAnnotationMarkers', () => {
         }
       )
 
-      const { unmount } = renderHook(
-        () => useAnnotationMarkers('tab-1', true, normalizedUrl),
-        {}
-      )
+      const { unmount } = renderHook(() => useAnnotationMarkers('tab-1', true, normalizedUrl), {})
 
       await act(async () => {
         await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -473,9 +428,7 @@ describe('useAnnotationMarkers', () => {
         capturedCallback!({ browserTabId: 'tab-1', annotationId: 'anno-marker' })
       })
 
-      const selectedId = useAnnotationStore
-        .getState()
-        .selectedAnnotationIdByUrl.get(normalizedUrl)
+      const selectedId = useAnnotationStore.getState().selectedAnnotationIdByUrl.get(normalizedUrl)
       expect(selectedId).toBe('anno-marker')
 
       unmount()
@@ -485,7 +438,9 @@ describe('useAnnotationMarkers', () => {
       setupBrowserTab('tab-1', true)
       const normalizedUrl = 'https://example.com'
 
-      let capturedCallback: ((payload: { browserTabId: string; annotationId: string }) => void) | null = null
+      let capturedCallback:
+        | ((payload: { browserTabId: string; annotationId: string }) => void)
+        | null = null
       mockOnMarkerClicked.mockImplementation(
         (cb: (payload: { browserTabId: string; annotationId: string }) => void) => {
           capturedCallback = cb
@@ -493,10 +448,7 @@ describe('useAnnotationMarkers', () => {
         }
       )
 
-      const { unmount } = renderHook(
-        () => useAnnotationMarkers('tab-1', true, normalizedUrl),
-        {}
-      )
+      const { unmount } = renderHook(() => useAnnotationMarkers('tab-1', true, normalizedUrl), {})
 
       await act(async () => {
         await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -507,9 +459,7 @@ describe('useAnnotationMarkers', () => {
         capturedCallback!({ browserTabId: 'tab-2', annotationId: 'other' })
       })
 
-      const selectedId = useAnnotationStore
-        .getState()
-        .selectedAnnotationIdByUrl.get(normalizedUrl)
+      const selectedId = useAnnotationStore.getState().selectedAnnotationIdByUrl.get(normalizedUrl)
       expect(selectedId).toBeFalsy()
 
       unmount()

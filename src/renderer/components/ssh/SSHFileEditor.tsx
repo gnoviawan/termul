@@ -1,9 +1,9 @@
-import { useCallback, useState } from 'react'
 import { FileEdit, Save, X } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { sshApi } from '@/lib/api'
-import { useSSHActions, useSSHEditorFile, useSSHEditorContent } from '@/stores/ssh-store'
+import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { sshApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
 
 interface SSHFileEditorProps {
   connectionId: string
@@ -58,14 +58,26 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
             <span className="text-[11px] font-mono text-muted-foreground">{editingFile.name}</span>
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={handleSave} disabled={isSaving}
-              className={cn('p-1 rounded transition-all duration-300',
-                saveAnimating ? 'bg-green-500/20 text-green-500 scale-110' : isDirty ? 'bg-amber-500/20 text-amber-500' : 'hover:bg-accent text-muted-foreground')}
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className={cn(
+                'p-1 rounded transition-all duration-300',
+                saveAnimating
+                  ? 'bg-green-500/20 text-green-500 scale-110'
+                  : isDirty
+                    ? 'bg-amber-500/20 text-amber-500'
+                    : 'hover:bg-accent text-muted-foreground'
+              )}
               title="Save"
             >
               <Save className={cn('h-3 w-3', saveAnimating && 'animate-pulse')} />
             </button>
-            <button onClick={handleClose} className="p-1 rounded hover:bg-accent text-muted-foreground" title="Close">
+            <button
+              onClick={handleClose}
+              className="p-1 rounded hover:bg-accent text-muted-foreground"
+              title="Close"
+            >
               <X className="h-3 w-3" />
             </button>
           </div>
@@ -86,12 +98,28 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               &ldquo;{editingFile.name}&rdquo; has unsaved changes.
             </p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirmClose(false)}
-                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent">Continue Editing</button>
-              <button onClick={handleSave} disabled={isSaving}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Save</button>
-              <button onClick={() => { setStoreFile(null); setConfirmClose(false) }}
-                className="px-3 py-1.5 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90">Discard</button>
+              <button
+                onClick={() => setConfirmClose(false)}
+                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
+              >
+                Continue Editing
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setStoreFile(null)
+                  setConfirmClose(false)
+                }}
+                className="px-3 py-1.5 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Discard
+              </button>
             </div>
           </div>
         </div>

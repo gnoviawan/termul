@@ -58,5 +58,4 @@ export const FilesystemErrorCodes = {
   RENAME_FAILED: 'RENAME_FAILED'
 } as const
 
-export type FilesystemErrorCode =
-  (typeof FilesystemErrorCodes)[keyof typeof FilesystemErrorCodes]
+export type FilesystemErrorCode = (typeof FilesystemErrorCodes)[keyof typeof FilesystemErrorCodes]

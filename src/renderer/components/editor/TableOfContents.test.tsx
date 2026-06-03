@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
-import type React from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { TableOfContents } from './TableOfContents'
+import type React from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TocHeading } from '@/hooks/use-toc-headings'
+import { TableOfContents } from './TableOfContents'
 
 vi.mock('@/components/ui/dropdown-menu', async () => {
   const React = await import('react')
@@ -19,7 +19,11 @@ vi.mock('@/components/ui/dropdown-menu', async () => {
     }: {
       children: React.ReactNode
       onValueChange?: (value: string) => void
-    }) => <RadioGroupContext.Provider value={onValueChange}><div>{children}</div></RadioGroupContext.Provider>,
+    }) => (
+      <RadioGroupContext.Provider value={onValueChange}>
+        <div>{children}</div>
+      </RadioGroupContext.Provider>
+    ),
     DropdownMenuRadioItem: ({
       children,
       value,

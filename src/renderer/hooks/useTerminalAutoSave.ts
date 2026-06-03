@@ -1,15 +1,15 @@
 import { useEffect, useRef } from 'react'
-import { useTerminalStore } from '../stores/terminal-store'
 import { persistenceApi } from '@/lib/api'
-import { useProjectStore } from '../stores/project-store'
+import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 import type { Terminal } from '@/types/project'
 import type {
   PersistedTerminal,
   PersistedTerminalLayout
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
+import { useProjectStore } from '../stores/project-store'
+import { useTerminalStore } from '../stores/terminal-store'
 import { extractScrollback } from '../utils/terminal-registry'
-import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 
 function transcriptToScrollback(transcript?: string): string[] | undefined {
   if (!transcript) {
@@ -66,7 +66,17 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
       shell: terminal.shell,
       cwd: terminal.cwd,
       scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
-      transcript: terminal.transcript
+      transcript: terminal.transcript,
+      // ADR-004.4: persist agent identity + program/baseArgs (no seed prompt).
+      ...(terminal.kind === 'agent'
+        ? {
+            kind: 'agent' as const,
+            agentId: terminal.agentId,
+            agentName: terminal.agentName,
+            agentProgram: terminal.agentProgram,
+            agentArgs: terminal.agentArgs
+          }
+        : {})
     },
     scrollbackExtractionAvailable: extractedScrollback !== undefined,
     extractedScrollbackLineCount: extractedScrollback?.length ?? 0
@@ -188,7 +198,12 @@ export function useTerminalAutoSave(): void {
               t.cwd !== prev.cwd ||
               t.projectId !== prev.projectId ||
               t.isAppHidden !== prev.isAppHidden ||
-              t.appHiddenSince !== prev.appHiddenSince
+              t.appHiddenSince !== prev.appHiddenSince ||
+              t.kind !== prev.kind ||
+              t.agentId !== prev.agentId ||
+              t.agentName !== prev.agentName ||
+              t.agentProgram !== prev.agentProgram ||
+              JSON.stringify(t.agentArgs ?? []) !== JSON.stringify(prev.agentArgs ?? [])
             )
           })
           if (added.length === 0 && removed.length === 0 && !changedFields) {
@@ -269,7 +284,8 @@ export async function saveTerminalLayout(
     snapshot: toPersistedTerminalSnapshot(terminal)
   }))
   const layout: PersistedTerminalLayout = {
-    activeTerminalId: projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
+    activeTerminalId:
+      projectTerminals.find((terminal) => terminal.id === state.activeTerminalId)?.id ?? null,
     terminals: terminalSnapshots.map(({ snapshot }) => snapshot.persistedTerminal),
     updatedAt: new Date().toISOString()
   }

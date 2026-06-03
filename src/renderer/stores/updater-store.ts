@@ -1,24 +1,24 @@
+import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { UpdateInfo, UpdateState, DownloadProgress } from '@shared/types/updater.types'
+import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
+  clearPendingUpdate,
+  registerUpdateEventHandlers,
+  type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
   downloadUpdate as tauriDownloadUpdate,
-  installAndRestart as tauriInstallAndRestart,
-  getUpdaterState as tauriGetUpdaterState,
-  setAutoUpdateEnabled as tauriSetAutoUpdateEnabled,
   getAutoUpdateEnabled as tauriGetAutoUpdateEnabled,
-  registerUpdateEventHandlers,
-  clearPendingUpdate,
-  type TauriUpdaterEventHandlers
+  getUpdaterState as tauriGetUpdaterState,
+  installAndRestart as tauriInstallAndRestart,
+  setAutoUpdateEnabled as tauriSetAutoUpdateEnabled
 } from '@/lib/tauri-updater-api'
 import {
-  getSkippedVersion,
-  skipVersion as tauriSkipVersion,
   clearSkippedVersion,
-  isVersionSkipped
+  getSkippedVersion,
+  isVersionSkipped,
+  skipVersion as tauriSkipVersion
 } from '@/lib/tauri-version-skip'
-import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 
 const RETRY_DELAYS_MS = [5000, 30000, 300000] as const
 const BASE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Minus, Square, Copy, X } from 'lucide-react'
+import { Copy, Minus, Square, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { windowApi } from '@/lib/api'
 import { isMac } from '@/lib/platform'
 

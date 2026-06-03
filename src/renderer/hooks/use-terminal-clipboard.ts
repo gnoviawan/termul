@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { clipboardApi } from '@/lib/api'
 
 export interface UseTerminalClipboardOptions {
@@ -90,12 +90,12 @@ export function useTerminalClipboard(
   const pasteFromClipboard = useCallback(async (): Promise<void> => {
     // Prevent concurrent paste operations
     if (isPastingRef.current) return
-    
+
     const currentTerminal = terminalRef.current
     if (!currentTerminal) return
 
     isPastingRef.current = true
-    
+
     try {
       // Check for image first - if present, delegate to onImagePaste callback
       const imageResult = await clipboardApi.hasImage()
@@ -103,7 +103,7 @@ export function useTerminalClipboard(
         await onImagePaste()
         return
       }
-      
+
       const result = await clipboardApi.readText()
       if (result.success && result.data) {
         // Validate clipboard content size

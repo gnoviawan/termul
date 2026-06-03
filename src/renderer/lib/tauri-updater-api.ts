@@ -1,14 +1,14 @@
-import { getVersion } from '@tauri-apps/api/app'
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
-import { relaunch } from '@tauri-apps/plugin-process'
-import { openUrl } from '@tauri-apps/plugin-opener'
 import type { IpcResult } from '@shared/types/ipc.types'
 import {
-  UpdaterErrorCodes,
   type DownloadProgress,
   type UpdateInfo,
+  UpdaterErrorCodes,
   type UpdateState
 } from '@shared/types/updater.types'
+import { getVersion } from '@tauri-apps/api/app'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { relaunch } from '@tauri-apps/plugin-process'
+import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -19,8 +19,7 @@ const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
 
 export type UpdateMode = 'tauri' | 'aur'
 
-const UPDATE_MODE: UpdateMode =
-  import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
+const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
 
 /**
  * Default mode uses Tauri's signed updater manifest and self-update flow.
@@ -195,8 +194,12 @@ function normalizeVersion(version: string): string {
 }
 
 function compareVersions(a: string, b: string): number {
-  const partsA = normalizeVersion(a).split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const partsB = normalizeVersion(b).split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const partsA = normalizeVersion(a)
+    .split('.')
+    .map((part) => Number.parseInt(part, 10) || 0)
+  const partsB = normalizeVersion(b)
+    .split('.')
+    .map((part) => Number.parseInt(part, 10) || 0)
   const length = Math.max(partsA.length, partsB.length, 3)
 
   for (let index = 0; index < length; index += 1) {
@@ -247,9 +250,7 @@ async function checkAurUpdate(): Promise<UpdateInfo | null> {
     throw new Error('Latest release has no version tag')
   }
 
-  return compareVersions(latestVersion, currentVersion) > 0
-    ? mapGitHubReleaseToInfo(release)
-    : null
+  return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
 export async function checkForUpdates(): Promise<UpdateInfo | null> {
@@ -338,9 +339,7 @@ async function checkGitHubFallback(): Promise<UpdateInfo | null> {
     throw new Error('Latest release has no version tag')
   }
 
-  return compareVersions(latestVersion, currentVersion) > 0
-    ? mapGitHubReleaseToInfo(release)
-    : null
+  return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
 export async function downloadUpdate(
@@ -439,7 +438,11 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     return { success: true, data: undefined }
   }
 
-  if (!pendingTauriUpdate || downloadedVersion !== pendingTauriUpdate.version || !downloadedUpdate) {
+  if (
+    !pendingTauriUpdate ||
+    downloadedVersion !== pendingTauriUpdate.version ||
+    !downloadedUpdate
+  ) {
     return {
       success: false,
       error: 'No downloaded update ready to install',
@@ -467,11 +470,13 @@ export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
     ? pendingAurUpdate !== null
     : pendingTauriUpdate !== null || isManualUpdateMode
   const version = isAurUpdateMode()
-    ? pendingAurUpdate?.version ?? null
+    ? (pendingAurUpdate?.version ?? null)
     : (pendingTauriUpdate?.version ?? manualUpdateInfo?.version ?? null)
   const downloaded = isAurUpdateMode()
     ? false
-    : !isManualUpdateMode && pendingTauriUpdate !== null && downloadedVersion === pendingTauriUpdate.version
+    : !isManualUpdateMode &&
+      pendingTauriUpdate !== null &&
+      downloadedVersion === pendingTauriUpdate.version
 
   return {
     success: true,

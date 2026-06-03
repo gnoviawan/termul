@@ -136,18 +136,33 @@ export interface SSHApi {
   getConnections: () => Promise<IpcResult<SSHConnection[]>>
 
   // Port forwarding
-  startPortForward: (connectionId: string, config: PortForwardConfig) => Promise<IpcResult<ActivePortForward>>
+  startPortForward: (
+    connectionId: string,
+    config: PortForwardConfig
+  ) => Promise<IpcResult<ActivePortForward>>
   stopPortForward: (connectionId: string, forwardId: string) => Promise<IpcResult<void>>
 
   // SFTP operations
   sftpListDir: (connectionId: string, remotePath: string) => Promise<IpcResult<SFTPEntry[]>>
-  sftpDownload: (connectionId: string, remotePath: string, localPath: string) => Promise<IpcResult<void>>
-  sftpUpload: (connectionId: string, localPath: string, remotePath: string) => Promise<IpcResult<void>>
+  sftpDownload: (
+    connectionId: string,
+    remotePath: string,
+    localPath: string
+  ) => Promise<IpcResult<void>>
+  sftpUpload: (
+    connectionId: string,
+    localPath: string,
+    remotePath: string
+  ) => Promise<IpcResult<void>>
   sftpDelete: (connectionId: string, remotePath: string) => Promise<IpcResult<void>>
   sftpMkdir: (connectionId: string, remotePath: string) => Promise<IpcResult<void>>
   sftpRename: (connectionId: string, oldPath: string, newPath: string) => Promise<IpcResult<void>>
   sftpReadFile: (connectionId: string, remotePath: string) => Promise<IpcResult<string>>
-  sftpWriteFile: (connectionId: string, remotePath: string, content: string) => Promise<IpcResult<void>>
+  sftpWriteFile: (
+    connectionId: string,
+    remotePath: string,
+    content: string
+  ) => Promise<IpcResult<void>>
   sftpCreateFile: (connectionId: string, remotePath: string) => Promise<IpcResult<void>>
 
   // Event listeners
@@ -157,6 +172,10 @@ export interface SSHApi {
 }
 
 // Event callback types
-export type SSHConnectionStatusCallback = (connectionId: string, status: SSHConnectionStatus, error?: string) => void
+export type SSHConnectionStatusCallback = (
+  connectionId: string,
+  status: SSHConnectionStatus,
+  error?: string
+) => void
 export type PortForwardStatusCallback = (connectionId: string, forward: ActivePortForward) => void
 export type TransferProgressCallback = (progress: SFTPTransferProgress) => void

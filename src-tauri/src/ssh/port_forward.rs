@@ -175,8 +175,17 @@ impl PortForwardManager {
         connection_id: String,
         forward_info: ActivePortForward,
     ) {
+        // AC #6 (issue #244): release logs default to `info` and are
+        // user-attachable, so keep the remote host out of the info line
+        // (it may be a private/internal hostname). Full target stays at
+        // `debug`, opt-in via RUST_LOG.
         log::info!(
-            "[SSH-PF] Local forward active: 127.0.0.1:{} -> {}:{}",
+            "[SSH-PF] Local forward active: 127.0.0.1:{} -> <redacted>:{}",
+            forward_info.local_port,
+            remote_port
+        );
+        log::debug!(
+            "[SSH-PF] Local forward target: 127.0.0.1:{} -> {}:{}",
             forward_info.local_port,
             remote_host,
             remote_port

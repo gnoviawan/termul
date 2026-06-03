@@ -1,10 +1,16 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { History, Terminal, Clock, Trash2 } from 'lucide-react'
-import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
-import { CommandHistoryEntry } from '@/stores/command-history-store'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Clock, History, Terminal, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import type { CommandHistoryEntry } from '@/stores/command-history-store'
 
 type FilterMode = 'this-project' | 'all-projects'
 
@@ -48,7 +54,7 @@ export function CommandHistoryModal({
   // Reset selection when query or filter changes
   useEffect(() => {
     setSelectedIndex(0)
-  }, [query, filterMode])
+  }, [])
 
   // Reset state when modal opens or closes
   useEffect(() => {
@@ -225,7 +231,8 @@ export function CommandHistoryModal({
             <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-between text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
               <div className="flex items-center space-x-4">
                 <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to navigate
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to
+                  navigate
                 </span>
                 <span className="flex items-center">
                   <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd> to insert
@@ -238,7 +245,11 @@ export function CommandHistoryModal({
                 onClick={() => setShowClearConfirm(true)}
                 className="flex items-center gap-1 px-2 py-1 rounded hover:bg-secondary/50 text-red-400 hover:text-red-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={entries.length === 0 || filterMode !== 'this-project' || isClearing}
-                title={filterMode === 'all-projects' ? 'Switch to "This Project" to clear history' : undefined}
+                title={
+                  filterMode === 'all-projects'
+                    ? 'Switch to "This Project" to clear history'
+                    : undefined
+                }
               >
                 <Trash2 size={12} />
                 <span>{isClearing ? 'Clearing...' : 'Clear History'}</span>

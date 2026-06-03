@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useEditorPersistence, persistState } from './use-editor-persistence'
-import { useWorkspaceStore } from '@/stores/workspace-store'
-import type { PaneNode, SplitNode, LeafNode } from '@/types/workspace.types'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
+import { persistState, useEditorPersistence } from './use-editor-persistence'
 
 const { mockLoadPersistedTerminals } = vi.hoisted(() => ({
   mockLoadPersistedTerminals: vi.fn()
@@ -288,8 +287,14 @@ describe('useEditorPersistence', () => {
   })
 
   it('persists pane layout with mixed editor and terminal tabs', () => {
-    mockEditorState.openFiles.set('/projects/a/src/index.ts', createEditorFileState('/projects/a/src/index.ts'))
-    mockEditorState.openFiles.set('/projects/a/README.md', createEditorFileState('/projects/a/README.md'))
+    mockEditorState.openFiles.set(
+      '/projects/a/src/index.ts',
+      createEditorFileState('/projects/a/src/index.ts')
+    )
+    mockEditorState.openFiles.set(
+      '/projects/a/README.md',
+      createEditorFileState('/projects/a/README.md')
+    )
     mockEditorState.activeFilePath = '/projects/a/src/index.ts'
     mockExplorerState.expandedDirs = new Set(['/projects/a', '/projects/a/src'])
 
@@ -508,26 +513,25 @@ describe('useEditorPersistence', () => {
 
   it('ignores stale restore results after switching projects', async () => {
     const projectARead = {
-      resolve:
-        undefined as
-          | ((value: {
-              success: true
-              data: {
-                openFiles: never[]
-                activeFilePath: null
-                expandedDirs: string[]
-                fileExplorerVisible: boolean
-                activeTabId: null
-                activePaneId: string
-                paneLayout: {
-                  type: 'leaf'
-                  id: string
-                  tabs: { type: 'editor'; filePath: string }[]
-                  activeTabId: string
-                }
+      resolve: undefined as
+        | ((value: {
+            success: true
+            data: {
+              openFiles: never[]
+              activeFilePath: null
+              expandedDirs: string[]
+              fileExplorerVisible: boolean
+              activeTabId: null
+              activePaneId: string
+              paneLayout: {
+                type: 'leaf'
+                id: string
+                tabs: { type: 'editor'; filePath: string }[]
+                activeTabId: string
               }
-            }) => void)
-          | undefined
+            }
+          }) => void)
+        | undefined
     }
 
     mockPersistenceRead
@@ -556,9 +560,12 @@ describe('useEditorPersistence', () => {
         }
       })
 
-    const { rerender } = renderHook(({ currentProjectId }) => useEditorPersistence(currentProjectId), {
-      initialProps: { currentProjectId: 'project-a' }
-    })
+    const { rerender } = renderHook(
+      ({ currentProjectId }) => useEditorPersistence(currentProjectId),
+      {
+        initialProps: { currentProjectId: 'project-a' }
+      }
+    )
 
     rerender({ currentProjectId: 'project-b' })
 
@@ -651,9 +658,7 @@ describe('useEditorPersistence', () => {
         {
           type: 'leaf',
           id: 'pane-left',
-          tabs: [
-            { type: 'terminal', id: 'term-old-1', terminalId: 'old-1' }
-          ],
+          tabs: [{ type: 'terminal', id: 'term-old-1', terminalId: 'old-1' }],
           activeTabId: 'term-old-1'
         },
         {

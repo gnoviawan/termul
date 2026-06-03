@@ -1,6 +1,6 @@
 import { Code2, Eye, List } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useTocIsVisible, useTocSettingsStore } from '@/stores/toc-settings-store'
 
 interface EditorToolbarProps {

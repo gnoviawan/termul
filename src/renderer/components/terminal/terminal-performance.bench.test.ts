@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterAll } from 'vitest'
-import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import { afterAll, describe, expect, it } from 'vitest'
 
 /**
  * Terminal Performance Benchmark Suite
@@ -83,7 +83,11 @@ async function waitForTerminalRender(terminal: Terminal): Promise<void> {
   })
 }
 
-async function runBenchmark(name: string, lineCount: number, content: string): Promise<BenchmarkResult> {
+async function runBenchmark(
+  name: string,
+  lineCount: number,
+  content: string
+): Promise<BenchmarkResult> {
   const { terminal, container } = createTerminal()
   const start = performance.now()
 
@@ -103,12 +107,13 @@ async function runBenchmark(name: string, lineCount: number, content: string): P
     lineCount,
     charCount: content.length,
     linesPerSecond: Math.round((lineCount / durationMs) * 1000),
-    charsPerSecond: Math.round((content.length / durationMs) * 1000),
+    charsPerSecond: Math.round((content.length / durationMs) * 1000)
   }
 }
 
 // xterm 6.1 requires a real DOM canvas for WidthCache; skip in JSDOM/CI
-const hasCanvas = typeof HTMLCanvasElement !== 'undefined' &&
+const hasCanvas =
+  typeof HTMLCanvasElement !== 'undefined' &&
   typeof HTMLCanvasElement.prototype.getContext === 'function' &&
   typeof OffscreenCanvas !== 'undefined'
 
@@ -187,7 +192,7 @@ describe.skipIf(!hasCanvas)('Terminal performance baseline (xterm 5.5)', () => {
       lineCount,
       charCount,
       linesPerSecond: Math.round((lineCount / durationMs) * 1000),
-      charsPerSecond: Math.round((charCount / durationMs) * 1000),
+      charsPerSecond: Math.round((charCount / durationMs) * 1000)
     })
 
     expect(durationMs).toBeLessThan(3000)

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
-import { DropZoneOverlay } from './DropZoneOverlay'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { DropZoneOverlay } from './DropZoneOverlay'
 
 vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: vi.fn()

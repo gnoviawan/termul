@@ -6,7 +6,7 @@
  * doing nothing visible. Success paths must NOT show an error toast.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), {
@@ -50,7 +50,7 @@ vi.mock('@/lib/tauri-safe-update', () => ({
 }))
 
 import { toast } from 'sonner'
-import { showUpdateToast, showUpdateDownloadedToast } from './UpdateAvailableToast'
+import { showUpdateDownloadedToast, showUpdateToast } from './UpdateAvailableToast'
 
 type ToastAction = { onClick: () => void | Promise<void> }
 

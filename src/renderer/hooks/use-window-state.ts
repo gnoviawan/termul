@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { PersistenceKeys, type WindowState } from '@shared/types/persistence.types'
 import {
   availableMonitors,
   getCurrentWindow,
   LogicalPosition,
   LogicalSize,
-  primaryMonitor,
-  type Monitor
+  type Monitor,
+  primaryMonitor
 } from '@tauri-apps/api/window'
+import { useEffect, useRef, useState } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
-import { PersistenceKeys, type WindowState } from '@shared/types/persistence.types'
 
 const DEFAULT_WIDTH = 1200
 const DEFAULT_HEIGHT = 800
@@ -235,7 +235,9 @@ export function useWindowState(): boolean {
     void initialize()
       .then((listeners) => {
         if (disposed) {
-          listeners.forEach((cleanup) => cleanup())
+          listeners.forEach((cleanup) => {
+            cleanup()
+          })
           return
         }
 
@@ -253,7 +255,9 @@ export function useWindowState(): boolean {
     return () => {
       disposed = true
       void persistWindowState(true)
-      cleanups.forEach((cleanup) => cleanup())
+      cleanups.forEach((cleanup) => {
+        cleanup()
+      })
     }
   }, [])
 

@@ -1,11 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
-import { useProjectStore } from '@/stores/project-store'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import {
-  usePersistProjectsImmediate,
-  useProjectsLoader
-} from './use-projects-persistence'
+import { renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useProjectStore } from '@/stores/project-store'
+import { usePersistProjectsImmediate, useProjectsLoader } from './use-projects-persistence'
 
 const REDACTED_VALUE = '[REDACTED]'
 

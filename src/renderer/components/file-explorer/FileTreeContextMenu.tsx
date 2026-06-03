@@ -1,19 +1,19 @@
-import {
-  FilePlus,
-  FolderPlus,
-  Edit2,
-  Trash2,
-  Copy,
-  Scissors,
-  ClipboardPaste,
-  Files,
-  Terminal,
-  ExternalLink,
-  FolderOpen
-} from 'lucide-react'
-import { ContextMenu } from '@/components/ContextMenu'
-import type { ContextMenuItem } from '@/components/ContextMenu'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import {
+  ClipboardPaste,
+  Copy,
+  Edit2,
+  ExternalLink,
+  FilePlus,
+  Files,
+  FolderOpen,
+  FolderPlus,
+  Scissors,
+  Terminal,
+  Trash2
+} from 'lucide-react'
+import type { ContextMenuItem } from '@/components/ContextMenu'
+import { ContextMenu } from '@/components/ContextMenu'
 
 interface FileTreeContextMenuProps {
   entry: DirectoryEntry

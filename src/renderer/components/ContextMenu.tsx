@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { ChevronRight, Check } from 'lucide-react'
+import { Check, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 export interface ContextMenuSubItem {
@@ -87,69 +87,67 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
       style={{ left: position.left, top: position.top }}
     >
       {items.map((item, index) => {
-          // Render separator
-          if (item.type === 'separator') {
-            return <div key={index} className="my-1 border-t border-border" />
-          }
+        // Render separator
+        if (item.type === 'separator') {
+          return <div key={index} className="my-1 border-t border-border" />
+        }
 
-          return (
-            <div
-              key={index}
-              className="relative"
-              onMouseEnter={() => setHoveredIndex(index)}
-              onMouseLeave={() => setHoveredIndex(null)}
-            >
-              <button
-                onClick={() => {
-                  if (!item.disabled && item.onClick) {
-                    item.onClick()
-                    onClose()
-                  }
-                }}
-                disabled={item.disabled}
-                className={cn(
-                  'w-full flex items-center px-2 py-1 text-xs transition-colors',
-                  item.disabled && 'opacity-50 cursor-not-allowed',
-                  item.variant === 'danger'
-                    ? 'text-red-400 hover:bg-red-500/10'
-                    : 'text-foreground hover:bg-secondary'
-                )}
-              >
-                {item.icon && <span className="mr-1.5">{item.icon}</span>}
-                {item.label}
-                {item.submenu && <ChevronRight size={12} className="ml-auto" />}
-              </button>
-
-              {/* Submenu */}
-              {item.submenu && hoveredIndex === index && (
-                <div
-                  className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[140px]"
-                >
-                  {item.submenu.map((subItem) => (
-                    <button
-                      key={subItem.value}
-                      onClick={() => {
-                        if (item.onSubmenuSelect) {
-                          item.onSubmenuSelect(subItem.value)
-                        }
-                        onClose()
-                      }}
-                      className="w-full flex items-center px-2 py-1 text-xs text-foreground hover:bg-secondary transition-colors"
-                    >
-                      {subItem.isSelected ? (
-                        <Check size={12} className="mr-1.5 text-primary" />
-                      ) : (
-                        <span className="w-[12px] mr-1.5" />
-                      )}
-                      {subItem.icon && <span className="mr-1.5">{subItem.icon}</span>}
-                      {subItem.label}
-                    </button>
-                  ))}
-                </div>
+        return (
+          <div
+            key={index}
+            className="relative"
+            onMouseEnter={() => setHoveredIndex(index)}
+            onMouseLeave={() => setHoveredIndex(null)}
+          >
+            <button
+              onClick={() => {
+                if (!item.disabled && item.onClick) {
+                  item.onClick()
+                  onClose()
+                }
+              }}
+              disabled={item.disabled}
+              className={cn(
+                'w-full flex items-center px-2 py-1 text-xs transition-colors',
+                item.disabled && 'opacity-50 cursor-not-allowed',
+                item.variant === 'danger'
+                  ? 'text-red-400 hover:bg-red-500/10'
+                  : 'text-foreground hover:bg-secondary'
               )}
-            </div>
-          )
-        })}
+            >
+              {item.icon && <span className="mr-1.5">{item.icon}</span>}
+              {item.label}
+              {item.submenu && <ChevronRight size={12} className="ml-auto" />}
+            </button>
+
+            {/* Submenu */}
+            {item.submenu && hoveredIndex === index && (
+              <div className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[140px]">
+                {item.submenu.map((subItem) => (
+                  <button
+                    key={subItem.value}
+                    onClick={() => {
+                      if (item.onSubmenuSelect) {
+                        item.onSubmenuSelect(subItem.value)
+                      }
+                      onClose()
+                    }}
+                    className="w-full flex items-center px-2 py-1 text-xs text-foreground hover:bg-secondary transition-colors"
+                  >
+                    {subItem.isSelected ? (
+                      <Check size={12} className="mr-1.5 text-primary" />
+                    ) : (
+                      <span className="w-[12px] mr-1.5" />
+                    )}
+                    {subItem.icon && <span className="mr-1.5">{subItem.icon}</span>}
+                    {subItem.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

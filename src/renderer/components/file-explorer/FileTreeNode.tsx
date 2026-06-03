@@ -1,9 +1,9 @@
+import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { ChevronRight, Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
 import { getFileIcon } from './file-icon-map'
-import { usePaneDnd } from '@/hooks/use-pane-dnd'
-import { useEffect, useRef, useState } from 'react'
-import type { DirectoryEntry } from '@shared/types/filesystem.types'
 
 interface FileTreeNodeProps {
   entry: DirectoryEntry
@@ -117,10 +117,7 @@ export function FileTreeNode({
         {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
         <Icon
           size={14}
-          className={cn(
-            'flex-shrink-0 mr-1.5',
-            isDir ? 'text-blue-400' : 'text-muted-foreground'
-          )}
+          className={cn('flex-shrink-0 mr-1.5', isDir ? 'text-blue-400' : 'text-muted-foreground')}
         />
         <span className="truncate">{entry.name}</span>
 
@@ -131,20 +128,18 @@ export function FileTreeNode({
         )}
       </div>
 
-      {isDir && isExpanded && children && (
-        <>
-          {children.map((child) => (
-            <FileTreeNodeWrapper
-              key={child.path}
-              entry={child}
-              depth={depth + 1}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-            />
-          ))}
-        </>
-      )}
+      {isDir &&
+        isExpanded &&
+        children?.map((child) => (
+          <FileTreeNodeWrapper
+            key={child.path}
+            entry={child}
+            depth={depth + 1}
+            onToggle={onToggle}
+            onSelect={onSelect}
+            onContextMenu={onContextMenu}
+          />
+        ))}
     </>
   )
 }
@@ -181,6 +176,7 @@ function FileTreeNodeWrapper({
       isExpanded={isExpanded}
       isSelected={isSelected}
       isLoading={isLoading}
+      // biome-ignore lint/correctness/noChildrenProp: `children` is a typed directory-data prop, not React children
       children={children}
       onToggle={onToggle}
       onSelect={onSelect}

@@ -1,15 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useAnnotationStore, normalizeUrl, type Annotation } from './annotation-store'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { type Annotation, normalizeUrl, useAnnotationStore } from './annotation-store'
 
 describe('annotation-store', () => {
   beforeEach(() => {
     // Reset store state before each test
-    useAnnotationStore.setState({ annotationsByUrl: new Map(), selectedAnnotationIdByUrl: new Map() })
+    useAnnotationStore.setState({
+      annotationsByUrl: new Map(),
+      selectedAnnotationIdByUrl: new Map()
+    })
   })
 
   describe('normalizeUrl', () => {
     it('strips tracking params', () => {
-      expect(normalizeUrl('https://example.com/?utm_source=newsletter&page=1')).toBe('https://example.com/?page=1')
+      expect(normalizeUrl('https://example.com/?utm_source=newsletter&page=1')).toBe(
+        'https://example.com/?page=1'
+      )
     })
 
     it('strips hash anchors', () => {
@@ -38,7 +43,7 @@ describe('annotation-store', () => {
         severity: 'blocking',
         description: 'Button is misaligned',
         viewportWidth: 1920,
-        viewportHeight: 1080,
+        viewportHeight: 1080
       })
 
       expect(result.id).toMatch(/^[0-9a-f-]{36}$/)
@@ -79,17 +84,17 @@ describe('annotation-store', () => {
           selectorConfidence: 'unique-id',
           attributes: {
             id: 'submit-button',
-            class: 'btn btn-primary',
+            class: 'btn btn-primary'
           },
           textContent: 'Submit',
           textTruncated: false,
-          boundingBox: { x: 12, y: 24, width: 140, height: 40 },
+          boundingBox: { x: 12, y: 24, width: 140, height: 40 }
         },
         intent: 'question',
         severity: 'suggestion',
         description: 'Captured button',
         viewportWidth: 1280,
-        viewportHeight: 720,
+        viewportHeight: 720
       })
 
       expect(added.type).toBe('element')
@@ -100,7 +105,7 @@ describe('annotation-store', () => {
         expect(added.geometry.selectorConfidence).toBe('unique-id')
         expect(added.geometry.attributes).toEqual({
           id: 'submit-button',
-          class: 'btn btn-primary',
+          class: 'btn btn-primary'
         })
         expect(added.geometry.textContent).toBe('Submit')
         expect(added.geometry.boundingBox.width).toBe(140)
@@ -133,7 +138,7 @@ describe('annotation-store', () => {
       store.updateAnnotation(url, added.id, {
         intent: 'change',
         severity: 'important',
-        description: 'Updated description',
+        description: 'Updated description'
       })
 
       const updated = store.getAnnotationsForUrl('https://example.com')[0]
@@ -149,7 +154,7 @@ describe('annotation-store', () => {
       const added = store.addAnnotation(makeElementAnnotation(url, 'tab-1'))
 
       store.updateAnnotation(url, added.id, {
-        description: 'Updated element annotation',
+        description: 'Updated element annotation'
       })
 
       const updated = store.getAnnotationsForUrl('https://example.com/element')[0]
@@ -282,7 +287,10 @@ describe('annotation-store', () => {
   })
 })
 
-function makeRegionAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
+function makeRegionAnnotation(
+  normalizedUrl: string,
+  browserTabId: string
+): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
   return {
     browserTabId,
     url: 'https://example.com',
@@ -294,11 +302,14 @@ function makeRegionAnnotation(normalizedUrl: string, browserTabId: string): Omit
     severity: 'suggestion',
     description: 'Test annotation',
     viewportWidth: 1920,
-    viewportHeight: 1080,
+    viewportHeight: 1080
   }
 }
 
-function makeElementAnnotation(normalizedUrl: string, browserTabId: string): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
+function makeElementAnnotation(
+  normalizedUrl: string,
+  browserTabId: string
+): Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'> {
   return {
     browserTabId,
     url: 'https://example.com/element',
@@ -312,7 +323,7 @@ function makeElementAnnotation(normalizedUrl: string, browserTabId: string): Omi
       selectorConfidence: 'unique-id',
       attributes: {
         id: 'submit-button',
-        class: 'btn btn-primary',
+        class: 'btn btn-primary'
       },
       textContent: 'Submit now',
       textTruncated: false,
@@ -320,13 +331,13 @@ function makeElementAnnotation(normalizedUrl: string, browserTabId: string): Omi
         x: 10,
         y: 20,
         width: 100,
-        height: 40,
-      },
+        height: 40
+      }
     },
     intent: 'question',
     severity: 'suggestion',
     description: 'Element annotation',
     viewportWidth: 1440,
-    viewportHeight: 900,
+    viewportHeight: 900
   }
 }

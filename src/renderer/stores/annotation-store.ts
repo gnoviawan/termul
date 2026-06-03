@@ -16,7 +16,7 @@ const ATTRIBUTE_ALLOWLIST = new Set([
   'type',
   'aria-label',
   'aria-describedby',
-  'data-testid',
+  'data-testid'
 ])
 
 export interface RegionGeometry {
@@ -76,9 +76,15 @@ export interface AnnotationState {
   selectedAnnotationIdByUrl: Map<string, string | null>
 
   // Actions
-  addAnnotation: (annotation: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'>) => Annotation
+  addAnnotation: (
+    annotation: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion'>
+  ) => Annotation
   removeAnnotation: (normalizedUrl: string, id: string) => void
-  updateAnnotation: (normalizedUrl: string, id: string, updates: Partial<Pick<Annotation, 'intent' | 'severity' | 'description'>>) => void
+  updateAnnotation: (
+    normalizedUrl: string,
+    id: string,
+    updates: Partial<Pick<Annotation, 'intent' | 'severity' | 'description'>>
+  ) => void
   getAnnotationsForUrl: (url: string) => Annotation[]
   clearAnnotationsForTab: (browserTabId: string) => void
   setSelectedAnnotationId: (normalizedUrl: string, id: string | null) => void
@@ -86,7 +92,7 @@ export interface AnnotationState {
 }
 
 function stripControlChars(value: string): string {
-  // eslint-disable-next-line no-control-regex -- intentional sanitization of captured text
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional sanitization of captured text
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
 }
 
@@ -94,14 +100,17 @@ function sanitizeCapturedString(value: string): string {
   return stripControlChars(value)
 }
 
-function truncateWithEllipsis(value: string, maxLength: number): { value: string; truncated: boolean } {
+function truncateWithEllipsis(
+  value: string,
+  maxLength: number
+): { value: string; truncated: boolean } {
   if (value.length <= maxLength) {
     return { value, truncated: false }
   }
 
   return {
     value: `${value.slice(0, Math.max(0, maxLength - 1))}…`,
-    truncated: true,
+    truncated: true
   }
 }
 
@@ -111,7 +120,10 @@ function toFiniteNumber(value: number): number {
 
 function sanitizeElementGeometry(geometry: ElementGeometry): ElementGeometry {
   const sanitizedTagName = sanitizeCapturedString(geometry.tagName)
-  const sanitizedSelector = truncateWithEllipsis(sanitizeCapturedString(geometry.selector), MAX_SELECTOR_LENGTH).value
+  const sanitizedSelector = truncateWithEllipsis(
+    sanitizeCapturedString(geometry.selector),
+    MAX_SELECTOR_LENGTH
+  ).value
   const sanitizedAttributes = Object.fromEntries(
     Object.entries(geometry.attributes)
       .filter(([key]) => ATTRIBUTE_ALLOWLIST.has(key))
@@ -140,8 +152,8 @@ function sanitizeElementGeometry(geometry: ElementGeometry): ElementGeometry {
       x: toFiniteNumber(geometry.boundingBox.x),
       y: toFiniteNumber(geometry.boundingBox.y),
       width: toFiniteNumber(geometry.boundingBox.width),
-      height: toFiniteNumber(geometry.boundingBox.height),
-    },
+      height: toFiniteNumber(geometry.boundingBox.height)
+    }
   }
 }
 
@@ -156,14 +168,14 @@ function sanitizeGeometry(geometry: AnnotationGeometry): AnnotationGeometry {
       x: toFiniteNumber(geometry.x),
       y: toFiniteNumber(geometry.y),
       width: toFiniteNumber(geometry.width),
-      height: toFiniteNumber(geometry.height),
+      height: toFiniteNumber(geometry.height)
     }
   }
 
   return {
     ...geometry,
     x: toFiniteNumber(geometry.x),
-    y: toFiniteNumber(geometry.y),
+    y: toFiniteNumber(geometry.y)
   }
 }
 
@@ -175,7 +187,7 @@ function sanitizeAnnotationData(
     url: sanitizeCapturedString(annotationData.url),
     normalizedUrl: sanitizeCapturedString(annotationData.normalizedUrl),
     pageTitle: sanitizeCapturedString(annotationData.pageTitle),
-    geometry: sanitizeGeometry(annotationData.geometry),
+    geometry: sanitizeGeometry(annotationData.geometry)
   }
 }
 
@@ -192,7 +204,15 @@ export function normalizeUrl(rawUrl: string): string {
     // Lowercase host
     url.host = url.host.toLowerCase()
     // Strip tracking params
-    const stripParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid']
+    const stripParams = [
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_term',
+      'utm_content',
+      'fbclid',
+      'gclid'
+    ]
     for (const param of stripParams) {
       url.searchParams.delete(param)
     }
@@ -222,7 +242,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       id,
       schemaVersion: 1,
       createdAt: now,
-      updatedAt: now,
+      updatedAt: now
     }
 
     set((state) => {
@@ -264,7 +284,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         return {
           ...a,
           ...updates,
-          updatedAt: Date.now(),
+          updatedAt: Date.now()
         }
       })
       if (!matched) return state
@@ -291,7 +311,11 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         if (filtered.length > 0) {
           next.set(normalizedUrl, filtered)
           const selectedId = selectedNext.get(normalizedUrl)
-          if (selectedId !== null && selectedId !== undefined && !filtered.some((a) => a.id === selectedId)) {
+          if (
+            selectedId !== null &&
+            selectedId !== undefined &&
+            !filtered.some((a) => a.id === selectedId)
+          ) {
             selectedNext.delete(normalizedUrl)
           }
         } else {
@@ -317,5 +341,5 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       next.set(normalizedUrl, null)
       return { selectedAnnotationIdByUrl: next }
     })
-  },
+  }
 }))

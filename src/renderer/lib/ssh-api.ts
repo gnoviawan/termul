@@ -1,25 +1,25 @@
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IpcResult } from '@shared/types/ipc.types'
 import type {
-  SSHProfile,
-  SSHConnection,
-  SSHConnectionStatus,
-  SSHApi,
-  SSHConnectionStatusCallback,
-  PortForwardStatusCallback,
-  TransferProgressCallback,
-  PortForwardConfig,
   ActivePortForward,
+  PortForwardConfig,
+  PortForwardStatusCallback,
   SFTPEntry,
   SFTPTransferProgress,
+  SSHApi,
+  SSHConnection,
+  SSHConnectionStatus,
+  SSHConnectionStatusCallback,
+  SSHProfile,
+  TransferProgressCallback
 } from '@shared/types/ssh.types'
-import { isTauriContext, cleanupTauriListener } from './tauri-runtime'
+import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 const SSH_EVENTS = {
   CONNECTION_STATUS_CHANGED: 'ssh-connection-status-changed',
   PORT_FORWARD_STATUS_CHANGED: 'ssh-port-forward-status-changed',
-  TRANSFER_PROGRESS: 'ssh-transfer-progress',
+  TRANSFER_PROGRESS: 'ssh-transfer-progress'
 } as const
 
 const SSH_COMMANDS = {
@@ -41,17 +41,20 @@ const SSH_COMMANDS = {
   SFTP_READ_FILE: 'sftp_read_file',
   SFTP_WRITE_FILE: 'sftp_write_file',
   SFTP_CREATE_FILE: 'sftp_create_file',
-  CREATE_ASKPASS: 'ssh_create_askpass',
+  CREATE_ASKPASS: 'ssh_create_askpass'
 } as const
 
-async function invokeIpc<T>(command: string, args?: Record<string, unknown>): Promise<IpcResult<T>> {
+async function invokeIpc<T>(
+  command: string,
+  args?: Record<string, unknown>
+): Promise<IpcResult<T>> {
   try {
     return await invoke<IpcResult<T>>(command, args)
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR',
+      code: 'INVOKE_ERROR'
     }
   }
 }
@@ -78,7 +81,7 @@ export function createSSHApi(): SSHApi {
     // Connection management
     async connect(profileId: string, password?: string): Promise<IpcResult<SSHConnection>> {
       return invokeIpc<SSHConnection>(SSH_COMMANDS.CONNECT, {
-        request: { profileId, password },
+        request: { profileId, password }
       })
     },
 
@@ -103,8 +106,8 @@ export function createSSHApi(): SSHApi {
           localPort: config.localPort,
           remoteHost: config.remoteHost,
           remotePort: config.remotePort,
-          label: config.label,
-        },
+          label: config.label
+        }
       })
     },
 
@@ -115,7 +118,7 @@ export function createSSHApi(): SSHApi {
     // SFTP operations
     async sftpListDir(connectionId: string, remotePath: string): Promise<IpcResult<SFTPEntry[]>> {
       return invokeIpc<SFTPEntry[]>(SSH_COMMANDS.SFTP_LIST_DIR, {
-        request: { connectionId, remotePath },
+        request: { connectionId, remotePath }
       })
     },
 
@@ -125,7 +128,7 @@ export function createSSHApi(): SSHApi {
       localPath: string
     ): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_DOWNLOAD, {
-        request: { connectionId, remotePath, localPath },
+        request: { connectionId, remotePath, localPath }
       })
     },
 
@@ -135,19 +138,19 @@ export function createSSHApi(): SSHApi {
       remotePath: string
     ): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_UPLOAD, {
-        request: { connectionId, remotePath, localPath },
+        request: { connectionId, remotePath, localPath }
       })
     },
 
     async sftpDelete(connectionId: string, remotePath: string): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_DELETE, {
-        request: { connectionId, remotePath },
+        request: { connectionId, remotePath }
       })
     },
 
     async sftpMkdir(connectionId: string, remotePath: string): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_MKDIR, {
-        request: { connectionId, remotePath },
+        request: { connectionId, remotePath }
       })
     },
 
@@ -157,25 +160,29 @@ export function createSSHApi(): SSHApi {
       newPath: string
     ): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_RENAME, {
-        request: { connectionId, oldPath, newPath },
+        request: { connectionId, oldPath, newPath }
       })
     },
 
     async sftpReadFile(connectionId: string, remotePath: string): Promise<IpcResult<string>> {
       return invokeIpc<string>(SSH_COMMANDS.SFTP_READ_FILE, {
-        request: { connectionId, remotePath },
+        request: { connectionId, remotePath }
       })
     },
 
-    async sftpWriteFile(connectionId: string, remotePath: string, content: string): Promise<IpcResult<void>> {
+    async sftpWriteFile(
+      connectionId: string,
+      remotePath: string,
+      content: string
+    ): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_WRITE_FILE, {
-        request: { connectionId, remotePath, content },
+        request: { connectionId, remotePath, content }
       })
     },
 
     async sftpCreateFile(connectionId: string, remotePath: string): Promise<IpcResult<void>> {
       return invokeIpc<void>(SSH_COMMANDS.SFTP_CREATE_FILE, {
-        request: { connectionId, remotePath },
+        request: { connectionId, remotePath }
       })
     },
 
@@ -195,7 +202,9 @@ export function createSSHApi(): SSHApi {
         return () => {}
       }
 
-      return () => { cleanupTauriListener(unlisten) }
+      return () => {
+        cleanupTauriListener(unlisten)
+      }
     },
 
     onPortForwardStatusChanged(callback: PortForwardStatusCallback): () => void {
@@ -213,7 +222,9 @@ export function createSSHApi(): SSHApi {
         return () => {}
       }
 
-      return () => { cleanupTauriListener(unlisten) }
+      return () => {
+        cleanupTauriListener(unlisten)
+      }
     },
 
     onTransferProgress(callback: TransferProgressCallback): () => void {
@@ -221,18 +232,17 @@ export function createSSHApi(): SSHApi {
 
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<SFTPTransferProgress>(
-          SSH_EVENTS.TRANSFER_PROGRESS,
-          ({ payload }) => {
-            callback(payload)
-          }
-        )
+        unlisten = listen<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, ({ payload }) => {
+          callback(payload)
+        })
       } catch {
         return () => {}
       }
 
-      return () => { cleanupTauriListener(unlisten) }
-    },
+      return () => {
+        cleanupTauriListener(unlisten)
+      }
+    }
   }
 }
 

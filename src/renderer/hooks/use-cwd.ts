@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { systemApi, terminalApi } from '@/lib/api'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { terminalApi, systemApi } from '@/lib/api'
 
 // Cache for home directory to avoid repeated IPC calls
 let cachedHomeDir: string | null = null
@@ -80,11 +80,8 @@ export function formatPath(
     const normalizedPath = fullPath.replace(/\\/g, '/')
 
     // Check if path starts with home dir followed by a separator or is exactly home dir
-    if (
-      normalizedPath === normalizedHome ||
-      normalizedPath.startsWith(normalizedHome + '/')
-    ) {
-      formatted = '~' + normalizedPath.slice(normalizedHome.length)
+    if (normalizedPath === normalizedHome || normalizedPath.startsWith(`${normalizedHome}/`)) {
+      formatted = `~${normalizedPath.slice(normalizedHome.length)}`
     } else {
       // Keep original path but normalize slashes for display consistency
       formatted = normalizedPath

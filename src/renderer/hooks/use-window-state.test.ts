@@ -1,7 +1,7 @@
+import type { WindowState } from '@shared/types/persistence.types'
+import type { Monitor } from '@tauri-apps/api/window'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Monitor } from '@tauri-apps/api/window'
-import type { WindowState } from '@shared/types/persistence.types'
 import {
   clampStateToMonitors,
   getLogicalWorkArea,
@@ -9,54 +9,61 @@ import {
   useWindowState
 } from './use-window-state'
 
-const { windowMock, persistenceMock, runtimeMock, monitorsMock, primaryMock, LogicalPositionStub, LogicalSizeStub } =
-  vi.hoisted(() => {
-    class LogicalPositionStub {
-      readonly type = 'Logical'
-      constructor(
-        public x: number,
-        public y: number
-      ) {}
-    }
+const {
+  windowMock,
+  persistenceMock,
+  runtimeMock,
+  monitorsMock,
+  primaryMock,
+  LogicalPositionStub,
+  LogicalSizeStub
+} = vi.hoisted(() => {
+  class LogicalPositionStub {
+    readonly type = 'Logical'
+    constructor(
+      public x: number,
+      public y: number
+    ) {}
+  }
 
-    class LogicalSizeStub {
-      readonly type = 'Logical'
-      constructor(
-        public width: number,
-        public height: number
-      ) {}
-    }
+  class LogicalSizeStub {
+    readonly type = 'Logical'
+    constructor(
+      public width: number,
+      public height: number
+    ) {}
+  }
 
-    return {
-      windowMock: {
-        isMaximized: vi.fn(async () => false),
-        scaleFactor: vi.fn(async () => 1),
-        outerPosition: vi.fn(async () => ({ x: 0, y: 0 })),
-        outerSize: vi.fn(async () => ({ width: 1200, height: 800 })),
-        setPosition: vi.fn(async (_position: unknown) => {}),
-        setSize: vi.fn(async (_size: unknown) => {}),
-        maximize: vi.fn(async () => {}),
-        onMoved: vi.fn(async () => vi.fn()),
-        onResized: vi.fn(async () => vi.fn()),
-        onCloseRequested: vi.fn(async () => vi.fn())
-      },
-      persistenceMock: {
-        read: vi.fn(
-          async (): Promise<{ success: boolean; data: WindowState | null }> => ({
-            success: false,
-            data: null
-          })
-        ),
-        write: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
-        writeDebounced: vi.fn(async (_key: string, _value: unknown) => ({ success: true }))
-      },
-      runtimeMock: { isTauri: true },
-      monitorsMock: vi.fn(async (): Promise<Monitor[]> => []),
-      primaryMock: vi.fn(async (): Promise<Monitor | null> => null),
-      LogicalPositionStub,
-      LogicalSizeStub
-    }
-  })
+  return {
+    windowMock: {
+      isMaximized: vi.fn(async () => false),
+      scaleFactor: vi.fn(async () => 1),
+      outerPosition: vi.fn(async () => ({ x: 0, y: 0 })),
+      outerSize: vi.fn(async () => ({ width: 1200, height: 800 })),
+      setPosition: vi.fn(async (_position: unknown) => {}),
+      setSize: vi.fn(async (_size: unknown) => {}),
+      maximize: vi.fn(async () => {}),
+      onMoved: vi.fn(async () => vi.fn()),
+      onResized: vi.fn(async () => vi.fn()),
+      onCloseRequested: vi.fn(async () => vi.fn())
+    },
+    persistenceMock: {
+      read: vi.fn(
+        async (): Promise<{ success: boolean; data: WindowState | null }> => ({
+          success: false,
+          data: null
+        })
+      ),
+      write: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
+      writeDebounced: vi.fn(async (_key: string, _value: unknown) => ({ success: true }))
+    },
+    runtimeMock: { isTauri: true },
+    monitorsMock: vi.fn(async (): Promise<Monitor[]> => []),
+    primaryMock: vi.fn(async (): Promise<Monitor | null> => null),
+    LogicalPositionStub,
+    LogicalSizeStub
+  }
+})
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowMock,

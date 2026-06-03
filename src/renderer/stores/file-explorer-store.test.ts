@@ -1,9 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockEntries: DirectoryEntry[] = [
-  { name: 'src', path: '/project/src', type: 'directory', extension: null, size: 0, modifiedAt: 1000 },
-  { name: 'index.ts', path: '/project/index.ts', type: 'file', extension: '.ts', size: 100, modifiedAt: 1000 }
+  {
+    name: 'src',
+    path: '/project/src',
+    type: 'directory',
+    extension: null,
+    size: 0,
+    modifiedAt: 1000
+  },
+  {
+    name: 'index.ts',
+    path: '/project/index.ts',
+    type: 'file',
+    extension: '.ts',
+    size: 100,
+    modifiedAt: 1000
+  }
 ]
 
 const { mockApi } = vi.hoisted(() => ({
@@ -23,7 +37,9 @@ vi.mock('@/lib/api', () => ({
 import { useFileExplorerStore } from './file-explorer-store'
 
 beforeEach(() => {
-  mockApi.filesystem.readDirectory.mockReset().mockResolvedValue({ success: true, data: mockEntries })
+  mockApi.filesystem.readDirectory
+    .mockReset()
+    .mockResolvedValue({ success: true, data: mockEntries })
   mockApi.filesystem.watchDirectory.mockReset().mockResolvedValue({ success: true })
   mockApi.filesystem.unwatchDirectory.mockReset().mockResolvedValue({ success: true })
 
@@ -249,14 +265,19 @@ describe('file-explorer-store', () => {
   describe('refreshDirectory', () => {
     it('should update contents for a directory', async () => {
       const newEntries: DirectoryEntry[] = [
-        { name: 'new.ts', path: '/project/new.ts', type: 'file', extension: '.ts', size: 50, modifiedAt: 2000 }
+        {
+          name: 'new.ts',
+          path: '/project/new.ts',
+          type: 'file',
+          extension: '.ts',
+          size: 50,
+          modifiedAt: 2000
+        }
       ]
       mockApi.filesystem.readDirectory.mockResolvedValueOnce({ success: true, data: newEntries })
 
       useFileExplorerStore.setState({
-        directoryContents: new Map([
-          ['/project', mockEntries]
-        ])
+        directoryContents: new Map([['/project', mockEntries]])
       })
 
       await useFileExplorerStore.getState().refreshDirectory('/project')
@@ -295,12 +316,9 @@ describe('file-explorer-store', () => {
         return { success: true, data: mockEntries }
       })
 
-      await useFileExplorerStore.getState().restoreExpandedDirs([
-        '/project',
-        '/project/src',
-        '/project/missing',
-        '/other/src'
-      ])
+      await useFileExplorerStore
+        .getState()
+        .restoreExpandedDirs(['/project', '/project/src', '/project/missing', '/other/src'])
 
       const state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project/src')).toBe(true)

@@ -1,21 +1,27 @@
-import { useState, useCallback } from 'react'
-import { Camera, Clock, Cpu, Grid3X3, Edit2, Trash2, RotateCcw } from 'lucide-react'
+import { Camera, Clock, Cpu, Edit2, Grid3X3, RotateCcw, Trash2 } from 'lucide-react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { NewProjectModal } from '@/components/NewProjectModal'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { RestoreSnapshotModal } from '@/components/RestoreSnapshotModal'
 import { DeleteSnapshotModal } from '@/components/DeleteSnapshotModal'
+import { NewProjectModal } from '@/components/NewProjectModal'
+import { RestoreSnapshotModal } from '@/components/RestoreSnapshotModal'
+import {
+  useCreateSnapshot,
+  useRestoreSnapshot,
+  useSnapshotActions,
+  useSnapshotLoader,
+  useSnapshots
+} from '@/hooks/use-snapshots'
+import { getColorClasses } from '@/lib/colors'
+import { cn } from '@/lib/utils'
 import {
   useActiveProject,
   useActiveProjectId,
   useProjectActions,
   useProjectsLoaded
 } from '@/stores/project-store'
-import { useSnapshots, useSnapshotLoader, useCreateSnapshot, useRestoreSnapshot, useSnapshotActions } from '@/hooks/use-snapshots'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { getColorClasses } from '@/lib/colors'
 import type { Snapshot } from '@/types/project'
-import { cn } from '@/lib/utils'
 
 export default function WorkspaceSnapshots(): React.JSX.Element {
   const navigate = useNavigate()
@@ -31,9 +37,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
   const isLoaded = useProjectsLoaded()
   const activeProject = useActiveProject()
   const activeProjectId = useActiveProjectId()
-  const {
-    addProject
-  } = useProjectActions()
+  const { addProject } = useProjectActions()
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -228,7 +232,12 @@ interface SnapshotCardProps {
   onDelete: (snapshot: Snapshot) => void
 }
 
-function SnapshotCard({ snapshot, formatTime, onRestore, onDelete }: SnapshotCardProps): React.JSX.Element {
+function SnapshotCard({
+  snapshot,
+  formatTime,
+  onRestore,
+  onDelete
+}: SnapshotCardProps): React.JSX.Element {
   return (
     <div className="group bg-card/50 border border-border rounded-lg p-4 flex items-start gap-5 hover:border-muted-foreground/50 transition-colors">
       {/* Thumbnail */}

@@ -1,97 +1,95 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useGitHistoryStore } from "@/stores/git-history-store";
-import { computeGraphLayout, type GraphLayout } from "@/lib/git-graph-layout";
-import { formatRelativeTime } from "@/lib/git-time";
-import { describeRef } from "@/lib/git-ref";
-import { cn } from "@/lib/utils";
-import { GitBranch, RefreshCw, History, Tag, Search } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
-import type { GitCommit } from "@shared/types/ipc.types";
+import type { GitCommit } from '@shared/types/ipc.types'
+import { GitBranch, History, RefreshCw, Search, Tag } from 'lucide-react'
+import type React from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { computeGraphLayout, type GraphLayout } from '@/lib/git-graph-layout'
+import { describeRef } from '@/lib/git-ref'
+import { formatRelativeTime } from '@/lib/git-time'
+import { cn } from '@/lib/utils'
+import { useGitHistoryStore } from '@/stores/git-history-store'
 
 interface GitHistoryPanelProps {
-  cwd: string;
-  isVisible: boolean;
+  cwd: string
+  isVisible: boolean
 }
 
 // Fixed row geometry so the SVG graph and the HTML rows line up exactly.
-const ROW_HEIGHT = 30;
-const LANE_WIDTH = 16;
-const NODE_RADIUS = 4;
-const GRAPH_PADDING = 10;
+const ROW_HEIGHT = 30
+const LANE_WIDTH = 16
+const NODE_RADIUS = 4
+const GRAPH_PADDING = 10
 
 // Lane colors cycle through the project palette tokens (see index.css).
 const LANE_COLORS = [
-  "hsl(var(--project-blue))",
-  "hsl(var(--project-green))",
-  "hsl(var(--project-purple))",
-  "hsl(var(--project-orange))",
-  "hsl(var(--project-cyan))",
-  "hsl(var(--project-pink))",
-  "hsl(var(--project-yellow))",
-  "hsl(var(--project-red))",
-];
+  'hsl(var(--project-blue))',
+  'hsl(var(--project-green))',
+  'hsl(var(--project-purple))',
+  'hsl(var(--project-orange))',
+  'hsl(var(--project-cyan))',
+  'hsl(var(--project-pink))',
+  'hsl(var(--project-yellow))',
+  'hsl(var(--project-red))'
+]
 
 function laneColor(lane: number): string {
-  return LANE_COLORS[lane % LANE_COLORS.length];
+  return LANE_COLORS[lane % LANE_COLORS.length]
 }
 
 function laneX(lane: number): number {
-  return GRAPH_PADDING + lane * LANE_WIDTH;
+  return GRAPH_PADDING + lane * LANE_WIDTH
 }
 
 function rowY(row: number): number {
-  return row * ROW_HEIGHT + ROW_HEIGHT / 2;
+  return row * ROW_HEIGHT + ROW_HEIGHT / 2
 }
 
 /** Parse a raw `%D` decoration into a display label + kind for chip styling. */
 
 export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React.JSX.Element {
-  const commits = useGitHistoryStore((state) => state.commits[cwd]);
-  const isLoading = useGitHistoryStore((state) => state.loading[cwd] ?? false);
-  const error = useGitHistoryStore((state) => state.error[cwd] ?? null);
-  const refreshLog = useGitHistoryStore((state) => state.refreshLog);
+  const commits = useGitHistoryStore((state) => state.commits[cwd])
+  const isLoading = useGitHistoryStore((state) => state.loading[cwd] ?? false)
+  const error = useGitHistoryStore((state) => state.error[cwd] ?? null)
+  const refreshLog = useGitHistoryStore((state) => state.refreshLog)
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     // Fetch on first reveal (or when no data yet) and on cwd change.
     if (isVisible && commits === undefined) {
-      void refreshLog(cwd);
+      void refreshLog(cwd)
     }
-  }, [isVisible, cwd, commits, refreshLog]);
+  }, [isVisible, cwd, commits, refreshLog])
 
   const filteredCommits = useMemo(() => {
-    const list = commits ?? [];
-    if (!searchQuery.trim()) return list;
-    const q = searchQuery.toLowerCase();
+    const list = commits ?? []
+    if (!searchQuery.trim()) return list
+    const q = searchQuery.toLowerCase()
     return list.filter(
       (c) =>
         c.subject.toLowerCase().includes(q) ||
         c.author.toLowerCase().includes(q) ||
         c.shortHash.toLowerCase().includes(q) ||
         c.hash.toLowerCase().includes(q) ||
-        c.refs.some((r) => r.toLowerCase().includes(q)),
-    );
-  }, [commits, searchQuery]);
+        c.refs.some((r) => r.toLowerCase().includes(q))
+    )
+  }, [commits, searchQuery])
 
   // The lane graph reflects true topology, so it is computed from the full
   // commit list, not the filtered view. Filtering only affects the row list.
-  const layout: GraphLayout = useMemo(
-    () => computeGraphLayout(commits ?? []),
-    [commits],
-  );
+  const layout: GraphLayout = useMemo(() => computeGraphLayout(commits ?? []), [commits])
   // Hash -> row index, so parent-edge endpoints are an O(1) lookup instead of
   // an O(n) scan per edge inside the render loop.
   const rowByHash = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of layout.rows) map.set(row.commit.hash, row.row);
-    return map;
-  }, [layout]);
+    const map = new Map<string, number>()
+    for (const row of layout.rows) map.set(row.commit.hash, row.row)
+    return map
+  }, [layout])
 
-  const graphWidth = GRAPH_PADDING * 2 + Math.max(1, layout.laneCount) * LANE_WIDTH;
-  const graphHeight = Math.max(1, layout.rows.length) * ROW_HEIGHT;
-  const isFiltering = searchQuery.trim().length > 0;
+  const graphWidth = GRAPH_PADDING * 2 + Math.max(1, layout.laneCount) * LANE_WIDTH
+  const graphHeight = Math.max(1, layout.rows.length) * ROW_HEIGHT
+  const isFiltering = searchQuery.trim().length > 0
 
   return (
     <div className="flex h-full w-full flex-col bg-background overflow-hidden">
@@ -102,7 +100,10 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
+            <Search
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+              size={14}
+            />
             <input
               type="text"
               placeholder="Filter commits..."
@@ -121,7 +122,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             title="Refresh history"
             aria-label="Refresh history"
           >
-            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+            <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           </Button>
         </div>
       </div>
@@ -149,19 +150,19 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
               >
                 {layout.rows.map((row) =>
                   row.parentEdges.map((edge) => {
-                    const x1 = laneX(row.lane);
-                    const y1 = rowY(row.row);
-                    const x2 = laneX(edge.toLane);
+                    const x1 = laneX(row.lane)
+                    const y1 = rowY(row.row)
+                    const x2 = laneX(edge.toLane)
                     // Parent row index drives the edge end; if the parent is
                     // outside the window, run the edge to the bottom edge.
-                    const parentRow = rowByHash.get(edge.parentHash);
-                    const y2 = parentRow !== undefined ? rowY(parentRow) : graphHeight;
-                    const color = laneColor(x1 === x2 ? row.lane : edge.toLane);
+                    const parentRow = rowByHash.get(edge.parentHash)
+                    const y2 = parentRow !== undefined ? rowY(parentRow) : graphHeight
+                    const color = laneColor(x1 === x2 ? row.lane : edge.toLane)
                     // Straight segment for same-lane; gentle bend for lane changes.
                     const d =
                       x1 === x2
                         ? `M ${x1} ${y1} L ${x2} ${y2}`
-                        : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+                        : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`
                     return (
                       <path
                         key={`${row.commit.hash}-${edge.parentHash}-${edge.toLane}`}
@@ -170,8 +171,8 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
                         stroke={color}
                         strokeWidth={1.5}
                       />
-                    );
-                  }),
+                    )
+                  })
                 )}
                 {layout.rows.map((row) => (
                   <circle
@@ -196,16 +197,16 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
                   No commits match "{searchQuery}"
                 </div>
               ) : (
-                (isFiltering ? filteredCommits : layout.rows.map((r) => r.commit)).map(
-                  (commit) => <CommitRow key={commit.hash} commit={commit} />,
-                )
+                (isFiltering ? filteredCommits : layout.rows.map((r) => r.commit)).map((commit) => (
+                  <CommitRow key={commit.hash} commit={commit} />
+                ))
               )}
             </div>
           </div>
         </ScrollArea>
       )}
     </div>
-  );
+  )
 }
 
 function CommitRow({ commit }: { commit: GitCommit }): React.JSX.Element {
@@ -231,25 +232,25 @@ function CommitRow({ commit }: { commit: GitCommit }): React.JSX.Element {
         {commit.shortHash}
       </span>
     </div>
-  );
+  )
 }
 
 function RefChip({ raw }: { raw: string }): React.JSX.Element {
-  const { label, kind } = describeRef(raw);
+  const { label, kind } = describeRef(raw)
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-1.5 h-4 rounded text-[9px] font-medium leading-none",
-        kind === "head" && "bg-primary/15 text-primary",
-        kind === "tag" && "bg-amber-500/15 text-amber-500",
-        kind === "remote" && "bg-muted-foreground/15 text-muted-foreground",
-        kind === "branch" && "bg-green-500/15 text-green-500",
+        'inline-flex items-center gap-1 px-1.5 h-4 rounded text-[9px] font-medium leading-none',
+        kind === 'head' && 'bg-primary/15 text-primary',
+        kind === 'tag' && 'bg-amber-500/15 text-amber-500',
+        kind === 'remote' && 'bg-muted-foreground/15 text-muted-foreground',
+        kind === 'branch' && 'bg-green-500/15 text-green-500'
       )}
     >
-      {kind === "tag" ? <Tag size={9} /> : <GitBranch size={9} />}
+      {kind === 'tag' ? <Tag size={9} /> : <GitBranch size={9} />}
       {label}
     </span>
-  );
+  )
 }
 
 function EmptyState({ error }: { error: string | null }): React.JSX.Element {
@@ -261,9 +262,9 @@ function EmptyState({ error }: { error: string | null }): React.JSX.Element {
       <h3 className="text-sm font-medium text-foreground mb-1">No commit history</h3>
       <p className="text-xs max-w-[260px]">
         {error
-          ? "This folder may not be a Git repository, or git is unavailable."
-          : "There are no commits to show yet. Make your first commit to see it here."}
+          ? 'This folder may not be a Git repository, or git is unavailable.'
+          : 'There are no commits to show yet. Make your first commit to see it here.'}
       </p>
     </div>
-  );
+  )
 }
