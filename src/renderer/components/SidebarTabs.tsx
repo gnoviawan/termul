@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { ProjectSidebar } from './ProjectSidebar'
-import { ChatHistoryTab } from './chat/ChatHistoryTab'
-import { cn } from '@/lib/utils'
 import { FolderGit2, MessagesSquare } from 'lucide-react'
+import { useState } from 'react'
+import { cn } from '@/lib/utils'
+import { ChatHistoryTab } from './chat/ChatHistoryTab'
+import { ProjectSidebar } from './ProjectSidebar'
 
 // Forward exactly what ProjectSidebar accepts so new sidebar props (e.g. SSH
 // handlers) flow through without having to be re-declared here.
@@ -42,7 +42,9 @@ export function SidebarTabs(props: SidebarTabsProps): React.JSX.Element {
         ) : (
           <aside className="w-full bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full overflow-hidden">
             <div className="h-9 flex items-center px-3 border-b border-sidebar-border rounded-t-xl">
-              <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Chats</span>
+              <span className="text-xs tracking-wider text-sidebar-foreground uppercase">
+                Chats
+              </span>
             </div>
             <div className="flex-1 min-h-0">
               <ChatHistoryTab />
@@ -71,9 +73,7 @@ function TabButton({
       onClick={onClick}
       className={cn(
         'flex-1 flex items-center justify-center gap-1.5 rounded-md py-1 text-[11px] font-medium transition-colors',
-        active
-          ? 'bg-sidebar-accent text-foreground'
-          : 'text-muted-foreground hover:text-foreground'
+        active ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
       )}
     >
       {icon}

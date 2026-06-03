@@ -1,7 +1,7 @@
-import { forwardRef, useImperativeHandle, useMemo, useState, useEffect, useRef } from 'react'
+import { Check, SlidersHorizontal, TerminalSquare } from 'lucide-react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { Check, TerminalSquare, SlidersHorizontal } from 'lucide-react'
-import type { SlashSection, SlashItem } from './slash-menu-model'
+import type { SlashItem, SlashSection } from './slash-menu-model'
 
 export interface SlashMenuHandle {
   /** Move highlight. Returns true if handled. */
@@ -52,7 +52,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
     useEffect(() => {
       const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)
       el?.scrollIntoView({ block: 'nearest' })
-    }, [highlight, flat])
+    }, [highlight])
 
     useImperativeHandle(
       ref,
@@ -82,7 +82,10 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
 
     let flatIndex = -1
     return (
-      <div ref={listRef} className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md">
+      <div
+        ref={listRef}
+        className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md"
+      >
         {sections.map((section) => (
           <div key={section.id}>
             <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
@@ -9,12 +9,12 @@ vi.mock('@/lib/api', () => ({
 
 import { persistenceApi } from '@/lib/api'
 import {
-  validateAgentConfig,
-  looksLikeSecretValue,
-  loadAgentConfigs,
-  saveAgentConfigs,
   ACP_AGENTS_KEY,
-  type StoredAgentConfig
+  loadAgentConfigs,
+  looksLikeSecretValue,
+  type StoredAgentConfig,
+  saveAgentConfigs,
+  validateAgentConfig
 } from './acp-agents-persistence'
 
 describe('validateAgentConfig', () => {
@@ -60,7 +60,10 @@ describe('load/save agent configs', () => {
     const list: StoredAgentConfig[] = [
       { id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} }
     ]
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, data: list })
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: list
+    })
     expect(await loadAgentConfigs()).toEqual(list)
   })
 

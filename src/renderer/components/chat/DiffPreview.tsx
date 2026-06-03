@@ -1,7 +1,7 @@
-import { diffLines, diffLineCounts } from './tool-call-format'
-import { cn } from '@/lib/utils'
 import { FileDiff } from 'lucide-react'
 import type { DiffContent } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
+import { diffLineCounts, diffLines } from './tool-call-format'
 
 interface DiffPreviewProps {
   diff: DiffContent
@@ -35,7 +35,9 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
             key={i}
             className={cn(
               'whitespace-pre-wrap',
-              line.type === 'added' ? 'bg-green-400/10 text-green-300' : 'bg-red-400/10 text-red-300'
+              line.type === 'added'
+                ? 'bg-green-400/10 text-green-300'
+                : 'bg-red-400/10 text-red-300'
             )}
           >
             <span className="select-none opacity-60">{line.type === 'added' ? '+' : '−'} </span>

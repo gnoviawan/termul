@@ -6,8 +6,9 @@
  * never written here; env values may hold `$VAR` placeholders whose real value
  * lives in OS secure storage.
  */
-import { persistenceApi } from '@/lib/api'
+
 import type { AgentConfig } from '@/lib/acp-api'
+import { persistenceApi } from '@/lib/api'
 
 export const ACP_AGENTS_KEY = 'acp/agents'
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
@@ -10,12 +10,12 @@ vi.mock('@tauri-apps/api/event', () => ({
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
-  acpSpawnAgent,
+  acpCancelPrompt,
   acpNewSession,
+  acpRespondPermission,
   acpSendPrompt,
   acpSetConfigOption,
-  acpRespondPermission,
-  acpCancelPrompt,
+  acpSpawnAgent,
   onAcpEvent
 } from './acp-api'
 

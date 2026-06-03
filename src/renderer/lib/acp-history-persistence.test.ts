@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
@@ -10,16 +10,16 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { persistenceApi } from '@/lib/api'
+import type { ChatMessage } from '@/stores/acp-store'
 import {
   deriveTitle,
   groupSessionsByRecency,
   loadSessionIndex,
-  saveSessionPayload,
   SESSION_INDEX_KEY,
-  sessionPayloadKey,
-  type SessionIndexEntry
+  type SessionIndexEntry,
+  saveSessionPayload,
+  sessionPayloadKey
 } from './acp-history-persistence'
-import type { ChatMessage } from '@/stores/acp-store'
 
 function msg(role: ChatMessage['role'], text: string): ChatMessage {
   return { id: `m-${text}`, role, blocks: [{ type: 'text', text }], streaming: false, timestamp: 0 }
@@ -85,15 +85,29 @@ describe('persistence I/O', () => {
 
   it('loadSessionIndex returns the stored array', async () => {
     const list: SessionIndexEntry[] = [
-      { id: 's1', agentId: 'a', title: 'T', cwd: '', createdAt: 0, lastActivityAt: 0, messageCount: 1, status: 'active' }
+      {
+        id: 's1',
+        agentId: 'a',
+        title: 'T',
+        cwd: '',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 1,
+        status: 'active'
+      }
     ]
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, data: list })
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: list
+    })
     expect(await loadSessionIndex()).toEqual(list)
     expect(persistenceApi.read).toHaveBeenCalledWith(SESSION_INDEX_KEY)
   })
 
   it('saveSessionPayload uses the debounced writer under the per-session key', async () => {
-    ;(persistenceApi.writeDebounced as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+    ;(persistenceApi.writeDebounced as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true
+    })
     const payload = {
       metadata: {
         id: 's1',

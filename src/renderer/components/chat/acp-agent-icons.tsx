@@ -11,6 +11,8 @@
  * Each icon is normalized to inherit the current text color and sized by the
  * caller via `width`/`height` props (default 14).
  */
+// biome-ignore-all lint/a11y/noSvgWithoutTitle: decorative vendored icons that are
+// marked aria-hidden with role="img"; a visible <title> is not desired.
 import type { SVGProps } from 'react'
 
 type IconProps = SVGProps<SVGSVGElement>

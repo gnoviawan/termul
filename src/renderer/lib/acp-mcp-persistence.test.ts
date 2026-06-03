@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
@@ -9,13 +9,13 @@ vi.mock('@/lib/api', () => ({
 
 import { persistenceApi } from '@/lib/api'
 import {
-  validateMcpServer,
-  buildMcpServers,
-  transportOf,
-  loadMcpServers,
-  saveMcpServers,
   ACP_MCP_KEY,
-  type StoredMcpServer
+  buildMcpServers,
+  loadMcpServers,
+  type StoredMcpServer,
+  saveMcpServers,
+  transportOf,
+  validateMcpServer
 } from './acp-mcp-persistence'
 
 describe('validateMcpServer', () => {
@@ -29,7 +29,9 @@ describe('validateMcpServer', () => {
   it('http/sse require a valid url', () => {
     expect(validateMcpServer({ type: 'http', name: 'api' }).valid).toBe(false)
     expect(validateMcpServer({ type: 'http', name: 'api', url: 'not a url' }).valid).toBe(false)
-    expect(validateMcpServer({ type: 'http', name: 'api', url: 'https://x.com/mcp' }).valid).toBe(true)
+    expect(validateMcpServer({ type: 'http', name: 'api', url: 'https://x.com/mcp' }).valid).toBe(
+      true
+    )
   })
 })
 
@@ -47,7 +49,9 @@ describe('buildMcpServers', () => {
   ]
   it('maps selected ids to wire shape and strips the local id', () => {
     const out = buildMcpServers(registry, ['m2'])
-    expect(out).toEqual([{ type: 'http', name: 'gh', url: 'https://api.github.com/mcp', headers: [] }])
+    expect(out).toEqual([
+      { type: 'http', name: 'gh', url: 'https://api.github.com/mcp', headers: [] }
+    ])
     expect((out[0] as unknown as Record<string, unknown>).id).toBeUndefined()
   })
   it('preserves selection order and skips unknown ids', () => {

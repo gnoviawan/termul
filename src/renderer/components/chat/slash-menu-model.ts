@@ -7,8 +7,8 @@
 import type {
   AvailableCommand,
   SessionConfigOption,
-  SessionModeState,
-  SessionMode
+  SessionMode,
+  SessionModeState
 } from '@/lib/acp-api'
 
 export interface SlashCommandItem {

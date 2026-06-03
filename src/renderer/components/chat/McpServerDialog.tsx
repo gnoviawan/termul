@@ -1,13 +1,17 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
+  DialogDescription,
   DialogFooter,
-  DialogTitle,
-  DialogDescription
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -15,19 +19,15 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Plus, Trash2 } from 'lucide-react'
-import { useAcpStore } from '@/stores/acp-store'
-import { secureStorageApi } from '@/lib/api'
 import { looksLikeSecretValue } from '@/lib/acp-agents-persistence'
-import {
-  validateMcpServer,
-  type McpTransport,
-  type StoredMcpServer
-} from '@/lib/acp-mcp-persistence'
 import type { McpServerConfig } from '@/lib/acp-api'
+import {
+  type McpTransport,
+  type StoredMcpServer,
+  validateMcpServer
+} from '@/lib/acp-mcp-persistence'
+import { secureStorageApi } from '@/lib/api'
+import { useAcpStore } from '@/stores/acp-store'
 
 interface McpServerDialogProps {
   open: boolean
@@ -58,7 +58,9 @@ export function McpServerDialog({
   )
   const [name, setName] = useState(existing?.name ?? '')
   const [command, setCommand] = useState(
-    existing && (existing.type ?? 'stdio') === 'stdio' ? (existing as { command: string }).command : ''
+    existing && (existing.type ?? 'stdio') === 'stdio'
+      ? (existing as { command: string }).command
+      : ''
   )
   const [args, setArgs] = useState<string[]>(
     existing && (existing.type ?? 'stdio') === 'stdio'
@@ -103,9 +105,7 @@ export function McpServerDialog({
   const validation = useMemo(
     () =>
       validateMcpServer(
-        transport === 'stdio'
-          ? { type: 'stdio', name, command }
-          : { type: transport, name, url }
+        transport === 'stdio' ? { type: 'stdio', name, command } : { type: transport, name, url }
       ),
     [transport, name, command, url]
   )
@@ -118,7 +118,8 @@ export function McpServerDialog({
         if (looksLikeSecretValue(row.value)) {
           const secretKey = `acp/mcp/${id}/${kind}/${row.name}`
           const res = await secureStorageApi.setSecret(secretKey, row.value)
-          if (!res.success) throw new Error(`Failed to store secret ${row.name}: ${res.error ?? ''}`)
+          if (!res.success)
+            throw new Error(`Failed to store secret ${row.name}: ${res.error ?? ''}`)
           out.push({ name: row.name, value: `$${row.name}` })
         } else {
           out.push({ name: row.name, value: row.value })
@@ -156,22 +157,43 @@ export function McpServerDialog({
     } catch (err) {
       toast.error(`Failed to save MCP server: ${String(err)}`)
     }
-  }, [validation.valid, existing, transport, name, command, args, url, env, headers, persistSecrets, saveMcpServer, onOpenChange])
+  }, [
+    validation.valid,
+    existing,
+    transport,
+    name,
+    command,
+    args,
+    url,
+    env,
+    headers,
+    persistSecrets,
+    saveMcpServer,
+    onOpenChange
+  ])
 
-  const kvEditor = (rows: KvRow[], setRows: (r: KvRow[]) => void, label: string): React.JSX.Element => (
+  const kvEditor = (
+    rows: KvRow[],
+    setRows: (r: KvRow[]) => void,
+    label: string
+  ): React.JSX.Element => (
     <div className="flex flex-col gap-1">
       <Label className="text-xs">{label}</Label>
       {rows.map((row, i) => (
         <div key={i} className="flex gap-1">
           <Input
             value={row.name}
-            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+            onChange={(e) =>
+              setRows(rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))
+            }
             placeholder="name"
             className="font-mono"
           />
           <Input
             value={row.value}
-            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+            onChange={(e) =>
+              setRows(rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))
+            }
             placeholder="value or $VAR"
             className="font-mono"
           />
@@ -203,7 +225,9 @@ export function McpServerDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{existing ? 'Edit MCP Server' : 'Add MCP Server'}</DialogTitle>
-          <DialogDescription>Configure a Model Context Protocol server for agents to use.</DialogDescription>
+          <DialogDescription>
+            Configure a Model Context Protocol server for agents to use.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
@@ -225,7 +249,12 @@ export function McpServerDialog({
             <Label htmlFor="mcp-name" className="text-xs">
               Name
             </Label>
-            <Input id="mcp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="filesystem" />
+            <Input
+              id="mcp-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="filesystem"
+            />
           </div>
 
           {transport === 'stdio' ? (

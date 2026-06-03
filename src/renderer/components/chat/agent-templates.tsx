@@ -11,14 +11,14 @@
 import type { ComponentType, SVGProps } from 'react'
 import type { AgentConfig } from '@/lib/acp-api'
 import {
-  GeminiIcon,
   CodexIcon,
-  GooseIcon,
+  CopilotIcon,
   CursorIcon,
-  QwenIcon,
-  OpenCodeIcon,
+  GeminiIcon,
+  GooseIcon,
   KimiIcon,
-  CopilotIcon
+  OpenCodeIcon,
+  QwenIcon
 } from './acp-agent-icons'
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>

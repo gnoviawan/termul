@@ -223,7 +223,11 @@ function hasActiveAssistantTail(messages: ChatMessage[], role: MessageRole): boo
 }
 
 /** Whether a chunk may open a new message (not coalesced into the previous one). */
-function mayStartChunkMessage(session: AcpSession, messages: ChatMessage[], role: MessageRole): boolean {
+function mayStartChunkMessage(
+  session: AcpSession,
+  messages: ChatMessage[],
+  role: MessageRole
+): boolean {
   if (session.openTurnId) return true
   const last = messages[messages.length - 1]
   if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
@@ -295,10 +299,7 @@ function dropPermissionsForAgent(
 }
 
 type TurnEndSetter = (
-  partial:
-    | AcpState
-    | Partial<AcpState>
-    | ((state: AcpState) => AcpState | Partial<AcpState>),
+  partial: AcpState | Partial<AcpState> | ((state: AcpState) => AcpState | Partial<AcpState>),
   replace?: false
 ) => void
 
@@ -307,11 +308,7 @@ type TurnEndSetter = (
  * `acp:message_chunk` events delivered after `acp_send_prompt` / `acp:prompt_complete`
  * are still accepted. Idempotent when the turn is already closed.
  */
-function scheduleTurnEnd(
-  set: TurnEndSetter,
-  sessionId: SessionId,
-  stopReason?: StopReason
-): void {
+function scheduleTurnEnd(set: TurnEndSetter, sessionId: SessionId, stopReason?: StopReason): void {
   setTimeout(() => {
     set((s) => {
       const current = s.sessions[sessionId]
@@ -1162,7 +1159,9 @@ export function initAcpEventListeners(): () => void {
     )
   ]
   return () => {
-    teardown.forEach((fn) => fn())
+    teardown.forEach((fn) => {
+      fn()
+    })
     teardown = []
     listenersInitialized = false
   }

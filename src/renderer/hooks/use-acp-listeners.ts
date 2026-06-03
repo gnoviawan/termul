@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { initAcpEventListeners } from '@/stores/acp-store'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { initAcpEventListeners } from '@/stores/acp-store'
 
 /**
  * Wire the ACP store to backend events exactly once for the app lifetime.

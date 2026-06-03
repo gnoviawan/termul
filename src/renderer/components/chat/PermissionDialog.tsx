@@ -1,17 +1,17 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
+  DialogDescription,
   DialogFooter,
-  DialogTitle,
-  DialogDescription
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { type PendingPermission, useAcpStore } from '@/stores/acp-store'
 import { isAllowOption, isRejectOption, pickRejectOption } from './tool-call-format'
-import { useAcpStore, type PendingPermission } from '@/stores/acp-store'
 
 interface PermissionDialogProps {
   permission: PendingPermission
@@ -61,7 +61,8 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
         <DialogHeader>
           <DialogTitle>Permission required</DialogTitle>
           <DialogDescription>
-            The agent wants to run <span className="font-medium">{toolTitle(permission.toolCall)}</span>.
+            The agent wants to run{' '}
+            <span className="font-medium">{toolTitle(permission.toolCall)}</span>.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
@@ -72,7 +73,11 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
             <Button
               key={option.optionId}
               variant={
-                isRejectOption(option) ? 'destructive' : isAllowOption(option) ? 'default' : 'secondary'
+                isRejectOption(option)
+                  ? 'destructive'
+                  : isAllowOption(option)
+                    ? 'default'
+                    : 'secondary'
               }
               className={cn('justify-start')}
               onClick={() => choose(option.optionId)}

@@ -1,22 +1,22 @@
-import { memo } from 'react'
-import { cn } from '@/lib/utils'
 import {
-  FileText,
-  FilePen,
-  Trash2,
-  FolderInput,
-  Search,
-  TerminalSquare,
   Brain,
+  FilePen,
+  FileText,
+  FolderInput,
   Globe,
-  Shuffle,
-  Wrench,
   Loader2,
-  type LucideIcon
+  type LucideIcon,
+  Search,
+  Shuffle,
+  TerminalSquare,
+  Trash2,
+  Wrench
 } from 'lucide-react'
+import { memo } from 'react'
+import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
 import { DiffPreview } from './DiffPreview'
 import { kindIcon, statusStyle, type ToolIconName } from './tool-call-format'
-import type { ToolCall, ToolCallContent, ContentBlock } from '@/lib/acp-api'
 
 const ICONS: Record<ToolIconName, LucideIcon> = {
   read: FileText,
@@ -72,7 +72,10 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
     // the tool call), so we surface the reference rather than inline output.
     const terminalId = (item as { terminalId?: string }).terminalId
     return (
-      <div key={key} className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground">
+      <div
+        key={key}
+        className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground"
+      >
         {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
       </div>
     )
@@ -106,7 +109,9 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
             status.className
           )}
         >
-          {status.spinning && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" />}
+          {status.spinning && (
+            <Loader2 size={9} className="animate-spin motion-reduce:animate-none" />
+          )}
           {status.label}
         </span>
       </div>

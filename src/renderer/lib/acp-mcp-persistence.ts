@@ -5,8 +5,9 @@
  * configs. Raw secrets are never persisted — header/env values may hold `$VAR`
  * placeholders resolved from OS secure storage.
  */
+
+import type { McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import type { McpServerConfig, McpServer } from '@/lib/acp-api'
 
 export const ACP_MCP_KEY = 'acp/mcp-servers'
 

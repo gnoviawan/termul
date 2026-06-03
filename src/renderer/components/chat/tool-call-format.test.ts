@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import type { PermissionOption } from '@/lib/acp-api'
 import {
-  kindIcon,
-  statusStyle,
-  diffLines,
   diffLineCounts,
+  diffLines,
   isAllowOption,
   isRejectOption,
-  pickRejectOption
+  kindIcon,
+  pickRejectOption,
+  statusStyle
 } from './tool-call-format'
-import type { PermissionOption } from '@/lib/acp-api'
 
 describe('kindIcon', () => {
   it('maps known kinds', () => {

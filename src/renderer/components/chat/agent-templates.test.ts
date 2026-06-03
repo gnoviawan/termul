@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { AGENT_TEMPLATES, templateById, templateIcon } from './agent-templates'
 
 describe('agent-templates', () => {

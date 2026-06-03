@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { decideResume } from './acp-resume-policy'
+import { describe, expect, it } from 'vitest'
 import type { AgentCapabilities } from '@/lib/acp-api'
+import { decideResume } from './acp-resume-policy'
 
 describe('decideResume', () => {
   it('returns local when not connected', () => {

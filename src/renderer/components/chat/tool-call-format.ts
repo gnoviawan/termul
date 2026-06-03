@@ -2,12 +2,7 @@
  * Pure helpers for rendering tool calls and permission options. No React/store
  * dependency, so they're directly unit-testable.
  */
-import type {
-  ToolKind,
-  ToolCallStatus,
-  DiffContent,
-  PermissionOption
-} from '@/lib/acp-api'
+import type { DiffContent, PermissionOption, ToolCallStatus, ToolKind } from '@/lib/acp-api'
 
 export type ToolIconName =
   | 'read'

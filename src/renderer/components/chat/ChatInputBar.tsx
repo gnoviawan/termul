@@ -1,15 +1,15 @@
-import { useState, useRef, useCallback, useMemo, type KeyboardEvent } from 'react'
 import { Send, Square } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import {
+  applyCommandToInput,
   buildSlashSections,
   isSlashTrigger,
-  slashFilter,
-  applyCommandToInput,
-  type SlashItem
+  type SlashItem,
+  slashFilter
 } from './slash-menu-model'
-import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 
 interface ChatInputBarProps {
   /** Whether a prompt turn is currently active (disables send, enables cancel). */

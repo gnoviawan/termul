@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback, Children } from 'react'
-import { ChatMessage } from './ChatMessage'
+import { Children, useCallback, useEffect, useRef } from 'react'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { ChatMessage } from './ChatMessage'
 
 interface ChatMessageListProps {
   messages: ChatMessageType[]
@@ -24,6 +24,7 @@ export function ChatMessageList({ messages, children }: ChatMessageListProps): R
     pinnedToBottomRef.current = distanceFromBottom < 48
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: messages/children are intentional re-scroll triggers even though they are not read in the body.
   useEffect(() => {
     const el = containerRef.current
     if (!el || !pinnedToBottomRef.current) return
@@ -40,11 +41,7 @@ export function ChatMessageList({ messages, children }: ChatMessageListProps): R
   }
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="flex-1 overflow-y-auto"
-    >
+    <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
       <div className="divide-y divide-border/40">
         {messages.map((m) => (
           <ChatMessage key={m.id} message={m} />

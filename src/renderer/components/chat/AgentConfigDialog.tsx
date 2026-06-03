@@ -1,26 +1,26 @@
-import { useState, useCallback, useMemo } from 'react'
+import { CheckCircle2, Loader2, Plus, Trash2, XCircle } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
+  DialogDescription,
   DialogFooter,
-  DialogTitle,
-  DialogDescription
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Plus, Trash2, Loader2, CheckCircle2, XCircle } from 'lucide-react'
-import { useAcpStore } from '@/stores/acp-store'
-import { secureStorageApi } from '@/lib/api'
-import { AGENT_TEMPLATES, templateById } from './agent-templates'
 import {
-  validateAgentConfig,
   looksLikeSecretValue,
-  type StoredAgentConfig
+  type StoredAgentConfig,
+  validateAgentConfig
 } from '@/lib/acp-agents-persistence'
 import type { AgentConfig } from '@/lib/acp-api'
+import { secureStorageApi } from '@/lib/api'
+import { useAcpStore } from '@/stores/acp-store'
+import { AGENT_TEMPLATES, templateById } from './agent-templates'
 
 interface AgentConfigDialogProps {
   open: boolean
@@ -121,7 +121,15 @@ export function AgentConfigDialog({
     } catch (err) {
       toast.error(`Failed to save agent: ${String(err)}`)
     }
-  }, [validation.valid, existing, templateId, buildConfig, sanitizeEnvForPersistence, saveAgentConfig, onOpenChange])
+  }, [
+    validation.valid,
+    existing,
+    templateId,
+    buildConfig,
+    sanitizeEnvForPersistence,
+    saveAgentConfig,
+    onOpenChange
+  ])
 
   const handleTest = useCallback(async () => {
     if (!validation.valid) return
@@ -134,7 +142,10 @@ export function AgentConfigDialog({
             .map(([k]) => k)
             .join(', ')
         : ''
-      setTest({ status: 'ok', message: capList ? `Connected. Capabilities: ${capList}` : 'Connected.' })
+      setTest({
+        status: 'ok',
+        message: capList ? `Connected. Capabilities: ${capList}` : 'Connected.'
+      })
     } catch (err) {
       setTest({ status: 'fail', message: String(err) })
     }
@@ -174,7 +185,12 @@ export function AgentConfigDialog({
             <Label htmlFor="acp-name" className="text-xs">
               Name
             </Label>
-            <Input id="acp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Gemini CLI" />
+            <Input
+              id="acp-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Gemini CLI"
+            />
           </div>
 
           <div className="flex flex-col gap-1">
@@ -237,7 +253,9 @@ export function AgentConfigDialog({
                 <Input
                   value={row.value}
                   onChange={(e) =>
-                    setEnvRows(envRows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))
+                    setEnvRows(
+                      envRows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r))
+                    )
                   }
                   placeholder="value or $VAR"
                   className="font-mono"
@@ -264,7 +282,8 @@ export function AgentConfigDialog({
               <Plus size={12} /> Add variable
             </Button>
             <p className="text-[10px] text-muted-foreground">
-              Secret-looking values are saved to OS secure storage; only a $PLACEHOLDER is persisted.
+              Secret-looking values are saved to OS secure storage; only a $PLACEHOLDER is
+              persisted.
             </p>
           </div>
 
@@ -278,8 +297,8 @@ export function AgentConfigDialog({
             <span className="flex flex-col">
               <span className="text-xs font-medium">Allow terminal access</span>
               <span className="text-[10px] text-muted-foreground">
-                Lets this agent run shell commands on your machine. Off by default — enable only
-                for agents you trust.
+                Lets this agent run shell commands on your machine. Off by default — enable only for
+                agents you trust.
               </span>
             </span>
           </label>

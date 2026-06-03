@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
@@ -564,21 +564,29 @@ describe('acp-store', () => {
   })
 
   it('saveAgentConfig adds then updates a config (P4)', async () => {
-    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     expect(useAcpStore.getState().agentConfigs).toHaveLength(1)
-    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Renamed', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'a1', name: 'Renamed', command: 'gemini', args: [], env: {} })
     expect(useAcpStore.getState().agentConfigs).toHaveLength(1)
     expect(useAcpStore.getState().agentConfigs[0].name).toBe('Renamed')
   })
 
   it('deleteAgentConfig removes a config (P4)', async () => {
-    await useAcpStore.getState().saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'a1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     await useAcpStore.getState().deleteAgentConfig('a1')
     expect(useAcpStore.getState().agentConfigs).toHaveLength(0)
   })
 
   it('startChat spawns a configured agent then creates a session (P4)', async () => {
-    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     ;(invoke as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce('agent-9')
       .mockResolvedValueOnce({ sessionId: 'sess-9' })
@@ -589,7 +597,9 @@ describe('acp-store', () => {
   })
 
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
-    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
       agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
@@ -613,9 +623,14 @@ describe('acp-store', () => {
     // Pre-seed capabilities so the capability wait resolves immediately
     // (the acp:agent_spawned listener isn't wired in the test).
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-test': { id: 'agent-test', capabilities: { loadSession: true } } }
+      agents: {
+        ...s.agents,
+        'agent-test': { id: 'agent-test', capabilities: { loadSession: true } }
+      }
     }))
-    const caps = await useAcpStore.getState().testConnection({ name: 'X', command: 'x', args: [], env: {} })
+    const caps = await useAcpStore
+      .getState()
+      .testConnection({ name: 'X', command: 'x', args: [], env: {} })
     expect(caps).toEqual({ loadSession: true })
     expect(invoke).toHaveBeenNthCalledWith(1, 'acp_spawn_agent', {
       config: { name: 'X', command: 'x', args: [], env: {} }
@@ -638,7 +653,13 @@ describe('acp-store', () => {
         status: 'closed'
       },
       messages: [
-        { id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'hello' }], streaming: false, timestamp: 0 }
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 0
+        }
       ]
     })
     await useAcpStore.getState().openHistorySession('s-old')
@@ -668,7 +689,13 @@ describe('acp-store', () => {
         status: 'active'
       },
       messages: [
-        { id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'prior' }], streaming: false, timestamp: 0 }
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
       ]
     })
     // acp_load_session rejects
@@ -682,7 +709,16 @@ describe('acp-store', () => {
   it('deleteHistorySession removes the index entry (P5)', async () => {
     useAcpStore.setState({
       sessionIndex: [
-        { id: 's1', agentId: 'a', title: 'T', cwd: '', createdAt: 0, lastActivityAt: 0, messageCount: 0, status: 'closed' }
+        {
+          id: 's1',
+          agentId: 'a',
+          title: 'T',
+          cwd: '',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 0,
+          status: 'closed'
+        }
       ]
     })
     await useAcpStore.getState().deleteHistorySession('s1')
@@ -690,9 +726,13 @@ describe('acp-store', () => {
   })
 
   it('MCP registry CRUD persists and removes (P6)', async () => {
-    await useAcpStore.getState().saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs', command: 'npx' })
+    await useAcpStore
+      .getState()
+      .saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs', command: 'npx' })
     expect(useAcpStore.getState().mcpServers).toHaveLength(1)
-    await useAcpStore.getState().saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs2', command: 'npx' })
+    await useAcpStore
+      .getState()
+      .saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs2', command: 'npx' })
     expect(useAcpStore.getState().mcpServers).toHaveLength(1)
     expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
     await useAcpStore.getState().deleteMcpServer('m1')
@@ -700,7 +740,9 @@ describe('acp-store', () => {
   })
 
   it('startChat forwards selected MCP servers to new_session (P6)', async () => {
-    await useAcpStore.getState().saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     ;(invoke as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce('agent-9')
       .mockResolvedValueOnce({ sessionId: 'sess-9' })

@@ -1,13 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import {
+  applyCommandToInput,
   buildSlashSections,
   isSlashTrigger,
-  slashFilter,
-  applyCommandToInput,
   type SlashConfigItem,
-  type SlashModeItem
+  type SlashModeItem,
+  slashFilter
 } from './slash-menu-model'
-import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 
 const commands: AvailableCommand[] = [
   { name: 'compact', description: 'Compact the conversation' },
@@ -117,6 +117,8 @@ describe('buildSlashSections', () => {
   })
 
   it('returns no sections when everything is empty', () => {
-    expect(buildSlashSections({ commands: [], configOptions: [], modes: null, filter: '' })).toEqual([])
+    expect(
+      buildSlashSections({ commands: [], configOptions: [], modes: null, filter: '' })
+    ).toEqual([])
   })
 })

@@ -1,8 +1,8 @@
+import { Bot, Brain, User } from 'lucide-react'
 import { memo } from 'react'
-import { cn } from '@/lib/utils'
-import { Bot, User, Brain } from 'lucide-react'
-import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import type { ContentBlock } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
+import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 
 /** Render a single content block. Only text is fully rendered in P1. */
 function renderBlock(block: ContentBlock, key: number): React.JSX.Element {

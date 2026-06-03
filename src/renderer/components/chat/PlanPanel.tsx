@@ -1,6 +1,6 @@
-import { cn } from '@/lib/utils'
-import { CheckCircle2, Circle, Loader2, ListChecks } from 'lucide-react'
+import { CheckCircle2, Circle, ListChecks, Loader2 } from 'lucide-react'
 import type { PlanEntry } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
 
 interface PlanPanelProps {
   entries: PlanEntry[]
@@ -42,7 +42,9 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element | null
             <span
               className={cn(
                 'min-w-0 flex-1 truncate',
-                entry.status === 'completed' ? 'text-muted-foreground line-through' : 'text-foreground'
+                entry.status === 'completed'
+                  ? 'text-muted-foreground line-through'
+                  : 'text-foreground'
               )}
             >
               {entry.content}

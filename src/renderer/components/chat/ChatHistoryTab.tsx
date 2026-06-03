@@ -1,10 +1,10 @@
-import { useState, useMemo, useCallback } from 'react'
-import { toast } from 'sonner'
 import { MessageSquare, Search, Trash2 } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 
 /** Sidebar tab listing persisted chat sessions, grouped by recency with search. */
 export function ChatHistoryTab(): React.JSX.Element {
