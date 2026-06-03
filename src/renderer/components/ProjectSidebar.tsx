@@ -1086,7 +1086,7 @@ export function ProjectSidebar({
                     <Reorder.Item
                       key={group.id}
                       value={groupEntry}
-                      drag={isSearching ? false : "y"}
+                      drag={isSearching ? false : 'y'}
                       layout="position"
                       className="list-none"
                     >
@@ -1170,7 +1170,7 @@ export function ProjectSidebar({
                                 <Reorder.Item
                                   key={project.id}
                                   value={project}
-                                  drag={isSearching ? false : "y"}
+                                  drag={isSearching ? false : 'y'}
                                   layout="position"
                                   className="list-none"
                                   whileDrag={{
@@ -1257,7 +1257,7 @@ export function ProjectSidebar({
                       <Reorder.Item
                         key={project.id}
                         value={project}
-                        drag={isSearching ? false : "y"}
+                        drag={isSearching ? false : 'y'}
                         layout="position"
                         className="list-none"
                         whileDrag={{
