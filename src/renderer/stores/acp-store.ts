@@ -10,63 +10,65 @@
  * (P2 slash menu, P3 tool/permission UI) can render them, but P1 renders only
  * messages.
  */
-import { create } from 'zustand'
+
 import { toast } from 'sonner'
-import {
-  acpApi,
-  ACP_EVENTS,
-  type AgentId,
-  type SessionId,
-  type AgentCapabilities,
-  type AgentConfig,
-  type ContentBlock,
-  type SessionMode,
-  type SessionModeState,
-  type SessionConfigOption,
-  type ToolCall,
-  type PlanEntry,
-  type AvailableCommand,
-  type PermissionOption,
-  type StopReason,
-  type AgentSpawnedEvent,
-  type SessionCreatedEvent,
-  type MessageChunkEvent,
-  type ToolCallEvent,
-  type ToolCallUpdateEvent,
-  type PlanUpdateEvent,
-  type CommandsUpdateEvent,
-  type ModeUpdateEvent,
-  type ConfigOptionsUpdateEvent,
-  type PermissionRequestEvent,
-  type PromptCompleteEvent,
-  type AgentErrorEvent,
-  type AgentDisconnectedEvent,
-  type SessionClosedEvent,
-  type McpServer
-} from '@/lib/acp-api'
+import { create } from 'zustand'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
-  saveAgentConfigs as saveAgentConfigsToDisk,
-  type StoredAgentConfig
+  type StoredAgentConfig,
+  saveAgentConfigs as saveAgentConfigsToDisk
 } from '@/lib/acp-agents-persistence'
 import {
-  loadSessionIndex as loadSessionIndexFromDisk,
-  saveSessionIndex as saveSessionIndexToDisk,
-  saveSessionPayload,
-  loadSessionPayload,
+  ACP_EVENTS,
+  type AgentCapabilities,
+  type AgentConfig,
+  type AgentDisconnectedEvent,
+  type AgentErrorEvent,
+  type AgentId,
+  type AgentSpawnedEvent,
+  type AuthRequiredEvent,
+  type AvailableCommand,
+  acpApi,
+  type CommandsUpdateEvent,
+  type ConfigOptionsUpdateEvent,
+  type ContentBlock,
+  type McpServer,
+  type MessageChunkEvent,
+  type ModeUpdateEvent,
+  type PermissionOption,
+  type PermissionRequestEvent,
+  type PlanEntry,
+  type PlanUpdateEvent,
+  type PromptCompleteEvent,
+  type SessionClosedEvent,
+  type SessionConfigOption,
+  type SessionCreatedEvent,
+  type SessionId,
+  type SessionMode,
+  type SessionModeState,
+  type StopReason,
+  type ToolCall,
+  type ToolCallEvent,
+  type ToolCallUpdateEvent
+} from '@/lib/acp-api'
+import {
   deleteSessionPayload,
   deriveTitle,
+  loadSessionIndex as loadSessionIndexFromDisk,
+  loadSessionPayload,
   type SessionIndexEntry,
-  type SessionPayload
+  type SessionPayload,
+  saveSessionIndex as saveSessionIndexToDisk,
+  saveSessionPayload
 } from '@/lib/acp-history-persistence'
-import { decideResume } from '@/lib/acp-resume-policy'
 import {
   loadMcpServers as loadMcpServersFromDisk,
-  saveMcpServers as saveMcpServersToDisk,
-  type StoredMcpServer
+  type StoredMcpServer,
+  saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
+import { decideResume } from '@/lib/acp-resume-policy'
 
-export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
+export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error' | 'needs-auth'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 export type MessageRole = 'user' | 'agent' | 'thought'
 
@@ -103,6 +105,8 @@ interface AcpState {
   // Agent registry
   agents: Record<AgentId, { id: AgentId; capabilities: AgentCapabilities | null }>
   agentStatus: Record<AgentId, AgentStatus>
+  /** Pending ACP authentication requirements, keyed by live agent id. */
+  pendingAuth: Record<AgentId, AuthRequiredEvent>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -162,6 +166,9 @@ interface AcpState {
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
 
+  // Actions — authentication
+  authenticate: (agentId: AgentId, methodId: string) => Promise<void>
+
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
   _onSessionCreated: (e: SessionCreatedEvent) => void
@@ -175,6 +182,7 @@ interface AcpState {
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
+  _onAuthRequired: (e: AuthRequiredEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
 }
@@ -253,7 +261,12 @@ function dropPermissionsForAgent(
  * into the runtime path.
  */
 function persistSession(
-  state: { sessions: Record<SessionId, AcpSession>; messages: Record<SessionId, ChatMessage[]>; sessionIndex: SessionIndexEntry[]; configToLiveAgent: Record<string, AgentId> },
+  state: {
+    sessions: Record<SessionId, AcpSession>
+    messages: Record<SessionId, ChatMessage[]>
+    sessionIndex: SessionIndexEntry[]
+    configToLiveAgent: Record<string, AgentId>
+  },
   sessionId: SessionId,
   setIndex: (entries: SessionIndexEntry[]) => void
 ): void {
@@ -274,10 +287,7 @@ function persistSession(
     messageCount: messages.length,
     status: session.status
   }
-  const nextIndex = [
-    entry,
-    ...state.sessionIndex.filter((e) => e.id !== sessionId)
-  ]
+  const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
   const payload: SessionPayload = { metadata: entry, messages }
   void saveSessionIndexToDisk(nextIndex).catch((e) =>
@@ -302,6 +312,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   plans: {},
   commands: {},
   pendingPermissions: {},
+  pendingAuth: {},
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -310,7 +321,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const agentId = await acpApi.spawnAgent(config)
       set((s) => ({
         agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
-        agentStatus: { ...s.agentStatus, [agentId]: 'connected' }
+        // Don't clobber a `needs-auth` status the auth_required event may have
+        // already set (the events race with this resolve).
+        agentStatus: {
+          ...s.agentStatus,
+          [agentId]: s.pendingAuth[agentId] ? 'needs-auth' : 'connected'
+        }
       }))
       return agentId
     } catch (err) {
@@ -324,8 +340,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const agents = { ...s.agents }
       const agentStatus = { ...s.agentStatus }
+      const pendingAuth = { ...s.pendingAuth }
       delete agents[agentId]
       delete agentStatus[agentId]
+      delete pendingAuth[agentId]
       // mark this agent's sessions closed
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
@@ -336,6 +354,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         agents,
         agentStatus,
+        pendingAuth,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
       }
@@ -505,6 +524,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
     }
+    // If the agent requires authentication, `newSession` will be rejected by the
+    // agent. Fail fast with an actionable message instead of throwing an opaque
+    // backend error; the agent stays connected so the user can authenticate and
+    // retry starting the chat.
+    if (get().pendingAuth[agentId]) {
+      throw new Error('This agent requires authentication before a chat can start.')
+    }
     return get().createSession(agentId, cwd, mcpServers)
   },
 
@@ -553,7 +579,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         set((s) => ({
           messages: { ...s.messages, [id]: payload.messages },
           sessions: s.sessions[id]
-            ? { ...s.sessions, [id]: { ...s.sessions[id], lastError: `Resume failed: ${String(err)}` } }
+            ? {
+                ...s.sessions,
+                [id]: { ...s.sessions[id], lastError: `Resume failed: ${String(err)}` }
+              }
             : s.sessions
         }))
         throw err
@@ -628,7 +657,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     set((s) => ({
       messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
-      sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], activeTurn: true, lastError: null } }
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...s.sessions[sessionId], activeTurn: true, lastError: null }
+      }
     }))
     try {
       const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
@@ -704,12 +736,44 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  authenticate: async (agentId, methodId) => {
+    const pending = get().pendingAuth[agentId]
+    // Optimistically clear so a rapid double-click (or a second method click)
+    // can't fire a concurrent `authenticate` for the same agent.
+    set((s) => {
+      const pendingAuth = { ...s.pendingAuth }
+      delete pendingAuth[agentId]
+      return {
+        pendingAuth,
+        agentStatus: { ...s.agentStatus, [agentId]: 'spawning' as AgentStatus }
+      }
+    })
+    try {
+      await acpApi.authenticate(agentId, methodId)
+      set((s) => ({
+        agentStatus: { ...s.agentStatus, [agentId]: 'connected' as AgentStatus }
+      }))
+    } catch (err) {
+      // Restore the requirement so the user can retry.
+      set((s) => ({
+        pendingAuth: pending ? { ...s.pendingAuth, [agentId]: pending } : s.pendingAuth,
+        agentStatus: { ...s.agentStatus, [agentId]: 'needs-auth' as AgentStatus }
+      }))
+      throw err
+    }
+  },
+
   // --- Event reducers ------------------------------------------------------
 
   _onAgentSpawned: (e) =>
     set((s) => ({
       agents: { ...s.agents, [e.agentId]: { id: e.agentId, capabilities: e.capabilities } },
-      agentStatus: { ...s.agentStatus, [e.agentId]: 'connected' }
+      // Preserve `needs-auth` if an auth_required event already arrived for this
+      // agent (the two events race across threads).
+      agentStatus: {
+        ...s.agentStatus,
+        [e.agentId]: s.pendingAuth[e.agentId] ? 'needs-auth' : 'connected'
+      }
     })),
 
   _onSessionCreated: (e) =>
@@ -776,7 +840,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCall: (e) =>
     set((s) => ({
-      toolCalls: { ...s.toolCalls, [e.sessionId]: [...(s.toolCalls[e.sessionId] ?? []), e.toolCall] }
+      toolCalls: {
+        ...s.toolCalls,
+        [e.sessionId]: [...(s.toolCalls[e.sessionId] ?? []), e.toolCall]
+      }
     })),
 
   _onToolCallUpdate: (e) =>
@@ -880,10 +947,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return { agentStatus }
     }),
 
+  _onAuthRequired: (e) =>
+    set((s) => ({
+      pendingAuth: { ...s.pendingAuth, [e.agentId]: e },
+      agentStatus: { ...s.agentStatus, [e.agentId]: 'needs-auth' as AgentStatus }
+    })),
+
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      const pendingAuth = { ...s.pendingAuth }
+      delete pendingAuth[e.agentId]
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
@@ -893,6 +968,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         agentStatus,
+        pendingAuth,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
       }
@@ -911,7 +987,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (!session) return { pendingPermissions }
       return {
         pendingPermissions,
-        sessions: { ...s.sessions, [e.sessionId]: { ...session, status: 'closed', activeTurn: false } }
+        sessions: {
+          ...s.sessions,
+          [e.sessionId]: { ...session, status: 'closed', activeTurn: false }
+        }
       }
     })
     if (get().sessions[e.sessionId]) {
@@ -947,12 +1026,23 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<PlanUpdateEvent>(ACP_EVENTS.planUpdate, s._onPlanUpdate),
     acpApi.onEvent<CommandsUpdateEvent>(ACP_EVENTS.commandsUpdate, s._onCommandsUpdate),
     acpApi.onEvent<ModeUpdateEvent>(ACP_EVENTS.modeUpdate, s._onModeUpdate),
-    acpApi.onEvent<ConfigOptionsUpdateEvent>(ACP_EVENTS.configOptionsUpdate, s._onConfigOptionsUpdate),
+    acpApi.onEvent<ConfigOptionsUpdateEvent>(
+      ACP_EVENTS.configOptionsUpdate,
+      s._onConfigOptionsUpdate
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, s._onPermissionRequest),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, s._onPromptComplete),
     acpApi.onEvent<AgentErrorEvent>(ACP_EVENTS.agentError, (e) => {
       s._onAgentError(e)
       toast.error(e.message || 'Agent error')
+    }),
+    acpApi.onEvent<AuthRequiredEvent>(ACP_EVENTS.authRequired, (e) => {
+      s._onAuthRequired(e)
+      toast.warning(
+        e.message
+          ? `Authentication required: ${e.message}`
+          : 'This agent requires authentication to continue.'
+      )
     }),
     acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, s._onAgentDisconnected),
     acpApi.onEvent<SessionClosedEvent>(ACP_EVENTS.sessionClosed, s._onSessionClosed)

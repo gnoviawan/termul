@@ -148,6 +148,17 @@ pub async fn acp_set_mode(
     manager.set_mode(&agent_id, session_id, mode_id).await
 }
 
+/// Run the ACP `authenticate` method for an agent. `methodId` must be one of
+/// the ids surfaced in the `acp:auth_required` event.
+#[tauri::command]
+pub async fn acp_authenticate(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    method_id: String,
+) -> Result<(), String> {
+    manager.authenticate(&agent_id, method_id).await
+}
+
 /// Respond to a pending permission request. `optionId == None` cancels it.
 #[tauri::command]
 pub async fn acp_respond_permission(

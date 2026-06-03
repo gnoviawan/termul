@@ -285,6 +285,16 @@ export interface AgentErrorEvent {
 export interface AgentDisconnectedEvent {
   agentId: AgentId
 }
+export interface AuthMethodInfo {
+  id: string
+  name: string
+  description?: string
+}
+export interface AuthRequiredEvent {
+  agentId: AgentId
+  methods: AuthMethodInfo[]
+  message?: string
+}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -304,6 +314,7 @@ export const ACP_EVENTS = {
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
   agentDisconnected: 'acp:agent_disconnected',
+  authRequired: 'acp:auth_required',
   sessionClosed: 'acp:session_closed'
 } as const
 
@@ -345,10 +356,7 @@ export async function acpResumeSession(
   await invoke('acp_resume_session', { agentId, sessionId, cwd })
 }
 
-export async function acpCloseSession(
-  agentId: AgentId,
-  sessionId: SessionId
-): Promise<void> {
+export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
   await invoke('acp_close_session', { agentId, sessionId })
 }
 
@@ -372,10 +380,7 @@ export async function acpSendPromptBlocks(
   return invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content })
 }
 
-export async function acpCancelPrompt(
-  agentId: AgentId,
-  sessionId: SessionId
-): Promise<void> {
+export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
   await invoke('acp_cancel_prompt', { agentId, sessionId })
 }
 
@@ -409,6 +414,10 @@ export async function acpRespondPermission(
   await invoke('acp_respond_permission', { agentId, requestId, optionId })
 }
 
+export async function acpAuthenticate(agentId: AgentId, methodId: string): Promise<void> {
+  await invoke('acp_authenticate', { agentId, methodId })
+}
+
 // --- Event subscription ----------------------------------------------------
 
 /**
@@ -417,10 +426,7 @@ export async function acpRespondPermission(
  * called before `listen()` resolves, the listener is torn down as soon as it
  * resolves.
  */
-export function onAcpEvent<T>(
-  eventName: string,
-  callback: (payload: T) => void
-): () => void {
+export function onAcpEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
   let resolvedUnlisten: UnlistenFn | null = null
   let unlistenCalledEarly = false
 
@@ -461,5 +467,6 @@ export const acpApi = {
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
   respondPermission: acpRespondPermission,
+  authenticate: acpAuthenticate,
   onEvent: onAcpEvent
 }

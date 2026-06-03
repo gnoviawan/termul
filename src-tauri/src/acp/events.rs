@@ -45,6 +45,10 @@ pub const EVENT_AGENT_ERROR: &str = "acp:agent_error";
 pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 /// Event name: the agent process disconnected/exited.
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
+/// Event name: the agent requires authentication before it can be used. Emitted
+/// when `initialize` advertised auth methods that could not be satisfied
+/// automatically (multiple methods, or a single-method `authenticate` failed).
+pub const EVENT_AUTH_REQUIRED: &str = "acp:auth_required";
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -64,6 +68,29 @@ pub enum ChunkRole {
 pub struct AgentSpawnedEvent {
     pub agent_id: AgentId,
     pub capabilities: AgentCapabilities,
+}
+
+/// One authentication method advertised by the agent in its `initialize`
+/// response, flattened to the fields the renderer needs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthMethodInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// `acp:auth_required`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthRequiredEvent {
+    pub agent_id: AgentId,
+    pub methods: Vec<AuthMethodInfo>,
+    /// Optional detail (e.g. the error string from a failed single-method
+    /// `authenticate` attempt).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// `acp:session_created`

@@ -276,8 +276,13 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
             },
         ),
         // SessionInfoUpdate and any future (non_exhaustive) variants have no
-        // dedicated P0 event; ignore them.
-        _ => {}
+        // dedicated P0 event; ignore them — but log so a silently-dropped
+        // update can be diagnosed instead of vanishing.
+        ref other => {
+            log::debug!(
+                "[acp] agent {agent_id} sent an unhandled session/update variant: {other:?}"
+            );
+        }
     }
 }
 

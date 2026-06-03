@@ -1,14 +1,14 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
+import { useShallow } from 'zustand/shallow'
+import type { AvailableCommand, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentHeader } from './AgentHeader'
-import { ChatMessageList } from './ChatMessageList'
 import { ChatInputBar } from './ChatInputBar'
+import { ChatMessageList } from './ChatMessageList'
+import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
 import { ToolCallCard } from './ToolCallCard'
-import { PermissionDialog } from './PermissionDialog'
-import { useAcpStore, useAcpSession, useAcpMessages } from '@/stores/acp-store'
-import { useShallow } from 'zustand/shallow'
-import type { SessionId, AvailableCommand, ToolCall, PlanEntry } from '@/lib/acp-api'
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
@@ -26,13 +26,15 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const pendingAuth = useAcpStore((s) => (session ? s.pendingAuth[session.agentId] : undefined))
+  const authenticate = useAcpStore((s) => s.authenticate)
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
   // The oldest pending permission for THIS session (resolve one to reveal the next).
   const pendingPermission = useAcpStore(
-    useShallow((s) =>
-      Object.values(s.pendingPermissions).find((p) => p.sessionId === sessionId) ?? null
+    useShallow(
+      (s) => Object.values(s.pendingPermissions).find((p) => p.sessionId === sessionId) ?? null
     )
   )
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
@@ -96,6 +98,26 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
           {session.lastError}
         </div>
       )}
+      {pendingAuth && pendingAuth.methods.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-400">
+          <span>{pendingAuth.message ?? 'This agent requires authentication.'}</span>
+          {pendingAuth.methods.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                void authenticate(session.agentId, m.id).catch((err) => {
+                  toast.error(`Authentication failed: ${String(err)}`)
+                })
+              }}
+              className="rounded border border-amber-500/40 px-2 py-0.5 font-medium hover:bg-amber-500/20"
+              title={m.description ?? m.name}
+            >
+              {m.name}
+            </button>
+          ))}
+        </div>
+      )}
       <PlanPanel entries={plan} />
       <ChatMessageList messages={messages}>
         {toolCalls.map((tc) => (
@@ -104,7 +126,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
       </ChatMessageList>
       <ChatInputBar
         busy={session.activeTurn}
-        disabled={isClosed}
+        disabled={isClosed || Boolean(pendingAuth)}
         onSend={handleSend}
         onCancel={handleCancel}
         commands={commands}

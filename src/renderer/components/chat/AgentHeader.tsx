@@ -1,12 +1,8 @@
-import { Bot, Circle, ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger
-} from '@/components/ui/popover'
-import type { AcpSession, AgentStatus } from '@/stores/acp-store'
+import { Bot, ChevronDown, Circle } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
+import type { AcpSession, AgentStatus } from '@/stores/acp-store'
 
 interface AgentHeaderProps {
   session: AcpSession
@@ -19,7 +15,8 @@ const STATUS_COLOR: Record<string, string> = {
   connected: 'text-green-500',
   spawning: 'text-amber-500',
   idle: 'text-muted-foreground',
-  error: 'text-red-500'
+  error: 'text-red-500',
+  'needs-auth': 'text-amber-400'
 }
 
 /** A popover selector for one config option. */
@@ -154,16 +151,18 @@ export function AgentHeader({
       </span>
 
       <div className="ml-auto flex items-center gap-2">
-        {hasConfigOptions
-          ? usableConfigOptions.map((option) => (
-              <ConfigChip
-                key={option.id}
-                option={option}
-                disabled={isClosed}
-                onSelect={(valueId) => onSetConfig(option.id, valueId)}
-              />
-            ))
-          : <ModeChip session={session} disabled={isClosed} onSelect={onSetMode} />}
+        {hasConfigOptions ? (
+          usableConfigOptions.map((option) => (
+            <ConfigChip
+              key={option.id}
+              option={option}
+              disabled={isClosed}
+              onSelect={(valueId) => onSetConfig(option.id, valueId)}
+            />
+          ))
+        ) : (
+          <ModeChip session={session} disabled={isClosed} onSelect={onSetMode} />
+        )}
       </div>
     </div>
   )

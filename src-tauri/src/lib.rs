@@ -902,6 +902,7 @@ pub fn run() {
             acp::commands::acp_set_config_option,
             acp::commands::acp_set_mode,
             acp::commands::acp_respond_permission,
+            acp::commands::acp_authenticate,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

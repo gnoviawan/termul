@@ -30,13 +30,13 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, CancelNotification, CloseSessionRequest, ContentBlock, InitializeRequest,
-    ListSessionsResponse, LoadSessionRequest, McpServer, NewSessionRequest, PromptRequest,
-    ProtocolVersion, RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigOption, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, StopReason,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
+    ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer,
+    NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
+    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigOption,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
+use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
 use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot};
@@ -44,7 +44,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, ConfigOptionsUpdateEvent,
+    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, AuthMethodInfo,
+    AuthRequiredEvent, ConfigOptionsUpdateEvent,
     PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
 };
 use crate::acp::session::DriverState;
@@ -123,8 +124,50 @@ enum AcpCommand {
         outcome: RequestPermissionOutcome,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Run the ACP `authenticate` method with the given method id.
+    Authenticate {
+        method_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Ask the driver thread to wind down its connection and exit.
     Shutdown,
+}
+
+/// Result of a successful `initialize` handshake, carried back to the spawning
+/// task. Auth methods are handled on the driver thread (auto-authenticate or
+/// emit `acp:auth_required`), so only the negotiated capabilities travel back.
+struct InitOutcome {
+    capabilities: AgentCapabilities,
+}
+
+/// Flatten a protocol `AuthMethod` into the renderer-facing `AuthMethodInfo`.
+fn auth_method_info(method: &AuthMethod) -> AuthMethodInfo {
+    AuthMethodInfo {
+        id: method.id().to_string(),
+        name: method.name().to_string(),
+        description: method.description().map(str::to_string),
+    }
+}
+
+/// What to do with the auth methods an agent advertised in `initialize`.
+#[derive(Debug, PartialEq, Eq)]
+enum AuthDecision {
+    /// No auth methods advertised — proceed unchanged.
+    None,
+    /// Exactly one method — attempt `authenticate` automatically with this id.
+    Auto(String),
+    /// Multiple methods — surface to the user, don't guess.
+    Prompt,
+}
+
+/// Decide how to handle the agent's advertised auth methods. Pure so it can be
+/// unit-tested without a live connection.
+fn decide_auth(auth_methods: &[AuthMethod]) -> AuthDecision {
+    match auth_methods.len() {
+        0 => AuthDecision::None,
+        1 => AuthDecision::Auto(auth_methods[0].id().to_string()),
+        _ => AuthDecision::Prompt,
+    }
 }
 
 /// Registry entry for a live agent.
@@ -159,7 +202,7 @@ impl AcpManager {
     pub async fn spawn(&self, config: AgentConfig) -> Result<AgentId, String> {
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
-        let (init_tx, init_rx) = oneshot::channel::<Result<AgentCapabilities, String>>();
+        let (init_tx, init_rx) = oneshot::channel::<Result<InitOutcome, String>>();
 
         // Shared flag serialized by the `agents` lock: set true when the driver
         // thread removes itself (reaps) so a late `spawn` insert can't recreate
@@ -202,7 +245,7 @@ impl AcpManager {
 
         // Wait for the handshake to complete (or fail) on the driver thread.
         let capabilities = match init_rx.await {
-            Ok(Ok(caps)) => caps,
+            Ok(Ok(outcome)) => outcome.capabilities,
             Ok(Err(e)) => {
                 // Initialize failed; the driver thread is exiting. Join it off
                 // the async runtime so we never block a Tauri worker.
@@ -445,6 +488,18 @@ impl AcpManager {
         .await
     }
 
+    /// Run the ACP `authenticate` method for an agent with the given method id
+    /// (one of the ids advertised in the `initialize` response / the
+    /// `acp:auth_required` event).
+    pub async fn authenticate(
+        &self,
+        agent_id: &AgentId,
+        method_id: String,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::Authenticate { method_id, reply }).await
+    }
+
     /// Kill an agent: stop its driver thread and join it. Idempotent.
     pub async fn kill(&self, agent_id: &AgentId) -> Result<(), String> {
         let entry = self.agents.lock().remove(agent_id);
@@ -573,7 +628,7 @@ fn run_agent(
     app: AppHandle,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
-    init_tx: oneshot::Sender<Result<AgentCapabilities, String>>,
+    init_tx: oneshot::Sender<Result<InitOutcome, String>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     reaped: Arc<AtomicBool>,
     killed: Arc<AtomicBool>,
@@ -695,11 +750,30 @@ async fn drive_connection(
     app: AppHandle,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
-    init_tx: oneshot::Sender<Result<AgentCapabilities, String>>,
+    init_tx: oneshot::Sender<Result<InitOutcome, String>>,
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
 ) -> Result<(), String> {
-    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server());
+    // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
+    // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
+    // errors, so it is logged verbatim. stdin/stdout carry the JSON-RPC protocol
+    // trace which can include `authenticate` payloads (API keys, OAuth tokens),
+    // so those are redacted to direction + byte length — enough to confirm
+    // streaming/traffic without writing secrets to disk.
+    let debug_agent_id = agent_id.clone();
+    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server()).with_debug(
+        move |line: &str, direction: LineDirection| match direction {
+            LineDirection::Stderr => {
+                log::debug!("[acp] {debug_agent_id} stderr {line}");
+            }
+            LineDirection::Stdin => {
+                log::debug!("[acp] {debug_agent_id} -> ({} bytes)", line.len());
+            }
+            LineDirection::Stdout => {
+                log::debug!("[acp] {debug_agent_id} <- ({} bytes)", line.len());
+            }
+        },
+    );
 
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
     let notif_app = app.clone();
@@ -959,7 +1033,7 @@ async fn drive_connection(
 async fn run_command_loop(
     cx: ConnectionTo<Agent>,
     mut command_rx: mpsc::UnboundedReceiver<AcpCommand>,
-    init_tx: oneshot::Sender<Result<AgentCapabilities, String>>,
+    init_tx: oneshot::Sender<Result<InitOutcome, String>>,
     app: AppHandle,
     agent_id: AgentId,
     driver_state: Arc<Mutex<DriverState>>,
@@ -976,8 +1050,73 @@ async fn run_command_loop(
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
     match init_outcome {
         Ok(Ok(response)) => {
+            let auth_method_ids: Vec<String> =
+                response.auth_methods.iter().map(|m| m.id().to_string()).collect();
+            log::info!(
+                "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} loadSession={}",
+                response.protocol_version,
+                auth_method_ids,
+                response.agent_capabilities.load_session,
+            );
+
+            // ACP authentication: an agent may require `authenticate` before any
+            // session can be used. When exactly one method is advertised, run it
+            // automatically; otherwise surface the requirement to the renderer.
+            let auth_methods = response.auth_methods.clone();
+            let mut auth_required: Option<AuthRequiredEvent> = None;
+            match decide_auth(&auth_methods) {
+                AuthDecision::None => {}
+                AuthDecision::Auto(method_id) => {
+                    log::info!("[acp] agent {agent_id} authenticating via '{method_id}'");
+                    // Bound by INIT_TIMEOUT, like `initialize`: this runs on the
+                    // spawn-critical path before the agent is registered and
+                    // before the command loop starts, so an agent that stalls on
+                    // `authenticate` must not wedge `spawn()` forever (it cannot
+                    // be killed yet).
+                    let auth_outcome = tokio::time::timeout(
+                        INIT_TIMEOUT,
+                        cx.send_request(AuthenticateRequest::new(method_id)).block_task(),
+                    )
+                    .await;
+                    match auth_outcome {
+                        Ok(Ok(_)) => log::info!("[acp] agent {agent_id} authenticated"),
+                        Ok(Err(e)) => {
+                            log::warn!("[acp] agent {agent_id} authenticate failed: {e}");
+                            auth_required = Some(AuthRequiredEvent {
+                                agent_id: agent_id.clone(),
+                                methods: auth_methods.iter().map(auth_method_info).collect(),
+                                message: Some(e.to_string()),
+                            });
+                        }
+                        Err(_) => {
+                            let message =
+                                format!("authenticate timed out after {INIT_TIMEOUT:?}");
+                            log::warn!("[acp] agent {agent_id} {message}");
+                            auth_required = Some(AuthRequiredEvent {
+                                agent_id: agent_id.clone(),
+                                methods: auth_methods.iter().map(auth_method_info).collect(),
+                                message: Some(message),
+                            });
+                        }
+                    }
+                }
+                AuthDecision::Prompt => {
+                    // Multiple methods: don't guess — let the user choose.
+                    auth_required = Some(AuthRequiredEvent {
+                        agent_id: agent_id.clone(),
+                        methods: auth_methods.iter().map(auth_method_info).collect(),
+                        message: None,
+                    });
+                }
+            }
+
             spawned.store(true, Ordering::Release);
-            let _ = init_tx.send(Ok(response.agent_capabilities));
+            let _ = init_tx.send(Ok(InitOutcome {
+                capabilities: response.agent_capabilities,
+            }));
+            if let Some(event) = auth_required {
+                events::emit(&app, events::EVENT_AUTH_REQUIRED, event);
+            }
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -1155,6 +1294,7 @@ async fn run_command_loop(
                 let turn_agent_id = agent_id.clone();
                 let turn_state = driver_state.clone();
                 let turn_session = session_id.clone();
+                let log_session = session_id.clone();
                 let spawn_result = cx.spawn(async move {
                     let request = PromptRequest::new(&session_id, content);
                     let prompt = turn_cx.send_request(request).block_task();
@@ -1177,6 +1317,17 @@ async fn run_command_loop(
                             }
                         }
                     };
+
+                    match &outcome {
+                        Ok(stop_reason) => log::info!(
+                            "[acp] session {} turn complete: stop_reason={stop_reason:?}",
+                            log_session.0
+                        ),
+                        Err(message) => log::warn!(
+                            "[acp] session {} turn failed: {message}",
+                            log_session.0
+                        ),
+                    }
 
                     // Turn is over: clear the active-turn marker and resolve any
                     // permissions that were never answered (H3 — normal
@@ -1306,6 +1457,23 @@ async fn run_command_loop(
                             .send(Err(format!("unknown permission request: {request_id}")));
                     }
                 }
+            }
+
+            AcpCommand::Authenticate { method_id, reply } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_cx = cx.clone();
+                let log_agent_id = agent_id.clone();
+                spawn_request(&cx, slot, async move {
+                    log::info!("[acp] agent {log_agent_id} authenticating via '{method_id}'");
+                    let result = req_cx
+                        .send_request(AuthenticateRequest::new(method_id))
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    send_reply(&task_slot, result);
+                });
             }
         }
     }
@@ -1494,5 +1662,52 @@ mod tests {
         // A second send is a no-op and must not panic.
         send_reply(&slot, Err("late".to_string()));
         assert_eq!(rx.await.unwrap(), Ok(()));
+    }
+
+    fn agent_method(id: &str, name: &str) -> AuthMethod {
+        AuthMethod::Agent(agent_client_protocol::schema::AuthMethodAgent::new(
+            id.to_string(),
+            name.to_string(),
+        ))
+    }
+
+    /// No advertised auth methods → proceed unchanged (working agents keep
+    /// working; no `authenticate` call).
+    #[test]
+    fn decide_auth_none_when_no_methods() {
+        assert_eq!(decide_auth(&[]), AuthDecision::None);
+    }
+
+    /// Exactly one method → auto-authenticate with that method's id.
+    #[test]
+    fn decide_auth_auto_for_single_method() {
+        let methods = vec![agent_method("oauth", "Sign in")];
+        assert_eq!(decide_auth(&methods), AuthDecision::Auto("oauth".to_string()));
+    }
+
+    /// Multiple methods → surface to the user rather than guessing.
+    #[test]
+    fn decide_auth_prompts_for_multiple_methods() {
+        let methods = vec![
+            agent_method("oauth", "Sign in"),
+            agent_method("api-key", "API key"),
+        ];
+        assert_eq!(decide_auth(&methods), AuthDecision::Prompt);
+    }
+
+    /// The renderer-facing flattening preserves id/name/description.
+    #[test]
+    fn auth_method_info_flattens_fields() {
+        let method = AuthMethod::Agent(
+            agent_client_protocol::schema::AuthMethodAgent::new(
+                "oauth".to_string(),
+                "Sign in".to_string(),
+            )
+            .description("Browser OAuth".to_string()),
+        );
+        let info = auth_method_info(&method);
+        assert_eq!(info.id, "oauth");
+        assert_eq!(info.name, "Sign in");
+        assert_eq!(info.description.as_deref(), Some("Browser OAuth"));
     }
 }
