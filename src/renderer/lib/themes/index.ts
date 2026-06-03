@@ -5,11 +5,26 @@ export {
 } from './apply-color-theme'
 export {
   BUNDLED_COLOR_THEMES,
+  COLOR_THEME_FAMILIES,
   COLOR_THEME_LIST,
+  type ColorThemeFamily,
   DEFAULT_COLOR_THEME_ID,
-  getColorThemeDefinition
+  getColorThemeDefinition,
+  THEME_PICKER_ROWS,
+  type ThemePickerRow
 } from './bundled-themes'
+export { deriveSurfaces } from './derive-surfaces'
 export { resolveSyntaxColors } from './resolve-syntax'
+export {
+  type AppearanceMode,
+  getEffectiveThemeId,
+  getLightThemeId,
+  getPickerApplySettings,
+  getSystemAppearance,
+  normalizeThemeFamilyId,
+  resolveAppearanceMode,
+  type ThemeAppearance
+} from './theme-appearance'
 export type {
   ColorThemeChangedDetail,
   ColorThemeDefinition,

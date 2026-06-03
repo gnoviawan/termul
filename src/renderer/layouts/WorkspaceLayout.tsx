@@ -54,9 +54,11 @@ import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac } from '@/lib/platform'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
+  useAppearanceMode,
   useColorTheme,
   useConfirmTerminalClose,
   useDefaultShell,
@@ -648,13 +650,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const fontSize = useTerminalFontSize()
   const colorTheme = useColorTheme()
+  const appearanceMode = useAppearanceMode()
 
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
-    useThemePickerStore.getState().open(colorTheme)
-  }, [colorTheme])
+    useThemePickerStore
+      .getState()
+      .open(getEffectiveThemeId(colorTheme, appearanceMode), appearanceMode)
+  }, [appearanceMode, colorTheme])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()

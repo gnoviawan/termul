@@ -33,12 +33,17 @@ export interface ThemeVariant {
   overrides?: ThemeSyntaxOverrides
 }
 
+export type ThemeAppearance = 'light' | 'dark'
+
 export interface ColorThemeDefinition {
   id: string
   name: string
+  /** UI + syntax variant (light or dark chrome). */
+  appearance: ThemeAppearance
+  /** Family base id (without `-light` suffix). */
+  familyId: string
+  /** Active palette + syntax overrides for this entry. */
   dark: ThemeVariant
-  /** Reserved for light-mode toggle (v2). */
-  light?: ThemeVariant
 }
 
 export interface ResolvedSyntaxColors {

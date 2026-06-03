@@ -4,12 +4,13 @@ import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { resolveSyntaxColors } from './resolve-syntax'
 
 describe('apply-color-theme', () => {
-  it('includes all v1 bundled themes', () => {
+  it('includes dark and light bundled themes', () => {
     const ids = Object.keys(BUNDLED_COLOR_THEMES)
     expect(ids).toContain('termul')
+    expect(ids).toContain('termul-light')
     expect(ids).toContain('catppuccin')
-    expect(ids).toContain('dracula')
-    expect(ids.length).toBeGreaterThanOrEqual(10)
+    expect(ids).toContain('catppuccin-light')
+    expect(ids.length).toBe(20)
   })
 
   it('derives syntax colors from catppuccin palette', () => {
@@ -34,8 +35,16 @@ describe('apply-color-theme', () => {
   })
 
   it('exports paletteToXtermTheme with 16 ansi colors', () => {
-    const xterm = paletteToXtermTheme(BUNDLED_COLOR_THEMES.nord.dark.palette)
+    const xterm = paletteToXtermTheme(BUNDLED_COLOR_THEMES.nord.dark.palette, 'dark')
     expect(xterm.brightBlue).toBeTruthy()
     expect(xterm.brightWhite).toBeTruthy()
+  })
+
+  it('maps light palette to xterm theme', () => {
+    const theme = BUNDLED_COLOR_THEMES['github-light']
+    const { xterm } = resolveThemeForTest(theme)
+    expect(theme.appearance).toBe('light')
+    expect(xterm.background).toBe('#ffffff')
+    expect(xterm.foreground).toBe('#24292f')
   })
 })

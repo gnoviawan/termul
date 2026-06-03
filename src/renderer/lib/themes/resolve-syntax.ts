@@ -25,7 +25,10 @@ function resolveVariant(variant: ThemeVariant): ResolvedSyntaxColors {
   }
 }
 
-/** v1: always use the dark variant. */
+export function getThemeVariant(theme: ColorThemeDefinition): ThemeVariant {
+  return theme.dark
+}
+
 export function resolveSyntaxColors(theme: ColorThemeDefinition): ResolvedSyntaxColors {
-  return resolveVariant(theme.dark)
+  return resolveVariant(getThemeVariant(theme))
 }

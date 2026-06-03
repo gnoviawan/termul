@@ -1,11 +1,13 @@
 import { create } from 'zustand'
 import { applyColorTheme } from '@/lib/themes'
+import type { AppearanceMode } from '@/lib/themes/theme-appearance'
 
 interface ThemePickerState {
   isOpen: boolean
-  initialThemeId: string | null
+  initialEffectiveThemeId: string | null
+  initialAppearanceMode: AppearanceMode | null
   highlightedThemeId: string | null
-  open: (appliedThemeId: string) => void
+  open: (effectiveThemeId: string, appearanceMode: AppearanceMode) => void
   close: () => void
   preview: (themeId: string) => void
   cancel: () => void
@@ -13,21 +15,24 @@ interface ThemePickerState {
 
 export const useThemePickerStore = create<ThemePickerState>((set, get) => ({
   isOpen: false,
-  initialThemeId: null,
+  initialEffectiveThemeId: null,
+  initialAppearanceMode: null,
   highlightedThemeId: null,
 
-  open: (appliedThemeId: string) => {
+  open: (effectiveThemeId: string, appearanceMode: AppearanceMode) => {
     set({
       isOpen: true,
-      initialThemeId: appliedThemeId,
-      highlightedThemeId: appliedThemeId
+      initialEffectiveThemeId: effectiveThemeId,
+      initialAppearanceMode: appearanceMode,
+      highlightedThemeId: effectiveThemeId
     })
   },
 
   close: () => {
     set({
       isOpen: false,
-      initialThemeId: null,
+      initialEffectiveThemeId: null,
+      initialAppearanceMode: null,
       highlightedThemeId: null
     })
   },
@@ -38,9 +43,9 @@ export const useThemePickerStore = create<ThemePickerState>((set, get) => ({
   },
 
   cancel: () => {
-    const { initialThemeId } = get()
-    if (initialThemeId) {
-      applyColorTheme(initialThemeId)
+    const { initialEffectiveThemeId } = get()
+    if (initialEffectiveThemeId) {
+      applyColorTheme(initialEffectiveThemeId)
     }
     get().close()
   }

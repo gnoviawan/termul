@@ -1,10 +1,25 @@
 import { Check, Palette, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
-import { COLOR_THEME_LIST, getColorThemeDefinition } from '@/lib/themes'
+import { useEffectiveColorThemeId } from '@/hooks/use-color-theme'
+import {
+  COLOR_THEME_FAMILIES,
+  getColorThemeDefinition,
+  getEffectiveThemeId,
+  getPickerApplySettings,
+  THEME_PICKER_ROWS,
+  type ThemePickerRow
+} from '@/lib/themes'
+import type { AppearanceMode } from '@/lib/themes/theme-appearance'
 import { cn } from '@/lib/utils'
-import { useColorTheme } from '@/stores/app-settings-store'
+import { useAppearanceMode, useColorTheme } from '@/stores/app-settings-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
+
+const APPEARANCE_OPTIONS: Array<{ value: AppearanceMode; label: string }> = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'System' }
+]
 
 function ThemeSwatches({ themeId }: { themeId: string }): React.JSX.Element {
   const palette = getColorThemeDefinition(themeId).dark.palette
@@ -30,52 +45,86 @@ export function ThemePicker(): React.JSX.Element | null {
   const cancel = useThemePickerStore((state) => state.cancel)
   const close = useThemePickerStore((state) => state.close)
 
-  const appliedThemeId = useColorTheme()
+  const colorTheme = useColorTheme()
+  const appearanceMode = useAppearanceMode()
+  const effectiveThemeId = useEffectiveColorThemeId()
   const updateSetting = useUpdateAppSetting()
 
   const [query, setQuery] = useState('')
+  const [previewAppearanceMode, setPreviewAppearanceMode] = useState<AppearanceMode>(appearanceMode)
   const [focusIndex, setFocusIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const filteredThemes = useMemo(() => {
+  const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return COLOR_THEME_LIST
-    return COLOR_THEME_LIST.filter(
-      (theme) =>
-        theme.name.toLowerCase().includes(normalized) || theme.id.toLowerCase().includes(normalized)
+    if (!normalized) return THEME_PICKER_ROWS
+    return THEME_PICKER_ROWS.filter(
+      (row) =>
+        row.label.toLowerCase().includes(normalized) ||
+        row.familyId.toLowerCase().includes(normalized) ||
+        row.themeId.toLowerCase().includes(normalized)
     )
   }, [query])
 
-  const confirmTheme = useCallback(
-    async (themeId: string) => {
-      await updateSetting('colorTheme', themeId)
+  const filteredFamilies = useMemo(() => {
+    const familyIds = new Set(filteredRows.map((row) => row.familyId))
+    return COLOR_THEME_FAMILIES.filter((family) => familyIds.has(family.familyId))
+  }, [filteredRows])
+
+  const flatFilteredRows = useMemo(() => {
+    return filteredFamilies.flatMap((family) =>
+      filteredRows.filter((row) => row.familyId === family.familyId)
+    )
+  }, [filteredFamilies, filteredRows])
+
+  const confirmRow = useCallback(
+    async (row: ThemePickerRow) => {
+      const apply = getPickerApplySettings(row.themeId)
+      await updateSetting('colorTheme', apply.colorTheme)
+      await updateSetting(
+        'appearanceMode',
+        previewAppearanceMode === 'system' ? 'system' : apply.appearanceMode
+      )
       close()
       setQuery('')
     },
-    [close, updateSetting]
+    [close, previewAppearanceMode, updateSetting]
   )
 
   const handleCancel = useCallback(() => {
     cancel()
     setQuery('')
-  }, [cancel])
+    setPreviewAppearanceMode(appearanceMode)
+  }, [appearanceMode, cancel])
+
+  const handleAppearanceModeChange = useCallback(
+    (mode: AppearanceMode) => {
+      setPreviewAppearanceMode(mode)
+      const highlighted = highlightedThemeId ?? effectiveThemeId
+      const row = THEME_PICKER_ROWS.find((item) => item.themeId === highlighted)
+      const familyId = row?.familyId ?? colorTheme
+      const nextThemeId = getEffectiveThemeId(familyId, mode)
+      preview(nextThemeId)
+    },
+    [colorTheme, effectiveThemeId, highlightedThemeId, preview]
+  )
 
   const scrollFocusedIntoView = useCallback((index: number) => {
     const list = listRef.current
     if (!list) return
-    const child = list.children[index]
-    if (child instanceof HTMLElement) {
-      child.scrollIntoView({ block: 'nearest' })
-    }
+    const options = list.querySelectorAll<HTMLElement>('[data-theme-row]')
+    const child = options[index]
+    child?.scrollIntoView({ block: 'nearest' })
   }, [])
 
   const wasOpenRef = useRef(false)
 
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
+      setPreviewAppearanceMode(appearanceMode)
       const highlightedIndex = highlightedThemeId
-        ? filteredThemes.findIndex((theme) => theme.id === highlightedThemeId)
+        ? flatFilteredRows.findIndex((row) => row.themeId === highlightedThemeId)
         : 0
       setFocusIndex(highlightedIndex >= 0 ? highlightedIndex : 0)
     }
@@ -86,7 +135,7 @@ export function ThemePicker(): React.JSX.Element | null {
       inputRef.current?.focus()
     })
     return () => cancelAnimationFrame(frame)
-  }, [filteredThemes, highlightedThemeId, isOpen])
+  }, [appearanceMode, flatFilteredRows, highlightedThemeId, isOpen])
 
   useEffect(() => {
     if (!isOpen) return
@@ -106,11 +155,10 @@ export function ThemePicker(): React.JSX.Element | null {
 
       if (event.key === 'ArrowDown') {
         event.preventDefault()
-        const next = Math.min(focusIndex + 1, filteredThemes.length - 1)
+        const next = Math.min(focusIndex + 1, flatFilteredRows.length - 1)
         setFocusIndex(next)
-        const theme = filteredThemes[next]
-        if (theme) preview(theme.id)
-        scrollFocusedIntoView(next)
+        const row = flatFilteredRows[next]
+        if (row) preview(row.themeId)
         return
       }
 
@@ -118,41 +166,35 @@ export function ThemePicker(): React.JSX.Element | null {
         event.preventDefault()
         const next = Math.max(focusIndex - 1, 0)
         setFocusIndex(next)
-        const theme = filteredThemes[next]
-        if (theme) preview(theme.id)
-        scrollFocusedIntoView(next)
+        const row = flatFilteredRows[next]
+        if (row) preview(row.themeId)
         return
       }
 
       if (event.key === 'Enter') {
         event.preventDefault()
-        const themeId = highlightedThemeId ?? filteredThemes[focusIndex]?.id
-        if (themeId) {
-          void confirmTheme(themeId)
+        const row =
+          flatFilteredRows.find((item) => item.themeId === highlightedThemeId) ??
+          flatFilteredRows[focusIndex]
+        if (row) {
+          void confirmRow(row)
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [
-    confirmTheme,
-    filteredThemes,
-    focusIndex,
-    handleCancel,
-    highlightedThemeId,
-    isOpen,
-    preview,
-    scrollFocusedIntoView
-  ])
+  }, [confirmRow, flatFilteredRows, focusIndex, handleCancel, highlightedThemeId, isOpen, preview])
 
   useEffect(() => {
-    if (focusIndex >= filteredThemes.length) {
-      setFocusIndex(Math.max(0, filteredThemes.length - 1))
+    if (focusIndex >= flatFilteredRows.length) {
+      setFocusIndex(Math.max(0, flatFilteredRows.length - 1))
     }
-  }, [filteredThemes.length, focusIndex])
+  }, [flatFilteredRows.length, focusIndex])
 
   if (!isOpen) return null
+
+  let rowCounter = 0
 
   return (
     <div className="fixed inset-0 z-[120] pointer-events-none">
@@ -191,7 +233,30 @@ export function ThemePicker(): React.JSX.Element | null {
           </button>
         </header>
 
-        <div className="px-3 py-2 border-b border-border">
+        <div className="px-3 py-2 border-b border-border space-y-2">
+          <div
+            className="flex rounded-md border border-border p-0.5 bg-secondary/40"
+            role="group"
+            aria-label="Appearance mode"
+          >
+            {APPEARANCE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => handleAppearanceModeChange(option.value)}
+                className={cn(
+                  'flex-1 rounded px-2 py-1 text-[11px] font-medium transition-colors',
+                  previewAppearanceMode === option.value
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                aria-pressed={previewAppearanceMode === option.value}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
           <div className="relative">
             <Search
               size={14}
@@ -219,50 +284,67 @@ export function ThemePicker(): React.JSX.Element | null {
           role="listbox"
           aria-label="Themes"
         >
-          {filteredThemes.length === 0 ? (
+          {filteredFamilies.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">No themes match.</p>
           ) : (
-            filteredThemes.map((theme, index) => {
-              const isApplied = theme.id === appliedThemeId
-              const isHighlighted =
-                theme.id === highlightedThemeId ||
-                (highlightedThemeId === null && index === focusIndex)
-              const isFocused = index === focusIndex
-
+            filteredFamilies.map((family) => {
+              const rows = filteredRows.filter((row) => row.familyId === family.familyId)
               return (
-                <button
-                  key={theme.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isHighlighted}
-                  className={cn(
-                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors duration-100 ease-[var(--ease-out)] active:scale-[0.98]',
-                    isHighlighted || isFocused
-                      ? 'bg-accent/20 text-foreground'
-                      : 'text-foreground/90 hover:bg-secondary/80'
-                  )}
-                  onMouseEnter={() => {
-                    setFocusIndex(index)
-                    preview(theme.id)
-                  }}
-                  onFocus={() => {
-                    setFocusIndex(index)
-                    preview(theme.id)
-                  }}
-                  onClick={() => {
-                    void confirmTheme(theme.id)
-                  }}
-                >
-                  <ThemeSwatches themeId={theme.id} />
-                  <span className="flex-1 truncate font-medium">{theme.name}</span>
-                  {isApplied ? (
-                    <Check
-                      size={14}
-                      className="text-primary shrink-0"
-                      aria-label="Currently applied"
-                    />
-                  ) : null}
-                </button>
+                <div key={family.familyId} className="mb-3 last:mb-0">
+                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {family.name}
+                  </p>
+                  {rows.map((row) => {
+                    const index = rowCounter
+                    rowCounter += 1
+                    const isApplied =
+                      row.themeId === effectiveThemeId ||
+                      (previewAppearanceMode !== 'system' &&
+                        row.familyId === colorTheme &&
+                        row.variant === previewAppearanceMode)
+                    const isHighlighted =
+                      row.themeId === highlightedThemeId ||
+                      (highlightedThemeId === null && index === focusIndex)
+                    const isFocused = index === focusIndex
+
+                    return (
+                      <button
+                        key={row.themeId}
+                        type="button"
+                        role="option"
+                        data-theme-row
+                        aria-selected={isHighlighted}
+                        className={cn(
+                          'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors duration-100 ease-[var(--ease-out)] active:scale-[0.98]',
+                          isHighlighted || isFocused
+                            ? 'bg-accent/20 text-foreground'
+                            : 'text-foreground/90 hover:bg-secondary/80'
+                        )}
+                        onMouseEnter={() => {
+                          setFocusIndex(index)
+                          preview(row.themeId)
+                        }}
+                        onFocus={() => {
+                          setFocusIndex(index)
+                          preview(row.themeId)
+                        }}
+                        onClick={() => {
+                          void confirmRow(row)
+                        }}
+                      >
+                        <ThemeSwatches themeId={row.themeId} />
+                        <span className="flex-1 truncate font-medium">{row.label}</span>
+                        {isApplied ? (
+                          <Check
+                            size={14}
+                            className="text-primary shrink-0"
+                            aria-label="Currently applied"
+                          />
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                </div>
               )
             })
           )}

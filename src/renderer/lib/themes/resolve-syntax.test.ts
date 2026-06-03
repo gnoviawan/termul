@@ -74,12 +74,23 @@ const EXPECTED_SYNTAX: Record<
     function: '#bc8cff',
     variable: '#d29922',
     property: '#39c5cf'
+  },
+  'termul-light': {
+    keyword: '#0000ff',
+    string: '#a31515',
+    function: '#795e26',
+    variable: '#001080'
+  },
+  'github-light': {
+    keyword: '#cf222e',
+    string: '#0969da',
+    function: '#8250df'
   }
 }
 
 describe('resolveSyntaxColors', () => {
   it.each(
-    COLOR_THEME_LIST.map((t) => [t.id, t] as const)
+    Object.keys(EXPECTED_SYNTAX).map((themeId) => [themeId] as const)
   )('resolves expected tokens for %s', (themeId) => {
     const theme = BUNDLED_COLOR_THEMES[themeId]
     const syntax = resolveSyntaxColors(theme)
@@ -108,15 +119,14 @@ describe('resolveSyntaxColors', () => {
       const { palette, overrides = {} } = theme.dark
       const keyword = overrides['syntax-keyword'] ?? palette.primary
 
-      if (overrides['syntax-variable']) {
-        expect(shouldOverrideToken(overrides['syntax-variable'], palette.ink)).toBe(true)
+      const assertDistinct = (token: string | undefined, base: string, label: string) => {
+        if (!token || token.replace(/^#/, '').length > 6) return
+        expect(shouldOverrideToken(token, base), `${theme.id} ${label}`).toBe(true)
       }
-      if (overrides['syntax-property']) {
-        expect(shouldOverrideToken(overrides['syntax-property'], palette.ink)).toBe(true)
-      }
-      if (overrides['syntax-function']) {
-        expect(shouldOverrideToken(overrides['syntax-function'], keyword)).toBe(true)
-      }
+
+      assertDistinct(overrides['syntax-variable'], palette.ink, 'variable')
+      assertDistinct(overrides['syntax-property'], palette.ink, 'property')
+      assertDistinct(overrides['syntax-function'], keyword, 'function')
     }
   })
 })

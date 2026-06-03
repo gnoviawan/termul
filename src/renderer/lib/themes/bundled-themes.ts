@@ -1,11 +1,21 @@
+import { BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
 import type { ColorThemeDefinition } from './types'
 
-/** Built-in color themes (dark variants; OpenCode palette-compatible). */
-export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
+export interface ColorThemeFamily {
+  familyId: string
+  name: string
+  darkThemeId: string
+  lightThemeId: string
+}
+
+/** Built-in dark appearance themes (OpenCode palette-compatible). */
+const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   // syntax: VS Code Dark+ (Termul default editor)
   termul: {
     id: 'termul',
     name: 'Termul',
+    appearance: 'dark',
+    familyId: 'termul',
     dark: {
       palette: {
         neutral: '#121212',
@@ -33,6 +43,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   cursor: {
     id: 'cursor',
     name: 'Cursor',
+    appearance: 'dark',
+    familyId: 'cursor',
     dark: {
       palette: {
         neutral: '#181818',
@@ -59,6 +71,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   catppuccin: {
     id: 'catppuccin',
     name: 'Catppuccin',
+    appearance: 'dark',
+    familyId: 'catppuccin',
     dark: {
       palette: {
         neutral: '#1e1e2e',
@@ -85,6 +99,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   dracula: {
     id: 'dracula',
     name: 'Dracula',
+    appearance: 'dark',
+    familyId: 'dracula',
     dark: {
       palette: {
         neutral: '#1d1e28',
@@ -111,6 +127,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   nord: {
     id: 'nord',
     name: 'Nord',
+    appearance: 'dark',
+    familyId: 'nord',
     dark: {
       palette: {
         neutral: '#2e3440',
@@ -136,6 +154,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   gruvbox: {
     id: 'gruvbox',
     name: 'Gruvbox',
+    appearance: 'dark',
+    familyId: 'gruvbox',
     dark: {
       palette: {
         neutral: '#282828',
@@ -161,6 +181,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   tokyonight: {
     id: 'tokyonight',
     name: 'Tokyo Night',
+    appearance: 'dark',
+    familyId: 'tokyonight',
     dark: {
       palette: {
         neutral: '#1a1b26',
@@ -187,6 +209,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   ayu: {
     id: 'ayu',
     name: 'Ayu',
+    appearance: 'dark',
+    familyId: 'ayu',
     dark: {
       palette: {
         neutral: '#0b0e14',
@@ -213,6 +237,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   'one-dark': {
     id: 'one-dark',
     name: 'One Dark',
+    appearance: 'dark',
+    familyId: 'one-dark',
     dark: {
       palette: {
         neutral: '#282c34',
@@ -240,6 +266,8 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
   github: {
     id: 'github',
     name: 'GitHub',
+    appearance: 'dark',
+    familyId: 'github',
     dark: {
       palette: {
         neutral: '#0d1117',
@@ -264,6 +292,42 @@ export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
     }
   }
 }
+
+export const BUNDLED_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
+  ...BUNDLED_DARK_COLOR_THEMES,
+  ...BUNDLED_LIGHT_COLOR_THEMES
+}
+
+export const COLOR_THEME_FAMILIES: ColorThemeFamily[] = Object.values(
+  BUNDLED_DARK_COLOR_THEMES
+).map((theme) => ({
+  familyId: theme.familyId,
+  name: theme.name.replace(/ Light$/, ''),
+  darkThemeId: theme.id,
+  lightThemeId: `${theme.familyId}-light`
+}))
+
+export interface ThemePickerRow {
+  themeId: string
+  familyId: string
+  label: string
+  variant: 'dark' | 'light'
+}
+
+export const THEME_PICKER_ROWS: ThemePickerRow[] = COLOR_THEME_FAMILIES.flatMap((family) => [
+  {
+    themeId: family.darkThemeId,
+    familyId: family.familyId,
+    label: family.name,
+    variant: 'dark' as const
+  },
+  {
+    themeId: family.lightThemeId,
+    familyId: family.familyId,
+    label: `${family.name} Light`,
+    variant: 'light' as const
+  }
+])
 
 export const DEFAULT_COLOR_THEME_ID = 'termul'
 

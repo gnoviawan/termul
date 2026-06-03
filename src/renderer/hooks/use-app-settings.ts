@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { persistenceApi, terminalApi } from '@/lib/api'
+import { normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
@@ -133,6 +134,18 @@ export function useAppSettingsLoader(): void {
       if (result.success && result.data) {
         // Merge with defaults to handle any missing keys from older versions
         settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
+
+        if (settings.colorTheme.endsWith('-light')) {
+          settings = {
+            ...settings,
+            colorTheme: normalizeThemeFamilyId(settings.colorTheme),
+            appearanceMode: settings.appearanceMode ?? 'light'
+          }
+        }
+
+        if (!settings.appearanceMode) {
+          settings = { ...settings, appearanceMode: 'dark' }
+        }
 
         // Migrate persisted "canvas" renderer preference to "dom"
         // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback

@@ -58,8 +58,10 @@ export interface AppSettings {
   sshPanelVisible: boolean
   /** Remote server bind: localhost (127.0.0.1) or all interfaces (0.0.0.0). */
   remoteBindMode: RemoteBindMode
-  /** App-wide UI color theme id (see bundled themes). */
+  /** App-wide color theme family id (without `-light` suffix). */
   colorTheme: string
+  /** Light, dark, or follow OS (maps to `{colorTheme}` / `{colorTheme}-light`). */
+  appearanceMode: 'light' | 'dark' | 'system'
 }
 
 // Terminal buffer size options
@@ -150,7 +152,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   fileExplorerVisible: true,
   sshPanelVisible: true,
   remoteBindMode: 'localhost',
-  colorTheme: 'termul'
+  colorTheme: 'termul',
+  appearanceMode: 'dark'
 }
 
 // Persistence key for app settings

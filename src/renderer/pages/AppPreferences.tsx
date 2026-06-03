@@ -22,9 +22,11 @@ import {
 import { shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
-import { getColorThemeDefinition } from '@/lib/themes'
+import { getColorThemeDefinition, getEffectiveThemeId } from '@/lib/themes'
+import type { AppearanceMode } from '@/lib/themes/theme-appearance'
 import { cn } from '@/lib/utils'
 import {
+  useAppearanceMode,
   useColorTheme,
   useConfirmTerminalClose,
   useDefaultProjectColor,
@@ -67,7 +69,10 @@ export default function AppPreferences(): React.JSX.Element {
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const colorTheme = useColorTheme()
-  const activeThemeName = getColorThemeDefinition(colorTheme).name
+  const appearanceMode = useAppearanceMode()
+  const activeThemeName = getColorThemeDefinition(
+    getEffectiveThemeId(colorTheme, appearanceMode)
+  ).name
 
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
@@ -234,6 +239,42 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <div className="w-2/3 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Appearance
+                    </label>
+                    <div className="flex rounded-lg border border-border p-1 bg-secondary/30 max-w-md">
+                      {(
+                        [
+                          { value: 'dark', label: 'Dark' },
+                          { value: 'light', label: 'Light' },
+                          { value: 'system', label: 'System' }
+                        ] as const satisfies ReadonlyArray<{
+                          value: AppearanceMode
+                          label: string
+                        }>
+                      ).map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => void updateSetting('appearanceMode', option.value)}
+                          className={cn(
+                            'flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                            appearanceMode === option.value
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                          aria-pressed={appearanceMode === option.value}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      System follows your OS light/dark setting for the selected theme family.
+                    </p>
+                  </div>
+
                   <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-secondary/30 px-4 py-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground">Current theme</p>
@@ -242,7 +283,9 @@ export default function AppPreferences(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => {
-                        useThemePickerStore.getState().open(colorTheme)
+                        useThemePickerStore
+                          .getState()
+                          .open(getEffectiveThemeId(colorTheme, appearanceMode), appearanceMode)
                       }}
                       className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform duration-150 ease-[var(--ease-out)] hover:opacity-90 active:scale-[0.97] shrink-0"
                     >
