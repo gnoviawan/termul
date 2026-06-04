@@ -80,6 +80,7 @@ export interface PersistedProjectGroup {
   name: string
   projectIds: string[]
   isCollapsed?: boolean
+  color?: string
 }
 
 export interface PersistedEnvVariable {

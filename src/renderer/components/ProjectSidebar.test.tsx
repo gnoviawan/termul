@@ -842,4 +842,24 @@ describe('ProjectSidebar Folder Grouping', () => {
     // Since it is collapsed, Project One should NOT be rendered
     expect(screen.queryByText('Project One')).not.toBeInTheDocument()
   })
+
+  it('should support custom folder group colors', () => {
+    useProjectStore.setState({
+      groups: [
+        {
+          id: 'group-1',
+          name: 'My Folder',
+          projectIds: ['1'],
+          isCollapsed: false,
+          color: 'purple'
+        }
+      ]
+    })
+
+    renderWithRouter()
+
+    const folderHeader = screen.getByRole('button', { name: /My Folder/i })
+    const iconContainer = folderHeader.querySelector('.text-project-purple')
+    expect(iconContainer).toBeInTheDocument()
+  })
 })
