@@ -71,7 +71,7 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
     >
       <video
         ref={videoRef}
-        className="w-full max-w-2xl max-h-full rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] object-contain bg-black/60"
+        className="w-full max-w-2xl max-h-full rounded-xl border border-border-subtle shadow-[0_20px_50px_color-mix(in_srgb,var(--color-pitch-black)_50%,transparent)] object-contain bg-pitch-black/60"
         poster={video.poster}
         muted
         loop

@@ -8,7 +8,7 @@ type ScrollContainerProps = {
 };
 
 const scrollContainerClassName =
-  'h-screen bg-black text-white selection:bg-white/30 font-sans';
+  'h-screen bg-background text-foreground selection:bg-neon-lime/30 selection:text-pitch-black font-sans';
 
 function subscribeToClientMount() {
   return () => {};

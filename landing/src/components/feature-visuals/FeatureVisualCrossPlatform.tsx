@@ -10,7 +10,7 @@ export function FeatureVisualCrossPlatform() {
           <div className="w-2.5 h-2.5 rounded-full bg-yellow-500"></div>
           <div className="w-2.5 h-2.5 rounded-full bg-green-500"></div>
         </div>
-        <div className="p-5 font-mono text-xs text-gray-400 min-h-[140px] bg-[#0d0d0d] flex flex-col justify-center items-center gap-4">
+        <div className="p-5 font-mono text-xs text-gray-400 min-h-[140px] bg-deep-slate flex flex-col justify-center items-center gap-4">
           <div className="flex gap-3 w-full">
             <div className="flex-1 flex flex-col items-center gap-2 p-3 bg-white/5 rounded-lg border border-white/5 shadow-inner text-gray-400">
               <div className="w-8 h-8 shrink-0 flex items-center justify-center">
