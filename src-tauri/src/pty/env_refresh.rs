@@ -151,7 +151,7 @@ fn probe_unix_login_path() -> Option<String> {
             .output()
             .ok()?,
         "fish" => Command::new(&shell)
-            .args(["-lc", "printf %s $PATH"])
+            .args(["-lc", "string join : $PATH"])
             .output()
             .ok()?,
         _ => return None,

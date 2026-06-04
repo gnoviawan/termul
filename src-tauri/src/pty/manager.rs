@@ -1845,28 +1845,6 @@ impl PtyManager {
             }
             None
         }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let path_for_which = crate::pty::env_refresh::path_for_resolution();
-            if let Ok(output) = std::process::Command::new("which")
-                .env("PATH", &path_for_which)
-                .arg(shell_path)
-                .output()
-            {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let first_line = stdout.lines().next().unwrap_or("").trim();
-                    if !first_line.is_empty() {
-                        return Some(first_line.to_string());
-                    }
-                }
-            }
-            if Path::new(shell_path).exists() {
-                return Some(shell_path.to_string());
-            }
-            None
-        }
     }
 
     /// Get the home directory
