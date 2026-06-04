@@ -366,6 +366,26 @@
   }
 }
 
+/* Diff syntax highlighting tokens */
+@layer components {
+  .hl-keyword {
+    color: #c792ea;
+  }
+  .hl-string {
+    color: #c3e88d;
+  }
+  .hl-comment {
+    color: #676e95;
+    font-style: italic;
+  }
+  .hl-number {
+    color: #f78c6c;
+  }
+  .hl-punctuation {
+    color: #89ddff;
+  }
+}
+
 /* Agent chat markdown prose (ref: key-agent-chat-pane mockup) */
 @layer components {
   .chat-prose {
