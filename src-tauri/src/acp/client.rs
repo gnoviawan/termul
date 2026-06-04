@@ -204,8 +204,9 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
             let preview = match &chunk.content {
                 agent_client_protocol::schema::ContentBlock::Text(text) => {
                     let t: &str = text.text.as_ref();
-                    if t.len() > 40 {
-                        format!("{}…", &t[..40])
+                    if t.chars().count() > 40 {
+                        let truncated: String = t.chars().take(40).collect();
+                        format!("{truncated}…")
                     } else {
                         t.to_string()
                     }
