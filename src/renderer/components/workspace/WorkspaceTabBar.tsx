@@ -26,10 +26,12 @@ import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
+import { useTerminalProfilesStore } from '@/stores/terminal-profiles-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
+import type { TerminalProfile } from '@/types/terminal-profile'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
 
@@ -57,6 +59,41 @@ interface TerminalTabInlineProps {
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
+}
+
+// Terminal Profiles Menu Component
+interface TerminalProfilesMenuProps {
+  onSelectProfile: (profile: TerminalProfile) => void
+}
+
+function TerminalProfilesMenu({
+  onSelectProfile
+}: TerminalProfilesMenuProps): React.JSX.Element | null {
+  const profiles = useTerminalProfilesStore((state) => state.profiles)
+
+  if (profiles.length === 0) {
+    return null
+  }
+
+  return (
+    <>
+      <div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30 border-t border-border mt-1">
+        Profiles
+      </div>
+      <div className="py-1">
+        {profiles.map((profile) => (
+          <button
+            key={profile.id}
+            onClick={() => onSelectProfile(profile)}
+            className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-secondary flex items-center gap-2 leading-none"
+          >
+            <TerminalIcon size={11} />
+            <span className="truncate">{profile.name}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  )
 }
 
 function TerminalTabInline({
@@ -847,6 +884,21 @@ export function WorkspaceTabBar({
     [onAddTerminal]
   )
 
+  const handleSelectProfile = useCallback(
+    (profile: TerminalProfile) => {
+      if (onAddTerminal) {
+        // Pass profile shell as ShellInfo-like object
+        onAddTerminal({
+          name: profile.name,
+          path: profile.shell ?? '',
+          displayName: profile.name
+        })
+      }
+      setIsTerminalMenuOpen(false)
+    },
+    [onAddTerminal]
+  )
+
   const handleCloseEditorTab = useCallback(
     (filePath: string) => {
       const operationStatus =
@@ -1191,6 +1243,8 @@ export function WorkspaceTabBar({
                     No shells detected
                   </div>
                 )}
+                {/* Terminal Profiles */}
+                <TerminalProfilesMenu onSelectProfile={handleSelectProfile} />
               </div>
             )}
           </div>

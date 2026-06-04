@@ -23,6 +23,10 @@ import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-per
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import {
+  useTerminalProfilesAutoSave,
+  useTerminalProfilesLoader
+} from './hooks/use-terminal-profiles-persistence'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
@@ -51,6 +55,8 @@ function AppEffects(): null {
   useAppSettingsLoader()
   useAppliedColorThemeSync()
   useKeyboardShortcutsLoader()
+  useTerminalProfilesLoader()
+  useTerminalProfilesAutoSave()
   useProjectsLoader()
   useProjectsAutoSave()
   useMenuUpdaterListener()
