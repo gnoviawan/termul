@@ -32,7 +32,10 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
         return candidate.exists().then(|| command.to_string());
     }
 
-    let path_var = env::var_os("PATH")?;
+    let path_var = crate::pty::env_refresh::path_for_resolution();
+    if path_var.is_empty() {
+        return None;
+    }
     let pathext_var =
         env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
 
@@ -864,13 +867,13 @@ impl PtyManager {
                     if cfg!(windows)
                         && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
                     {
-                        "-NoLogo"  // Load user profile for custom prompts
+                        "-NoLogo"  // Skip PowerShell banner only (profile still loads)
                     } else {
                         ""
                     }
                 )
             } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
-                format!("{} -NoLogo", shell_path)  // Load user profile for custom prompts
+                format!("{} -NoLogo", shell_path)  // Skip PowerShell banner only (profile still loads)
             } else {
                 shell_path.clone()
             };
@@ -985,6 +988,13 @@ impl PtyManager {
                 .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
             let mut cmd = CommandBuilder::new(&shell_path);
+            // Interactive shells: login flag so profile-sourced PATH is applied (GH-275).
+            if options.program.is_none() {
+                if let Some(login_arg) = crate::pty::env_refresh::shell_wants_login_arg(&shell_path)
+                {
+                    cmd.arg(login_arg);
+                }
+            }
             // ADR-004.2: In agent mode, append the argv tail as discrete
             // arguments. portable-pty passes argv without a shell, so the prompt
             // is delivered verbatim with no shell interpolation. In shell mode
@@ -1607,7 +1617,12 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            if let Ok(output) = std::process::Command::new("which").arg(trimmed).output() {
+            let path_for_which = crate::pty::env_refresh::path_for_resolution();
+            if let Ok(output) = std::process::Command::new("which")
+                .env("PATH", &path_for_which)
+                .arg(trimmed)
+                .output()
+            {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let first_line = stdout.lines().next().unwrap_or("").trim();
@@ -1833,7 +1848,12 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            if let Ok(output) = std::process::Command::new("which").arg(shell_path).output() {
+            let path_for_which = crate::pty::env_refresh::path_for_resolution();
+            if let Ok(output) = std::process::Command::new("which")
+                .env("PATH", &path_for_which)
+                .arg(shell_path)
+                .output()
+            {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let first_line = stdout.lines().next().unwrap_or("").trim();
@@ -1870,28 +1890,58 @@ impl PtyManager {
         &self,
         custom_env: Option<HashMap<String, String>>,
     ) -> HashMap<String, String> {
+        let custom_sets_path = custom_env.as_ref().is_some_and(|custom| {
+            custom
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("path"))
+        });
+
         #[cfg(target_os = "windows")]
         {
-            merge_windows_environment_map(env::vars(), custom_env)
+            let mut env_map = merge_windows_environment_map(env::vars(), None);
+            if !custom_sets_path {
+                crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+            }
+            if let Some(custom) = custom_env {
+                for (key, value) in custom {
+                    upsert_windows_env_var(&mut env_map, &key, value);
+                }
+            }
+            if !has_windows_env_var(&env_map, "Path") {
+                upsert_windows_env_var(
+                    &mut env_map,
+                    "Path",
+                    env::var("PATH").unwrap_or_default(),
+                );
+            }
+            if !has_windows_env_var(&env_map, "PATHEXT") {
+                upsert_windows_env_var(
+                    &mut env_map,
+                    "PATHEXT",
+                    env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string()),
+                );
+            }
+            env_map
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let mut env = HashMap::new();
 
-            // Copy current process environment
             for (key, value) in env::vars() {
                 env.insert(key, value);
             }
 
-            // Apply custom environment (overriding existing)
+            if !custom_sets_path {
+                crate::pty::env_refresh::apply_fresh_path(&mut env);
+            }
+
             if let Some(custom) = custom_env {
                 for (key, value) in custom {
                     env.insert(key, value);
                 }
             }
 
-            // Ensure PATH exists
             if !env.contains_key("PATH") {
                 env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
             }
