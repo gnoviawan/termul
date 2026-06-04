@@ -1,7 +1,12 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
-import { useAppSettingsStore, useTerminalUrlOpenMode } from './app-settings-store'
+import {
+  useAppearanceMode,
+  useAppSettingsStore,
+  useColorTheme,
+  useTerminalUrlOpenMode
+} from './app-settings-store'
 
 describe('app-settings-store', () => {
   beforeEach(() => {
@@ -218,6 +223,26 @@ describe('app-settings-store', () => {
 
       const { result } = renderHook(() => useTerminalUrlOpenMode())
       expect(result.current).toBe('termul')
+    })
+
+    it('useColorTheme should select the app color theme', () => {
+      useAppSettingsStore.setState((state) => ({
+        ...state,
+        settings: { ...state.settings, colorTheme: 'dracula' }
+      }))
+
+      const { result } = renderHook(() => useColorTheme())
+      expect(result.current).toBe('dracula')
+    })
+
+    it('useAppearanceMode should select the app appearance mode', () => {
+      useAppSettingsStore.setState((state) => ({
+        ...state,
+        settings: { ...state.settings, appearanceMode: 'light' }
+      }))
+
+      const { result } = renderHook(() => useAppearanceMode())
+      expect(result.current).toBe('light')
     })
   })
 })

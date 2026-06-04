@@ -43,6 +43,7 @@ export function ThemePicker(): React.JSX.Element | null {
   const [focusIndex, setFocusIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const previousQueryRef = useRef(query)
 
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -114,6 +115,22 @@ export function ThemePicker(): React.JSX.Element | null {
   }, [focusIndex, isOpen, scrollFocusedIntoView])
 
   useEffect(() => {
+    if (!isOpen) {
+      previousQueryRef.current = query
+      return
+    }
+
+    if (previousQueryRef.current === query) return
+    previousQueryRef.current = query
+
+    const row = flatFilteredRows[0]
+    if (row) {
+      setFocusIndex(0)
+      preview(row.themeId)
+    }
+  }, [flatFilteredRows, isOpen, preview, query])
+
+  useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -145,8 +162,8 @@ export function ThemePicker(): React.JSX.Element | null {
       if (event.key === 'Enter') {
         event.preventDefault()
         const row =
-          flatFilteredRows.find((item) => item.themeId === highlightedThemeId) ??
-          flatFilteredRows[focusIndex]
+          flatFilteredRows[focusIndex] ??
+          flatFilteredRows.find((item) => item.themeId === highlightedThemeId)
         if (row) {
           void confirmRow(row)
         }

@@ -102,7 +102,9 @@ vi.mock('@/stores/app-settings-store', () => ({
   useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
-  useDefaultProjectColor: vi.fn(() => 'blue')
+  useDefaultProjectColor: vi.fn(() => 'blue'),
+  useColorTheme: vi.fn(() => 'termul'),
+  useAppearanceMode: vi.fn(() => 'dark')
 }))
 
 vi.mock('@/stores/remote-status-store', () => ({
@@ -149,7 +151,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
     closeTab: { customKey: 'ctrl+w', defaultKey: 'ctrl+w' },
     saveFile: { customKey: 'ctrl+s', defaultKey: 'ctrl+s' },
     toggleFileExplorer: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
-    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' }
+    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' },
+    colorThemePicker: { customKey: 'ctrl+alt+t', defaultKey: 'ctrl+alt+t' }
   }
 
   return {

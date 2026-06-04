@@ -3,12 +3,18 @@ import mermaid from 'mermaid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { COLOR_THEME_CHANGED_EVENT } from '@/lib/themes'
 
-function useIsDark(): boolean {
-  const [isDark, setIsDark] = useState(document.documentElement.classList.contains('dark'))
+function useMermaidThemeSignal(): { isDark: boolean; revision: number } {
+  const [themeSignal, setThemeSignal] = useState(() => ({
+    isDark: document.documentElement.classList.contains('dark'),
+    revision: 0
+  }))
 
   useEffect(() => {
     const sync = (): void => {
-      setIsDark(document.documentElement.classList.contains('dark'))
+      setThemeSignal((current) => ({
+        isDark: document.documentElement.classList.contains('dark'),
+        revision: current.revision + 1
+      }))
     }
 
     const observer = new MutationObserver(sync)
@@ -25,7 +31,7 @@ function useIsDark(): boolean {
     }
   }, [])
 
-  return isDark
+  return themeSignal
 }
 
 interface MermaidBlockProps {
@@ -76,7 +82,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
   }, [])
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const isDark = useIsDark()
+  const { isDark, revision: themeRevision } = useMermaidThemeSignal()
 
   // Zoom / pan state
   const [scale, setScale] = useState(1)
@@ -103,7 +109,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
       suppressErrorRendering: true
     })
 
-    const id = `mb-${Math.random().toString(36).slice(2, 11)}`
+    const id = `mb-${themeRevision}-${Math.random().toString(36).slice(2, 11)}`
     latestRenderIdRef.current = id
 
     mermaid
@@ -122,7 +128,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
         setError(err instanceof Error ? err.message : String(err))
         setSvg('')
       })
-  }, [source, isDark])
+  }, [source, isDark, themeRevision])
 
   // Reset zoom/pan when source changes
   useEffect(() => {

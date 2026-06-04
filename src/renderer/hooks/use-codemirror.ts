@@ -295,11 +295,13 @@ export function useCodeMirror(
   // Watch for dark/light class changes and color theme updates
   useEffect(() => {
     const reconfigureTheme = (syntax?: ColorThemeChangedDetail['syntax'] | null): void => {
-      const view = viewRef.current
-      if (!view) return
-      if (syntax) {
+      if (syntax !== undefined) {
         syntaxColorsRef.current = syntax
       }
+
+      const view = viewRef.current
+      if (!view) return
+
       const isDarkNow = document.documentElement.classList.contains('dark')
       view.dispatch({
         effects: themeCompartment.current.reconfigure(
