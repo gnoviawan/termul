@@ -2,6 +2,7 @@ import {
   FolderKanban,
   GitBranch,
   History,
+  MessageSquarePlus,
   Network,
   PanelLeft,
   PanelRight,
@@ -29,6 +30,10 @@ interface ActivityRailProps {
   onOpenGitChanges?: () => void
   /** Whether a git changes tab can currently be opened (active project has a path). */
   canOpenGitChanges?: boolean
+  /** Opens the New Agent Chat dialog. */
+  onOpenAgentChat?: () => void
+  /** Whether a new agent chat can currently be started (active project has a path). */
+  canOpenAgentChat?: boolean
   /** Opens a git history (commit graph) tab in the active pane. */
   onOpenGitHistory?: () => void
   /** Whether a git history tab can currently be opened (active project has a path). */
@@ -57,6 +62,8 @@ export function ActivityRail({
   onOpenCommandPalette,
   onOpenGitChanges,
   canOpenGitChanges = false,
+  onOpenAgentChat,
+  canOpenAgentChat = false,
   onOpenGitHistory,
   canOpenGitHistory = false
 }: ActivityRailProps = {}): React.JSX.Element {
@@ -142,6 +149,22 @@ export function ActivityRail({
         <GitBranch
           size={18}
           className={canOpenGitChanges ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenAgentChat?.()
+        }}
+        className={railButtonClass}
+        title={canOpenAgentChat ? 'New agent chat' : 'New agent chat (open a project first)'}
+        aria-label="New agent chat"
+        disabled={!onOpenAgentChat || !canOpenAgentChat}
+      >
+        <MessageSquarePlus
+          size={18}
+          className={canOpenAgentChat ? 'text-muted-foreground' : 'text-muted-foreground/40'}
         />
       </button>
 

@@ -160,6 +160,33 @@ describe('ActivityRail', () => {
     expect(onOpenGitChanges).not.toHaveBeenCalled()
   })
 
+  it('opens a new agent chat when a project is available', () => {
+    const onOpenAgentChat = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenAgentChat={onOpenAgentChat} canOpenAgentChat />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'New agent chat' }))
+
+    expect(onOpenAgentChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables new agent chat when no project is available', () => {
+    const onOpenAgentChat = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenAgentChat={onOpenAgentChat} canOpenAgentChat={false} />
+      </MemoryRouter>
+    )
+
+    const chatButton = screen.getByRole('button', { name: 'New agent chat' })
+    expect(chatButton).toBeDisabled()
+    fireEvent.click(chatButton)
+    expect(onOpenAgentChat).not.toHaveBeenCalled()
+  })
+
   it('toggles the SSH panel via persistence-aware updater on click', async () => {
     renderRail()
 

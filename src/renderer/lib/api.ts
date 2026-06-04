@@ -8,6 +8,7 @@
  *   import { terminalApi, clipboardApi, systemApi } from '@/lib/api'
  */
 
+export { acpApi } from './acp-api'
 export { clipboardApi } from './clipboard-api'
 export { dialogApi } from './dialog-api'
 export { filesystemApi } from './filesystem-api'

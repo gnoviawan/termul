@@ -1,4 +1,5 @@
 // Module declarations
+mod acp;
 mod browser_tab_manager;
 mod commands;
 mod agent_registry;
@@ -104,6 +105,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
+pub use acp::AcpManager;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 
@@ -708,6 +710,10 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
+            // Create ACP Manager — spawns/owns ACP agent subprocesses
+            let acp_manager = Arc::new(AcpManager::new(handle.clone()));
+            app.manage(acp_manager);
+
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
             app.manage(ssh_manager);
@@ -882,6 +888,21 @@ pub fn run() {
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
             secure_storage::secure_storage_delete,
+            // ACP (Agent Client Protocol) commands — ADR-003 P0
+            acp::commands::acp_spawn_agent,
+            acp::commands::acp_kill_agent,
+            acp::commands::acp_list_agents,
+            acp::commands::acp_new_session,
+            acp::commands::acp_load_session,
+            acp::commands::acp_resume_session,
+            acp::commands::acp_close_session,
+            acp::commands::acp_list_sessions,
+            acp::commands::acp_send_prompt,
+            acp::commands::acp_cancel_prompt,
+            acp::commands::acp_set_config_option,
+            acp::commands::acp_set_mode,
+            acp::commands::acp_respond_permission,
+            acp::commands::acp_authenticate,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,
@@ -908,6 +929,10 @@ pub fn run() {
                 .try_state::<Arc<RemoteServerState>>()
                 .map(|state| state.inner().clone());
 
+            let acp_manager = app_handle
+                .try_state::<Arc<AcpManager>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
@@ -923,10 +948,22 @@ pub fn run() {
                         let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
+                    if let Some(acp_manager) = acp_manager {
+                        acp_manager.kill_all().await;
+                    }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
                     // After cleanup completes, allow the app to exit with code 0
+                    app_handle_clone.exit(0);
+                });
+            } else if let Some(acp_manager) = acp_manager {
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    acp_manager.kill_all().await;
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
                     app_handle_clone.exit(0);
                 });
             } else {
@@ -941,7 +978,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
-                    // No PTY manager, just exit
+                    // No PTY or ACP manager, just exit
                     app_handle_clone.exit(0);
                 });
             }
