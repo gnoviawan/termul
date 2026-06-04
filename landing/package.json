@@ -21,6 +21,7 @@
     "@hugeicons/core-free-icons": "^4.1.4",
     "@hugeicons/react": "^1.1.6",
     "@radix-ui/react-avatar": "^1.1.11",
+    "@radix-ui/react-tooltip": "^1.2.8",
     "@unhead/react": "^3.1.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
