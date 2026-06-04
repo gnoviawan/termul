@@ -16,11 +16,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
 const ICONS_DIR = join(ROOT, 'src', 'renderer', 'assets', 'agent-icons', 'acp')
 const MANIFEST_PATH = join(ICONS_DIR, 'manifest.json')
+const AGENTS_PATH = join(ICONS_DIR, 'agents.json')
 const REGISTRY_URL = 'https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json'
 const SAFE_AGENT_ID = /^[A-Za-z0-9._-]+$/
 const SAFE_DISPLAY_NAME = /^[\p{L}\p{N}\s._-]+$/u
+// Registry distribution.binary keys are `{os}-{arch}`; allow the documented tokens only.
+const SAFE_PLATFORM_ARCH = /^[a-z0-9]+-[a-z0-9_]+$/
 const FETCH_TIMEOUT_MS = 10_000
 const MAX_SVG_BYTES = 256 * 1024
+const MAX_STR = 512
+const MAX_ARR = 32
 
 function isSafeIconPath(filepath) {
   const iconsRoot = resolve(ICONS_DIR)
@@ -107,6 +112,87 @@ function validateAndNormalizeSvg(untrusted) {
     throw new Error('SVG contains disallowed content')
   }
   return normalizeSvg(untrusted)
+}
+
+/** Trim + length-cap an untrusted string; returns '' when not a usable string. */
+function safeStr(value) {
+  if (typeof value !== 'string') return ''
+  const v = value.trim()
+  return v.length === 0 || v.length > MAX_STR ? '' : v
+}
+
+/** Sanitize an untrusted string[] (drop non-strings, cap count + length). */
+function safeStrArray(value) {
+  if (!Array.isArray(value)) return []
+  const out = []
+  for (const item of value) {
+    const s = safeStr(item)
+    if (s) out.push(s)
+    if (out.length >= MAX_ARR) break
+  }
+  return out
+}
+
+/** Sanitize an untrusted Record<string,string> env map. */
+function safeEnv(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out = {}
+  for (const [k, v] of Object.entries(value)) {
+    const key = safeStr(k)
+    const val = safeStr(v)
+    if (key) out[key] = val
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Build a sanitized `{package, args?, env?}` launcher block, or null when invalid. */
+function sanitizeLauncher(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const pkg = safeStr(raw.package)
+  if (!pkg) return null
+  const block = { package: pkg }
+  const args = safeStrArray(raw.args)
+  if (args.length > 0) block.args = args
+  const env = safeEnv(raw.env)
+  if (env) block.env = env
+  return block
+}
+
+/** Build a sanitized `distribution` block, or null when no usable launch method. */
+function sanitizeDistribution(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const dist = {}
+
+  const npx = sanitizeLauncher(raw.npx)
+  if (npx) dist.npx = npx
+  const uvx = sanitizeLauncher(raw.uvx)
+  if (uvx) dist.uvx = uvx
+
+  if (raw.binary && typeof raw.binary === 'object' && !Array.isArray(raw.binary)) {
+    const binary = {}
+    for (const [platformArch, target] of Object.entries(raw.binary)) {
+      if (!SAFE_PLATFORM_ARCH.test(platformArch)) continue
+      if (!target || typeof target !== 'object') continue
+      const cmd = safeStr(target.cmd)
+      if (!cmd) continue
+      const entry = { cmd }
+      const args = safeStrArray(target.args)
+      if (args.length > 0) entry.args = args
+      const env = safeEnv(target.env)
+      if (env) entry.env = env
+      binary[platformArch] = entry
+    }
+    if (Object.keys(binary).length > 0) dist.binary = binary
+  }
+
+  return Object.keys(dist).length > 0 ? dist : null
+}
+
+function writeTrustedAgents(entries) {
+  if (!isSafeIconPath(AGENTS_PATH)) {
+    throw new Error(`Unsafe agents path: ${AGENTS_PATH}`)
+  }
+  writeFileSync(AGENTS_PATH, `${JSON.stringify(entries, null, 2)}\n`, 'utf8')
 }
 
 function sanitizeDisplayName(id, rawName) {
@@ -196,6 +282,30 @@ async function main() {
   writeTrustedManifest(manifest)
   console.log(`\nDone! Downloaded ${manifest.length} icons.`)
   console.log(`Manifest written to ${MANIFEST_PATH}`)
+
+  // Agents snapshot: every agent with a valid id and a usable distribution,
+  // independent of icon availability. Offline-first source for the settings list.
+  const agentEntries = []
+  for (const agent of agents) {
+    const id = agent.id
+    if (!id || !SAFE_AGENT_ID.test(id)) continue
+    const distribution = sanitizeDistribution(agent.distribution)
+    if (!distribution) {
+      console.log(`  SKIP ${id}: no usable distribution`)
+      continue
+    }
+    agentEntries.push({
+      id,
+      name: sanitizeDisplayName(id, agent.name),
+      version: safeStr(agent.version),
+      description: safeStr(agent.description),
+      distribution
+    })
+  }
+  agentEntries.sort((a, b) => a.id.localeCompare(b.id))
+  writeTrustedAgents(agentEntries)
+  console.log(`Captured ${agentEntries.length} agent distributions.`)
+  console.log(`Agents snapshot written to ${AGENTS_PATH}`)
 }
 
 main().catch((err) => {
