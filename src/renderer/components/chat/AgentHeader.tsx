@@ -1,9 +1,10 @@
-import { ChevronDown, Circle } from 'lucide-react'
+import { Brain, ChevronDown, Circle } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession, AgentStatus } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
+import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 
 interface AgentHeaderProps {
   session: AcpSession
@@ -18,17 +19,29 @@ const STATUS_COLOR: Record<string, string> = {
   'needs-auth': 'text-amber-400'
 }
 
-/** A popover selector for one config option. */
+/**
+ * A popover selector for one config option. When `promoted` is set (e.g. a
+ * `thought_level` reasoning-level option, issue #286), the chip gains a leading
+ * icon and uses the shared category heading for its popover title, giving it
+ * visual priority over generic `other` options.
+ */
 export function ConfigChip({
   option,
   disabled,
-  onSelect
+  onSelect,
+  promoted = false
 }: {
   option: SessionConfigOption
   disabled: boolean
   onSelect: (valueId: string) => void
+  promoted?: boolean
 }): React.JSX.Element {
   const current = option.options.find((o) => o.value === option.currentValue)
+  // Promoted chips (e.g. thought_level) use the shared category heading; generic
+  // chips keep their original `option.name` fallback unchanged.
+  const fallbackLabel = promoted
+    ? (option.category && KNOWN_CATEGORY_HEADINGS[option.category]) || option.name
+    : option.name
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -37,13 +50,14 @@ export function ConfigChip({
           disabled={disabled}
           className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {current?.name ?? option.name}
+          {promoted && <Brain size={13} className="text-muted-foreground" />}
+          {current?.name ?? fallbackLabel}
           <ChevronDown size={11} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-          {option.name}
+          {promoted ? fallbackLabel : option.name}
         </div>
         {option.options.map((v) => (
           <button
