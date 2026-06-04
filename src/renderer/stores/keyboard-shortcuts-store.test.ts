@@ -36,6 +36,12 @@ describe('keyboard-shortcuts-store', () => {
       expect(shortcuts.sidebarToggle.customKey).toBeUndefined()
     })
 
+    it('should include color theme picker shortcut defaults', () => {
+      const { shortcuts } = useKeyboardShortcutsStore.getState()
+      expect(shortcuts.colorThemePicker.defaultKey).toBe('ctrl+alt+t')
+      expect(shortcuts.colorThemePicker.customKey).toBeUndefined()
+    })
+
     it('should have commandPalette shortcut with default key', () => {
       const { shortcuts } = useKeyboardShortcutsStore.getState()
       expect(shortcuts.commandPalette.defaultKey).toBe('ctrl+k')
@@ -70,6 +76,16 @@ describe('keyboard-shortcuts-store', () => {
       updateShortcut('commandPalette', 'ctrl+k')
       expect(
         useKeyboardShortcutsStore.getState().shortcuts.commandPalette.customKey
+      ).toBeUndefined()
+    })
+
+    it('should clear customKey when set to the default with reordered modifiers', () => {
+      const { updateShortcut } = useKeyboardShortcutsStore.getState()
+
+      updateShortcut('worktreeCreate', 'ctrl+alt+shift+n')
+
+      expect(
+        useKeyboardShortcutsStore.getState().shortcuts.worktreeCreate.customKey
       ).toBeUndefined()
     })
 
@@ -182,6 +198,14 @@ describe('findConflictingShortcut', () => {
     expect(conflict).toBeDefined()
     expect(conflict?.id).toBe('terminalSearch')
   })
+
+  it('should find conflicts with reordered modifiers', () => {
+    const shortcuts = { ...DEFAULT_KEYBOARD_SHORTCUTS }
+
+    const conflict = findConflictingShortcut(shortcuts, 'ctrl+alt+shift+n', 'commandPalette')
+    expect(conflict).toBeDefined()
+    expect(conflict?.id).toBe('worktreeCreate')
+  })
 })
 
 describe('normalizeKeyEvent', () => {
@@ -207,6 +231,21 @@ describe('normalizeKeyEvent', () => {
     // On non-macOS (test env), metaKey → 'cmd' (secondary modifier)
     // On macOS, metaKey → 'cmd' (primary modifier)
     expect(normalized).toBe('cmd+k')
+  })
+
+  it('should normalize ctrl+alt in persisted shortcut order', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, altKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+alt+t')
+  })
+
+  it('should normalize ctrl+shift+alt in persisted shortcut order', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'n',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+shift+alt+n')
   })
 })
 
@@ -251,6 +290,23 @@ describe('matchesShortcut', () => {
   it('should match with shift modifier', () => {
     const event = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, shiftKey: true })
     expect(matchesShortcut(event, 'ctrl+shift+p')).toBe(true)
+  })
+
+  it('should match the color theme picker shortcut', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, altKey: true })
+    expect(matchesShortcut(event, DEFAULT_KEYBOARD_SHORTCUTS.colorThemePicker.defaultKey)).toBe(
+      true
+    )
+  })
+
+  it('should match ctrl+shift+alt shortcuts using persisted default order', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'n',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(matchesShortcut(event, DEFAULT_KEYBOARD_SHORTCUTS.worktreeCreate.defaultKey)).toBe(true)
   })
 
   it('should match cmd+k against ctrl+k on macOS (alias)', async () => {

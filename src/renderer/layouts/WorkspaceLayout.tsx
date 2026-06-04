@@ -19,6 +19,7 @@ import { SidebarTabs } from '@/components/SidebarTabs'
 import { StatusBar } from '@/components/StatusBar'
 import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
 import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
+import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import {
@@ -56,9 +57,12 @@ import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac } from '@/lib/platform'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
+  useAppearanceMode,
+  useColorTheme,
   useConfirmTerminalClose,
   useDefaultShell,
   useMaxTerminalsPerProject,
@@ -91,6 +95,7 @@ import {
   useTerminalStore,
   useTerminals
 } from '@/stores/terminal-store'
+import { useThemePickerOpen, useThemePickerStore } from '@/stores/theme-picker-store'
 import {
   editorTabId,
   findPaneById,
@@ -593,6 +598,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
+    if (useThemePickerStore.getState().isOpen) {
+      useThemePickerStore.getState().cancel()
+    }
     navigate('/preferences')
   }, [navigate])
 
@@ -651,7 +659,44 @@ export default function WorkspaceLayout(): React.JSX.Element {
     },
     [shortcuts]
   )
+
   const fontSize = useTerminalFontSize()
+  const colorTheme = useColorTheme()
+  const appearanceMode = useAppearanceMode()
+
+  const isThemePickerOpen = useThemePickerOpen()
+
+  const closeThemePickerPeerOverlays = useCallback(() => {
+    setIsCommandPaletteOpen(false)
+    setIsShortcutMenuOpen(false)
+    setIsCommandHistoryOpen(false)
+  }, [])
+
+  const handleToggleThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    closeThemePickerPeerOverlays()
+    useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+
+  const handleOpenThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    closeThemePickerPeerOverlays()
+    const store = useThemePickerStore.getState()
+    if (!store.isOpen) {
+      store.open(getEffectiveThemeId(colorTheme, appearanceMode))
+    }
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
@@ -903,6 +948,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
+      // Color theme picker (Ctrl+Alt+T)
+      if (matchesShortcut(e, getActiveKey('colorThemePicker'))) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleOpenThemePicker()
+        return
+      }
+
       // New project (Ctrl+N)
       if (matchesShortcut(e, getActiveKey('newProject'))) {
         e.preventDefault()
@@ -1023,7 +1076,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     handleNewBrowserTab,
     updatePanelVisibility,
     isExplorerVisible,
-    isSidebarVisible
+    isSidebarVisible,
+    handleOpenThemePicker
   ])
 
   useEffect(() => {
@@ -1082,9 +1136,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
             )
           })
           break
+        case 'colorThemePicker':
+          handleOpenThemePicker()
+          break
       }
     })
-  }, [cycleTab, fontSize, updateAppSetting, updatePanelVisibility, isSidebarVisible])
+  }, [
+    cycleTab,
+    fontSize,
+    handleOpenThemePicker,
+    updateAppSetting,
+    updatePanelVisibility,
+    isSidebarVisible
+  ])
 
   const closeTerminalByRecordId = useCallback(
     async (terminalRecordId: string): Promise<boolean> => {
@@ -1317,6 +1381,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
           canOpenGitChanges={Boolean(activeProject?.path)}
           onOpenGitHistory={() => handleAddGitHistoryTab()}
           canOpenGitHistory={Boolean(activeProject?.path)}
+          isThemePickerOpen={isThemePickerOpen}
+          onToggleThemePicker={handleToggleThemePicker}
           onOpenAgentChat={handleOpenAgentChat}
           canOpenAgentChat={Boolean(activeProject?.path)}
         />
@@ -1491,6 +1557,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateProject={addProject}
       />
 
+      <ThemePicker />
+
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
@@ -1510,6 +1578,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onOpenAppPreferences={handleOpenAppPreferences}
         onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
         onOpenShortcutMenu={handleOpenShortcutMenu}
+        onOpenThemePicker={handleOpenThemePicker}
         onSSHConnect={handleSSHConnect}
         sshProfiles={sshProfiles.map((p) => ({
           id: p.id,

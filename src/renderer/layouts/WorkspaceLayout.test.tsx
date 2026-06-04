@@ -102,7 +102,9 @@ vi.mock('@/stores/app-settings-store', () => ({
   useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
-  useDefaultProjectColor: vi.fn(() => 'blue')
+  useDefaultProjectColor: vi.fn(() => 'blue'),
+  useColorTheme: vi.fn(() => 'termul'),
+  useAppearanceMode: vi.fn(() => 'dark')
 }))
 
 vi.mock('@/stores/remote-status-store', () => ({
@@ -149,7 +151,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
     closeTab: { customKey: 'ctrl+w', defaultKey: 'ctrl+w' },
     saveFile: { customKey: 'ctrl+s', defaultKey: 'ctrl+s' },
     toggleFileExplorer: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
-    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' }
+    newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' },
+    colorThemePicker: { customKey: 'ctrl+alt+t', defaultKey: 'ctrl+alt+t' }
   }
 
   return {
@@ -196,6 +199,7 @@ const { mockUpdatePanelVisibility, mockWaitForPendingAppSettingsPersistence } = 
 
 vi.mock('@/hooks/use-app-settings', () => ({
   useUpdateAppSetting: vi.fn(() => vi.fn()),
+  useUpdateAppSettings: vi.fn(() => vi.fn()),
   useUpdatePanelVisibility: vi.fn(() => mockUpdatePanelVisibility),
   waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))
@@ -229,7 +233,7 @@ vi.mock('@/components/file-explorer/FileExplorer', () => ({
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     keyboard: {
-      onShortcut: vi.fn((_callback: () => Promise<boolean>) => vi.fn())
+      onShortcut: vi.fn((_callback: (shortcut: string) => void) => vi.fn())
     },
     shell: {
       getAvailableShells: vi
@@ -353,6 +357,8 @@ beforeEach(() => {
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+  mockApi.keyboard.onShortcut.mockReset()
+  mockApi.keyboard.onShortcut.mockImplementation((_callback: (shortcut: string) => void) => vi.fn())
   mockApi.persistence.flushPendingWrites.mockReset()
   mockApi.persistence.flushPendingWrites.mockResolvedValue({ success: true, data: undefined })
   mockApi.window.onCloseRequested.mockReset()
@@ -777,6 +783,19 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(screen.getByText('Command History')).toBeInTheDocument()
 
       document.body.removeChild(terminalRoot)
+    })
+
+    it('opens the color theme picker from backend shortcut callbacks', async () => {
+      mockApi.keyboard.onShortcut.mockImplementationOnce((callback: (shortcut: string) => void) => {
+        callback('colorThemePicker')
+        return vi.fn()
+      })
+
+      renderWithRouter()
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
+      })
     })
   })
 

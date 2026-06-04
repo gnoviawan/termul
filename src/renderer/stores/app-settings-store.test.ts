@@ -1,7 +1,21 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
-import { useAppSettingsStore, useTerminalUrlOpenMode } from './app-settings-store'
+import {
+  useAppearanceMode,
+  useAppSettingsStore,
+  useColorTheme,
+  useTerminalUrlOpenMode
+} from './app-settings-store'
+
+function assertUpdateSettingsRejectsPanelVisibility(
+  updateSettings: ReturnType<typeof useAppSettingsStore.getState>['updateSettings']
+): void {
+  // @ts-expect-error Panel visibility changes must go through useUpdatePanelVisibility.
+  updateSettings({ sidebarVisible: false })
+}
+
+void assertUpdateSettingsRejectsPanelVisibility
 
 describe('app-settings-store', () => {
   beforeEach(() => {
@@ -88,6 +102,19 @@ describe('app-settings-store', () => {
     })
   })
 
+  describe('updateSettings', () => {
+    it('should update multiple settings in one state change', () => {
+      const { updateSettings } = useAppSettingsStore.getState()
+
+      updateSettings({ colorTheme: 'dracula', appearanceMode: 'light' })
+
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.colorTheme).toBe('dracula')
+      expect(settings.appearanceMode).toBe('light')
+      expect(settings.terminalFontSize).toBe(DEFAULT_APP_SETTINGS.terminalFontSize)
+    })
+  })
+
   describe('setSettings', () => {
     it('should replace all settings and set isLoaded to true', () => {
       const newSettings = {
@@ -105,7 +132,9 @@ describe('app-settings-store', () => {
         sidebarVisible: false,
         fileExplorerVisible: true,
         sshPanelVisible: true,
-        remoteBindMode: 'localhost' as const
+        remoteBindMode: 'localhost' as const,
+        colorTheme: 'dracula',
+        appearanceMode: 'dark' as const
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -136,7 +165,9 @@ describe('app-settings-store', () => {
           sidebarVisible: false,
           fileExplorerVisible: false,
           sshPanelVisible: false,
-          remoteBindMode: 'all' as const
+          remoteBindMode: 'all' as const,
+          colorTheme: 'nord',
+          appearanceMode: 'light' as const
         },
         isLoaded: true
       })
@@ -214,6 +245,26 @@ describe('app-settings-store', () => {
 
       const { result } = renderHook(() => useTerminalUrlOpenMode())
       expect(result.current).toBe('termul')
+    })
+
+    it('useColorTheme should select the app color theme', () => {
+      useAppSettingsStore.setState((state) => ({
+        ...state,
+        settings: { ...state.settings, colorTheme: 'dracula' }
+      }))
+
+      const { result } = renderHook(() => useColorTheme())
+      expect(result.current).toBe('dracula')
+    })
+
+    it('useAppearanceMode should select the app appearance mode', () => {
+      useAppSettingsStore.setState((state) => ({
+        ...state,
+        settings: { ...state.settings, appearanceMode: 'light' }
+      }))
+
+      const { result } = renderHook(() => useAppearanceMode())
+      expect(result.current).toBe('light')
     })
   })
 })

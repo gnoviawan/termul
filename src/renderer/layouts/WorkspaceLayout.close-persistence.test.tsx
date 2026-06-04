@@ -170,7 +170,8 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => ({
       prevTerminal: { customKey: 'Ctrl+PageUp', defaultKey: 'Ctrl+PageUp' },
       zoomIn: { customKey: 'Ctrl+=', defaultKey: 'Ctrl+=' },
       zoomOut: { customKey: 'Ctrl+-', defaultKey: 'Ctrl+-' },
-      zoomReset: { customKey: 'Ctrl+0', defaultKey: 'Ctrl+0' }
+      zoomReset: { customKey: 'Ctrl+0', defaultKey: 'Ctrl+0' },
+      colorThemePicker: { customKey: 'Ctrl+Alt+T', defaultKey: 'Ctrl+Alt+T' }
     }
   }),
   matchesShortcut: () => false
@@ -180,7 +181,9 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useDefaultShell: () => 'bash',
   useMaxTerminalsPerProject: () => 10,
-  useConfirmTerminalClose: () => true
+  useConfirmTerminalClose: () => true,
+  useColorTheme: () => 'termul',
+  useAppearanceMode: () => 'dark'
 }))
 
 vi.mock('@/hooks/use-snapshots', () => ({
@@ -205,6 +208,7 @@ vi.mock('@/hooks/use-command-history', () => ({
 
 vi.mock('@/hooks/use-app-settings', () => ({
   useUpdateAppSetting: () => vi.fn(),
+  useUpdateAppSettings: () => vi.fn(),
   useUpdatePanelVisibility: () => mockUpdatePanelVisibility,
   waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))

@@ -114,6 +114,32 @@ describe('ActivityRail', () => {
     expect(screen.getByRole('button', { name: 'Open keyboard shortcuts menu' })).toBeInTheDocument()
   })
 
+  it('disables color themes when no toggle handler is provided', () => {
+    renderRail()
+
+    const themeButton = screen.getByRole('button', { name: 'Color themes' })
+    expect(themeButton).toBeDisabled()
+    expect(themeButton).toHaveAttribute('aria-disabled', 'true')
+    expect(themeButton).not.toHaveAttribute('aria-pressed')
+  })
+
+  it('toggles color themes when a toggle handler is provided', () => {
+    const onToggleThemePicker = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail isThemePickerOpen onToggleThemePicker={onToggleThemePicker} />
+      </MemoryRouter>
+    )
+
+    const themeButton = screen.getByRole('button', { name: 'Color themes' })
+    expect(themeButton).not.toBeDisabled()
+    expect(themeButton).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(themeButton)
+
+    expect(onToggleThemePicker).toHaveBeenCalledTimes(1)
+  })
+
   it('renders the Termul brand mark', () => {
     renderRail()
 

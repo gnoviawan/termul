@@ -5,6 +5,7 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
@@ -90,6 +91,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedColorThemeSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()

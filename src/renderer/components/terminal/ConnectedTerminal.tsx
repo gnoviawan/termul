@@ -17,6 +17,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
+import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
 import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
@@ -29,6 +30,7 @@ import {
   recordTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
+import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
@@ -294,6 +296,7 @@ function ConnectedTerminalComponent({
   })
 
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+  useTerminalColorTheme(terminalInstance)
 
   // 5. CALLBACKS & EFFECTS
   const disposeWebglAddon = useCallback((): void => {
@@ -484,6 +487,7 @@ function ConnectedTerminalComponent({
         cacheKey
       })
       terminal = cachedTerminal
+      applyThemeToTerminal(terminal, getActiveTerminalTheme())
     } else {
       terminal = new Terminal(terminalOptions)
     }
@@ -1707,7 +1711,7 @@ function ConnectedTerminalComponent({
       <ContextMenuTrigger asChild>
         <div className="relative w-full h-full group overflow-hidden">
           <div
-            className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
+            className={`w-full h-full bg-terminal-bg px-4 py-0.5 pb-1 ${className}`}
             onClick={handleContainerClick}
             onMouseDown={(e) => {
               // Prevent event from bubbling to window/parent handlers

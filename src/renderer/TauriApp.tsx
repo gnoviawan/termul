@@ -10,6 +10,7 @@ import { useWindowState } from '@/hooks/use-window-state'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
 import { useCwd } from './hooks/use-cwd'
@@ -48,6 +49,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedColorThemeSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
