@@ -318,7 +318,18 @@ impl BrowserTabManager {
     }
 
     fn escape_js_string_literal(value: &str) -> String {
-        value.replace('\\', "\\\\").replace('\'', "\\'")
+        value
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+            .replace('\0', "\\0")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+            .replace("</script>", "<\\/script>")
+            .replace("</Script>", "<\\/Script>")
+            .replace("</SCRIPT>", "<\\/SCRIPT>")
     }
 
     pub fn inject_annotation_markers(
@@ -499,5 +510,97 @@ impl BrowserTabManager {
 impl Drop for BrowserTabManager {
     fn drop(&mut self) {
         self.destroy_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_js_handles_backslash() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn escape_js_handles_single_quote() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("it's"), "it\\'s");
+    }
+
+    #[test]
+    fn escape_js_handles_newline() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("a\nb"), "a\\nb");
+    }
+
+    #[test]
+    fn escape_js_handles_carriage_return() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("a\rb"), "a\\rb");
+    }
+
+    #[test]
+    fn escape_js_handles_tab() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn escape_js_handles_null() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal("a\0b"), "a\\0b");
+    }
+
+    #[test]
+    fn escape_js_handles_line_separator() {
+        let ls = '\u{2028}';
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal(&format!("a{}b", ls)),
+            "a\\u2028b"
+        );
+    }
+
+    #[test]
+    fn escape_js_handles_paragraph_separator() {
+        let ps = '\u{2029}';
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal(&format!("a{}b", ps)),
+            "a\\u2029b"
+        );
+    }
+
+    #[test]
+    fn escape_js_handles_close_script() {
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal("</script>"),
+            "<\\/script>"
+        );
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal("</Script>"),
+            "<\\/Script>"
+        );
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal("</SCRIPT>"),
+            "<\\/SCRIPT>"
+        );
+    }
+
+    #[test]
+    fn escape_js_handles_combined() {
+        let input = "it's\na\tline\\with</script>\0chars\u{2028}end";
+        let expected = "it\\'s\\na\\tline\\\\with<\\/script>\\0chars\\u2028end";
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal(input),
+            expected
+        );
+    }
+
+    #[test]
+    fn escape_js_handles_plain_text() {
+        assert_eq!(
+            BrowserTabManager::escape_js_string_literal("hello world"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn escape_js_handles_empty() {
+        assert_eq!(BrowserTabManager::escape_js_string_literal(""), "");
     }
 }
