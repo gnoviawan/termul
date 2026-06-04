@@ -5,21 +5,12 @@ import { useEffectiveColorThemeId } from '@/hooks/use-color-theme'
 import {
   COLOR_THEME_FAMILIES,
   getColorThemeDefinition,
-  getEffectiveThemeId,
   getPickerApplySettings,
   THEME_PICKER_ROWS,
   type ThemePickerRow
 } from '@/lib/themes'
-import type { AppearanceMode } from '@/lib/themes/theme-appearance'
 import { cn } from '@/lib/utils'
-import { useAppearanceMode, useColorTheme } from '@/stores/app-settings-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
-
-const APPEARANCE_OPTIONS: Array<{ value: AppearanceMode; label: string }> = [
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-  { value: 'system', label: 'System' }
-]
 
 function ThemeSwatches({ themeId }: { themeId: string }): React.JSX.Element {
   const palette = getColorThemeDefinition(themeId).dark.palette
@@ -45,13 +36,10 @@ export function ThemePicker(): React.JSX.Element | null {
   const cancel = useThemePickerStore((state) => state.cancel)
   const close = useThemePickerStore((state) => state.close)
 
-  const colorTheme = useColorTheme()
-  const appearanceMode = useAppearanceMode()
   const effectiveThemeId = useEffectiveColorThemeId()
   const updateSetting = useUpdateAppSetting()
 
   const [query, setQuery] = useState('')
-  const [previewAppearanceMode, setPreviewAppearanceMode] = useState<AppearanceMode>(appearanceMode)
   const [focusIndex, setFocusIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -82,33 +70,17 @@ export function ThemePicker(): React.JSX.Element | null {
     async (row: ThemePickerRow) => {
       const apply = getPickerApplySettings(row.themeId)
       await updateSetting('colorTheme', apply.colorTheme)
-      await updateSetting(
-        'appearanceMode',
-        previewAppearanceMode === 'system' ? 'system' : apply.appearanceMode
-      )
+      await updateSetting('appearanceMode', apply.appearanceMode)
       close()
       setQuery('')
     },
-    [close, previewAppearanceMode, updateSetting]
+    [close, updateSetting]
   )
 
   const handleCancel = useCallback(() => {
     cancel()
     setQuery('')
-    setPreviewAppearanceMode(appearanceMode)
-  }, [appearanceMode, cancel])
-
-  const handleAppearanceModeChange = useCallback(
-    (mode: AppearanceMode) => {
-      setPreviewAppearanceMode(mode)
-      const highlighted = highlightedThemeId ?? effectiveThemeId
-      const row = THEME_PICKER_ROWS.find((item) => item.themeId === highlighted)
-      const familyId = row?.familyId ?? colorTheme
-      const nextThemeId = getEffectiveThemeId(familyId, mode)
-      preview(nextThemeId)
-    },
-    [colorTheme, effectiveThemeId, highlightedThemeId, preview]
-  )
+  }, [cancel])
 
   const scrollFocusedIntoView = useCallback((index: number) => {
     const list = listRef.current
@@ -122,7 +94,6 @@ export function ThemePicker(): React.JSX.Element | null {
 
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
-      setPreviewAppearanceMode(appearanceMode)
       const highlightedIndex = highlightedThemeId
         ? flatFilteredRows.findIndex((row) => row.themeId === highlightedThemeId)
         : 0
@@ -135,7 +106,7 @@ export function ThemePicker(): React.JSX.Element | null {
       inputRef.current?.focus()
     })
     return () => cancelAnimationFrame(frame)
-  }, [appearanceMode, flatFilteredRows, highlightedThemeId, isOpen])
+  }, [flatFilteredRows, highlightedThemeId, isOpen])
 
   useEffect(() => {
     if (!isOpen) return
@@ -212,7 +183,7 @@ export function ThemePicker(): React.JSX.Element | null {
         role="dialog"
         aria-modal="true"
         aria-label="Color theme picker"
-        className="pointer-events-auto absolute right-4 bottom-4 top-4 w-[min(20rem,calc(100vw-2rem))] flex flex-col rounded-xl border border-border bg-popover/95 shadow-2xl backdrop-blur-sm"
+        className="pointer-events-auto absolute left-14 top-4 bottom-4 w-[min(20rem,calc(100vw-2rem))] flex flex-col rounded-xl border border-border bg-popover/95 shadow-2xl backdrop-blur-sm"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="flex items-center gap-2 border-b border-border px-3 py-2.5">
@@ -233,30 +204,7 @@ export function ThemePicker(): React.JSX.Element | null {
           </button>
         </header>
 
-        <div className="px-3 py-2 border-b border-border space-y-2">
-          <div
-            className="flex rounded-md border border-border p-0.5 bg-secondary/40"
-            role="group"
-            aria-label="Appearance mode"
-          >
-            {APPEARANCE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => handleAppearanceModeChange(option.value)}
-                className={cn(
-                  'flex-1 rounded px-2 py-1 text-[11px] font-medium transition-colors',
-                  previewAppearanceMode === option.value
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                aria-pressed={previewAppearanceMode === option.value}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
+        <div className="px-3 py-2 border-b border-border">
           <div className="relative">
             <Search
               size={14}
@@ -297,11 +245,7 @@ export function ThemePicker(): React.JSX.Element | null {
                   {rows.map((row) => {
                     const index = rowCounter
                     rowCounter += 1
-                    const isApplied =
-                      row.themeId === effectiveThemeId ||
-                      (previewAppearanceMode !== 'system' &&
-                        row.familyId === colorTheme &&
-                        row.variant === previewAppearanceMode)
+                    const isApplied = row.themeId === effectiveThemeId
                     const isHighlighted =
                       row.themeId === highlightedThemeId ||
                       (highlightedThemeId === null && index === focusIndex)

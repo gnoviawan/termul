@@ -1,4 +1,4 @@
-export type AppearanceMode = 'light' | 'dark' | 'system'
+export type AppearanceMode = 'light' | 'dark'
 export type ThemeAppearance = 'light' | 'dark'
 
 export function getSystemAppearance(): ThemeAppearance {
@@ -6,10 +6,6 @@ export function getSystemAppearance(): ThemeAppearance {
     return 'dark'
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-export function resolveAppearanceMode(mode: AppearanceMode): ThemeAppearance {
-  return mode === 'system' ? getSystemAppearance() : mode
 }
 
 export function getLightThemeId(familyId: string): string {
@@ -22,14 +18,13 @@ export function normalizeThemeFamilyId(themeId: string): string {
 
 export function getEffectiveThemeId(familyId: string, appearanceMode: AppearanceMode): string {
   const family = normalizeThemeFamilyId(familyId)
-  const resolved = resolveAppearanceMode(appearanceMode)
-  return resolved === 'light' ? getLightThemeId(family) : family
+  return appearanceMode === 'light' ? getLightThemeId(family) : family
 }
 
-/** Map a bundled theme row id to persisted settings (Q7-A + Q11-A). */
+/** Map a bundled theme row id to persisted settings. */
 export function getPickerApplySettings(themeId: string): {
   colorTheme: string
-  appearanceMode: Exclude<AppearanceMode, 'system'>
+  appearanceMode: AppearanceMode
 } {
   if (themeId.endsWith('-light')) {
     return {

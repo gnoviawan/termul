@@ -23,7 +23,6 @@ export {
   getPickerApplySettings,
   getSystemAppearance,
   normalizeThemeFamilyId,
-  resolveAppearanceMode,
   type ThemeAppearance
 } from './theme-appearance'
 export type {

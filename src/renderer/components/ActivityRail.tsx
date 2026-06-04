@@ -3,6 +3,7 @@ import {
   GitBranch,
   History,
   Network,
+  Palette,
   PanelLeft,
   PanelRight,
   SlidersHorizontal
@@ -33,6 +34,10 @@ interface ActivityRailProps {
   onOpenGitHistory?: () => void
   /** Whether a git history tab can currently be opened (active project has a path). */
   canOpenGitHistory?: boolean
+  /** Whether the color theme picker overlay is open. */
+  isThemePickerOpen?: boolean
+  /** Toggle the color theme picker (opens beside the rail). */
+  onToggleThemePicker?: () => void
 }
 
 /**
@@ -45,7 +50,7 @@ interface ActivityRailProps {
  * - Brand mark at the top, followed by a separator.
  * - Top group: projects (command palette), git changes, SSH panel toggle.
  * - Bottom group (pinned via `mt-auto`): sidebar toggle, file explorer toggle,
- *   keyboard shortcuts, preferences.
+ *   keyboard shortcuts, preferences, color themes.
  *
  * All actions preserve the behavior contracts that previously lived in the
  * top title bar: persistence-aware panel toggles with error toasts, and
@@ -58,7 +63,9 @@ export function ActivityRail({
   onOpenGitChanges,
   canOpenGitChanges = false,
   onOpenGitHistory,
-  canOpenGitHistory = false
+  canOpenGitHistory = false,
+  isThemePickerOpen = false,
+  onToggleThemePicker
 }: ActivityRailProps = {}): React.JSX.Element {
   const isSidebarVisible = useSidebarVisible()
   const isExplorerVisible = useFileExplorerVisible()
@@ -228,6 +235,23 @@ export function ActivityRail({
             className={
               location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'
             }
+          />
+        </button>
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleThemePicker?.()
+          }}
+          className={railButtonClass}
+          title="Color themes"
+          aria-label="Color themes"
+          aria-pressed={isThemePickerOpen}
+        >
+          <Palette
+            size={18}
+            className={isThemePickerOpen ? 'text-foreground' : 'text-muted-foreground'}
           />
         </button>
       </div>

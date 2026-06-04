@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { persistenceApi, terminalApi } from '@/lib/api'
-import { normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
+import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
@@ -147,6 +147,16 @@ export function useAppSettingsLoader(): void {
           settings = { ...settings, appearanceMode: 'dark' }
         }
 
+        let shouldPersistSettings = false
+        const rawAppearance = result.data.appearanceMode as string | undefined
+        if (rawAppearance === 'system') {
+          settings = { ...settings, appearanceMode: getSystemAppearance() }
+          shouldPersistSettings = true
+        } else if (settings.appearanceMode !== 'light' && settings.appearanceMode !== 'dark') {
+          settings = { ...settings, appearanceMode: 'dark' }
+          shouldPersistSettings = true
+        }
+
         // Migrate persisted "canvas" renderer preference to "dom"
         // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
         if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
@@ -154,6 +164,9 @@ export function useAppSettingsLoader(): void {
         }
 
         setSettings(settings)
+        if (shouldPersistSettings) {
+          void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
+        }
       } else {
         settings = DEFAULT_APP_SETTINGS
         setSettings(settings)

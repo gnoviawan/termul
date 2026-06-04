@@ -61,7 +61,7 @@ export interface AppSettings {
   /** App-wide color theme family id (without `-light` suffix). */
   colorTheme: string
   /** Light, dark, or follow OS (maps to `{colorTheme}` / `{colorTheme}-light`). */
-  appearanceMode: 'light' | 'dark' | 'system'
+  appearanceMode: 'light' | 'dark'
 }
 
 // Terminal buffer size options

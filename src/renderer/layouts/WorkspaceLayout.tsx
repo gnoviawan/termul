@@ -92,7 +92,7 @@ import {
   useTerminalStore,
   useTerminals
 } from '@/stores/terminal-store'
-import { useThemePickerStore } from '@/stores/theme-picker-store'
+import { useThemePickerOpen, useThemePickerStore } from '@/stores/theme-picker-store'
 import {
   editorTabId,
   findPaneById,
@@ -589,6 +589,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
+    if (useThemePickerStore.getState().isOpen) {
+      useThemePickerStore.getState().cancel()
+    }
     navigate('/preferences')
   }, [navigate])
 
@@ -652,14 +655,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const colorTheme = useColorTheme()
   const appearanceMode = useAppearanceMode()
 
+  const isThemePickerOpen = useThemePickerOpen()
+
+  const handleToggleThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
+  }, [appearanceMode, colorTheme, location.pathname, navigate])
+
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
-    useThemePickerStore
-      .getState()
-      .open(getEffectiveThemeId(colorTheme, appearanceMode), appearanceMode)
-  }, [appearanceMode, colorTheme])
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    const store = useThemePickerStore.getState()
+    if (!store.isOpen) {
+      store.open(getEffectiveThemeId(colorTheme, appearanceMode))
+    }
+  }, [appearanceMode, colorTheme, location.pathname, navigate])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
@@ -1324,6 +1343,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
           canOpenGitChanges={Boolean(activeProject?.path)}
           onOpenGitHistory={() => handleAddGitHistoryTab()}
           canOpenGitHistory={Boolean(activeProject?.path)}
+          isThemePickerOpen={isThemePickerOpen}
+          onToggleThemePicker={handleToggleThemePicker}
         />
         <div className="flex-1 flex flex-col min-w-0">
           {/* macOS: draggable band clearing native traffic lights over the content column */}
