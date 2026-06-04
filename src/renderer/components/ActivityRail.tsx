@@ -270,14 +270,20 @@ export function ActivityRail({
 
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleThemePicker?.()
-          }}
+          onClick={
+            onToggleThemePicker
+              ? (e) => {
+                  e.stopPropagation()
+                  onToggleThemePicker()
+                }
+              : undefined
+          }
           className={railButtonClass}
           title="Color themes"
           aria-label="Color themes"
-          aria-pressed={isThemePickerOpen}
+          aria-pressed={onToggleThemePicker ? isThemePickerOpen : undefined}
+          aria-disabled={!onToggleThemePicker}
+          disabled={!onToggleThemePicker}
         >
           <Palette
             size={18}

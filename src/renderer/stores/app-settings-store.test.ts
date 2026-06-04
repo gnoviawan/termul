@@ -93,6 +93,19 @@ describe('app-settings-store', () => {
     })
   })
 
+  describe('updateSettings', () => {
+    it('should update multiple settings in one state change', () => {
+      const { updateSettings } = useAppSettingsStore.getState()
+
+      updateSettings({ colorTheme: 'dracula', appearanceMode: 'light' })
+
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.colorTheme).toBe('dracula')
+      expect(settings.appearanceMode).toBe('light')
+      expect(settings.terminalFontSize).toBe(DEFAULT_APP_SETTINGS.terminalFontSize)
+    })
+  })
+
   describe('setSettings', () => {
     it('should replace all settings and set isLoaded to true', () => {
       const newSettings = {

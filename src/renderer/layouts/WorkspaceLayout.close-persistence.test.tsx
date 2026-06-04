@@ -208,6 +208,7 @@ vi.mock('@/hooks/use-command-history', () => ({
 
 vi.mock('@/hooks/use-app-settings', () => ({
   useUpdateAppSetting: () => vi.fn(),
+  useUpdateAppSettings: () => vi.fn(),
   useUpdatePanelVisibility: () => mockUpdatePanelVisibility,
   waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))

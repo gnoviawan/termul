@@ -117,7 +117,6 @@ describe('resolveSyntaxColors', () => {
   it('does not store redundant variable/property/function overrides', () => {
     for (const theme of COLOR_THEME_LIST) {
       const { palette, overrides = {} } = theme.dark
-      const keyword = overrides['syntax-keyword'] ?? palette.primary
 
       const assertDistinct = (token: string | undefined, base: string, label: string) => {
         if (!token || token.replace(/^#/, '').length > 6) return
@@ -126,7 +125,7 @@ describe('resolveSyntaxColors', () => {
 
       assertDistinct(overrides['syntax-variable'], palette.ink, 'variable')
       assertDistinct(overrides['syntax-property'], palette.ink, 'property')
-      assertDistinct(overrides['syntax-function'], keyword, 'function')
+      assertDistinct(overrides['syntax-function'], palette.accent, 'function')
     }
   })
 })

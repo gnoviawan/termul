@@ -1,33 +1,85 @@
 import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import mermaid from 'mermaid'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { COLOR_THEME_CHANGED_EVENT } from '@/lib/themes'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  COLOR_THEME_CHANGED_EVENT,
+  type ColorThemeChangedDetail,
+  deriveSurfaces,
+  getColorThemeDefinition,
+  getLastAppliedColorThemeId
+} from '@/lib/themes'
+import { mixHex } from '@/lib/themes/color-utils'
 
-function useMermaidThemeSignal(): { isDark: boolean; revision: number } {
+type MermaidThemeVariables = Record<string, string | boolean>
+
+function buildMermaidThemeVariables(themeId: string): MermaidThemeVariables {
+  const theme = getColorThemeDefinition(themeId)
+  const palette = theme.dark.palette
+  const surfaces = deriveSurfaces(palette, theme.appearance)
+  const isDark = theme.appearance === 'dark'
+
+  return {
+    darkMode: isDark,
+    background: palette.neutral,
+    mainBkg: surfaces.card,
+    nodeBkg: surfaces.card,
+    primaryColor: surfaces.card,
+    primaryTextColor: palette.ink,
+    primaryBorderColor: surfaces.border,
+    secondaryColor: mixHex(palette.primary, palette.neutral, isDark ? 0.7 : 0.85),
+    tertiaryColor: surfaces.muted,
+    lineColor: palette.primary,
+    textColor: palette.ink,
+    titleColor: palette.ink,
+    edgeLabelBackground: surfaces.secondary,
+    clusterBkg: surfaces.sidebar,
+    clusterBorder: surfaces.border,
+    noteBkg: surfaces.muted,
+    noteTextColor: palette.ink,
+    noteBorderColor: surfaces.border,
+    actorBkg: surfaces.card,
+    actorTextColor: palette.ink,
+    actorBorder: surfaces.border,
+    signalColor: palette.ink,
+    signalTextColor: palette.ink
+  }
+}
+
+function useMermaidThemeSignal(): { isDark: boolean; revision: number; themeId: string } {
   const [themeSignal, setThemeSignal] = useState(() => ({
     isDark: document.documentElement.classList.contains('dark'),
-    revision: 0
+    revision: 0,
+    themeId: getLastAppliedColorThemeId()
   }))
 
   useEffect(() => {
-    const sync = (): void => {
+    const sync = (themeId = getLastAppliedColorThemeId()): void => {
       setThemeSignal((current) => ({
         isDark: document.documentElement.classList.contains('dark'),
-        revision: current.revision + 1
+        revision: current.revision + 1,
+        themeId
       }))
     }
 
-    const observer = new MutationObserver(sync)
+    const handleThemeChanged = (event: Event): void => {
+      const detail =
+        event instanceof CustomEvent
+          ? (event.detail as ColorThemeChangedDetail | undefined)
+          : undefined
+      sync(detail?.themeId)
+    }
+
+    const observer = new MutationObserver(() => sync())
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class']
     })
 
-    window.addEventListener(COLOR_THEME_CHANGED_EVENT, sync)
+    window.addEventListener(COLOR_THEME_CHANGED_EVENT, handleThemeChanged)
 
     return () => {
       observer.disconnect()
-      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, sync)
+      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, handleThemeChanged)
     }
   }, [])
 
@@ -82,7 +134,8 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
   }, [])
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const { isDark, revision: themeRevision } = useMermaidThemeSignal()
+  const { isDark, revision: themeRevision, themeId } = useMermaidThemeSignal()
+  const themeVariables = useMemo(() => buildMermaidThemeVariables(themeId), [themeId])
 
   // Zoom / pan state
   const [scale, setScale] = useState(1)
@@ -106,6 +159,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
     mermaid.initialize({
       startOnLoad: false,
       theme: isDark ? 'dark' : 'default',
+      themeVariables,
       suppressErrorRendering: true
     })
 
@@ -128,7 +182,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
         setError(err instanceof Error ? err.message : String(err))
         setSvg('')
       })
-  }, [source, isDark, themeRevision])
+  }, [source, isDark, themeRevision, themeVariables])
 
   // Reset zoom/pan when source changes
   useEffect(() => {

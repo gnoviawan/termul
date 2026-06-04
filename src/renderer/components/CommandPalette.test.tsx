@@ -50,6 +50,7 @@ function renderPalette(overrides: Partial<React.ComponentProps<typeof CommandPal
     onOpenAppPreferences: vi.fn(),
     onOpenCommandHistory: vi.fn(),
     onOpenShortcutMenu: vi.fn(),
+    onOpenThemePicker: vi.fn(),
     getShortcutLabel: (id) => {
       const labels: Record<string, string> = {
         newTerminal: 'Ctrl+T',
@@ -128,6 +129,7 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Alt+T')).toBeInTheDocument()
     expect(screen.getByText('Alt+B')).toBeInTheDocument()
     expect(screen.getByText('Alt+H')).toBeInTheDocument()
+    expect(screen.getByText('Alt+Shift+T')).toBeInTheDocument()
     expect(screen.getByText('Alt+1')).toBeInTheDocument()
     expect(screen.queryByText('Ctrl+T')).not.toBeInTheDocument()
     expect(screen.queryByText('Ctrl+Shift+N')).not.toBeInTheDocument()
@@ -210,6 +212,11 @@ describe('CommandPalette', () => {
         label: 'Open Shortcut Menu',
         commandId: 'open-shortcut-menu',
         callback: 'onOpenShortcutMenu'
+      },
+      {
+        label: 'Change Color Theme',
+        commandId: 'change-color-theme',
+        callback: 'onOpenThemePicker'
       }
     ]
 
@@ -238,7 +245,8 @@ describe('CommandPalette', () => {
       onOpenProjectSettings: undefined,
       onOpenAppPreferences: undefined,
       onOpenCommandHistory: undefined,
-      onOpenShortcutMenu: undefined
+      onOpenShortcutMenu: undefined,
+      onOpenThemePicker: undefined
     })
 
     expect(screen.queryByText('New Terminal')).not.toBeInTheDocument()
@@ -249,6 +257,7 @@ describe('CommandPalette', () => {
     expect(screen.queryByText('App Preferences')).not.toBeInTheDocument()
     expect(screen.queryByText('Command History')).not.toBeInTheDocument()
     expect(screen.queryByText('Open Shortcut Menu')).not.toBeInTheDocument()
+    expect(screen.queryByText('Change Color Theme')).not.toBeInTheDocument()
     expect(screen.getByText('Alpha')).toBeInTheDocument()
   })
 

@@ -1,6 +1,6 @@
 import { Check, Palette, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useUpdateAppSetting } from '@/hooks/use-app-settings'
+import { useUpdateAppSettings } from '@/hooks/use-app-settings'
 import { useEffectiveColorThemeId } from '@/hooks/use-color-theme'
 import {
   COLOR_THEME_FAMILIES,
@@ -37,7 +37,7 @@ export function ThemePicker(): React.JSX.Element | null {
   const close = useThemePickerStore((state) => state.close)
 
   const effectiveThemeId = useEffectiveColorThemeId()
-  const updateSetting = useUpdateAppSetting()
+  const updateSettings = useUpdateAppSettings()
 
   const [query, setQuery] = useState('')
   const [focusIndex, setFocusIndex] = useState(0)
@@ -70,12 +70,14 @@ export function ThemePicker(): React.JSX.Element | null {
   const confirmRow = useCallback(
     async (row: ThemePickerRow) => {
       const apply = getPickerApplySettings(row.themeId)
-      await updateSetting('colorTheme', apply.colorTheme)
-      await updateSetting('appearanceMode', apply.appearanceMode)
+      await updateSettings({
+        colorTheme: apply.colorTheme,
+        appearanceMode: apply.appearanceMode
+      })
       close()
       setQuery('')
     },
-    [close, updateSetting]
+    [close, updateSettings]
   )
 
   const handleCancel = useCallback(() => {

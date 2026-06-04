@@ -666,6 +666,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const isThemePickerOpen = useThemePickerOpen()
 
+  const closeThemePickerPeerOverlays = useCallback(() => {
+    setIsCommandPaletteOpen(false)
+    setIsShortcutMenuOpen(false)
+    setIsCommandHistoryOpen(false)
+  }, [])
+
   const handleToggleThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
@@ -673,8 +679,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     if (location.pathname === '/preferences') {
       navigate('/')
     }
+    closeThemePickerPeerOverlays()
     useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
-  }, [appearanceMode, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
 
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
@@ -683,11 +690,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
     if (location.pathname === '/preferences') {
       navigate('/')
     }
+    closeThemePickerPeerOverlays()
     const store = useThemePickerStore.getState()
     if (!store.isOpen) {
       store.open(getEffectiveThemeId(colorTheme, appearanceMode))
     }
-  }, [appearanceMode, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
@@ -1128,9 +1136,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
             )
           })
           break
+        case 'colorThemePicker':
+          handleOpenThemePicker()
+          break
       }
     })
-  }, [cycleTab, fontSize, updateAppSetting, updatePanelVisibility, isSidebarVisible])
+  }, [
+    cycleTab,
+    fontSize,
+    handleOpenThemePicker,
+    updateAppSetting,
+    updatePanelVisibility,
+    isSidebarVisible
+  ])
 
   const closeTerminalByRecordId = useCallback(
     async (terminalRecordId: string): Promise<boolean> => {

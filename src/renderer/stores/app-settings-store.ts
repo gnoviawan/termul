@@ -7,6 +7,7 @@ interface AppSettingsState {
   isLoaded: boolean
   setSettings: (settings: AppSettings) => void
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
+  updateSettings: (updates: Partial<AppSettings>) => void
   resetToDefaults: () => void
 }
 
@@ -19,6 +20,11 @@ export const useAppSettingsStore = create<AppSettingsState>((set) => ({
   updateSetting: (key, value) =>
     set((state) => ({
       settings: { ...state.settings, [key]: value }
+    })),
+
+  updateSettings: (updates) =>
+    set((state) => ({
+      settings: { ...state.settings, ...updates }
     })),
 
   resetToDefaults: () => set({ settings: DEFAULT_APP_SETTINGS })

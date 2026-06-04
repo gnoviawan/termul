@@ -1,6 +1,20 @@
+const HEX_COLOR_PATTERN = /^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
+
+function stripHexPrefix(hex: string): string {
+  return hex.trim().replace(/^#/, '')
+}
+
+function assertValidHex(hex: string): string {
+  const normalized = stripHexPrefix(hex)
+  if (!HEX_COLOR_PATTERN.test(normalized)) {
+    throw new Error(`Invalid hex color: ${hex}`)
+  }
+  return normalized
+}
+
 /** Parse #rgb or #rrggbb to { r, g, b } in 0–255. */
 export function parseHexColor(hex: string): { r: number; g: number; b: number } {
-  const normalized = hex.trim().replace(/^#/, '')
+  const normalized = assertValidHex(hex)
   if (normalized.length === 3) {
     const r = parseInt(normalized[0] + normalized[0], 16)
     const g = parseInt(normalized[1] + normalized[1], 16)
@@ -70,20 +84,14 @@ export function darkenHex(hex: string, amount: number): string {
   return mixHex(hex, '#000000', amount)
 }
 
-/** Normalize #rgb / #rrggbb / #rrggbbaa to lowercase #rrggbb (alpha stripped). */
+/** Normalize #rgb / #rrggbb to lowercase #rrggbb. */
 export function normalizeHex(hex: string): string {
-  let normalized = hex.trim().toLowerCase().replace(/^#/, '')
-  if (normalized.length === 8) {
-    normalized = normalized.slice(0, 6)
-  }
+  let normalized = assertValidHex(hex).toLowerCase()
   if (normalized.length === 3) {
     normalized = normalized
       .split('')
       .map((ch) => ch + ch)
       .join('')
-  }
-  if (normalized.length !== 6) {
-    throw new Error(`Invalid hex color: ${hex}`)
   }
   return `#${normalized}`
 }

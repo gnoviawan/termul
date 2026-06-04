@@ -29,8 +29,9 @@ describe('color-utils', () => {
     expect(normalizeHex('#E5E5E5')).toBe('#e5e5e5')
   })
 
-  it('strips alpha from 8-digit hex for comparison', () => {
-    expect(normalizeHex('#e4e4e45e')).toBe('#e4e4e4')
+  it('rejects malformed hex values', () => {
+    expect(() => parseHexColor('#12zzzz')).toThrow('Invalid hex color')
+    expect(() => normalizeHex('#e4e4e45e')).toThrow('Invalid hex color')
   })
 
   it('detects when override differs from base', () => {

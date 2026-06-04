@@ -134,21 +134,24 @@ export function useAppSettingsLoader(): void {
       if (result.success && result.data) {
         // Merge with defaults to handle any missing keys from older versions
         settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
+        let shouldPersistSettings = false
+        const rawAppearance = result.data.appearanceMode as string | undefined
+        const hasLegacyLightThemeId = settings.colorTheme.endsWith('-light')
 
-        if (settings.colorTheme.endsWith('-light')) {
+        if (hasLegacyLightThemeId) {
           settings = {
             ...settings,
             colorTheme: normalizeThemeFamilyId(settings.colorTheme),
             appearanceMode: settings.appearanceMode ?? 'light'
           }
+          shouldPersistSettings = true
         }
 
-        if (!settings.appearanceMode) {
+        if (rawAppearance === undefined && !hasLegacyLightThemeId) {
           settings = { ...settings, appearanceMode: 'dark' }
+          shouldPersistSettings = true
         }
 
-        let shouldPersistSettings = false
-        const rawAppearance = result.data.appearanceMode as string | undefined
         if (rawAppearance === 'system') {
           settings = { ...settings, appearanceMode: getSystemAppearance() }
           shouldPersistSettings = true
@@ -161,6 +164,7 @@ export function useAppSettingsLoader(): void {
         // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
         if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
           settings = { ...settings, terminalRenderer: 'dom' as const }
+          shouldPersistSettings = true
         }
 
         setSettings(settings)
@@ -207,6 +211,19 @@ export function useUpdateAppSetting<K extends keyof AppSettings>(): (
       await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
     },
     [updateSetting]
+  )
+}
+
+export function useUpdateAppSettings(): (updates: Partial<AppSettings>) => Promise<void> {
+  const updateSettings = useAppSettingsStore((state) => state.updateSettings)
+
+  return useCallback(
+    async (updates: Partial<AppSettings>) => {
+      updateSettings(updates)
+      const updatedSettings = useAppSettingsStore.getState().settings
+      await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
+    },
+    [updateSettings]
   )
 }
 
