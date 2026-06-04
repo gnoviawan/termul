@@ -143,7 +143,7 @@ function XTerminalComponent({
   return (
     <div
       ref={containerRef}
-      className={`w-full h-full bg-[#1e1e1e] px-4 py-0.5 pb-1 ${className}`}
+      className={`w-full h-full bg-terminal-bg px-4 py-0.5 pb-1 ${className}`}
     />
   )
 }

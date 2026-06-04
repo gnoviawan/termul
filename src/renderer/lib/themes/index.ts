@@ -3,6 +3,7 @@ export {
   getActiveTerminalTheme,
   getLastAppliedColorThemeId
 } from './apply-color-theme'
+export { applyThemeToTerminal } from './apply-theme-to-terminal'
 export {
   BUNDLED_COLOR_THEMES,
   COLOR_THEME_FAMILIES,

@@ -1,5 +1,6 @@
 import type { ITheme } from '@xterm/xterm'
 import { forEachTerminal } from '@/utils/terminal-registry'
+import { applyThemeToTerminal } from './apply-theme-to-terminal'
 import {
   BUNDLED_COLOR_THEMES,
   DEFAULT_COLOR_THEME_ID,
@@ -121,7 +122,7 @@ export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppe
 
 function applyTerminalThemes(xtermTheme: ITheme): void {
   forEachTerminal((terminal) => {
-    terminal.options.theme = xtermTheme
+    applyThemeToTerminal(terminal, xtermTheme)
   })
 }
 
