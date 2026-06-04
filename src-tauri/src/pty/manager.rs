@@ -32,7 +32,10 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
         return candidate.exists().then(|| command.to_string());
     }
 
-    let path_var = env::var_os("PATH")?;
+    let path_var = crate::pty::env_refresh::path_for_resolution();
+    if path_var.is_empty() {
+        return None;
+    }
     let pathext_var =
         env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
 
@@ -284,6 +287,68 @@ pub(super) fn parse_powershell_cmd_shim(shim_path: &str) -> Option<ResolvedProgr
 #[cfg(target_os = "windows")]
 fn try_parse_windows_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
     parse_npm_cmd_shim(shim_path).or_else(|| parse_powershell_cmd_shim(shim_path))
+}
+
+/// ADR-004.2: Resolve a spawn program the same way the PTY launcher does, for
+/// reuse by other subprocess spawners (e.g. the ACP agent runtime).
+///
+/// On Windows: prefer a directly-executable PE image (`.exe`/`.com`/`.scr`);
+/// when only a `.cmd`/`.bat` npm/PowerShell shim is on PATH, parse it and
+/// rewrite to the underlying interpreter + script so `CreateProcessW` does not
+/// fail with os error 193. Explicit paths are honored as-is when already a PE
+/// image, otherwise the shim is parsed. Returns `Err` when nothing usable is
+/// found so the caller can fall back to its previous behavior.
+///
+/// On non-Windows: returns the program unchanged (no rewriting needed).
+pub(crate) fn resolve_spawn_program(program: &str) -> Result<ResolvedProgram, String> {
+    let trimmed = program.trim();
+    if trimmed.is_empty() {
+        return Err("program is empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Explicit path: honor it if it exists.
+        if trimmed.contains('/') || trimmed.contains('\\') {
+            if Path::new(trimmed).exists() {
+                if is_directly_executable_windows(trimmed) {
+                    return Ok(ResolvedProgram::new(trimmed.to_string()));
+                }
+                if let Some(resolved) = try_parse_windows_cmd_shim(trimmed) {
+                    return Ok(resolved);
+                }
+            }
+            return Err(format!("program not found or not executable: {}", trimmed));
+        }
+
+        // 1. Bare name: try directly-executable PE image extensions first.
+        const WIN_EXECUTABLE_EXTS: &[&str] = &["", ".exe", ".com", ".scr"];
+        for ext in WIN_EXECUTABLE_EXTS {
+            let candidate = format!("{}{}", trimmed, ext);
+            if let Some(abs_path) = resolve_executable_from_path(&candidate) {
+                if is_directly_executable_windows(&abs_path) {
+                    return Ok(ResolvedProgram::new(abs_path));
+                }
+            }
+        }
+
+        // 2. No PE image: parse a `.cmd`/`.bat` shim and rewrite it.
+        for shim_ext in [".cmd", ".bat"] {
+            let candidate = format!("{}{}", trimmed, shim_ext);
+            if let Some(abs_path) = resolve_executable_from_path(&candidate) {
+                if let Some(resolved) = try_parse_windows_cmd_shim(&abs_path) {
+                    return Ok(resolved);
+                }
+            }
+        }
+
+        Err(format!("program not found on PATH: {}", trimmed))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(ResolvedProgram::new(trimmed.to_string()))
+    }
 }
 
 use tokio::sync::Mutex as AsyncMutex;
@@ -802,13 +867,13 @@ impl PtyManager {
                     if cfg!(windows)
                         && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
                     {
-                        "-NoLogo"  // Load user profile for custom prompts
+                        "-NoLogo"  // Skip PowerShell banner only (profile still loads)
                     } else {
                         ""
                     }
                 )
             } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
-                format!("{} -NoLogo", shell_path)  // Load user profile for custom prompts
+                format!("{} -NoLogo", shell_path)  // Skip PowerShell banner only (profile still loads)
             } else {
                 shell_path.clone()
             };
@@ -923,6 +988,13 @@ impl PtyManager {
                 .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
             let mut cmd = CommandBuilder::new(&shell_path);
+            // Interactive shells: login flag so profile-sourced PATH is applied (GH-275).
+            if options.program.is_none() {
+                if let Some(login_arg) = crate::pty::env_refresh::shell_wants_login_arg(&shell_path)
+                {
+                    cmd.arg(login_arg);
+                }
+            }
             // ADR-004.2: In agent mode, append the argv tail as discrete
             // arguments. portable-pty passes argv without a shell, so the prompt
             // is delivered verbatim with no shell interpolation. In shell mode
@@ -1545,7 +1617,12 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            if let Ok(output) = std::process::Command::new("which").arg(trimmed).output() {
+            let path_for_which = crate::pty::env_refresh::path_for_resolution();
+            if let Ok(output) = std::process::Command::new("which")
+                .env("PATH", &path_for_which)
+                .arg(trimmed)
+                .output()
+            {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let first_line = stdout.lines().next().unwrap_or("").trim();
@@ -1768,23 +1845,6 @@ impl PtyManager {
             }
             None
         }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            if let Ok(output) = std::process::Command::new("which").arg(shell_path).output() {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let first_line = stdout.lines().next().unwrap_or("").trim();
-                    if !first_line.is_empty() {
-                        return Some(first_line.to_string());
-                    }
-                }
-            }
-            if Path::new(shell_path).exists() {
-                return Some(shell_path.to_string());
-            }
-            None
-        }
     }
 
     /// Get the home directory
@@ -1808,28 +1868,58 @@ impl PtyManager {
         &self,
         custom_env: Option<HashMap<String, String>>,
     ) -> HashMap<String, String> {
+        let custom_sets_path = custom_env.as_ref().is_some_and(|custom| {
+            custom
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("path"))
+        });
+
         #[cfg(target_os = "windows")]
         {
-            merge_windows_environment_map(env::vars(), custom_env)
+            let mut env_map = merge_windows_environment_map(env::vars(), None);
+            if !custom_sets_path {
+                crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+            }
+            if let Some(custom) = custom_env {
+                for (key, value) in custom {
+                    upsert_windows_env_var(&mut env_map, &key, value);
+                }
+            }
+            if !has_windows_env_var(&env_map, "Path") {
+                upsert_windows_env_var(
+                    &mut env_map,
+                    "Path",
+                    env::var("PATH").unwrap_or_default(),
+                );
+            }
+            if !has_windows_env_var(&env_map, "PATHEXT") {
+                upsert_windows_env_var(
+                    &mut env_map,
+                    "PATHEXT",
+                    env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string()),
+                );
+            }
+            env_map
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let mut env = HashMap::new();
 
-            // Copy current process environment
             for (key, value) in env::vars() {
                 env.insert(key, value);
             }
 
-            // Apply custom environment (overriding existing)
+            if !custom_sets_path {
+                crate::pty::env_refresh::apply_fresh_path(&mut env);
+            }
+
             if let Some(custom) = custom_env {
                 for (key, value) in custom {
                     env.insert(key, value);
                 }
             }
 
-            // Ensure PATH exists
             if !env.contains_key("PATH") {
                 env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
             }
@@ -2226,6 +2316,106 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_spawn_program_rewrites_npm_cmd_shim() {
+        let dir = std::env::temp_dir().join("termul-test-resolve-npm-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\gemini\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\gemini\\bin\\gemini"), b"").unwrap();
+
+        let shim_path = dir.join("gemini.cmd");
+        let shim_content = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            endLocal & goto #_undefined_# 2>NUL || \"%_prog%\" \"%dp0%\\node_modules\\gemini\\bin\\gemini\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        // Explicit-path form: resolve_spawn_program parses and rewrites the shim.
+        let resolved = resolve_spawn_program(shim_path.to_str().unwrap())
+            .expect("npm .cmd shim should resolve");
+        assert!(
+            resolved.program.ends_with("node.exe"),
+            "expected node.exe, got: {}",
+            resolved.program
+        );
+        assert_eq!(resolved.prepend_args.len(), 1);
+        assert!(
+            resolved.prepend_args[0].contains("gemini\\bin\\gemini"),
+            "expected the script path prepended, got: {:?}",
+            resolved.prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_spawn_program_rewrites_powershell_cmd_shim() {
+        let dir = std::env::temp_dir().join("termul-test-resolve-ps-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cursor-agent.ps1"), b"").unwrap();
+        let ps_exe = std::path::Path::new(
+            &std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string()),
+        )
+        .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+        let ps_exe_str = ps_exe.to_string_lossy().to_string();
+        let script_str = dir.join("cursor-agent.ps1").to_string_lossy().to_string();
+
+        let shim_path = dir.join("cursor-agent.cmd");
+        let shim_content = format!(
+            "@echo off\r\n{ps} -NoProfile -ExecutionPolicy Bypass -File \"{script}\" %*\r\n",
+            ps = ps_exe_str,
+            script = script_str,
+        );
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = resolve_spawn_program(shim_path.to_str().unwrap())
+            .expect("PowerShell .cmd shim should resolve");
+        assert!(
+            resolved.program.ends_with("powershell.exe"),
+            "expected powershell.exe, got: {}",
+            resolved.program
+        );
+        assert!(
+            resolved.prepend_args.iter().any(|a| a.ends_with("cursor-agent.ps1")),
+            "expected -File script prepended, got: {:?}",
+            resolved.prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_spawn_program_keeps_native_exe_without_prepend() {
+        let dir = std::env::temp_dir().join("termul-test-resolve-native-exe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe_path = dir.join("agent.exe");
+        std::fs::write(&exe_path, b"MZ").unwrap();
+
+        let resolved = resolve_spawn_program(exe_path.to_str().unwrap())
+            .expect("native .exe should resolve");
+        assert!(resolved.program.ends_with("agent.exe"));
+        assert!(
+            resolved.prepend_args.is_empty(),
+            "native exe must not prepend args, got: {:?}",
+            resolved.prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn resolve_spawn_program_passes_through_on_unix() {
+        let resolved = resolve_spawn_program("gemini").expect("unix passthrough");
+        assert_eq!(resolved.program, "gemini");
+        assert!(resolved.prepend_args.is_empty());
     }
 
     #[test]

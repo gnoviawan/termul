@@ -82,3 +82,6 @@ VERIFICATION_CHECKLIST.md
 /.pi-lens
 /.agents
 .pi-automator-active
+
+# Personal notes & specs (local only)
+/ntfd/

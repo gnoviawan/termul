@@ -37,7 +37,7 @@ export function SectionHeader({
             align === 'center' && 'justify-center',
           )}
         >
-          <div className="h-1.5 w-1.5 rounded-sm bg-white/30" />
+          <div className="h-1.5 w-1.5 rounded-sm bg-porcelain/30" />
           {eyebrow}
         </div>
       )}

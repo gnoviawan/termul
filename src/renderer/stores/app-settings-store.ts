@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings } from '@/types/settings'
+import type { AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 
 interface AppSettingsState {
@@ -7,6 +7,7 @@ interface AppSettingsState {
   isLoaded: boolean
   setSettings: (settings: AppSettings) => void
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
+  updateSettings: (updates: AppSettingsUpdate) => void
   resetToDefaults: () => void
 }
 
@@ -19,6 +20,11 @@ export const useAppSettingsStore = create<AppSettingsState>((set) => ({
   updateSetting: (key, value) =>
     set((state) => ({
       settings: { ...state.settings, [key]: value }
+    })),
+
+  updateSettings: (updates) =>
+    set((state) => ({
+      settings: { ...state.settings, ...updates }
     })),
 
   resetToDefaults: () => set({ settings: DEFAULT_APP_SETTINGS })
@@ -52,3 +58,5 @@ export const useSidebarVisibilitySetting = () =>
   useAppSettingsStore((state) => state.settings.sidebarVisible)
 export const useFileExplorerVisibilitySetting = () =>
   useAppSettingsStore((state) => state.settings.fileExplorerVisible)
+export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
+export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)

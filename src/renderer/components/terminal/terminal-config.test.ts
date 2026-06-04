@@ -49,4 +49,8 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.scrollback).toBe(10000)
     expect(DEFAULT_TERMINAL_OPTIONS.cursorBlink).toBe(true)
   })
+
+  it('should disable screenReaderMode to avoid duplicate PTY input (#267)', () => {
+    expect(DEFAULT_TERMINAL_OPTIONS.screenReaderMode).toBe(false)
+  })
 })

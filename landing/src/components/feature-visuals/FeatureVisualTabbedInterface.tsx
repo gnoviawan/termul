@@ -6,8 +6,8 @@ export function FeatureVisualTabbedInterface() {
   return (
     <FeatureVisualFrameRoot>
       <FeatureVisualFrameWindow className="flex flex-col overflow-hidden">
-        <div className="h-10 bg-[#000] border-b border-white/10 flex items-end px-2 pt-2 gap-1">
-          <div className="bg-[#161616] border border-b-0 border-white/10 rounded-t-lg px-4 h-full text-[10px] text-gray-300 flex items-center gap-2">
+        <div className="h-10 bg-pitch-black border-b border-white/10 flex items-end px-2 pt-2 gap-1">
+          <div className="bg-deep-slate border border-b-0 border-white/10 rounded-t-lg px-4 h-full text-[10px] text-gray-300 flex items-center gap-2">
             <HugeiconsIcon icon={ConsoleIcon} className="w-3 h-3 text-blue-400" />
             termul
           </div>
@@ -20,7 +20,7 @@ export function FeatureVisualTabbedInterface() {
             client
           </div>
         </div>
-        <div className="p-5 font-mono text-[10px] sm:text-xs text-gray-400 min-h-[140px] bg-[#0d0d0d] flex flex-col gap-1.5">
+        <div className="p-5 font-mono text-[10px] sm:text-xs text-gray-400 min-h-[140px] bg-deep-slate flex flex-col gap-1.5">
           <div className="text-gray-500">~/Projects/termul</div>
           <div>
             <span className="text-green-400">➜</span> npm run dev

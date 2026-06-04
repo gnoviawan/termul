@@ -8,6 +8,18 @@ body:
       value: |
         Thanks for the suggestion. Please check for similar requests first and explain the user problem, not just the solution.
 
+  - type: dropdown
+    id: contributor-intent
+    attributes:
+      label: Will you contribute an implementation?
+      description: Helps maintainers prioritize requests and avoid duplicate work.
+      options:
+        - "Yes — I plan to open a pull request"
+        - "No — reporting for maintainers to handle"
+        - "Unsure — open to contributing with guidance"
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:

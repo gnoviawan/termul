@@ -10,13 +10,16 @@ import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
+import { AgentConfigDialog } from '@/components/chat/AgentConfigDialog'
+import { NewChatDialog } from '@/components/chat/NewChatDialog'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
 import { NewProjectModal } from '@/components/NewProjectModal'
-import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { ResizeEdges } from '@/components/ResizeEdges'
+import { SidebarTabs } from '@/components/SidebarTabs'
 import { StatusBar } from '@/components/StatusBar'
 import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
 import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
+import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import {
@@ -38,6 +41,7 @@ import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -53,9 +57,12 @@ import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac } from '@/lib/platform'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
+  useAppearanceMode,
+  useColorTheme,
   useConfirmTerminalClose,
   useDefaultShell,
   useMaxTerminalsPerProject,
@@ -88,6 +95,7 @@ import {
   useTerminalStore,
   useTerminals
 } from '@/stores/terminal-store'
+import { useThemePickerOpen, useThemePickerStore } from '@/stores/theme-picker-store'
 import {
   editorTabId,
   findPaneById,
@@ -123,6 +131,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+  // Agent chat entry point (moved from the pane tab bar to the Activity Rail).
+  // The dialogs are owned here so the rail button can open them globally; the
+  // New Chat dialog targets the active pane by default.
+  const [isNewChatOpen, setIsNewChatOpen] = useState(false)
+  const [isAgentConfigOpen, setIsAgentConfigOpen] = useState(false)
+  const [editingAgent, setEditingAgent] = useState<StoredAgentConfig | undefined>(undefined)
   const hiddenBrowserTabForModalRef = useRef<string | null>(null)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false)
@@ -584,6 +598,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
+    if (useThemePickerStore.getState().isOpen) {
+      useThemePickerStore.getState().cancel()
+    }
     navigate('/preferences')
   }, [navigate])
 
@@ -642,7 +659,44 @@ export default function WorkspaceLayout(): React.JSX.Element {
     },
     [shortcuts]
   )
+
   const fontSize = useTerminalFontSize()
+  const colorTheme = useColorTheme()
+  const appearanceMode = useAppearanceMode()
+
+  const isThemePickerOpen = useThemePickerOpen()
+
+  const closeThemePickerPeerOverlays = useCallback(() => {
+    setIsCommandPaletteOpen(false)
+    setIsShortcutMenuOpen(false)
+    setIsCommandHistoryOpen(false)
+  }, [])
+
+  const handleToggleThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    closeThemePickerPeerOverlays()
+    useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+
+  const handleOpenThemePicker = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    if (location.pathname === '/preferences') {
+      navigate('/')
+    }
+    closeThemePickerPeerOverlays()
+    const store = useThemePickerStore.getState()
+    if (!store.isOpen) {
+      store.open(getEffectiveThemeId(colorTheme, appearanceMode))
+    }
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
   const updateAppSetting = useUpdateAppSetting()
@@ -741,6 +795,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
     }
   }, [])
 
+  const handleOpenAgentChat = useCallback(() => {
+    if (!activeProject?.path) return
+    setIsNewChatOpen(true)
+  }, [activeProject?.path])
+
   const handleAddGitTab = useCallback(
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
@@ -825,6 +884,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
         } else if (activeTab?.type === 'browser') {
           useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
           useWorkspaceStore.getState().removeTab(activeTab.id)
+        } else if (activeTab?.type === 'agent-chat') {
+          useWorkspaceStore.getState().removeTab(activeTab.id)
         }
         return
       }
@@ -884,6 +945,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
           }
           setIsCommandHistoryOpen(true)
         }
+        return
+      }
+
+      // Color theme picker (Ctrl+Alt+T)
+      if (matchesShortcut(e, getActiveKey('colorThemePicker'))) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleOpenThemePicker()
         return
       }
 
@@ -1007,11 +1076,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
     handleNewBrowserTab,
     updatePanelVisibility,
     isExplorerVisible,
-    isSidebarVisible
+    isSidebarVisible,
+    handleOpenThemePicker
   ])
 
   useEffect(() => {
-    if (isNewProjectModalOpen) {
+    // Hide the active browser webview while a modal/dialog is open, since native
+    // child webviews paint above the DOM and would otherwise obscure it. Covers
+    // the New Project modal and the ACP New Chat / Agent Config dialogs.
+    const modalOpen = isNewProjectModalOpen || isNewChatOpen || isAgentConfigOpen
+    if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
         browserTabHide(activeTab.browserTabId).catch(console.error)
@@ -1024,7 +1098,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, activeTab])
+  }, [isNewProjectModalOpen, isNewChatOpen, isAgentConfigOpen, activeTab])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
@@ -1062,9 +1136,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
             )
           })
           break
+        case 'colorThemePicker':
+          handleOpenThemePicker()
+          break
       }
     })
-  }, [cycleTab, fontSize, updateAppSetting, updatePanelVisibility, isSidebarVisible])
+  }, [
+    cycleTab,
+    fontSize,
+    handleOpenThemePicker,
+    updateAppSetting,
+    updatePanelVisibility,
+    isSidebarVisible
+  ])
 
   const closeTerminalByRecordId = useCallback(
     async (terminalRecordId: string): Promise<boolean> => {
@@ -1297,6 +1381,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
           canOpenGitChanges={Boolean(activeProject?.path)}
           onOpenGitHistory={() => handleAddGitHistoryTab()}
           canOpenGitHistory={Boolean(activeProject?.path)}
+          isThemePickerOpen={isThemePickerOpen}
+          onToggleThemePicker={handleToggleThemePicker}
+          onOpenAgentChat={handleOpenAgentChat}
+          canOpenAgentChat={Boolean(activeProject?.path)}
         />
         <div className="flex-1 flex flex-col min-w-0">
           {/* macOS: draggable band clearing native traffic lights over the content column */}
@@ -1307,7 +1395,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             {/* Sidebar */}
             {isSidebarVisible && (
               <div className="mr-2">
-                <ProjectSidebar
+                <SidebarTabs
                   projects={projects}
                   activeProjectId={activeProjectId}
                   onSelectProject={handleSelectProject}
@@ -1440,11 +1528,36 @@ export default function WorkspaceLayout(): React.JSX.Element {
       </div>
 
       {/* Modals */}
+      {isNewChatOpen && (
+        <NewChatDialog
+          open={isNewChatOpen}
+          onOpenChange={setIsNewChatOpen}
+          onAddAgent={() => {
+            setEditingAgent(undefined)
+            setIsAgentConfigOpen(true)
+          }}
+          onEditAgent={(cfg) => {
+            setEditingAgent(cfg)
+            setIsAgentConfigOpen(true)
+          }}
+        />
+      )}
+      {isAgentConfigOpen && (
+        <AgentConfigDialog
+          key={editingAgent?.id ?? 'new'}
+          open={isAgentConfigOpen}
+          onOpenChange={setIsAgentConfigOpen}
+          existing={editingAgent}
+        />
+      )}
+
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}
         onCreateProject={addProject}
       />
+
+      <ThemePicker />
 
       <CommandPalette
         isOpen={isCommandPaletteOpen}
@@ -1465,6 +1578,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onOpenAppPreferences={handleOpenAppPreferences}
         onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
         onOpenShortcutMenu={handleOpenShortcutMenu}
+        onOpenThemePicker={handleOpenThemePicker}
         onSSHConnect={handleSSHConnect}
         sshProfiles={sshProfiles.map((p) => ({
           id: p.id,

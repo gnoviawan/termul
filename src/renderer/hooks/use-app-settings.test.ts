@@ -10,6 +10,7 @@ import {
   useAppSettingsLoader,
   useResetAppSettings,
   useUpdateAppSetting,
+  useUpdateAppSettings,
   useUpdatePanelVisibility,
   waitForPendingAppSettingsPersistence
 } from './use-app-settings'
@@ -86,6 +87,64 @@ describe('use-app-settings', () => {
     await waitFor(() => {
       expect(useAppSettingsStore.getState().isLoaded).toBe(true)
       expect(useAppSettingsStore.getState().settings.terminalUrlOpenMode).toBe('system')
+    })
+  })
+
+  it('persists normalized legacy light color theme settings', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...DEFAULT_APP_SETTINGS,
+        colorTheme: 'termul-light',
+        appearanceMode: undefined
+      }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ colorTheme: 'termul', appearanceMode: 'light' })
+      )
+    })
+  })
+
+  it('persists missing appearance mode defaults', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...DEFAULT_APP_SETTINGS,
+        appearanceMode: undefined
+      }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ appearanceMode: 'dark' })
+      )
+    })
+  })
+
+  it('persists terminal renderer migration from canvas to dom', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...DEFAULT_APP_SETTINGS,
+        terminalRenderer: 'canvas'
+      }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ terminalRenderer: 'dom' })
+      )
     })
   })
 
@@ -211,6 +270,20 @@ describe('use-app-settings', () => {
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
       APP_SETTINGS_KEY,
       expect.objectContaining({ terminalFontSize: 16 })
+    )
+  })
+
+  it('writes one snapshot when updating multiple app settings', async () => {
+    const { result } = renderHook(() => useUpdateAppSettings())
+
+    await result.current({ colorTheme: 'dracula', appearanceMode: 'light' })
+
+    expect(useAppSettingsStore.getState().settings.colorTheme).toBe('dracula')
+    expect(useAppSettingsStore.getState().settings.appearanceMode).toBe('light')
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ colorTheme: 'dracula', appearanceMode: 'light' })
     )
   })
 

@@ -8,7 +8,9 @@ import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWindowState } from '@/hooks/use-window-state'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
 import { useCwd } from './hooks/use-cwd'
@@ -47,6 +49,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedColorThemeSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
@@ -56,6 +59,7 @@ function AppEffects(): null {
   useVisibilityState()
   useTerminalExitNotification()
   useRemoteProjects()
+  useAcpListeners()
 
   // Initialize desktop notification permissions once at app startup
   // so the OS permission prompt appears early, not on first terminal exit

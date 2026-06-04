@@ -4,7 +4,7 @@ export function FeatureVisualProjectWorkspaces() {
   return (
     <FeatureVisualFrameRoot>
       <FeatureVisualFrameWindow size="md" className="flex min-h-[180px] overflow-hidden">
-        <div className="w-28 shrink-0 bg-[#080808] border-r border-white/10 flex flex-col py-3">
+        <div className="w-28 shrink-0 bg-pitch-black border-r border-white/10 flex flex-col py-3">
           <div className="px-3 mb-2 text-[9px] text-gray-500 font-mono tracking-wider uppercase">
             Projects
           </div>
@@ -23,7 +23,7 @@ export function FeatureVisualProjectWorkspaces() {
             </div>
           </div>
         </div>
-        <div className="flex-1 flex flex-col bg-[#0d0d0d]">
+        <div className="flex-1 flex flex-col bg-deep-slate">
           <div className="flex-1 p-4 font-mono text-[10px] text-gray-400 flex flex-col gap-1.5 justify-center">
             <div className="text-gray-500">~/Projects/termul</div>
             <div>
@@ -31,7 +31,7 @@ export function FeatureVisualProjectWorkspaces() {
             </div>
             <div className="text-violet-400/80">Compiling termul v0.1.0...</div>
           </div>
-          <div className="h-6 border-t border-white/10 bg-[#161616] flex items-center px-3">
+          <div className="h-6 border-t border-white/10 bg-deep-slate flex items-center px-3">
             <span className="text-[9px] text-gray-500 font-mono">
               Workspace: <span className="text-violet-400">termul</span>
             </span>

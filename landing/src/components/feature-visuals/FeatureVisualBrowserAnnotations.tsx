@@ -4,17 +4,17 @@ export function FeatureVisualBrowserAnnotations() {
   return (
     <FeatureVisualFrameRoot>
       <FeatureVisualFrameWindow size="md" className="flex min-h-[180px] flex-col overflow-hidden">
-        <div className="h-8 bg-[#161616] border-b border-white/10 flex items-center px-2 gap-2">
+        <div className="h-8 bg-deep-slate border-b border-white/10 flex items-center px-2 gap-2">
           <div className="flex gap-1">
             <div className="w-2 h-2 rounded-full bg-red-500/80"></div>
             <div className="w-2 h-2 rounded-full bg-yellow-500/80"></div>
             <div className="w-2 h-2 rounded-full bg-green-500/80"></div>
           </div>
-          <div className="flex-1 bg-[#0a0a0a] border border-white/10 rounded px-2 py-0.5 text-[9px] text-gray-500 font-mono truncate">
+          <div className="flex-1 bg-graphite border border-white/10 rounded px-2 py-0.5 text-[9px] text-gray-500 font-mono truncate">
             https://app.example.com/dashboard
           </div>
         </div>
-        <div className="relative flex-1 bg-[#0d0d0d] p-4 min-h-[120px]">
+        <div className="relative flex-1 bg-deep-slate p-4 min-h-[120px]">
           <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 space-y-2">
             <div className="h-2 w-24 rounded bg-white/10"></div>
             <div className="h-2 w-full rounded bg-white/5"></div>
@@ -28,7 +28,7 @@ export function FeatureVisualBrowserAnnotations() {
             Critical · UI regression
           </div>
         </div>
-        <div className="h-7 border-t border-white/10 bg-[#161616] flex items-center px-3 gap-3">
+        <div className="h-7 border-t border-white/10 bg-deep-slate flex items-center px-3 gap-3">
           <span className="text-[9px] text-gray-500 font-mono">Annotate</span>
           <span className="text-[9px] text-gray-600">|</span>
           <span className="text-[9px] text-gray-500 font-mono">Export package</span>

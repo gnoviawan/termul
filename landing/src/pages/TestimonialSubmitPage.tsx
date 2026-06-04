@@ -4,6 +4,13 @@ import { useSeoMeta } from '@unhead/react';
 import { Button } from '../components/Button';
 import { SectionHeader } from '../components/SectionHeader';
 import { submitTestimonial } from '../lib/testimonials-api';
+import {
+  testimonialFileInputClass,
+  testimonialInputClass,
+  testimonialLabelClass,
+  testimonialPanelInsetClass,
+  testimonialTextareaClass,
+} from '../lib/testimonial-ui';
 
 export function TestimonialSubmitPage() {
   const [status, setStatus] = useState<
@@ -53,7 +60,7 @@ export function TestimonialSubmitPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 shadow-2xl shadow-black/30 sm:p-8"
+          className={`p-6 shadow-2xl shadow-pitch-black/40 backdrop-blur-md sm:p-8 ${testimonialPanelInsetClass}`}
         >
           <div className="hidden" aria-hidden="true">
             <label>
@@ -64,7 +71,7 @@ export function TestimonialSubmitPage() {
 
           <div className="grid gap-5">
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-white">Quote</span>
+              <span className={testimonialLabelClass}>Quote</span>
               <textarea
                 name="quote"
                 required
@@ -72,54 +79,50 @@ export function TestimonialSubmitPage() {
                 maxLength={500}
                 rows={6}
                 placeholder="Termul helps me..."
-                className="resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                className={testimonialTextareaClass}
               />
             </label>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-white">Name</span>
+              <label className="grid gap-2 min-w-0">
+                <span className={testimonialLabelClass}>Name</span>
                 <input
                   name="name"
                   required
                   maxLength={80}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="Alex Chen"
                 />
               </label>
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-white">Role</span>
+              <label className="grid gap-2 min-w-0">
+                <span className={testimonialLabelClass}>Role</span>
                 <input
                   name="role"
                   required
                   maxLength={120}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="Staff Engineer"
                 />
               </label>
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-white">
-                  Avatar upload
-                </span>
+              <label className="grid gap-2 min-w-0">
+                <span className={testimonialLabelClass}>Avatar upload</span>
                 <input
                   name="avatar"
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/gif"
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-2.5 text-sm text-gray-300 file:mr-3 file:rounded-full file:border-0 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-black"
+                  className={testimonialFileInputClass}
                 />
               </label>
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-white">
-                  Or avatar URL
-                </span>
+              <label className="grid gap-2 min-w-0">
+                <span className={testimonialLabelClass}>Or avatar URL</span>
                 <input
                   name="avatarUrl"
                   type="url"
                   maxLength={500}
-                  className="rounded-full border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-blue-400/60"
+                  className={`w-full ${testimonialInputClass}`}
                   placeholder="https://..."
                 />
               </label>
@@ -139,8 +142,8 @@ export function TestimonialSubmitPage() {
                   aria-live="polite"
                   className={
                     status === 'success'
-                      ? 'text-sm text-green-300'
-                      : 'text-sm text-rose-300'
+                      ? 'text-sm text-emerald animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
+                      : 'text-sm text-warning-red animate-in fade-in slide-in-from-bottom-1 duration-300 ease-[var(--ease-out)] fill-mode-both'
                   }
                 >
                   {message}

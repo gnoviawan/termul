@@ -122,7 +122,7 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
 
             {/* Submenu */}
             {item.submenu && hoveredIndex === index && (
-              <div className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[140px]">
+              <div className="absolute left-full top-0 ml-1 bg-card border border-border rounded-md shadow-lg py-0.5 min-w-[160px]">
                 {item.submenu.map((subItem) => (
                   <button
                     key={subItem.value}

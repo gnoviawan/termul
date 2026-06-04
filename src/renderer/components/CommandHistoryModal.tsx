@@ -242,6 +242,7 @@ export function CommandHistoryModal({
                 </span>
               </div>
               <button
+                type="button"
                 onClick={() => setShowClearConfirm(true)}
                 className="flex items-center gap-1 px-2 py-1 rounded hover:bg-secondary/50 text-red-400 hover:text-red-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={entries.length === 0 || filterMode !== 'this-project' || isClearing}

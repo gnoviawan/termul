@@ -66,7 +66,8 @@ interface ColorPickerState {
   isOpen: boolean
   x: number
   y: number
-  projectId: string
+  targetId: string
+  targetType: 'project' | 'group'
 }
 
 interface DeleteConfirmState {
@@ -131,6 +132,7 @@ export function ProjectSidebar({
   const navigate = useNavigate()
   const {
     selectProject,
+    addProject,
     setActiveWorktree,
     setWorktreeOperationLock,
     addGroup,
@@ -139,7 +141,8 @@ export function ProjectSidebar({
     toggleGroupCollapse,
     moveProjectToGroup,
     reorderGroups,
-    reorderProjectInGroup
+    reorderProjectInGroup,
+    updateGroup
   } = useProjectActions()
   const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked)
   const storeGroups = useProjectStore((state) => state.groups)
@@ -173,6 +176,9 @@ export function ProjectSidebar({
     y: 0,
     groupId: ''
   })
+
+  const [activeDragOverGroupId, setActiveDragOverGroupId] = useState<string | null>(null)
+  const activeDragOverGroupIdRef = useRef<string | null>(null)
 
   // Project search/filter query
   const [searchQuery, setSearchQuery] = useState('')
@@ -215,8 +221,39 @@ export function ProjectSidebar({
     isOpen: false,
     x: 0,
     y: 0,
-    projectId: ''
+    targetId: '',
+    targetType: 'project'
   })
+
+  const handleOpenColorPicker = useCallback(
+    (targetId: string, targetType: 'project' | 'group', x: number, y: number): void => {
+      setColorPicker({
+        isOpen: true,
+        x,
+        y,
+        targetId,
+        targetType
+      })
+    },
+    []
+  )
+
+  const closeColorPicker = useCallback((): void => {
+    setColorPicker((prev) => ({ ...prev, isOpen: false }))
+  }, [])
+
+  const handleColorChange = useCallback(
+    (color: ProjectColor): void => {
+      if (colorPicker.targetId) {
+        if (colorPicker.targetType === 'project') {
+          onUpdateProject(colorPicker.targetId, { color })
+        } else if (colorPicker.targetType === 'group') {
+          updateGroup(colorPicker.targetId, { color })
+        }
+      }
+    },
+    [colorPicker.targetId, colorPicker.targetType, onUpdateProject, updateGroup]
+  )
 
   // Delete confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
@@ -292,6 +329,32 @@ export function ProjectSidebar({
     [addGroup, moveProjectToGroup, newGroupModal.projectIdToMove]
   )
 
+  const handleAddNewProjectToGroup = useCallback(
+    async (groupId: string) => {
+      try {
+        const result = await dialogApi.selectDirectory()
+        if (result.success && result.data) {
+          const projectPath = result.data
+          const folderName = projectPath.split(/[\\/]/).pop() || 'New Project'
+          const newProject = addProject(folderName, 'blue', projectPath)
+          moveProjectToGroup(newProject.id, groupId)
+          toast({
+            title: 'Project created',
+            description: `Created project "${folderName}" and added to group.`
+          })
+        }
+      } catch (err) {
+        console.error('Failed to create project:', err)
+        toast({
+          title: 'Error',
+          description: 'Failed to create project from folder.',
+          variant: 'destructive'
+        })
+      }
+    },
+    [addProject, moveProjectToGroup]
+  )
+
   const handleGroupContextMenu = useCallback(
     (e: React.MouseEvent, groupId: string): void => {
       e.preventDefault()
@@ -347,11 +410,47 @@ export function ProjectSidebar({
 
   const getGroupMenuItems = useCallback(
     (groupId: string): ContextMenuItem[] => {
+      const activeProjects = projects.filter((p) => !p.isArchived)
+      const currentGroup = groups.find((g) => g.id === groupId)
+      const addProjectSubmenu: ContextMenuSubItem[] = [
+        ...activeProjects.map((p) => {
+          const isProjectInGroup = currentGroup?.projectIds.includes(p.id) ?? false
+          return {
+            label: p.name,
+            value: p.id,
+            isSelected: isProjectInGroup
+          }
+        }),
+        {
+          label: '+ Import Project...',
+          value: 'import-project',
+          isSelected: false
+        }
+      ]
+
       return [
         {
           label: 'Rename Group',
           icon: <Edit2 size={14} />,
           onClick: () => handleStartRenameGroup(groupId)
+        },
+        {
+          label: 'Change Color',
+          icon: <Palette size={14} />,
+          onClick: () =>
+            handleOpenColorPicker(groupId, 'group', groupContextMenu.x, groupContextMenu.y)
+        },
+        {
+          label: 'Add Project',
+          icon: <Plus size={14} />,
+          submenu: addProjectSubmenu,
+          onSubmenuSelect: (projectId: string) => {
+            if (projectId === 'import-project') {
+              void handleAddNewProjectToGroup(groupId)
+            } else {
+              moveProjectToGroup(projectId, groupId)
+            }
+          }
         },
         {
           label: 'Delete Group (Keep Projects)',
@@ -366,7 +465,17 @@ export function ProjectSidebar({
         }
       ]
     },
-    [handleStartRenameGroup, handleConfirmDeleteGroup]
+    [
+      handleStartRenameGroup,
+      handleConfirmDeleteGroup,
+      projects,
+      groups,
+      moveProjectToGroup,
+      handleAddNewProjectToGroup,
+      handleOpenColorPicker,
+      groupContextMenu.x,
+      groupContextMenu.y
+    ]
   )
 
   const handleWorktreeSelect = useCallback(
@@ -562,28 +671,6 @@ export function ProjectSidebar({
     setEditName('')
   }, [])
 
-  const handleOpenColorPicker = useCallback((projectId: string, x: number, y: number): void => {
-    setColorPicker({
-      isOpen: true,
-      x,
-      y,
-      projectId
-    })
-  }, [])
-
-  const closeColorPicker = useCallback((): void => {
-    setColorPicker((prev) => ({ ...prev, isOpen: false }))
-  }, [])
-
-  const handleColorChange = useCallback(
-    (color: ProjectColor): void => {
-      if (colorPicker.projectId) {
-        onUpdateProject(colorPicker.projectId, { color })
-      }
-    },
-    [colorPicker.projectId, onUpdateProject]
-  )
-
   const handleConfirmDelete = useCallback(
     (projectId: string): void => {
       const project = projects.find((p) => p.id === projectId)
@@ -707,7 +794,7 @@ export function ProjectSidebar({
         {
           label: 'Change Color',
           icon: <Palette size={14} />,
-          onClick: () => handleOpenColorPicker(projectId, contextMenu.x, contextMenu.y)
+          onClick: () => handleOpenColorPicker(projectId, 'project', contextMenu.x, contextMenu.y)
         }
       ]
 
@@ -868,7 +955,10 @@ export function ProjectSidebar({
     ]
   )
 
-  const colorPickerProject = projects.find((p) => p.id === colorPicker.projectId)
+  const colorPickerTarget =
+    colorPicker.targetType === 'project'
+      ? projects.find((p) => p.id === colorPicker.targetId)
+      : groups.find((g) => g.id === colorPicker.targetId)
 
   // Split active and archived projects
   const activeProjects = useMemo(() => projects.filter((p) => !p.isArchived), [projects])
@@ -1041,7 +1131,7 @@ export function ProjectSidebar({
       )}
 
       {/* Project List */}
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 overflow-y-auto py-1" data-group-id="root">
         {projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
             <p className="text-sm text-muted-foreground">No projects yet</p>
@@ -1103,7 +1193,12 @@ export function ProjectSidebar({
                               toggleGroupCollapse(group.id)
                             }
                           }}
-                          className="w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none"
+                          className={cn(
+                            'w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
+                            activeDragOverGroupId === group.id &&
+                              'bg-primary/20 border border-primary/50'
+                          )}
+                          data-group-id={group.id}
                         >
                           <span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
                             {isCollapsed ? (
@@ -1112,7 +1207,12 @@ export function ProjectSidebar({
                               <ChevronDown size={12} className="text-muted-foreground" />
                             )}
                           </span>
-                          <span className="mr-1.5 flex-shrink-0 inline-flex items-center text-primary/80">
+                          <span
+                            className={cn(
+                              'mr-1.5 flex-shrink-0 inline-flex items-center',
+                              group.color ? getColorClasses(group.color).text : 'text-primary/80'
+                            )}
+                          >
                             {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
                           </span>
                           {editingGroupId === group.id ? (
@@ -1150,88 +1250,134 @@ export function ProjectSidebar({
                         </div>
 
                         {/* Projects in Group */}
-                        {!isCollapsed && gpProjects.length > 0 && (
-                          <Reorder.Group
-                            axis="y"
-                            values={gpProjects}
-                            onReorder={(reordered) => {
-                              if (isSearching) return
-                              reorderProjectInGroup(
-                                group.id,
-                                reordered.map((p) => p.id)
-                              )
-                            }}
-                            className="pl-4 flex flex-col"
-                          >
-                            {gpProjects.map((project) => {
-                              const hasActivity = projectActivityIds.includes(project.id)
-                              const shortcutIndex = activeIndexById.get(project.id) ?? -1
-                              return (
-                                <Reorder.Item
-                                  key={project.id}
-                                  value={project}
-                                  drag={isSearching ? false : 'y'}
-                                  layout="position"
-                                  className="list-none"
-                                  whileDrag={{
-                                    scale: 1.02,
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-                                  }}
-                                >
-                                  <ProjectItem
-                                    project={project}
-                                    isActive={project.id === activeProjectId}
-                                    isExpanded={expandedProjects.has(project.id)}
-                                    onToggleExpand={() => toggleProjectExpanded(project.id)}
-                                    isEditing={editingId === project.id}
-                                    editName={editName}
-                                    shortcut={
-                                      shortcutIndex >= 0 && shortcutIndex < 9
-                                        ? `Ctrl+${shortcutIndex + 1}`
-                                        : undefined
-                                    }
-                                    hasActivity={hasActivity}
-                                    hasError={projectErrorIds.has(project.id)}
-                                    onClick={() => {
-                                      onSelectProject(project.id)
-                                      navigate('/')
-                                    }}
-                                    onContextMenu={(e) => handleContextMenu(e, project.id)}
-                                    onEditNameChange={setEditName}
-                                    onSaveRename={() => handleSaveRename(project.id)}
-                                    onCancelRename={handleCancelRename}
-                                    onSettingsClick={() => {
-                                      selectProject(project.id)
-                                      navigate('/settings')
-                                    }}
-                                    onWorktreeSelect={(worktreeId) =>
-                                      handleWorktreeSelect(project.id, worktreeId)
-                                    }
-                                    onWorktreeContextMenu={(e, worktree) =>
-                                      handleWorktreeContextMenu(e, project.id, worktree)
-                                    }
-                                    onOpenTerminalInWorktree={(
-                                      worktreeId,
-                                      worktreePath,
-                                      worktreeName
-                                    ) =>
-                                      void handleOpenTerminalInWorktree(
-                                        project.id,
-                                        worktreeId,
-                                        worktreePath,
-                                        worktreeName
-                                      )
-                                    }
-                                    isWorktreeOperationLocked={isWorktreeOperationLocked}
-                                    onNewWorktree={(pId) =>
-                                      setNewWorktreeModal({ isOpen: true, projectId: pId })
-                                    }
-                                  />
-                                </Reorder.Item>
-                              )
-                            })}
-                          </Reorder.Group>
-                        )}
+                        <AnimatePresence initial={false}>
+                          {(!isCollapsed || isSearching) && gpProjects.length > 0 && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.15, ease: 'easeInOut' }}
+                              className="overflow-hidden"
+                            >
+                              <Reorder.Group
+                                axis="y"
+                                values={gpProjects}
+                                onReorder={(reordered) => {
+                                  if (isSearching) return
+                                  reorderProjectInGroup(
+                                    group.id,
+                                    reordered.map((p) => p.id)
+                                  )
+                                }}
+                                className="pl-4 flex flex-col"
+                                data-group-container-id={group.id}
+                              >
+                                {gpProjects.map((project) => {
+                                  const hasActivity = projectActivityIds.includes(project.id)
+                                  const shortcutIndex = activeIndexById.get(project.id) ?? -1
+                                  return (
+                                    <Reorder.Item
+                                      key={project.id}
+                                      value={project}
+                                      drag={isSearching ? false : 'y'}
+                                      layout="position"
+                                      className="list-none"
+                                      whileDrag={{
+                                        scale: 1.02,
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                        pointerEvents: 'none'
+                                      }}
+                                      onDrag={(_event, info) => {
+                                        const element = document.elementFromPoint(
+                                          info.point.x,
+                                          info.point.y
+                                        )
+                                        const container = element?.closest(
+                                          '[data-group-container-id]'
+                                        )
+                                        const folderHeader = element?.closest('[data-group-id]')
+                                        const groupId =
+                                          container?.getAttribute('data-group-container-id') ||
+                                          folderHeader?.getAttribute('data-group-id') ||
+                                          null
+                                        if (groupId !== activeDragOverGroupId) {
+                                          setActiveDragOverGroupId(groupId)
+                                          activeDragOverGroupIdRef.current = groupId
+                                        }
+                                      }}
+                                      onDragEnd={() => {
+                                        const targetGroupId = activeDragOverGroupIdRef.current
+                                        if (targetGroupId) {
+                                          const nextGroupId =
+                                            targetGroupId === 'root' ? null : targetGroupId
+                                          const currentGroup = groups.find((g) =>
+                                            g.projectIds.includes(project.id)
+                                          )
+                                          const currentGroupId = currentGroup?.id ?? null
+                                          if (nextGroupId !== currentGroupId) {
+                                            moveProjectToGroup(project.id, nextGroupId)
+                                          }
+                                        }
+                                        setActiveDragOverGroupId(null)
+                                        activeDragOverGroupIdRef.current = null
+                                      }}
+                                    >
+                                      <ProjectItem
+                                        project={project}
+                                        isActive={project.id === activeProjectId}
+                                        isExpanded={expandedProjects.has(project.id)}
+                                        onToggleExpand={() => toggleProjectExpanded(project.id)}
+                                        isEditing={editingId === project.id}
+                                        editName={editName}
+                                        shortcut={
+                                          shortcutIndex >= 0 && shortcutIndex < 9
+                                            ? `Ctrl+${shortcutIndex + 1}`
+                                            : undefined
+                                        }
+                                        hasActivity={hasActivity}
+                                        hasError={projectErrorIds.has(project.id)}
+                                        onClick={() => {
+                                          onSelectProject(project.id)
+                                          navigate('/')
+                                        }}
+                                        onContextMenu={(e) => handleContextMenu(e, project.id)}
+                                        onEditNameChange={setEditName}
+                                        onSaveRename={() => handleSaveRename(project.id)}
+                                        onCancelRename={handleCancelRename}
+                                        onSettingsClick={() => {
+                                          selectProject(project.id)
+                                          navigate('/settings')
+                                        }}
+                                        onWorktreeSelect={(worktreeId) =>
+                                          handleWorktreeSelect(project.id, worktreeId)
+                                        }
+                                        onWorktreeContextMenu={(e, worktree) =>
+                                          handleWorktreeContextMenu(e, project.id, worktree)
+                                        }
+                                        onOpenTerminalInWorktree={(
+                                          worktreeId,
+                                          worktreePath,
+                                          worktreeName
+                                        ) =>
+                                          void handleOpenTerminalInWorktree(
+                                            project.id,
+                                            worktreeId,
+                                            worktreePath,
+                                            worktreeName
+                                          )
+                                        }
+                                        isWorktreeOperationLocked={isWorktreeOperationLocked}
+                                        onNewWorktree={(pId) =>
+                                          setNewWorktreeModal({ isOpen: true, projectId: pId })
+                                        }
+                                      />
+                                    </Reorder.Item>
+                                  )
+                                })}
+                              </Reorder.Group>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     </Reorder.Item>
                   )
@@ -1262,7 +1408,36 @@ export function ProjectSidebar({
                         className="list-none"
                         whileDrag={{
                           scale: 1.02,
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          pointerEvents: 'none'
+                        }}
+                        onDrag={(_event, info) => {
+                          const element = document.elementFromPoint(info.point.x, info.point.y)
+                          const container = element?.closest('[data-group-container-id]')
+                          const folderHeader = element?.closest('[data-group-id]')
+                          const groupId =
+                            container?.getAttribute('data-group-container-id') ||
+                            folderHeader?.getAttribute('data-group-id') ||
+                            null
+                          if (groupId !== activeDragOverGroupId) {
+                            setActiveDragOverGroupId(groupId)
+                            activeDragOverGroupIdRef.current = groupId
+                          }
+                        }}
+                        onDragEnd={() => {
+                          const targetGroupId = activeDragOverGroupIdRef.current
+                          if (targetGroupId) {
+                            const nextGroupId = targetGroupId === 'root' ? null : targetGroupId
+                            const currentGroup = groups.find((g) =>
+                              g.projectIds.includes(project.id)
+                            )
+                            const currentGroupId = currentGroup?.id ?? null
+                            if (nextGroupId !== currentGroupId) {
+                              moveProjectToGroup(project.id, nextGroupId)
+                            }
+                          }
+                          setActiveDragOverGroupId(null)
+                          activeDragOverGroupIdRef.current = null
                         }}
                       >
                         <ProjectItem
@@ -1367,7 +1542,7 @@ export function ProjectSidebar({
       {/* Version - pinned bottom */}
       <div className="p-2 rounded-b-xl">
         <div className="w-full h-6 inline-flex items-center justify-center">
-          <span className="text-xs text-muted-foreground">Termul v0.4.2</span>
+          <span className="text-xs text-muted-foreground">Termul v0.4.3</span>
         </div>
       </div>
 
@@ -1428,11 +1603,11 @@ export function ProjectSidebar({
       )}
 
       {/* Color Picker Popover */}
-      {colorPicker.isOpen && colorPickerProject && (
+      {colorPicker.isOpen && colorPickerTarget && (
         <ColorPickerPopover
           x={colorPicker.x}
           y={colorPicker.y}
-          currentColor={colorPickerProject.color}
+          currentColor={colorPickerTarget.color || 'blue'}
           onSelectColor={handleColorChange}
           onClose={closeColorPicker}
         />

@@ -194,7 +194,7 @@ type PixelBlastThree = {
 const PixelBlast = ({
   variant = 'square',
   pixelSize = 3,
-  color = '#B497CF',
+  color = '#8b5cf6',
   className,
   style,
   antialias = true,

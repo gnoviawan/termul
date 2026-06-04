@@ -34,7 +34,7 @@ export function FeatureVisualFrameWindow({
   return (
     <div
       className={cn(
-        'relative rounded-xl border border-white/10 bg-[#0a0a0a] shadow-[0_20px_50px_rgba(0,0,0,0.5)]',
+        'relative rounded-xl border border-border-subtle bg-graphite shadow-[0_20px_50px_color-mix(in_srgb,var(--color-pitch-black)_50%,transparent)]',
         size === 'sm' && 'w-[85%] max-w-sm',
         size === 'md' && 'w-[90%] max-w-md',
         className,

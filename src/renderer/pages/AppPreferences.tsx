@@ -62,7 +62,6 @@ export default function AppPreferences(): React.JSX.Element {
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
-
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 

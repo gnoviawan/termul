@@ -1,13 +1,14 @@
 import { useCallback, useEffect } from 'react'
 import { persistenceApi, terminalApi } from '@/lib/api'
+import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
-import type { AppSettings } from '@/types/settings'
+import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
 
-type PanelSettingKey = 'sidebarVisible' | 'fileExplorerVisible' | 'sshPanelVisible'
+type PanelSettingKey = AppPanelVisibilitySettingKey
 
 type PanelWriteRequest = {
   panel: PanelSettingKey
@@ -133,14 +134,43 @@ export function useAppSettingsLoader(): void {
       if (result.success && result.data) {
         // Merge with defaults to handle any missing keys from older versions
         settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
+        let shouldPersistSettings = false
+        const rawAppearance = result.data.appearanceMode as string | undefined
+        const hasLegacyLightThemeId = settings.colorTheme.endsWith('-light')
+
+        if (hasLegacyLightThemeId) {
+          settings = {
+            ...settings,
+            colorTheme: normalizeThemeFamilyId(settings.colorTheme),
+            appearanceMode: settings.appearanceMode ?? 'light'
+          }
+          shouldPersistSettings = true
+        }
+
+        if (rawAppearance === undefined && !hasLegacyLightThemeId) {
+          settings = { ...settings, appearanceMode: 'dark' }
+          shouldPersistSettings = true
+        }
+
+        if (rawAppearance === 'system') {
+          settings = { ...settings, appearanceMode: getSystemAppearance() }
+          shouldPersistSettings = true
+        } else if (settings.appearanceMode !== 'light' && settings.appearanceMode !== 'dark') {
+          settings = { ...settings, appearanceMode: 'dark' }
+          shouldPersistSettings = true
+        }
 
         // Migrate persisted "canvas" renderer preference to "dom"
         // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
         if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
           settings = { ...settings, terminalRenderer: 'dom' as const }
+          shouldPersistSettings = true
         }
 
         setSettings(settings)
+        if (shouldPersistSettings) {
+          void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
+        }
       } else {
         settings = DEFAULT_APP_SETTINGS
         setSettings(settings)
@@ -181,6 +211,19 @@ export function useUpdateAppSetting<K extends keyof AppSettings>(): (
       await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
     },
     [updateSetting]
+  )
+}
+
+export function useUpdateAppSettings(): (updates: AppSettingsUpdate) => Promise<void> {
+  const updateSettings = useAppSettingsStore((state) => state.updateSettings)
+
+  return useCallback(
+    async (updates: AppSettingsUpdate) => {
+      updateSettings(updates)
+      const updatedSettings = useAppSettingsStore.getState().settings
+      await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
+    },
+    [updateSettings]
   )
 }
 

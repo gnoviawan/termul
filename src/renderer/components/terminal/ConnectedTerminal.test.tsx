@@ -1247,6 +1247,47 @@ describe('ConnectedTerminal', () => {
       expect(result).toBe(true)
     })
 
+    it('should prevent default on Shift+Tab and let xterm handle the key', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+      const event = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: true,
+        bubbles: true
+      })
+      const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+      expect(preventDefaultSpy).toHaveBeenCalled()
+    })
+
+    it('should prevent default on Tab and let xterm handle the key', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+      const event = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true
+      })
+      const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+      expect(preventDefaultSpy).toHaveBeenCalled()
+    })
+
     it('should bubble app-owned shortcuts so the workspace handler can process them', async () => {
       render(<ConnectedTerminal />)
 

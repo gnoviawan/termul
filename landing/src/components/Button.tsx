@@ -36,7 +36,7 @@ const renderButton = <E extends React.ElementType = 'button'>(
           
           // Variants
           variant === 'primary' && [
-            "bg-[#fcfcfc] text-black",
+            "bg-porcelain text-pitch-black",
             "border border-black/5",
             "shadow-[inset_0_1px_1px_rgba(255,255,255,1),inset_0_-1px_1px_rgba(0,0,0,0.1),0_4px_6px_rgba(0,0,0,0.05)]",
             "hover:bg-white",

@@ -8,6 +8,18 @@ body:
       value: |
         Thanks for reporting a bug. Please search existing issues first and include enough detail for someone else to reproduce the problem.
 
+  - type: dropdown
+    id: contributor-intent
+    attributes:
+      label: Will you contribute a fix?
+      description: Helps maintainers prioritize issues and avoid duplicate work.
+      options:
+        - "Yes — I plan to open a pull request"
+        - "No — reporting for maintainers to handle"
+        - "Unsure — open to contributing with guidance"
+    validations:
+      required: true
+
   - type: textarea
     id: summary
     attributes:

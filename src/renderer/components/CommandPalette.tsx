@@ -6,6 +6,7 @@ import {
   Keyboard,
   Layers,
   Monitor,
+  Palette,
   Pin,
   Save,
   Settings,
@@ -28,7 +29,7 @@ import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { Project, ProjectColor } from '@/types/project'
 
-type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory'
+type CommandShortcutId = 'newTerminal' | 'newBrowserTab' | 'commandHistory' | 'colorThemePicker'
 
 interface CommandPaletteProps {
   isOpen: boolean
@@ -44,6 +45,7 @@ interface CommandPaletteProps {
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
   onOpenShortcutMenu?: () => void
+  onOpenThemePicker?: () => void
   onSSHConnect?: (profileId: string) => void
   sshProfiles?: Array<{ id: string; name: string; host: string; username: string }>
   getShortcutLabel?: (id: CommandShortcutId) => string | undefined
@@ -99,6 +101,7 @@ export function CommandPalette({
   onOpenAppPreferences,
   onOpenCommandHistory,
   onOpenShortcutMenu,
+  onOpenThemePicker,
   onSSHConnect,
   sshProfiles,
   getShortcutLabel,
@@ -234,6 +237,20 @@ export function CommandPalette({
             }
           ]
         : []),
+      ...(onOpenThemePicker
+        ? [
+            {
+              id: 'change-color-theme',
+              category: 'tools' as const,
+              icon: <Palette aria-hidden="true" size={16} />,
+              label: 'Change Color Theme',
+              description: 'Preview and apply a UI color theme',
+              keywords: ['theme', 'color', 'appearance', 'palette', 'dark', 'dracula', 'nord'],
+              shortcut: getShortcutLabel?.('colorThemePicker'),
+              execute: onOpenThemePicker
+            }
+          ]
+        : []),
       ...(onOpenShortcutMenu
         ? [
             {
@@ -271,6 +288,7 @@ export function CommandPalette({
       onOpenAppPreferences,
       onOpenCommandHistory,
       onOpenShortcutMenu,
+      onOpenThemePicker,
       onSSHConnect,
       sshProfiles,
       getShortcutLabel,

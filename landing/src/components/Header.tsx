@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, GithubIcon, Menu01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "./Button";
@@ -6,6 +6,7 @@ import { Logo } from "./Logo";
 import { cn } from "../lib/utils";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
+import { HEADER_SCROLL_OFFSET, smoothScrollToHash } from "../lib/smooth-scroll";
 
 export type HeaderProps = {
   /** Scroll offset of the real scroll container (e.g. OverlayScrollbars viewport). When omitted, uses `window`. */
@@ -53,6 +54,20 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
 
   const closeMenu = () => setMenuOpen(false);
 
+  const handleAnchorClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    href: string,
+  ) => {
+    if (!href.startsWith("#")) return;
+
+    event.preventDefault();
+    closeMenu();
+
+    if (smoothScrollToHash(href, { offset: HEADER_SCROLL_OFFSET })) {
+      window.history.pushState(null, "", href);
+    }
+  };
+
   const linkClassName = cn(
     "transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
     isScrolled ? "hover:text-white" : "hover:text-black",
@@ -69,8 +84,8 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
         className={cn(
           "fixed top-0 left-0 right-0 z-50 px-6 py-4 flex items-center justify-between md:grid md:grid-cols-[1fr_auto_1fr] border-b transition-[background-color,border-color,backdrop-filter] duration-200 ease-[var(--ease-out)]",
           isScrolled
-            ? "bg-black/80 backdrop-blur-md border-white/10"
-            : "bg-black/0 border-white/0",
+            ? "bg-background/80 backdrop-blur-md border-border-subtle"
+            : "bg-background/0 border-transparent",
         )}
       >
         <div className="min-w-0 md:justify-self-start md:col-start-1">
@@ -98,6 +113,11 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
               href={link.href}
               target={link.external ? "_blank" : undefined}
               rel={link.external ? "noreferrer" : undefined}
+              onClick={
+                link.external
+                  ? undefined
+                  : (event) => handleAnchorClick(event, link.href)
+              }
               className={linkClassName}
             >
               {link.label}
@@ -160,13 +180,13 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
           aria-label="Close menu"
           onClick={closeMenu}
           className={cn(
-            "absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
+            "absolute inset-0 bg-pitch-black/60 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
             menuOpen ? "opacity-100" : "opacity-0",
           )}
         />
         <nav
           className={cn(
-            "absolute top-[72px] left-4 right-4 rounded-2xl border border-white/10 bg-[#0a0a0a]/95 backdrop-blur-xl p-2 shadow-2xl shadow-black/50",
+            "absolute top-[72px] left-4 right-4 rounded-2xl border border-border-subtle bg-graphite/95 backdrop-blur-xl p-2 shadow-2xl shadow-pitch-black/50",
             "transition-[opacity,transform] duration-200 ease-[var(--ease-out)]",
             menuOpen
               ? "opacity-100 translate-y-0"
@@ -182,7 +202,13 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
               href={link.href}
               target={link.external ? "_blank" : undefined}
               rel={link.external ? "noreferrer" : undefined}
-              onClick={closeMenu}
+              onClick={(event) => {
+                if (link.external) {
+                  closeMenu();
+                  return;
+                }
+                handleAnchorClick(event, link.href);
+              }}
               className="flex items-center justify-between rounded-xl px-4 py-3.5 text-base text-gray-200 transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-white/5 active:scale-[0.97]"
             >
               {link.label}

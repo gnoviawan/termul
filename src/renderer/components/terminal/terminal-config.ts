@@ -1,4 +1,5 @@
-import type { ITerminalOptions, ITheme } from '@xterm/xterm'
+import type { ITerminalOptions } from '@xterm/xterm'
+import { getActiveTerminalTheme } from '@/lib/themes'
 
 // Resize debounce delay in milliseconds - prevents flooding PTY with resize events during drag
 export const RESIZE_DEBOUNCE_MS = 50
@@ -7,32 +8,6 @@ export const RESIZE_DEBOUNCE_MS = 50
 // support. Using this value enables xterm.js to apply appropriate workarounds for ConPTY
 // behavior (e.g., correct line wrapping calculations).
 export const CONPTY_MIN_BUILD_NUMBER = 21376
-
-export const TERMINAL_THEME: ITheme = {
-  background: '#1e1e1e',
-  foreground: '#d4d4d4',
-  cursor: '#ffffff',
-  cursorAccent: '#000000',
-  selectionBackground: '#264f78',
-  selectionForeground: '#ffffff',
-  selectionInactiveBackground: '#3a3d41',
-  black: '#000000',
-  red: '#cd3131',
-  green: '#0dbc79',
-  yellow: '#e5e510',
-  blue: '#2472c8',
-  magenta: '#bc3fbc',
-  cyan: '#11a8cd',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
-  brightWhite: '#ffffff'
-}
 
 export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   // Cross-platform monospace stack:
@@ -43,7 +18,6 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
     '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
   fontSize: 14,
   lineHeight: 1.2,
-  theme: TERMINAL_THEME,
   cursorBlink: true,
   cursorStyle: 'block',
   allowTransparency: false,
@@ -52,7 +26,10 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   convertEol: false,
   ignoreBracketedPasteMode: false,
   rightClickSelectsWord: true,
-  screenReaderMode: true
+  // xterm screenReaderMode routes keystrokes through the a11y textarea path, which
+  // can emit duplicate bytes to the PTY (see xtermjs/xterm.js#3467). Default off;
+  // re-enable only when we add an explicit user-facing accessibility setting.
+  screenReaderMode: false
 }
 
 /**
@@ -63,7 +40,8 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
  */
 export function getTerminalOptions(platform: string): ITerminalOptions {
   const baseOptions: ITerminalOptions = {
-    ...DEFAULT_TERMINAL_OPTIONS
+    ...DEFAULT_TERMINAL_OPTIONS,
+    theme: getActiveTerminalTheme()
   }
 
   if (platform.startsWith('Win')) {
