@@ -127,6 +127,9 @@ type ConPtySpawnResult = (
     Box<dyn std::io::Write + Send>,
     u32,
     *mut c_void,
+    // Job Object handle (KILL_ON_JOB_CLOSE) owning the child process tree, or
+    // null if the Job Object could not be created/assigned. Owned by the caller.
+    *mut c_void,
     ConPtyHandles,
 );
 
@@ -200,13 +203,68 @@ fn env_to_wide_block(env: &std::collections::HashMap<String, String>) -> Vec<u16
     block
 }
 
+/// Create a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and assign
+/// `process` to it. When the returned handle is closed, the OS terminates the
+/// process and its entire descendant tree. Returns a null handle (and logs a
+/// warning) if the job could not be created, configured, or assigned, in which
+/// case the caller proceeds with the process running but without tree-kill.
+#[cfg(target_os = "windows")]
+unsafe fn create_kill_on_close_job(process: *mut c_void) -> *mut c_void {
+    use winapi::um::jobapi2::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+    };
+    use winapi::um::winnt::{
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+    if job.is_null() {
+        log::warn!(
+            "[ConPTY] CreateJobObject failed, orphan protection disabled: {}",
+            std::io::Error::last_os_error()
+        );
+        return std::ptr::null_mut();
+    }
+
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if SetInformationJobObject(
+        job,
+        JobObjectExtendedLimitInformation,
+        &mut info as *mut _ as *mut c_void,
+        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+    ) == 0
+    {
+        log::warn!(
+            "[ConPTY] SetInformationJobObject failed, orphan protection disabled: {}",
+            std::io::Error::last_os_error()
+        );
+        winapi::um::handleapi::CloseHandle(job);
+        return std::ptr::null_mut();
+    }
+
+    // Nested jobs are supported on Win8+/Win10+ (ConPTY requires Win10+), so
+    // assignment is safe even if the child is already in a job.
+    if AssignProcessToJobObject(job, process) == 0 {
+        log::warn!(
+            "[ConPTY] AssignProcessToJobObject failed, orphan protection disabled: {}",
+            std::io::Error::last_os_error()
+        );
+        winapi::um::handleapi::CloseHandle(job);
+        return std::ptr::null_mut();
+    }
+
+    job
+}
+
 /// Spawn a command using Windows ConPTY with proper flags to hide console window
 ///
 /// This function uses the Windows ConPTY API directly to spawn processes
 /// without showing the console window (the main issue with portable-pty 0.9).
 ///
 /// # Returns
-/// A tuple of (reader, writer, pid, process_handle, conpty_handles)
+/// A tuple of (reader, writer, pid, process_handle, job_handle, conpty_handles)
 pub fn spawn_conpty(
     command: &str,
     cwd: Option<&str>,
@@ -363,7 +421,9 @@ pub fn spawn_conpty(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             0,
-            EXTENDED_STARTUPINFO_PRESENT | winapi::um::winbase::CREATE_UNICODE_ENVIRONMENT,
+            EXTENDED_STARTUPINFO_PRESENT
+                | winapi::um::winbase::CREATE_UNICODE_ENVIRONMENT
+                | winapi::um::winbase::CREATE_SUSPENDED,
             env_block.as_mut_ptr() as *mut _,
             cwd_wide
                 .as_ref()
@@ -384,6 +444,34 @@ pub fn spawn_conpty(
 
         DeleteProcThreadAttributeList(attr_list);
 
+        // 7b. Assign the child to a Job Object configured to kill the whole
+        // process tree when the job handle closes. This is the core fix for the
+        // ConPTY orphan leak (#281): even if app-side cleanup is deferred or the
+        // app exits uncleanly, the OS reaps the entire descendant tree when the
+        // owning handle (held by the terminal instance) is closed. It also kills
+        // grandchildren that single-PID TerminateProcess misses. On any failure
+        // we log and continue with a null job handle — no regression vs. before.
+        let job = create_kill_on_close_job(pi.hProcess);
+
+        // Resume the child only after it is in the job so no grandchild can
+        // escape assignment (#281 spawn race).
+        if winapi::um::processthreadsapi::ResumeThread(pi.hThread) == u32::MAX {
+            let err = std::io::Error::last_os_error();
+            log::warn!("[ConPTY] ResumeThread failed: {}", err);
+            let _ = winapi::um::processthreadsapi::TerminateProcess(pi.hProcess, 1);
+            if !job.is_null() {
+                winapi::um::handleapi::CloseHandle(job);
+            }
+            winapi::um::handleapi::CloseHandle(pi.hProcess);
+            winapi::um::handleapi::CloseHandle(pi.hThread);
+            CloseHandle(input_read);
+            CloseHandle(input_write);
+            CloseHandle(output_read);
+            CloseHandle(output_write);
+            ClosePseudoConsole(hpcon);
+            return Err(err);
+        }
+
         // 8. Close ConPTY's pipe ends (we keep our ends)
         CloseHandle(input_read);
         CloseHandle(output_write);
@@ -399,7 +487,14 @@ pub fn spawn_conpty(
 
         CloseHandle(pi.hThread);
 
-        Ok((reader, writer, pi.dwProcessId, pi.hProcess, conpty_handles))
+        Ok((
+            reader,
+            writer,
+            pi.dwProcessId,
+            pi.hProcess,
+            job,
+            conpty_handles,
+        ))
     }
 }
 
@@ -410,6 +505,71 @@ mod tests {
     fn cmdline(program: &str, args: &[&str]) -> String {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         build_windows_command_line(program, &owned)
+    }
+
+    /// #281: a spawned ConPTY child must be owned by a kill-on-close Job Object,
+    /// and dropping the returned handles must terminate the whole process tree
+    /// (the same mechanism that reaps children when the app process exits).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn spawn_conpty_assigns_job_and_kills_tree_on_close() {
+        use super::spawn_conpty;
+        use std::collections::HashMap;
+
+        let mut env = HashMap::new();
+        env.insert("Path".to_string(), std::env::var("PATH").unwrap_or_default());
+
+        let (reader, writer, pid, process_handle, job_handle, conpty_handles) =
+            spawn_conpty("cmd.exe", None, 80, 24, &env).expect("spawn_conpty failed");
+
+        assert_ne!(pid, 0, "expected a valid child pid");
+        assert!(!job_handle.is_null(), "child must be assigned to a Job Object");
+        assert!(
+            is_process_alive(pid),
+            "child should be running immediately after spawn"
+        );
+
+        // Drop all owned handles. Closing the last job handle triggers
+        // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, terminating the child tree.
+        drop(reader);
+        drop(writer);
+        unsafe {
+            winapi::um::handleapi::CloseHandle(process_handle);
+        }
+        drop(conpty_handles);
+        unsafe {
+            winapi::um::handleapi::CloseHandle(job_handle);
+        }
+
+        // Give the OS a brief moment to reap the tree.
+        let mut alive = true;
+        for _ in 0..50 {
+            if !is_process_alive(pid) {
+                alive = false;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!alive, "child pid {} leaked after job handle close", pid);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn is_process_alive(pid: u32) -> bool {
+        unsafe {
+            let handle = winapi::um::processthreadsapi::OpenProcess(
+                winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            );
+            if handle.is_null() {
+                return false;
+            }
+            let mut code: u32 = 0;
+            let ok =
+                winapi::um::processthreadsapi::GetExitCodeProcess(handle, &mut code);
+            winapi::um::handleapi::CloseHandle(handle);
+            ok != 0 && code == winapi::um::minwinbase::STILL_ACTIVE
+        }
     }
 
     #[test]
