@@ -25,8 +25,83 @@ type DisplayTestimonial = {
   href?: string;
 };
 
+const hashedAvatarSeedCache = new Map<string, string>();
+const pendingAvatarSeedCache = new Map<string, Promise<string | null>>();
+
 function dicebearAvatar(seed: string) {
   return `https://api.dicebear.com/10.x/glass/svg?seed=${encodeURIComponent(seed)}`;
+}
+
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+function getInitials(name: string): string {
+  const initials = name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('');
+
+  return initials.toUpperCase() || '?';
+}
+
+function getHashedAvatarSeed(seed: string): Promise<string | null> {
+  const cached = hashedAvatarSeedCache.get(seed);
+  if (cached) return Promise.resolve(cached);
+
+  const pending = pendingAvatarSeedCache.get(seed);
+  if (pending) return pending;
+
+  if (!globalThis.crypto?.subtle || typeof TextEncoder === 'undefined') {
+    return Promise.resolve(null);
+  }
+
+  const next = globalThis.crypto.subtle
+    .digest('SHA-256', new TextEncoder().encode(seed))
+    .then((digest) => {
+      const hashedSeed = `sha256:${toHex(digest)}`;
+      hashedAvatarSeedCache.set(seed, hashedSeed);
+      return hashedSeed;
+    })
+    .catch(() => null)
+    .finally(() => {
+      pendingAvatarSeedCache.delete(seed);
+    });
+
+  pendingAvatarSeedCache.set(seed, next);
+  return next;
+}
+
+function useHashedAvatarSeed(seed: string): string | null {
+  const cachedSeed = hashedAvatarSeedCache.get(seed);
+  const [hashedSeed, setHashedSeed] = useState<{
+    source: string;
+    value: string | null;
+  }>(() => ({
+    source: seed,
+    value: cachedSeed ?? null,
+  }));
+
+  useEffect(() => {
+    if (hashedAvatarSeedCache.has(seed)) {
+      return;
+    }
+
+    let cancelled = false;
+    void getHashedAvatarSeed(seed).then((nextSeed) => {
+      if (!cancelled) setHashedSeed({ source: seed, value: nextSeed });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [seed]);
+
+  return cachedSeed ?? (hashedSeed.source === seed ? hashedSeed.value : null);
 }
 
 function fromApiTestimonial(testimonial: PublicTestimonial): DisplayTestimonial {
@@ -135,6 +210,7 @@ function TestimonialsCard({
   role,
   ...props
 }: ComponentProps<'article'> & DisplayTestimonial) {
+  const fallbackAvatarSeed = useHashedAvatarSeed(name);
   const content = (
     <>
       <blockquote className="flex-1 py-4">
@@ -145,11 +221,17 @@ function TestimonialsCard({
           <Avatar className="size-8 rounded-full">
             <AvatarImage alt={`${name}'s profile picture`} src={image} />
             <AvatarFallback>
-              <img
-                alt={`${name}'s profile picture`}
-                className="aspect-square h-full w-full object-cover"
-                src={dicebearAvatar(name)}
-              />
+              {fallbackAvatarSeed ? (
+                <img
+                  alt={`${name}'s profile picture`}
+                  className="aspect-square h-full w-full object-cover"
+                  src={dicebearAvatar(fallbackAvatarSeed)}
+                />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground text-xs font-medium">
+                  {getInitials(name)}
+                </span>
+              )}
             </AvatarFallback>
           </Avatar>
           <div className="flex flex-col py-2">

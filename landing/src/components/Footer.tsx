@@ -68,7 +68,7 @@ const Footer = () => {
           ))}
         </div>
         
-        <div className="mt-12 pt-8 border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-600">
+        <div className="mt-12 pt-8 border-t border-border-subtle flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-600">
           <p>© {new Date().getFullYear()} Termul Contributors. MIT Licensed.</p>
           <div className="flex items-center gap-4">
             <FooterLink href={GITHUB_REPO_URL}>GitHub</FooterLink>

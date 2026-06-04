@@ -6,7 +6,7 @@ import { Logo } from "./Logo";
 import { cn } from "../lib/utils";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
-import { smoothScrollToHash } from "../lib/smooth-scroll";
+import { HEADER_SCROLL_OFFSET, smoothScrollToHash } from "../lib/smooth-scroll";
 
 export type HeaderProps = {
   /** Scroll offset of the real scroll container (e.g. OverlayScrollbars viewport). When omitted, uses `window`. */
@@ -63,7 +63,7 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     event.preventDefault();
     closeMenu();
 
-    if (smoothScrollToHash(href, { offset: 80 })) {
+    if (smoothScrollToHash(href, { offset: HEADER_SCROLL_OFFSET })) {
       window.history.pushState(null, "", href);
     }
   };

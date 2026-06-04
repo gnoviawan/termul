@@ -10,6 +10,8 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+export const HEADER_SCROLL_OFFSET = 112;
+
 /** Nearest scrollable ancestor (OverlayScrollbars viewport or overflow fallback). */
 export function resolveScrollElement(from: HTMLElement): HTMLElement {
   let node: HTMLElement | null = from.parentElement;
@@ -50,7 +52,7 @@ export type SmoothScrollOptions = {
 
 export function smoothScrollToElement(
   target: HTMLElement,
-  { offset = 80 }: SmoothScrollOptions = {},
+  { offset = HEADER_SCROLL_OFFSET }: SmoothScrollOptions = {},
 ): void {
   activeScrollCancel?.();
 

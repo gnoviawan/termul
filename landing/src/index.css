@@ -31,6 +31,8 @@
   --color-foreground: var(--color-porcelain);
   --color-muted: var(--color-graphite);
   --color-muted-foreground: var(--color-storm-cloud);
+  --color-text-muted: var(--color-fog-grey);
+  --color-text-muted-hover: var(--color-light-steel);
   --color-accent: color-mix(in srgb, var(--color-muted-ash) 40%, transparent);
   --color-border: var(--color-muted-ash);
   --color-border-subtle: color-mix(in srgb, var(--color-porcelain) 10%, transparent);

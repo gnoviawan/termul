@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 import { useReducedMotion } from '../lib/useReducedMotion';
-import { smoothScrollToElement } from '../lib/smooth-scroll';
+import { HEADER_SCROLL_OFFSET, smoothScrollToElement } from '../lib/smooth-scroll';
 import { features, featureBackgroundImage } from '../data/features';
 import { FeatureVisual } from './feature-visuals';
 import { SectionHeader } from './SectionHeader';
@@ -34,7 +34,7 @@ const FeatureSection = () => {
   const scrollToFeature = (id: string) => {
     const target = document.getElementById(`feature-${id}`);
     if (target) {
-      smoothScrollToElement(target, { offset: reducedMotion ? 96 : 112 });
+      smoothScrollToElement(target, { offset: HEADER_SCROLL_OFFSET });
     }
   };
 
@@ -62,7 +62,7 @@ const FeatureSection = () => {
                   className={`snap-center rounded-full px-4 py-2 font-mono text-xs tracking-wide whitespace-nowrap transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]
                     ${activeFeature === feature.id
                       ? 'bg-porcelain/10 text-foreground border border-border-subtle'
-                      : 'text-gray-500 border border-transparent hover:text-gray-300 hover:bg-porcelain/5'
+                      : 'text-text-muted border border-transparent hover:text-text-muted-hover hover:bg-porcelain/5'
                     }`}
                 >
                   <span className={activeFeature === feature.id ? 'text-aether-blue' : ''}>
@@ -96,7 +96,7 @@ const FeatureSection = () => {
                 className={`py-3 px-4 rounded-lg font-mono text-sm tracking-wide flex items-center gap-4 relative z-10 transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]
                   ${activeFeature === feature.id
                     ? 'text-foreground'
-                    : 'text-gray-500 hover:text-gray-300'
+                    : 'text-text-muted hover:text-text-muted-hover'
                   }`}
               >
                 <span
