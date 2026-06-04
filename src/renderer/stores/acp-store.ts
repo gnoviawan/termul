@@ -622,16 +622,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   openHistorySession: async (id) => {
+    const cached = get().sessions[id]
+    // Only skip reload for a genuinely live session (active/initializing/error).
+    // A cached `closed` entry (e.g. tab still open after delete) must still open
+    // from persisted history via load/resume/local below.
+    if (cached && cached.status !== 'closed') return
+
     const payload = await loadSessionPayload(id)
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
-    const live = get().sessions[id]
-
-    // If the session is already live in memory it's running in a pane already; the
-    // in-memory transcript is fresher than the (debounced) persisted copy, so keep
-    // it untouched and just let the caller activate the tab. Reloading here would
-    // wipe the live transcript and leave a blank pane if the agent doesn't replay.
-    if (live) return
 
     const connected = get().agentStatus[meta.agentId] === 'connected'
     const capabilities = get().agents[meta.agentId]?.capabilities ?? null
