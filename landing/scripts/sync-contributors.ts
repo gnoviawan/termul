@@ -14,27 +14,50 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outputPath = path.resolve(__dirname, '../src/data/contributors.ts');
 
 const GITHUB_REPO = 'gnoviawan/termul';
+const PER_PAGE = 100;
 
 type GitHubContributor = {
   login: string;
   avatar_url: string;
 };
 
-async function fetchContributors(): Promise<GitHubContributor[]> {
-  const response = await fetch(
-    `https://api.github.com/repos/${GITHUB_REPO}/contributors?per_page=100`,
-    {
-      headers: { Accept: 'application/vnd.github+json' },
-    },
-  );
+function hasNextPage(linkHeader: string | null): boolean {
+  return linkHeader?.includes('rel="next"') ?? false;
+}
 
-  if (!response.ok) {
-    throw new Error(
-      `GitHub API ${response.status}: ${await response.text()}`,
+async function fetchContributors(): Promise<GitHubContributor[]> {
+  const contributors: GitHubContributor[] = [];
+  let page = 1;
+
+  while (true) {
+    const response = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/contributors?per_page=${PER_PAGE}&page=${page}`,
+      {
+        headers: { Accept: 'application/vnd.github+json' },
+      },
     );
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API ${response.status}: ${await response.text()}`,
+      );
+    }
+
+    const batch = (await response.json()) as GitHubContributor[];
+    if (batch.length === 0) {
+      break;
+    }
+
+    contributors.push(...batch);
+
+    if (batch.length < PER_PAGE || !hasNextPage(response.headers.get('link'))) {
+      break;
+    }
+
+    page += 1;
   }
 
-  return response.json() as Promise<GitHubContributor[]>;
+  return contributors;
 }
 
 function toSourceFile(contributors: GitHubContributor[]): string {

@@ -8,6 +8,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  // Single worker: webServer binds a fixed port (shared preview server).
   workers: 1,
   reporter: [['list']],
   use: {
@@ -25,7 +26,7 @@ export default defineConfig({
   snapshotPathTemplate:
     '{testDir}/{testFileDir}/__snapshots__/{testFileName}-snapshots/{arg}{ext}',
   webServer: {
-    command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${port}`,
+    command: `bun run build && bun run preview -- --host 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

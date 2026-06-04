@@ -1,22 +1,10 @@
-import { mkdirSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { expect, test } from '@playwright/test';
 
-import { contributors } from '../../src/data/contributors';
+import { getDisplayContributors } from '../../src/lib/contributors';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const snapshotDir = path.resolve(
-  __dirname,
-  '../../test-results/snapshots',
-);
+const displayedContributors = getDisplayContributors();
 
 test.describe('Contributors section', () => {
-  test.beforeAll(() => {
-    mkdirSync(snapshotDir, { recursive: true });
-  });
-
   test('renders heading, count badge, and contributor avatars', async ({
     page,
   }) => {
@@ -29,13 +17,15 @@ test.describe('Contributors section', () => {
       page.getByRole('heading', { name: /Contributors/i }),
     ).toBeVisible();
     await expect(
-      page.getByLabel(`${contributors.length} contributors`),
-    ).toHaveText(String(contributors.length));
+      page.getByLabel(`${displayedContributors.length} contributors`),
+    ).toHaveText(String(displayedContributors.length));
 
     const list = page.getByRole('list', { name: 'Project contributors' });
-    await expect(list.getByRole('listitem')).toHaveCount(contributors.length);
+    await expect(list.getByRole('listitem')).toHaveCount(
+      displayedContributors.length,
+    );
 
-    for (const contributor of contributors) {
+    for (const contributor of displayedContributors) {
       await expect(
         page.getByRole('link', {
           name: `@${contributor.username} on GitHub`,
@@ -47,7 +37,7 @@ test.describe('Contributors section', () => {
   test('shows GitHub username tooltip on avatar hover', async ({ page }) => {
     await page.goto('/');
 
-    const firstContributor = contributors[0];
+    const firstContributor = displayedContributors[0];
     const avatarLink = page.getByRole('link', {
       name: `@${firstContributor.username} on GitHub`,
     });
@@ -66,23 +56,23 @@ test.describe('Contributors section', () => {
     const section = page.getByTestId('contributors-section');
     await section.scrollIntoViewIfNeeded();
 
-    await expect(section.locator('img').first()).toBeVisible({ timeout: 15_000 });
-    await page.waitForTimeout(500);
+    const firstAvatar = section.locator('img').first();
+    await expect(firstAvatar).toBeVisible({ timeout: 15_000 });
+    await expect(firstAvatar).toHaveJSProperty('complete', true);
+    await expect(firstAvatar).not.toHaveJSProperty('naturalWidth', 0);
 
     await expect(section).toHaveScreenshot('contributors-section.png', {
       animations: 'disabled',
       maxDiffPixelRatio: 0.05,
     });
-
-    await section.screenshot({
-      path: path.join(snapshotDir, 'contributors-section.png'),
-    });
   });
 
-  test('matches contributors section with tooltip snapshot', async ({ page }) => {
+  test('matches contributors section with tooltip snapshot', async ({
+    page,
+  }) => {
     await page.goto('/');
 
-    const firstContributor = contributors[0];
+    const firstContributor = displayedContributors[0];
     const section = page.getByTestId('contributors-section');
     const avatarLink = page.getByRole('link', {
       name: `@${firstContributor.username} on GitHub`,
@@ -90,16 +80,14 @@ test.describe('Contributors section', () => {
 
     await section.scrollIntoViewIfNeeded();
     await avatarLink.hover();
-    await expect(page.getByRole('tooltip')).toBeVisible();
-    await page.waitForTimeout(300);
+
+    const tooltip = page.getByRole('tooltip');
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toHaveText(`@${firstContributor.username}`);
 
     await expect(section).toHaveScreenshot('contributors-section-tooltip.png', {
       animations: 'disabled',
       maxDiffPixelRatio: 0.05,
-    });
-
-    await section.screenshot({
-      path: path.join(snapshotDir, 'contributors-section-tooltip.png'),
     });
   });
 });
