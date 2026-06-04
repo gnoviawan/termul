@@ -25,6 +25,7 @@ export function ContributorsSection() {
     <section
       aria-labelledby="contributors-heading"
       className="px-6 py-20"
+      data-testid="contributors-section"
     >
       <div className="relative mx-auto max-w-5xl">
         <SectionHeader

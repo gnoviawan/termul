@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "bun test",
+    "test:e2e": "playwright test",
+    "test:contributors": "bun test tests/contributors.test.ts && playwright test tests/e2e/contributors-section.spec.ts",
     "deploy": "wrangler pages deploy dist",
     "pages:dev": "bun run build && wrangler pages dev",
     "db:migrate": "wrangler d1 migrations apply termul --remote",
@@ -42,6 +44,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250514.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.3.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.12.3",
