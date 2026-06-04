@@ -626,16 +626,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
     const live = get().sessions[id]
-    const connected = !!live && get().agentStatus[live.agentId] === 'connected'
-    const capabilities = live ? (get().agents[live.agentId]?.capabilities ?? null) : null
+
+    // If the session is already live in memory it's running in a pane already; the
+    // in-memory transcript is fresher than the (debounced) persisted copy, so keep
+    // it untouched and just let the caller activate the tab. Reloading here would
+    // wipe the live transcript and leave a blank pane if the agent doesn't replay.
+    if (live) return
+
+    const connected = get().agentStatus[meta.agentId] === 'connected'
+    const capabilities = get().agents[meta.agentId]?.capabilities ?? null
     const strategy = decideResume({ connected, capabilities })
 
-    // Always show the persisted transcript locally first (and register the session
-    // record if it isn't live), so the pane has content regardless of strategy.
+    // Show the persisted transcript locally and register the session record so the
+    // pane has content regardless of strategy.
     set((s) => ({
       sessions: {
         ...s.sessions,
-        [id]: s.sessions[id] ?? {
+        [id]: {
           id,
           agentId: meta.agentId,
           cwd: meta.cwd,
@@ -652,11 +659,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       messages: { ...s.messages, [id]: payload.messages }
     }))
 
-    if (strategy === 'load' && live) {
+    if (strategy === 'load') {
       // Agent replays history via session/update; clear local copy to avoid dupes.
       set((s) => ({ messages: { ...s.messages, [id]: [] } }))
       try {
-        await acpApi.loadSession(live.agentId, id, meta.cwd)
+        await acpApi.loadSession(meta.agentId, id, meta.cwd)
       } catch (err) {
         // Load failed — restore the local transcript so the user still sees history.
         set((s) => ({
@@ -670,8 +677,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }))
         throw err
       }
-    } else if (strategy === 'resume' && live) {
-      await acpApi.resumeSession(live.agentId, id, meta.cwd)
+    } else if (strategy === 'resume') {
+      await acpApi.resumeSession(meta.agentId, id, meta.cwd)
     }
     // 'local' → nothing more; the transcript is already shown.
   },

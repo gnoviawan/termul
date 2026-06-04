@@ -669,12 +669,25 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-old'].status).toBe('closed')
   })
 
-  it('openHistorySession restores the local transcript if load fails (P5)', async () => {
-    // a connected agent with loadSession -> 'load' strategy
-    seedSession('s-live', 'agent-1', false)
+  it('openHistorySession leaves a live session untouched (P5)', async () => {
+    // The session is already running in a pane with messages in memory; reopening
+    // it from history must not reload or wipe the live transcript.
+    seedSession('s-live', 'agent-1', true)
     useAcpStore.setState((s) => ({
       agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
-      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      messages: {
+        ...s.messages,
+        's-live': [
+          {
+            id: 'live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'streaming' }],
+            streaming: false,
+            timestamp: 0
+          }
+        ]
+      }
     }))
     const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -690,6 +703,43 @@ describe('acp-store', () => {
       },
       messages: [
         {
+          id: 'stale',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'stale-persisted' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('s-live')
+    // No reload IPC, and the live in-memory transcript is preserved (not the
+    // stale persisted copy).
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().messages['s-live']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s-live'][0].id).toBe('live-1')
+  })
+
+  it('openHistorySession restores the local transcript if load fails (P5)', async () => {
+    // A non-live session whose agent process is still connected with loadSession
+    // -> 'load' strategy; if the reload fails the local transcript is restored.
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-load',
+        agentId: 'agent-1',
+        title: 'Reloadable',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
           id: 'm1',
           role: 'user',
           blocks: [{ type: 'text', text: 'prior' }],
@@ -700,10 +750,10 @@ describe('acp-store', () => {
     })
     // acp_load_session rejects
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('load boom')
-    await expect(useAcpStore.getState().openHistorySession('s-live')).rejects.toBeDefined()
+    await expect(useAcpStore.getState().openHistorySession('s-load')).rejects.toBeDefined()
     // transcript was restored (not left empty) and the error surfaced
-    expect(useAcpStore.getState().messages['s-live']).toHaveLength(1)
-    expect(useAcpStore.getState().sessions['s-live'].lastError).toMatch(/Resume failed/)
+    expect(useAcpStore.getState().messages['s-load']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-load'].lastError).toMatch(/Resume failed/)
   })
 
   it('deleteHistorySession removes the index entry (P5)', async () => {
