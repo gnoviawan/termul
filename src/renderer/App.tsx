@@ -30,6 +30,10 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
 import { isWindows } from '@/lib/platform'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { useAcpAgents } from './hooks/use-acp-agents'
+import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpListeners } from './hooks/use-acp-listeners'
+import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
@@ -92,6 +96,10 @@ function AppEffects(): null {
   useProjectsLoader()
   useProjectsAutoSave()
   useMenuUpdaterListener()
+  useAcpListeners()
+  useAcpAgents()
+  useAcpHistory()
+  useAcpMcp()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()

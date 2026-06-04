@@ -29,6 +29,7 @@ export interface ProjectGroup {
   name: string
   projectIds: string[]
   isCollapsed?: boolean
+  color?: ProjectColor
 }
 
 export interface Project {

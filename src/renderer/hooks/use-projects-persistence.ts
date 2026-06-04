@@ -448,7 +448,18 @@ export function useProjectsAutoSave(): void {
   useEffect(() => {
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
-      // Skip the first state change (from loading)
+      // Skip auto-saving if the store is not yet loaded
+      if (!state.isLoaded) {
+        return
+      }
+
+      // If we just transitioned to loaded, mark it initialized and skip saving
+      if (!prevState.isLoaded) {
+        hasInitialized.current = true
+        return
+      }
+
+      // Skip the first state change (only if we haven't initialized yet, e.g. in tests where isLoaded starts as true)
       if (!hasInitialized.current) {
         hasInitialized.current = true
         return

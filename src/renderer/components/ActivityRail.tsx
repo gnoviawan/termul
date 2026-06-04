@@ -2,6 +2,7 @@ import {
   FolderKanban,
   GitBranch,
   History,
+  MessageSquarePlus,
   Network,
   Palette,
   PanelLeft,
@@ -30,6 +31,10 @@ interface ActivityRailProps {
   onOpenGitChanges?: () => void
   /** Whether a git changes tab can currently be opened (active project has a path). */
   canOpenGitChanges?: boolean
+  /** Opens the New Agent Chat dialog. */
+  onOpenAgentChat?: () => void
+  /** Whether a new agent chat can currently be started (active project has a path). */
+  canOpenAgentChat?: boolean
   /** Opens a git history (commit graph) tab in the active pane. */
   onOpenGitHistory?: () => void
   /** Whether a git history tab can currently be opened (active project has a path). */
@@ -62,6 +67,8 @@ export function ActivityRail({
   onOpenCommandPalette,
   onOpenGitChanges,
   canOpenGitChanges = false,
+  onOpenAgentChat,
+  canOpenAgentChat = false,
   onOpenGitHistory,
   canOpenGitHistory = false,
   isThemePickerOpen = false,
@@ -124,6 +131,7 @@ export function ActivityRail({
       <div className="w-6 h-px bg-border/60 my-1" aria-hidden="true" />
 
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation()
           onOpenCommandPalette?.()
@@ -137,6 +145,7 @@ export function ActivityRail({
       </button>
 
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation()
           onOpenGitChanges?.()
@@ -149,6 +158,23 @@ export function ActivityRail({
         <GitBranch
           size={18}
           className={canOpenGitChanges ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenAgentChat?.()
+        }}
+        className={railButtonClass}
+        title={canOpenAgentChat ? 'New agent chat' : 'New agent chat (open a project first)'}
+        aria-label="New agent chat"
+        disabled={!onOpenAgentChat || !canOpenAgentChat}
+      >
+        <MessageSquarePlus
+          size={18}
+          className={canOpenAgentChat ? 'text-muted-foreground' : 'text-muted-foreground/40'}
         />
       </button>
 
@@ -169,6 +195,7 @@ export function ActivityRail({
       </button>
 
       <button
+        type="button"
         onClick={(e) => {
           void handleToggleSSHPanel(e)
         }}
@@ -185,6 +212,7 @@ export function ActivityRail({
 
       <div className="mt-auto flex flex-col items-center pb-1">
         <button
+          type="button"
           onClick={(e) => {
             void handleToggleSidebar(e)
           }}
@@ -200,6 +228,7 @@ export function ActivityRail({
         </button>
 
         <button
+          type="button"
           onClick={(e) => {
             void handleToggleFileExplorer(e)
           }}
@@ -221,6 +250,7 @@ export function ActivityRail({
         />
 
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation()
             navigate('/preferences')

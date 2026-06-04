@@ -93,6 +93,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
             AI Conflict Resolution Prompts
           </h2>
           <button
+            type="button"
             onClick={onClose}
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground"
             aria-label="Close"
@@ -111,6 +112,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
               const TplIcon = TOOL_ICONS[tpl.toolName] ?? MessageSquare
               return (
                 <button
+                  type="button"
                   key={tpl.id}
                   onClick={() => setSelectedTemplate(tpl)}
                   className={cn(
@@ -146,6 +148,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
             Variables: {selectedTemplate.variables.join(', ')}
           </span>
           <button
+            type="button"
             onClick={handleCopy}
             disabled={!generatedPrompt}
             className={cn(
