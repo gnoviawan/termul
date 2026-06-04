@@ -32,7 +32,7 @@ export interface ProjectState {
   moveProjectToGroup: (projectId: string, targetGroupId: string | null, index?: number) => void
   reorderGroups: (groupIds: string[]) => void
   reorderProjectInGroup: (groupId: string, projectIds: string[]) => void
-  updateGroup: (id: string, updates: Partial<ProjectGroup>) => void
+  updateGroup: (id: string, updates: Partial<Omit<ProjectGroup, 'id'>>) => void
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -275,7 +275,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
   },
 
-  updateGroup: (id: string, updates: Partial<ProjectGroup>): void => {
+  updateGroup: (id: string, updates: Partial<Omit<ProjectGroup, 'id'>>): void => {
     set((state) => ({
       groups: state.groups.map((g) => (g.id === id ? { ...g, ...updates } : g))
     }))
