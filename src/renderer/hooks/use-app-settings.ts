@@ -5,10 +5,10 @@ import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
-import type { AppSettings } from '@/types/settings'
+import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
 
-type PanelSettingKey = 'sidebarVisible' | 'fileExplorerVisible' | 'sshPanelVisible'
+type PanelSettingKey = AppPanelVisibilitySettingKey
 
 type PanelWriteRequest = {
   panel: PanelSettingKey
@@ -214,11 +214,11 @@ export function useUpdateAppSetting<K extends keyof AppSettings>(): (
   )
 }
 
-export function useUpdateAppSettings(): (updates: Partial<AppSettings>) => Promise<void> {
+export function useUpdateAppSettings(): (updates: AppSettingsUpdate) => Promise<void> {
   const updateSettings = useAppSettingsStore((state) => state.updateSettings)
 
   return useCallback(
-    async (updates: Partial<AppSettings>) => {
+    async (updates: AppSettingsUpdate) => {
       updateSettings(updates)
       const updatedSettings = useAppSettingsStore.getState().settings
       await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)

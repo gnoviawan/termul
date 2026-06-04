@@ -64,6 +64,13 @@ export interface AppSettings {
   appearanceMode: 'light' | 'dark'
 }
 
+export type AppPanelVisibilitySettingKey =
+  | 'sidebarVisible'
+  | 'fileExplorerVisible'
+  | 'sshPanelVisible'
+
+export type AppSettingsUpdate = Partial<Omit<AppSettings, AppPanelVisibilitySettingKey>>
+
 // Terminal buffer size options
 export const BUFFER_SIZE_OPTIONS = [
   { value: 1000, label: '1,000 lines' },

@@ -54,11 +54,18 @@ function useMermaidThemeSignal(): { isDark: boolean; revision: number; themeId: 
 
   useEffect(() => {
     const sync = (themeId = getLastAppliedColorThemeId()): void => {
-      setThemeSignal((current) => ({
-        isDark: document.documentElement.classList.contains('dark'),
-        revision: current.revision + 1,
-        themeId
-      }))
+      setThemeSignal((current) => {
+        const isDark = document.documentElement.classList.contains('dark')
+        if (current.themeId === themeId && current.isDark === isDark) {
+          return current
+        }
+
+        return {
+          isDark,
+          revision: current.revision + 1,
+          themeId
+        }
+      })
     }
 
     const handleThemeChanged = (event: Event): void => {

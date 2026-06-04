@@ -8,6 +8,15 @@ import {
   useTerminalUrlOpenMode
 } from './app-settings-store'
 
+function assertUpdateSettingsRejectsPanelVisibility(
+  updateSettings: ReturnType<typeof useAppSettingsStore.getState>['updateSettings']
+): void {
+  // @ts-expect-error Panel visibility changes must go through useUpdatePanelVisibility.
+  updateSettings({ sidebarVisible: false })
+}
+
+void assertUpdateSettingsRejectsPanelVisibility
+
 describe('app-settings-store', () => {
   beforeEach(() => {
     // Reset store to initial state before each test

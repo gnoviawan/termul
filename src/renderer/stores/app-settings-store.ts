@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings } from '@/types/settings'
+import type { AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 
 interface AppSettingsState {
@@ -7,7 +7,7 @@ interface AppSettingsState {
   isLoaded: boolean
   setSettings: (settings: AppSettings) => void
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
-  updateSettings: (updates: Partial<AppSettings>) => void
+  updateSettings: (updates: AppSettingsUpdate) => void
   resetToDefaults: () => void
 }
 
