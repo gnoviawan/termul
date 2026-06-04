@@ -103,6 +103,15 @@ function isAppOwnedTerminalShortcut(
   return false
 }
 
+/** Prevent browser reverse-tab focus traversal; xterm still handles Tab / Shift+Tab. */
+function trapTerminalTabFocusNavigation(event: KeyboardEvent): boolean {
+  if (event.key !== 'Tab') {
+    return false
+  }
+  event.preventDefault()
+  return true
+}
+
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
 const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100
 const VISIBILITY_RECOVERY_DELAY_MS = 150
@@ -630,6 +639,10 @@ function ConnectedTerminalComponent({
             terminal.selectAll()
             return false
         }
+      }
+
+      if (trapTerminalTabFocusNavigation(event)) {
+        return true
       }
 
       return true
@@ -1523,6 +1536,9 @@ function ConnectedTerminalComponent({
             terminal.selectAll()
             return false
         }
+      }
+      if (trapTerminalTabFocusNavigation(event)) {
+        return true
       }
       return true
     })
