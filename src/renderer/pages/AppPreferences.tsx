@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
+import { TerminalProfilesSection } from '@/components/TerminalProfilesSection'
 import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
 import {
   useResetAllShortcuts,
@@ -496,6 +497,9 @@ export default function AppPreferences(): React.JSX.Element {
                 </div>
               </div>
             </section>
+
+            {/* Terminal Profiles Section */}
+            <TerminalProfilesSection />
 
             {/* New Project Defaults Section */}
             <section>
