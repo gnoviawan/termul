@@ -1250,122 +1250,134 @@ export function ProjectSidebar({
                         </div>
 
                         {/* Projects in Group */}
-                        {(!isCollapsed || isSearching) && gpProjects.length > 0 && (
-                          <Reorder.Group
-                            axis="y"
-                            values={gpProjects}
-                            onReorder={(reordered) => {
-                              if (isSearching) return
-                              reorderProjectInGroup(
-                                group.id,
-                                reordered.map((p) => p.id)
-                              )
-                            }}
-                            className="pl-4 flex flex-col"
-                            data-group-container-id={group.id}
-                          >
-                            {gpProjects.map((project) => {
-                              const hasActivity = projectActivityIds.includes(project.id)
-                              const shortcutIndex = activeIndexById.get(project.id) ?? -1
-                              return (
-                                <Reorder.Item
-                                  key={project.id}
-                                  value={project}
-                                  drag={isSearching ? false : 'y'}
-                                  layout="position"
-                                  className="list-none"
-                                  whileDrag={{
-                                    scale: 1.02,
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                    pointerEvents: 'none'
-                                  }}
-                                  onDrag={(_event, info) => {
-                                    const element = document.elementFromPoint(
-                                      info.point.x,
-                                      info.point.y
-                                    )
-                                    const container = element?.closest('[data-group-container-id]')
-                                    const folderHeader = element?.closest('[data-group-id]')
-                                    const groupId =
-                                      container?.getAttribute('data-group-container-id') ||
-                                      folderHeader?.getAttribute('data-group-id') ||
-                                      null
-                                    if (groupId !== activeDragOverGroupId) {
-                                      setActiveDragOverGroupId(groupId)
-                                      activeDragOverGroupIdRef.current = groupId
-                                    }
-                                  }}
-                                  onDragEnd={() => {
-                                    const targetGroupId = activeDragOverGroupIdRef.current
-                                    if (targetGroupId) {
-                                      const nextGroupId =
-                                        targetGroupId === 'root' ? null : targetGroupId
-                                      const currentGroup = groups.find((g) =>
-                                        g.projectIds.includes(project.id)
-                                      )
-                                      const currentGroupId = currentGroup?.id ?? null
-                                      if (nextGroupId !== currentGroupId) {
-                                        moveProjectToGroup(project.id, nextGroupId)
-                                      }
-                                    }
-                                    setActiveDragOverGroupId(null)
-                                    activeDragOverGroupIdRef.current = null
-                                  }}
-                                >
-                                  <ProjectItem
-                                    project={project}
-                                    isActive={project.id === activeProjectId}
-                                    isExpanded={expandedProjects.has(project.id)}
-                                    onToggleExpand={() => toggleProjectExpanded(project.id)}
-                                    isEditing={editingId === project.id}
-                                    editName={editName}
-                                    shortcut={
-                                      shortcutIndex >= 0 && shortcutIndex < 9
-                                        ? `Ctrl+${shortcutIndex + 1}`
-                                        : undefined
-                                    }
-                                    hasActivity={hasActivity}
-                                    hasError={projectErrorIds.has(project.id)}
-                                    onClick={() => {
-                                      onSelectProject(project.id)
-                                      navigate('/')
-                                    }}
-                                    onContextMenu={(e) => handleContextMenu(e, project.id)}
-                                    onEditNameChange={setEditName}
-                                    onSaveRename={() => handleSaveRename(project.id)}
-                                    onCancelRename={handleCancelRename}
-                                    onSettingsClick={() => {
-                                      selectProject(project.id)
-                                      navigate('/settings')
-                                    }}
-                                    onWorktreeSelect={(worktreeId) =>
-                                      handleWorktreeSelect(project.id, worktreeId)
-                                    }
-                                    onWorktreeContextMenu={(e, worktree) =>
-                                      handleWorktreeContextMenu(e, project.id, worktree)
-                                    }
-                                    onOpenTerminalInWorktree={(
-                                      worktreeId,
-                                      worktreePath,
-                                      worktreeName
-                                    ) =>
-                                      void handleOpenTerminalInWorktree(
-                                        project.id,
-                                        worktreeId,
-                                        worktreePath,
-                                        worktreeName
-                                      )
-                                    }
-                                    isWorktreeOperationLocked={isWorktreeOperationLocked}
-                                    onNewWorktree={(pId) =>
-                                      setNewWorktreeModal({ isOpen: true, projectId: pId })
-                                    }
-                                  />
-                                </Reorder.Item>
-                              )
-                            })}
-                          </Reorder.Group>
-                        )}
+                        <AnimatePresence initial={false}>
+                          {(!isCollapsed || isSearching) && gpProjects.length > 0 && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.15, ease: 'easeInOut' }}
+                              className="overflow-hidden"
+                            >
+                              <Reorder.Group
+                                axis="y"
+                                values={gpProjects}
+                                onReorder={(reordered) => {
+                                  if (isSearching) return
+                                  reorderProjectInGroup(
+                                    group.id,
+                                    reordered.map((p) => p.id)
+                                  )
+                                }}
+                                className="pl-4 flex flex-col"
+                                data-group-container-id={group.id}
+                              >
+                                {gpProjects.map((project) => {
+                                  const hasActivity = projectActivityIds.includes(project.id)
+                                  const shortcutIndex = activeIndexById.get(project.id) ?? -1
+                                  return (
+                                    <Reorder.Item
+                                      key={project.id}
+                                      value={project}
+                                      drag={isSearching ? false : 'y'}
+                                      layout="position"
+                                      className="list-none"
+                                      whileDrag={{
+                                        scale: 1.02,
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                        pointerEvents: 'none'
+                                      }}
+                                      onDrag={(_event, info) => {
+                                        const element = document.elementFromPoint(
+                                          info.point.x,
+                                          info.point.y
+                                        )
+                                        const container = element?.closest(
+                                          '[data-group-container-id]'
+                                        )
+                                        const folderHeader = element?.closest('[data-group-id]')
+                                        const groupId =
+                                          container?.getAttribute('data-group-container-id') ||
+                                          folderHeader?.getAttribute('data-group-id') ||
+                                          null
+                                        if (groupId !== activeDragOverGroupId) {
+                                          setActiveDragOverGroupId(groupId)
+                                          activeDragOverGroupIdRef.current = groupId
+                                        }
+                                      }}
+                                      onDragEnd={() => {
+                                        const targetGroupId = activeDragOverGroupIdRef.current
+                                        if (targetGroupId) {
+                                          const nextGroupId =
+                                            targetGroupId === 'root' ? null : targetGroupId
+                                          const currentGroup = groups.find((g) =>
+                                            g.projectIds.includes(project.id)
+                                          )
+                                          const currentGroupId = currentGroup?.id ?? null
+                                          if (nextGroupId !== currentGroupId) {
+                                            moveProjectToGroup(project.id, nextGroupId)
+                                          }
+                                        }
+                                        setActiveDragOverGroupId(null)
+                                        activeDragOverGroupIdRef.current = null
+                                      }}
+                                    >
+                                      <ProjectItem
+                                        project={project}
+                                        isActive={project.id === activeProjectId}
+                                        isExpanded={expandedProjects.has(project.id)}
+                                        onToggleExpand={() => toggleProjectExpanded(project.id)}
+                                        isEditing={editingId === project.id}
+                                        editName={editName}
+                                        shortcut={
+                                          shortcutIndex >= 0 && shortcutIndex < 9
+                                            ? `Ctrl+${shortcutIndex + 1}`
+                                            : undefined
+                                        }
+                                        hasActivity={hasActivity}
+                                        hasError={projectErrorIds.has(project.id)}
+                                        onClick={() => {
+                                          onSelectProject(project.id)
+                                          navigate('/')
+                                        }}
+                                        onContextMenu={(e) => handleContextMenu(e, project.id)}
+                                        onEditNameChange={setEditName}
+                                        onSaveRename={() => handleSaveRename(project.id)}
+                                        onCancelRename={handleCancelRename}
+                                        onSettingsClick={() => {
+                                          selectProject(project.id)
+                                          navigate('/settings')
+                                        }}
+                                        onWorktreeSelect={(worktreeId) =>
+                                          handleWorktreeSelect(project.id, worktreeId)
+                                        }
+                                        onWorktreeContextMenu={(e, worktree) =>
+                                          handleWorktreeContextMenu(e, project.id, worktree)
+                                        }
+                                        onOpenTerminalInWorktree={(
+                                          worktreeId,
+                                          worktreePath,
+                                          worktreeName
+                                        ) =>
+                                          void handleOpenTerminalInWorktree(
+                                            project.id,
+                                            worktreeId,
+                                            worktreePath,
+                                            worktreeName
+                                          )
+                                        }
+                                        isWorktreeOperationLocked={isWorktreeOperationLocked}
+                                        onNewWorktree={(pId) =>
+                                          setNewWorktreeModal({ isOpen: true, projectId: pId })
+                                        }
+                                      />
+                                    </Reorder.Item>
+                                  )
+                                })}
+                              </Reorder.Group>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     </Reorder.Item>
                   )
