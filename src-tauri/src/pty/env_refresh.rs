@@ -37,15 +37,19 @@ pub fn merge_path_segments(registry: &str, inherited: &str, delimiter: char) -> 
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = Vec::new();
 
+    // Semicolon-separated paths follow Windows rules (case-insensitive dedupe).
+    let case_insensitive = delimiter == ';';
+
     let mut push_segment = |seg: &str| {
         let trimmed = seg.trim();
         if trimmed.is_empty() {
             return;
         }
-        #[cfg(target_os = "windows")]
-        let key = trimmed.to_ascii_lowercase();
-        #[cfg(not(target_os = "windows"))]
-        let key = trimmed.to_string();
+        let key = if case_insensitive {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_string()
+        };
         if seen.insert(key) {
             out.push(trimmed.to_string());
         }
