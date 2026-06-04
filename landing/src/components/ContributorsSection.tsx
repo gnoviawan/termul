@@ -10,7 +10,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-import { contributors } from '../data/contributors';
+import { getDisplayContributors } from '../lib/contributors';
 import { cn } from '../lib/utils';
 import { SectionHeader } from './SectionHeader';
 
@@ -19,6 +19,7 @@ function contributorProfileUrl(username: string) {
 }
 
 export function ContributorsSection() {
+  const contributors = getDisplayContributors();
   const count = contributors.length;
 
   return (

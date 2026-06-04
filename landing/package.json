@@ -13,6 +13,7 @@
     "test": "bun test",
     "test:e2e": "playwright test",
     "test:contributors": "bun test tests/contributors.test.ts && playwright test tests/e2e/contributors-section.spec.ts",
+    "sync:contributors": "bun scripts/sync-contributors.ts",
     "deploy": "wrangler pages deploy dist",
     "pages:dev": "bun run build && wrangler pages dev",
     "db:migrate": "wrangler d1 migrations apply termul --remote",
