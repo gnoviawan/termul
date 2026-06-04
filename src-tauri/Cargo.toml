@@ -108,6 +108,7 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 winapi = { version = "0.3", features = [
+    "jobapi2",
     "winbase",
     "winuser",
     "consoleapi",
