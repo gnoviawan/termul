@@ -3,6 +3,7 @@
 //! This module handles terminal spawning, data I/O, and lifecycle management.
 
 pub mod da_filter;
+pub mod env_refresh;
 pub mod manager;
 
 #[cfg(target_os = "windows")]
