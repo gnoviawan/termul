@@ -20,6 +20,16 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 /**
+ * Resolve the display label for a config chip. Promoted chips (e.g.
+ * `thought_level`) use the shared category heading; generic chips keep their
+ * original `option.name` fallback unchanged.
+ */
+function getLabelForConfigChip(option: SessionConfigOption, promoted: boolean): string {
+  if (!promoted || !option.category) return option.name
+  return KNOWN_CATEGORY_HEADINGS[option.category] ?? option.name
+}
+
+/**
  * A popover selector for one config option. When `promoted` is set (e.g. a
  * `thought_level` reasoning-level option, issue #286), the chip gains a leading
  * icon and uses the shared category heading for its popover title, giving it
@@ -37,11 +47,7 @@ export function ConfigChip({
   promoted?: boolean
 }): React.JSX.Element {
   const current = option.options.find((o) => o.value === option.currentValue)
-  // Promoted chips (e.g. thought_level) use the shared category heading; generic
-  // chips keep their original `option.name` fallback unchanged.
-  const fallbackLabel = promoted
-    ? (option.category && KNOWN_CATEGORY_HEADINGS[option.category]) || option.name
-    : option.name
+  const fallbackLabel = getLabelForConfigChip(option, promoted)
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
