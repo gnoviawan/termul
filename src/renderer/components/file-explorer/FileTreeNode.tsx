@@ -31,6 +31,7 @@ export function FileTreeNode({
   onClick
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
+  const isIgnored = entry.ignored === true
   const Icon = getFileIcon(entry.extension, isDir, isExpanded)
   const { startFileDrag } = usePaneDnd()
   const [showTooltip, setShowTooltip] = useState(false)
@@ -89,8 +90,10 @@ export function FileTreeNode({
       <div
         className={cn(
           'group relative flex items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
+          isIgnored && 'opacity-50',
           isSelected && 'bg-accent text-accent-foreground'
         )}
+        title={isIgnored ? `${entry.name} (git-ignored)` : undefined}
         style={{ paddingLeft: depth * 16 + 4 }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, entry)}

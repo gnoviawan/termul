@@ -119,7 +119,7 @@ describe('tauriFilesystemApi', () => {
       }
     })
 
-    it('should filter ALWAYS_IGNORE patterns', async () => {
+    it('should flag ALWAYS_IGNORE patterns as ignored but still include them', async () => {
       const mockEntries: DirEntry[] = [
         {
           name: 'file1.txt',
@@ -142,8 +142,16 @@ describe('tauriFilesystemApi', () => {
 
       expect(result.success).toBe(true)
       if (result.success) {
-        expect(result.data).toHaveLength(1)
-        expect(result.data![0].name).toBe('file1.txt')
+        expect(result.data).toHaveLength(4)
+        const byName = Object.fromEntries(result.data!.map((e) => [e.name, e]))
+        // Ignored entries are flagged, not removed
+        expect(byName.node_modules.ignored).toBe(true)
+        expect(byName['.git'].ignored).toBe(true)
+        expect(byName.dist.ignored).toBe(true)
+        // Non-ignored entries are not flagged
+        expect(byName['file1.txt'].ignored).toBe(false)
+        // Non-ignored directories sort before ignored directories
+        expect(result.data![0].name).toBe('.git')
       }
     })
 
