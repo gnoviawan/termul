@@ -127,6 +127,7 @@ describe('tauriFilesystemApi', () => {
           isFile: true,
           isSymlink: false
         },
+        { name: 'src', isDirectory: true, isFile: false, isSymlink: false },
         {
           name: 'node_modules',
           isDirectory: true,
@@ -142,16 +143,25 @@ describe('tauriFilesystemApi', () => {
 
       expect(result.success).toBe(true)
       if (result.success) {
-        expect(result.data).toHaveLength(4)
+        expect(result.data).toHaveLength(5)
         const byName = Object.fromEntries(result.data!.map((e) => [e.name, e]))
         // Ignored entries are flagged, not removed
         expect(byName.node_modules.ignored).toBe(true)
         expect(byName['.git'].ignored).toBe(true)
         expect(byName.dist.ignored).toBe(true)
         // Non-ignored entries are not flagged
+        expect(byName.src.ignored).toBe(false)
         expect(byName['file1.txt'].ignored).toBe(false)
-        // Non-ignored directories sort before ignored directories
-        expect(result.data![0].name).toBe('.git')
+        // Non-ignored directory sorts before ignored directories
+        expect(result.data![0].name).toBe('src')
+        // Ignored directories still precede files
+        expect(result.data!.map((e) => e.name)).toEqual([
+          'src',
+          '.git',
+          'dist',
+          'node_modules',
+          'file1.txt'
+        ])
       }
     })
 
