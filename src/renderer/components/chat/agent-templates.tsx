@@ -2,7 +2,7 @@
  * Pre-configured ACP agent templates, sourced from the official ACP registry
  * (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json).
  *
- * Used to prefill the AgentConfigDialog; users can edit before saving. Commands
+ * Used to resolve a configured ACP agent's icon by template id. Commands
  * favor the registry's `npx` distribution where available (zero install) and
  * the direct binary name where the agent is expected on PATH. Icons are
  * vendored inline (see `acp-agent-icons.tsx`) and rendered theme-adaptively via
