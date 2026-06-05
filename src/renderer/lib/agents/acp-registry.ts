@@ -109,6 +109,20 @@ function isSafePackage(pkg: string): boolean {
   return pkg.length > 0 && !pkg.startsWith('-')
 }
 
+/**
+ * An archive is installable only when it is an HTTPS URL whose path ends with a
+ * format the Rust installer can extract (zip / gzip-tar). Anything else (raw
+ * binaries, `.tar.bz2`, ...) returns `undefined` so the agent is not marked
+ * installable from a format we cannot unpack.
+ */
+function supportedArchiveUrl(archive: string | undefined): string | undefined {
+  if (typeof archive !== 'string' || !archive.startsWith('https://')) return undefined
+  const path = archive.split(/[?#]/)[0].toLowerCase()
+  return path.endsWith('.zip') || path.endsWith('.tar.gz') || path.endsWith('.tgz')
+    ? archive
+    : undefined
+}
+
 /** Derive an `AgentConfig` (or unavailability) for the given platform-arch. */
 export function deriveAgentConfig(agent: RegistryAgent, platformArch: string): DeriveResult {
   const dist = agent.distribution
@@ -143,10 +157,7 @@ export function deriveAgentConfig(agent: RegistryAgent, platformArch: string): D
 
   const target = dist.binary?.[platformArch]
   if (target) {
-    const archiveUrl =
-      typeof target.archive === 'string' && target.archive.startsWith('https://')
-        ? target.archive
-        : undefined
+    const archiveUrl = supportedArchiveUrl(target.archive)
     return {
       kind: 'needs-install',
       cmd: target.cmd,

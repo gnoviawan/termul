@@ -402,6 +402,16 @@ function persistSession(
  */
 const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
+/**
+ * A live agent can be reused (instead of spawning a second process) when it is
+ * connected or merely awaiting authentication. Re-spawning a `needs-auth` agent
+ * would orphan the original; the caller's `pendingAuth` guard then blocks the
+ * actual session until the user authenticates.
+ */
+function isReusableStatus(status: AgentStatus | undefined): boolean {
+  return status === 'connected' || status === 'needs-auth'
+}
+
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
 export function prepareChatKey(
   configId: string,
@@ -680,7 +690,22 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   cancelPreparedChat: (key) => {
+    // A prepared session was created via `createSession` (live backend session +
+    // persisted history). When the user abandons it (dialog closed / inputs
+    // changed) we must tear those down, not just drop the lookup entry.
+    const sessionId = get().preparedSessions[key]
     cancelPreparedChatEntry(key, set)
+    if (!sessionId) return
+    // If the user already navigated to this session, don't reap it.
+    if (get().activeSessionId === sessionId) return
+    void get()
+      .closeSession(sessionId)
+      .catch(() => {
+        /* best-effort: backend may already be gone */
+      })
+      .finally(() => {
+        void get().deleteHistorySession(sessionId)
+      })
   },
 
   prepareChat: (configId, cwd, mcpServers) => {
@@ -697,7 +722,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         const warming = inFlightWarms.get(configId)
         if (warming) await warming
         const existing = get().configToLiveAgent[configId]
-        const reuse = existing && get().agentStatus[existing] === 'connected' ? existing : null
+        const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
         let agentId: AgentId
         if (reuse) {
           agentId = reuse
@@ -818,9 +843,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // of racing a second spawn (which would orphan one of the two processes).
     const warming = inFlightWarms.get(configId)
     if (warming) await warming
-    // Reuse a live agent for this config when it is still connected; otherwise spawn.
+    // Reuse a live agent for this config when it is connected or awaiting auth
+    // (re-spawning a needs-auth agent would orphan the original); otherwise spawn.
     const existing = get().configToLiveAgent[configId]
-    const reuse = existing && get().agentStatus[existing] === 'connected' ? existing : null
+    const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
     let agentId: AgentId
     if (reuse) {
       agentId = reuse

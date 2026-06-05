@@ -91,6 +91,28 @@ describe('deriveAgentConfig', () => {
     })
   })
 
+  it('accepts .tar.gz / .tgz and ignores query strings', () => {
+    const targz = deriveAgentConfig(
+      agent({ binary: { 'linux-x86_64': { cmd: './x', archive: 'https://e.com/x.tar.gz?t=1' } } }),
+      'linux-x86_64'
+    )
+    expect(targz).toMatchObject({ archiveUrl: 'https://e.com/x.tar.gz?t=1' })
+  })
+
+  it('rejects archive formats the installer cannot extract', () => {
+    for (const archive of [
+      'https://e.com/x.tar.bz2',
+      'https://e.com/x.exe',
+      'http://e.com/x.zip'
+    ]) {
+      const res = deriveAgentConfig(
+        agent({ binary: { 'windows-x86_64': { cmd: './x.exe', archive } } }),
+        'windows-x86_64'
+      )
+      expect(res).toMatchObject({ kind: 'needs-install', archiveUrl: undefined })
+    }
+  })
+
   it('returns needs-install for a binary present on the current platform-arch', () => {
     const res = deriveAgentConfig(
       agent({ binary: { 'windows-x86_64': { cmd: './stakpak.exe', args: ['acp'] } } }),

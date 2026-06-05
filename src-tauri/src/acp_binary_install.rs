@@ -1,14 +1,18 @@
 //! Download and extract ACP registry release archives into app-local storage.
 
-use std::io::copy;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 const FETCH_TIMEOUT_SECS: u64 = 120;
 const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+/// Decompressed-output quotas, to bound zip/tar bombs.
+const MAX_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_EXTRACTED_FILES: usize = 50_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,14 +84,47 @@ fn resolve_cmd_in_root(root: &Path, cmd: &str) -> Result<PathBuf, String> {
     if !canon_cmd.starts_with(&canon_root) {
         return Err("cmd escapes install directory".to_string());
     }
+    // Must be a regular file: a directory would later fail at spawn time.
+    if !canon_cmd
+        .metadata()
+        .map_err(|e| format!("installed binary stat failed: {e}"))?
+        .is_file()
+    {
+        return Err("installed binary is a directory".to_string());
+    }
     Ok(candidate)
+}
+
+/// Stream-copy a reader to disk while enforcing the global extracted-bytes
+/// quota. `written` tracks the running total across all entries.
+fn copy_bounded(
+    mut reader: impl Read,
+    out: &mut std::fs::File,
+    written: &mut u64,
+) -> Result<(), String> {
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        *written += n as u64;
+        if *written > MAX_EXTRACTED_BYTES {
+            return Err("archive expands beyond size limit".to_string());
+        }
+        out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn extract_zip(archive_path: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip: {e}"))?;
+    let mut written: u64 = 0;
+    let mut files: usize = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        // enclosed_name() rejects path traversal (absolute / `..`) entries.
         let Some(name) = entry.enclosed_name().map(|p| p.to_owned()) else {
             continue;
         };
@@ -95,11 +132,15 @@ fn extract_zip(archive_path: &Path, dest: &Path) -> Result<(), String> {
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {
+            files += 1;
+            if files > MAX_EXTRACTED_FILES {
+                return Err("archive contains too many files".to_string());
+            }
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
-            copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            copy_bounded(&mut entry, &mut out, &mut written)?;
         }
     }
     Ok(())
@@ -109,7 +150,38 @@ fn extract_tar_gz(archive_path: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
-    archive.unpack(dest).map_err(|e| format!("tar: {e}"))?;
+    let canon_dest = dest
+        .canonicalize()
+        .map_err(|e| format!("extract dir missing: {e}"))?;
+    let mut written: u64 = 0;
+    let mut files: usize = 0;
+    for entry in archive.entries().map_err(|e| format!("tar: {e}"))? {
+        let mut entry = entry.map_err(|e| format!("tar: {e}"))?;
+        let path = entry.path().map_err(|e| format!("tar: {e}"))?.into_owned();
+        // Reject absolute paths and parent-dir traversal.
+        if path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err("tar entry has unsafe path".to_string());
+        }
+        let out_path = canon_dest.join(&path);
+        if entry.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+        } else {
+            files += 1;
+            if files > MAX_EXTRACTED_FILES {
+                return Err("archive contains too many files".to_string());
+            }
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+            copy_bounded(&mut entry, &mut out, &mut written)?;
+        }
+    }
     Ok(())
 }
 
@@ -157,51 +229,88 @@ pub async fn install_registry_binary(
     }
 
     let root = install_root(app, &req.agent_id)?;
-    if root.exists() {
-        std::fs::remove_dir_all(&root).map_err(|e| format!("clear install dir: {e}"))?;
-    }
-    std::fs::create_dir_all(&root).map_err(|e| format!("create install dir: {e}"))?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-
-    let response = client
-        .get(&req.archive_url)
-        .send()
-        .await
-        .map_err(|e| format!("download failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("download returned HTTP {}", response.status()));
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create install parent: {e}"))?;
     }
 
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| format!("download body: {e}"))?;
-    if body.len() as u64 > MAX_ARCHIVE_BYTES {
-        return Err("archive too large".to_string());
-    }
-
+    // Download + extract into a private staging directory; only swap it into the
+    // real install root once everything succeeds, so a failure never destroys a
+    // previously-working install.
     let tmp_dir = std::env::temp_dir().join(format!("termul-acp-dl-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
-    let archive_name = req
-        .archive_url
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or("archive.bin");
-    let archive_path = tmp_dir.join(archive_name);
-    std::fs::write(&archive_path, &body).map_err(|e| e.to_string())?;
+    let staging = tmp_dir.join("stage");
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
 
-    let extract_result = extract_archive(&archive_path, &root);
+    let result = (|| async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+
+        let response = client
+            .get(&req.archive_url)
+            .send()
+            .await
+            .map_err(|e| format!("download failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!("download returned HTTP {}", response.status()));
+        }
+
+        // Stream the body to disk, enforcing the download cap incrementally so a
+        // hostile server can't force us to buffer an unbounded response.
+        let archive_name = req
+            .archive_url
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("archive.bin");
+        let archive_path = tmp_dir.join(archive_name);
+        let mut file = std::fs::File::create(&archive_path).map_err(|e| e.to_string())?;
+        let mut downloaded: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("download stream: {e}"))?;
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_ARCHIVE_BYTES {
+                return Err("archive too large".to_string());
+            }
+            file.write_all(&chunk).map_err(|e| e.to_string())?;
+        }
+        file.flush().map_err(|e| e.to_string())?;
+        drop(file);
+
+        extract_archive(&archive_path, &staging)?;
+        // Validate the cmd resolves to a regular file inside the staging dir.
+        let staged_program = resolve_cmd_in_root(&staging, cmd_trim)?;
+        mark_executable(&staged_program);
+        Ok(())
+    })()
+    .await;
+
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err(e);
+    }
+
+    // Atomic-ish swap: move the old install aside, promote staging, drop backup.
+    let backup = root.with_extension("old");
+    let _ = std::fs::remove_dir_all(&backup);
+    if root.exists() {
+        std::fs::rename(&root, &backup).map_err(|e| format!("backup old install: {e}"))?;
+    }
+    if let Err(e) = std::fs::rename(&staging, &root) {
+        // Restore the previous install on swap failure.
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, &root);
+        }
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err(format!("promote install: {e}"));
+    }
+    let _ = std::fs::remove_dir_all(&backup);
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
-    extract_result?;
-
-    let program = resolve_cmd_in_root(&root, cmd_trim)?;
-    mark_executable(&program);
+    // Recompute the program path under the final root (plain, non-canonical).
+    let program = root.join(normalize_cmd_path(cmd_trim));
 
     let args = req.args.unwrap_or_default();
     Ok(InstallAcpRegistryBinaryOutcome {

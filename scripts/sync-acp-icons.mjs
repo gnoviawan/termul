@@ -42,6 +42,17 @@ function isAllowedHttpsUrl(urlString) {
   }
 }
 
+// Only archive formats the Rust installer can extract (zip / gzip-tar).
+function isSupportedArchiveUrl(urlString) {
+  if (!isAllowedHttpsUrl(urlString)) return false
+  try {
+    const pathname = new URL(urlString).pathname.toLowerCase()
+    return pathname.endsWith('.zip') || pathname.endsWith('.tar.gz') || pathname.endsWith('.tgz')
+  } catch {
+    return false
+  }
+}
+
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -138,8 +149,9 @@ function safeEnv(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const out = {}
   for (const [k, v] of Object.entries(value)) {
-    const key = safeStr(k)
     const val = safeStr(v)
+    if (!val) continue
+    const key = safeStr(k)
     if (key) out[key] = val
   }
   return Object.keys(out).length > 0 ? out : undefined
@@ -177,7 +189,7 @@ function sanitizeDistribution(raw) {
       if (!cmd) continue
       const entry = { cmd }
       const archive = safeStr(target.archive)
-      if (archive && isAllowedHttpsUrl(archive)) entry.archive = archive
+      if (archive && isSupportedArchiveUrl(archive)) entry.archive = archive
       const args = safeStrArray(target.args)
       if (args.length > 0) entry.args = args
       const env = safeEnv(target.env)

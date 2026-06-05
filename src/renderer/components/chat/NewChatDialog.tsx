@@ -86,7 +86,15 @@ export function NewChatDialog({
 
   // Background session/new while the user picks agent, cwd, and MCP (same inputs as Start).
   useEffect(() => {
-    if (!open || !activePrepareKey || !configId || trimmedCwd.length === 0) return
+    // Inputs invalid (no agent / empty cwd / dialog closed): drop any prepared
+    // session for the previous key so its backend session + history are cleaned.
+    if (!open || !activePrepareKey || !configId || trimmedCwd.length === 0) {
+      setPrepareKey((prev) => {
+        if (prev) cancelPreparedChat(prev)
+        return null
+      })
+      return
+    }
     setPrepareKey((prev) => {
       if (prev && prev !== activePrepareKey) cancelPreparedChat(prev)
       return activePrepareKey

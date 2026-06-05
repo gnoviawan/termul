@@ -44,11 +44,11 @@
   {
     "id": "auggie",
     "name": "Auggie CLI",
-    "version": "0.28.0",
+    "version": "0.29.0",
     "description": "Augment Code's powerful software agent, backed by industry-leading context engine",
     "distribution": {
       "npx": {
-        "package": "@augmentcode/auggie@0.28.0",
+        "package": "@augmentcode/auggie@0.29.0",
         "args": ["--acp"],
         "env": {
           "AUGMENT_DISABLE_AUTO_UPDATE": "1"
@@ -81,11 +81,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.17",
+    "version": "3.0.20",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.17",
+        "package": "cline@3.0.20",
         "args": ["--acp"]
       }
     }
@@ -318,11 +318,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.140.0",
+    "version": "0.141.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.140.0",
+        "package": "droid@0.141.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -346,11 +346,11 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.45.0",
+    "version": "0.45.1",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.45.0",
+        "package": "@google/gemini-cli@0.45.1",
         "args": ["--acp"]
       }
     }
@@ -387,22 +387,18 @@
       "binary": {
         "darwin-aarch64": {
           "cmd": "./goose",
-          "archive": "https://github.com/block/goose/releases/download/v1.37.0/goose-aarch64-apple-darwin.tar.bz2",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./goose",
-          "archive": "https://github.com/block/goose/releases/download/v1.37.0/goose-x86_64-apple-darwin.tar.bz2",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./goose",
-          "archive": "https://github.com/block/goose/releases/download/v1.37.0/goose-aarch64-unknown-linux-gnu.tar.bz2",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./goose",
-          "archive": "https://github.com/block/goose/releases/download/v1.37.0/goose-x86_64-unknown-linux-gnu.tar.bz2",
           "args": ["acp"]
         },
         "windows-x86_64": {
@@ -422,32 +418,26 @@
       "binary": {
         "darwin-aarch64": {
           "cmd": "./grok-0.2.20-macos-aarch64",
-          "archive": "https://x.ai/cli/grok-0.2.20-macos-aarch64",
           "args": ["agent", "stdio"]
         },
         "darwin-x86_64": {
           "cmd": "./grok-0.2.20-macos-x86_64",
-          "archive": "https://x.ai/cli/grok-0.2.20-macos-x86_64",
           "args": ["agent", "stdio"]
         },
         "linux-aarch64": {
           "cmd": "./grok-0.2.20-linux-aarch64",
-          "archive": "https://x.ai/cli/grok-0.2.20-linux-aarch64",
           "args": ["agent", "stdio"]
         },
         "linux-x86_64": {
           "cmd": "./grok-0.2.20-linux-x86_64",
-          "archive": "https://x.ai/cli/grok-0.2.20-linux-x86_64",
           "args": ["agent", "stdio"]
         },
         "windows-aarch64": {
           "cmd": "./grok-0.2.20-windows-aarch64.exe",
-          "archive": "https://x.ai/cli/grok-0.2.20-windows-aarch64.exe",
           "args": ["agent", "stdio"]
         },
         "windows-x86_64": {
           "cmd": "./grok-0.2.20-windows-x86_64.exe",
-          "archive": "https://x.ai/cli/grok-0.2.20-windows-x86_64.exe",
           "args": ["agent", "stdio"]
         }
       }
@@ -491,37 +481,37 @@
   {
     "id": "kilo",
     "name": "Kilo",
-    "version": "7.3.21",
+    "version": "7.3.33",
     "description": "The open source coding agent",
     "distribution": {
       "npx": {
-        "package": "@kilocode/cli@7.3.21",
+        "package": "@kilocode/cli@7.3.33",
         "args": ["acp"]
       },
       "binary": {
         "darwin-aarch64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.21/kilo-darwin-arm64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.33/kilo-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.21/kilo-darwin-x64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.33/kilo-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.21/kilo-linux-arm64.tar.gz",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.33/kilo-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.21/kilo-linux-x64.tar.gz",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.33/kilo-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./kilo.exe",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.21/kilo-windows-x64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.3.33/kilo-windows-x64.zip",
           "args": ["acp"]
         }
       }
@@ -619,38 +609,38 @@
   {
     "id": "opencode",
     "name": "OpenCode",
-    "version": "1.15.13",
+    "version": "1.16.0",
     "description": "The open source coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-darwin-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-darwin-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-linux-arm64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-linux-x64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-windows-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-windows-arm64.zip",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./opencode.exe",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-windows-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-windows-x64.zip",
           "args": ["acp"]
         }
       }
@@ -750,20 +740,16 @@
           "archive": "https://github.com/getsigit/sigit/releases/download/v1.0.4/sigit-macos-amd64.tar.gz"
         },
         "linux-aarch64": {
-          "cmd": "./sigit-linux-arm64",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.0.4/sigit-linux-arm64"
+          "cmd": "./sigit-linux-arm64"
         },
         "linux-x86_64": {
-          "cmd": "./sigit-linux-amd64",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.0.4/sigit-linux-amd64"
+          "cmd": "./sigit-linux-amd64"
         },
         "windows-aarch64": {
-          "cmd": "./sigit-win-arm64.exe",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.0.4/sigit-win-arm64.exe"
+          "cmd": "./sigit-win-arm64.exe"
         },
         "windows-x86_64": {
-          "cmd": "./sigit-win-amd64.exe",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.0.4/sigit-win-amd64.exe"
+          "cmd": "./sigit-win-amd64.exe"
         }
       }
     }
