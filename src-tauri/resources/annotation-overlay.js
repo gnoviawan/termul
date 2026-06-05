@@ -154,7 +154,19 @@
     }
     if (element.hasAttribute('aria-valuetext') || element.hasAttribute('aria-valuenow')) return true;
 
-    if (element.closest('[contenteditable]')) return true;
+    // contenteditable check: must filter for true/empty (which means true)
+    // contenteditable="false" explicitly disables editing, so don't block those
+    var editableAncestor = element.closest('[contenteditable]');
+    if (editableAncestor) {
+      var editableValue = editableAncestor.getAttribute('contenteditable');
+      // contenteditable="" or "true" or "plaintext-only" are all editable
+      if (editableValue === '' || editableValue === 'true' || editableValue === 'plaintext-only') {
+        return true;
+      }
+    }
+    
+    // Also check if the element itself has isContentEditable (live property)
+    if (element.isContentEditable) return true;
 
     return false;
   }
