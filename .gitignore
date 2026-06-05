@@ -16,6 +16,13 @@ out/
 src-tauri/target/
 src-tauri/gen/
 
+# ripgrep sidecar binaries — fetched at build time by scripts/fetch-rg.mjs
+src-tauri/bin/rg-*
+src-tauri/bin/.rg-version
+
+# npm lockfile — this project uses Bun (bun.lock); npm's lockfile is not used
+package-lock.json
+
 # Logs
 logs/
 *.log

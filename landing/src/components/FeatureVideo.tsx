@@ -81,8 +81,7 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
         aria-label={`${title} demo`}
         onError={() => setFailed(true)}
       >
-        {shouldLoad && video.webm && <source src={video.webm} type="video/webm" />}
-        {shouldLoad && <source src={video.src} type="video/mp4" />}
+        {shouldLoad && <source src={video.src} type="video/webm" />}
       </video>
     </div>
   );

@@ -4,9 +4,9 @@
 	"version": "0.4.4",
 	"identifier": "com.termul-manager.app",
 	"build": {
-		"beforeDevCommand": "npx vite --config vite.config.tauri.ts",
+		"beforeDevCommand": "node scripts/fetch-rg.mjs && npx vite --config vite.config.tauri.ts",
 		"devUrl": "http://localhost:5180/tauri-index.html",
-		"beforeBuildCommand": "npx vite build --config vite.config.tauri.ts",
+		"beforeBuildCommand": "node scripts/fetch-rg.mjs && npx vite build --config vite.config.tauri.ts",
 		"frontendDist": "../dist-tauri"
 	},
 	"app": {
