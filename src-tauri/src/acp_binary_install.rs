@@ -213,6 +213,58 @@ fn mark_executable(path: &Path) {
 #[cfg(not(unix))]
 fn mark_executable(_path: &Path) {}
 
+/// Download the archive into `tmp_dir`, extract it into `staging`, and validate
+/// that `cmd` resolves to a regular file inside `staging`. Kept separate from
+/// the swap logic so the caller can clean up staging on any failure.
+async fn stage_archive(
+    archive_url: &str,
+    cmd: &str,
+    tmp_dir: &Path,
+    staging: &Path,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+
+    let response = client
+        .get(archive_url)
+        .send()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("download returned HTTP {}", response.status()));
+    }
+
+    // Stream the body to disk, enforcing the download cap incrementally so a
+    // hostile server can't force us to buffer an unbounded response.
+    let archive_name = archive_url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("archive.bin");
+    let archive_path = tmp_dir.join(archive_name);
+    let mut file = std::fs::File::create(&archive_path).map_err(|e| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("download stream: {e}"))?;
+        downloaded += chunk.len() as u64;
+        if downloaded > MAX_ARCHIVE_BYTES {
+            return Err("archive too large".to_string());
+        }
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    drop(file);
+
+    extract_archive(&archive_path, staging)?;
+    // Validate the cmd resolves to a regular file inside the staging dir.
+    let staged_program = resolve_cmd_in_root(staging, cmd)?;
+    mark_executable(&staged_program);
+    Ok(())
+}
+
 pub async fn install_registry_binary(
     app: &AppHandle,
     req: InstallAcpRegistryBinaryRequest,
@@ -241,53 +293,7 @@ pub async fn install_registry_binary(
     let staging = tmp_dir.join("stage");
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
 
-    let result = (|| async {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| format!("http client: {e}"))?;
-
-        let response = client
-            .get(&req.archive_url)
-            .send()
-            .await
-            .map_err(|e| format!("download failed: {e}"))?;
-        if !response.status().is_success() {
-            return Err(format!("download returned HTTP {}", response.status()));
-        }
-
-        // Stream the body to disk, enforcing the download cap incrementally so a
-        // hostile server can't force us to buffer an unbounded response.
-        let archive_name = req
-            .archive_url
-            .rsplit('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("archive.bin");
-        let archive_path = tmp_dir.join(archive_name);
-        let mut file = std::fs::File::create(&archive_path).map_err(|e| e.to_string())?;
-        let mut downloaded: u64 = 0;
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("download stream: {e}"))?;
-            downloaded += chunk.len() as u64;
-            if downloaded > MAX_ARCHIVE_BYTES {
-                return Err("archive too large".to_string());
-            }
-            file.write_all(&chunk).map_err(|e| e.to_string())?;
-        }
-        file.flush().map_err(|e| e.to_string())?;
-        drop(file);
-
-        extract_archive(&archive_path, &staging)?;
-        // Validate the cmd resolves to a regular file inside the staging dir.
-        let staged_program = resolve_cmd_in_root(&staging, cmd_trim)?;
-        mark_executable(&staged_program);
-        Ok(())
-    })()
-    .await;
-
-    if let Err(e) = result {
+    if let Err(e) = stage_archive(&req.archive_url, cmd_trim, &tmp_dir, &staging).await {
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err(e);
     }
