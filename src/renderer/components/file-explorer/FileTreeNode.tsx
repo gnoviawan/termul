@@ -120,7 +120,7 @@ export function FileTreeNode({
         {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
         <Icon
           size={14}
-          className={cn('flex-shrink-0 mr-1.5', isDir ? 'text-blue-400' : 'text-muted-foreground')}
+          className={cn('flex-shrink-0 mr-1.5', isDir ? 'text-primary' : 'text-muted-foreground')}
         />
         <span className="truncate">{entry.name}</span>
 

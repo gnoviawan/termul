@@ -139,7 +139,7 @@ export function SSHFileExplorer({
           <Icon
             className={cn(
               'h-3.5 w-3.5 flex-shrink-0',
-              isDir ? 'text-blue-400' : 'text-muted-foreground'
+              isDir ? 'text-primary' : 'text-muted-foreground'
             )}
           />
           <span className="flex-1 truncate">{entry.name}</span>
