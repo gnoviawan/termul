@@ -641,14 +641,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   prewarmAgent: async (configId) => {
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) return
-    // Dedupe: a warm already in flight, or an already-connected agent, is a no-op.
+    // Dedupe: a warm already in flight, or a live reusable agent (connected or
+    // awaiting auth), is a no-op. Re-spawning would orphan the original and
+    // overwrite configToLiveAgent — matching prepareChat/startChat reuse.
     const inFlight = inFlightWarms.get(configId)
     if (inFlight) {
       await inFlight
       return
     }
     const existing = get().configToLiveAgent[configId]
-    if (existing && get().agentStatus[existing] === 'connected') return
+    if (existing && isReusableStatus(get().agentStatus[existing])) return
 
     set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [configId]: true } }))
     const spawnPromise = (async (): Promise<AgentId | null> => {
