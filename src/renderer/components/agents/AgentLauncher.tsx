@@ -1,7 +1,8 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
-import { PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Loader2, Plus, Terminal as TerminalIcon } from 'lucide-react'
+import { type LastSelectedAgent, PersistenceKeys } from '@shared/types/persistence.types'
+import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,10 +17,19 @@ import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
 import { loadAllAgents, upsertCustomAgent } from '@/lib/agents/custom-agents'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
+import {
+  type AgentMode,
+  buildUnifiedAgents,
+  normalizePersistedSelection,
+  resolveSelection,
+  selectionToPersisted,
+  type UnifiedAgentEntry
+} from '@/lib/agents/unified-agents'
 import { persistenceApi, shellApi } from '@/lib/api'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { useAcpStore } from '@/stores/acp-store'
 import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -40,30 +50,44 @@ interface AgentLauncherProps {
 
 const AGENT_SELECT_NEW = '__new__'
 
-/** Survives overlay unmount (Ctrl+T) so the selector does not flash the default agent. */
-let cachedLastSelectedAgentId: string | null = null
+/** Survives overlay unmount (Ctrl+T) so the selector does not flash the default. */
+let cachedSelection: { key: string; mode: AgentMode } | null = null
+
+/** Test-only: clear the cross-unmount selection cache. */
+export function __resetLauncherSelectionCache(): void {
+  cachedSelection = null
+}
 
 export function AgentLauncher({
   paneId,
   agents: agentsProp,
   className
 }: AgentLauncherProps): React.JSX.Element {
+  const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
   const [loadedAgents, setLoadedAgents] =
     useState<readonly TerminalAgentDefinition[]>(BUILT_IN_AGENTS)
-  const agents = agentsProp ?? loadedAgents
-  const [selectedAgentId, setSelectedAgentId] = useState(
-    () => cachedLastSelectedAgentId ?? agents[0]?.id ?? ''
+  const cliAgents = agentsProp ?? loadedAgents
+  const acpConfigs = useAcpStore((s) => s.agentConfigs)
+
+  const entries = useMemo(() => buildUnifiedAgents(cliAgents, acpConfigs), [cliAgents, acpConfigs])
+
+  const [selectedKey, setSelectedKey] = useState(
+    () => cachedSelection?.key ?? entries[0]?.key ?? ''
+  )
+  const [selectedMode, setSelectedMode] = useState<AgentMode>(
+    () => cachedSelection?.mode ?? entries[0]?.modes[0] ?? 'cli'
   )
   const [isLaunching, setIsLaunching] = useState(false)
   const [isSpawningTerminal, setIsSpawningTerminal] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
 
-  const persistSelectedAgent = useCallback((agentId: string) => {
-    if (!agentId || agentId === AGENT_SELECT_NEW) return
-    cachedLastSelectedAgentId = agentId
-    void persistenceApi.write(PersistenceKeys.lastSelectedAgent, { agentId })
+  const persistSelection = useCallback((entry: UnifiedAgentEntry, mode: AgentMode) => {
+    const persisted = selectionToPersisted(entry, mode)
+    if (!persisted) return
+    cachedSelection = { key: entry.key, mode }
+    void persistenceApi.write<LastSelectedAgent>(PersistenceKeys.lastSelectedAgent, persisted)
   }, [])
 
   useEffect(() => {
@@ -71,27 +95,43 @@ export function AgentLauncher({
     let cancelled = false
     void (async () => {
       try {
-        const [all, persisted] = await Promise.all([
-          loadAllAgents(),
-          persistenceApi.read<{ agentId: string }>(PersistenceKeys.lastSelectedAgent)
-        ])
+        const all = await loadAllAgents()
         if (cancelled) return
-        const pool = all.length > 0 ? all : [...BUILT_IN_AGENTS]
         if (all.length > 0) setLoadedAgents(all)
-        const savedId = persisted.success ? persisted.data?.agentId : undefined
-        const nextId = savedId && pool.some((a) => a.id === savedId) ? savedId : (pool[0]?.id ?? '')
-        if (nextId) {
-          cachedLastSelectedAgentId = nextId
-          setSelectedAgentId(nextId)
-        }
       } catch {
-        // Keep built-in default when persistence or agent load fails.
+        // Keep built-in default when agent load fails.
       }
     })()
     return () => {
       cancelled = true
     }
   }, [agentsProp])
+
+  // Restore the persisted { agentId, mode } once entries are available, migrating
+  // legacy { agentId } records to mode 'cli'. Runs until a match resolves so the
+  // async agent/config load doesn't leave the default selected.
+  useEffect(() => {
+    if (cachedSelection || entries.length === 0) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
+        if (cancelled) return
+        const saved = persisted.success ? normalizePersistedSelection(persisted.data) : null
+        const resolved = resolveSelection(entries, saved)
+        if (resolved) {
+          cachedSelection = resolved
+          setSelectedKey(resolved.key)
+          setSelectedMode(resolved.mode)
+        }
+      } catch {
+        // Keep the default selection when persistence read fails.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [entries])
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const maxTerminals = useMaxTerminalsPerProject()
@@ -130,14 +170,57 @@ export function AgentLauncher({
     })
   }, [appDefaultShell, projectDefaultShell, shells])
 
-  const selectedAgent = useMemo(
-    () => agents.find((a) => a.id === selectedAgentId) ?? agents[0],
-    [agents, selectedAgentId]
+  const selectedEntry = useMemo(
+    () => entries.find((e) => e.key === selectedKey) ?? entries[0],
+    [entries, selectedKey]
+  )
+
+  // The mode actually used: the selection if supported, else the entry's first.
+  const effectiveMode: AgentMode = useMemo(() => {
+    if (!selectedEntry) return 'cli'
+    return selectedEntry.modes.includes(selectedMode) ? selectedMode : selectedEntry.modes[0]
+  }, [selectedEntry, selectedMode])
+
+  const launchCli = useCallback(
+    async (agent: TerminalAgentDefinition): Promise<void> => {
+      const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
+      const cwd = getDefaultCwdForProject(activeProjectId as string)
+      const result = await launchAgentInPane(
+        paneId,
+        activeProjectId as string,
+        cwd,
+        agent,
+        prompt,
+        {
+          envVars: project?.envVars,
+          maxTerminalsPerProject: maxTerminals
+        }
+      )
+      if (!result.success) {
+        toast.error(result.error || 'Failed to launch agent')
+        return
+      }
+      useWorkspaceStore.getState().hideAgentLauncher()
+    },
+    [activeProjectId, maxTerminals, paneId, prompt]
+  )
+
+  const launchAcp = useCallback(
+    async (configId: string): Promise<void> => {
+      const cwd = getDefaultCwdForProject(activeProjectId as string)
+      const sessionId = await useAcpStore.getState().startChat(configId, cwd)
+      useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
+      if (prompt.trim().length > 0) {
+        void useAcpStore.getState().sendPrompt(sessionId, prompt.trim())
+      }
+      useWorkspaceStore.getState().hideAgentLauncher()
+    },
+    [activeProjectId, paneId, prompt]
   )
 
   const launch = useCallback(
-    async (agent: TerminalAgentDefinition | undefined) => {
-      if (!agent) return
+    async (entry: UnifiedAgentEntry | undefined, mode: AgentMode) => {
+      if (!entry) return
       if (!activeProjectId) {
         toast.error('No active project')
         return
@@ -146,43 +229,41 @@ export function AgentLauncher({
 
       setIsLaunching(true)
       try {
-        const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
-        const cwd = getDefaultCwdForProject(activeProjectId)
-        const result = await launchAgentInPane(paneId, activeProjectId, cwd, agent, prompt, {
-          envVars: project?.envVars,
-          maxTerminalsPerProject: maxTerminals
-        })
-        if (!result.success) {
-          toast.error(result.error || 'Failed to launch agent')
-        } else {
-          useWorkspaceStore.getState().hideAgentLauncher()
+        if (mode === 'cli' && entry.cli) {
+          persistSelection(entry, 'cli')
+          await launchCli(entry.cli)
+        } else if (mode === 'acp' && entry.acp) {
+          persistSelection(entry, 'acp')
+          await launchAcp(entry.acp.id)
         }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to launch agent')
       } finally {
         setIsLaunching(false)
       }
     },
-    [activeProjectId, isLaunching, maxTerminals, paneId, prompt]
+    [activeProjectId, isLaunching, launchCli, launchAcp, persistSelection]
   )
 
   const handleSubmit = useCallback(() => {
-    void launch(selectedAgent)
-  }, [launch, selectedAgent])
+    void launch(selectedEntry, effectiveMode)
+  }, [launch, selectedEntry, effectiveMode])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
-        void launch(selectedAgent)
+        void launch(selectedEntry, effectiveMode)
       }
       if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
-        void launch(selectedAgent)
+        void launch(selectedEntry, effectiveMode)
       }
       if (e.key === 'Escape') {
         useWorkspaceStore.getState().hideAgentLauncher()
       }
     },
-    [launch, selectedAgent]
+    [launch, selectedEntry, effectiveMode]
   )
 
   const handleSelectChange = useCallback(
@@ -191,11 +272,29 @@ export function AgentLauncher({
         setShowCreateDialog(true)
         return
       }
-      setSelectedAgentId(value)
-      persistSelectedAgent(value)
+      const entry = entries.find((e) => e.key === value)
+      if (!entry) return
+      const mode = entry.modes.includes(selectedMode) ? selectedMode : entry.modes[0]
+      setSelectedKey(value)
+      setSelectedMode(mode)
+      persistSelection(entry, mode)
     },
-    [persistSelectedAgent]
+    [entries, selectedMode, persistSelection]
   )
+
+  const handleModeChange = useCallback(
+    (mode: AgentMode) => {
+      if (!selectedEntry?.modes.includes(mode)) return
+      setSelectedMode(mode)
+      persistSelection(selectedEntry, mode)
+    },
+    [selectedEntry, persistSelection]
+  )
+
+  const openAgentSettings = useCallback(() => {
+    useWorkspaceStore.getState().hideAgentLauncher()
+    navigate('/preferences')
+  }, [navigate])
 
   const spawnShellTerminal = useCallback(
     async (shell?: ShellInfo) => {
@@ -226,33 +325,35 @@ export function AgentLauncher({
     [activeProjectId, appDefaultShell, isSpawningTerminal, maxTerminals, paneId]
   )
 
-  const handleAgentCreated = useCallback(
-    async (def: TerminalAgentDefinition) => {
-      try {
-        const saved = await upsertCustomAgent({
-          id: def.id,
-          name: def.name,
-          command: def.command,
-          baseArgs: def.baseArgs,
-          promptMode: def.promptMode,
-          promptFlag: def.promptFlag,
-          icon: def.icon,
-          registryId: def.registryId,
-          env: def.env
-        })
-        const all = await loadAllAgents()
-        setLoadedAgents(all)
-        setSelectedAgentId(saved.id)
-        persistSelectedAgent(saved.id)
-        toast.success(`Added "${def.name}" to your agents`)
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to save agent')
-      }
-    },
-    [persistSelectedAgent]
-  )
+  const handleAgentCreated = useCallback(async (def: TerminalAgentDefinition) => {
+    try {
+      const saved = await upsertCustomAgent({
+        id: def.id,
+        name: def.name,
+        command: def.command,
+        baseArgs: def.baseArgs,
+        promptMode: def.promptMode,
+        promptFlag: def.promptFlag,
+        icon: def.icon,
+        registryId: def.registryId,
+        env: def.env
+      })
+      const all = await loadAllAgents()
+      setLoadedAgents(all)
+      setSelectedKey(`cli:${saved.id}`)
+      setSelectedMode('cli')
+      cachedSelection = { key: `cli:${saved.id}`, mode: 'cli' }
+      void persistenceApi.write<LastSelectedAgent>(PersistenceKeys.lastSelectedAgent, {
+        agentId: saved.id,
+        mode: 'cli'
+      })
+      toast.success(`Added "${def.name}" to your agents`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save agent')
+    }
+  }, [])
 
-  const canLaunch = selectedAgent && !isLaunching
+  const canLaunch = Boolean(selectedEntry) && !isLaunching
 
   return (
     <div
@@ -260,58 +361,89 @@ export function AgentLauncher({
     >
       <div className="flex w-full max-w-xl flex-col gap-3">
         {/* Chat-style input bar — grid layout for clean alignment */}
-        <div className="grid grid-cols-[auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
+        <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
           {/* Agent selector — column 1 */}
-          <Select value={selectedAgentId} onValueChange={handleSelectChange}>
+          <Select value={selectedKey} onValueChange={handleSelectChange}>
             <SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
               <SelectValue>
                 <span className="flex items-center gap-1.5">
-                  <AgentGlyph agent={selectedAgent} />
+                  <EntryGlyph entry={selectedEntry} />
                   <span className="max-w-[100px] truncate text-xs font-medium">
-                    {selectedAgent?.name ?? 'Agent'}
+                    {selectedEntry?.name ?? 'Agent'}
                   </span>
                 </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {agents.filter((a) => a.isBuiltIn).length > 0 && (
+              {entries.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={openAgentSettings}
+                  className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-primary hover:bg-muted/40"
+                >
+                  <Settings2 size={12} />
+                  Enable an agent in Settings…
+                </button>
+              ) : (
                 <>
-                  {agents
-                    .filter((a) => a.isBuiltIn)
-                    .map((agent) => (
-                      <SelectItem key={agent.id} value={agent.id}>
-                        <span className="flex items-center gap-2">
-                          <AgentGlyph agent={agent} />
-                          {agent.name}
-                        </span>
+                  {entries
+                    .filter((e) => e.isBuiltIn)
+                    .map((entry) => (
+                      <SelectItem key={entry.key} value={entry.key}>
+                        <EntryRow entry={entry} />
                       </SelectItem>
                     ))}
-                </>
-              )}
-              {agents.filter((a) => !a.isBuiltIn).length > 0 && (
-                <>
+                  {entries.some((e) => e.isBuiltIn) && entries.some((e) => !e.isBuiltIn) && (
+                    <SelectSeparator />
+                  )}
+                  {entries
+                    .filter((e) => !e.isBuiltIn)
+                    .map((entry) => (
+                      <SelectItem key={entry.key} value={entry.key}>
+                        <EntryRow entry={entry} />
+                      </SelectItem>
+                    ))}
                   <SelectSeparator />
-                  {agents
-                    .filter((a) => !a.isBuiltIn)
-                    .map((agent) => (
-                      <SelectItem key={agent.id} value={agent.id}>
-                        <span className="flex items-center gap-2">
-                          <AgentGlyph agent={agent} />
-                          {agent.name}
-                        </span>
-                      </SelectItem>
-                    ))}
+                  <SelectItem value={AGENT_SELECT_NEW}>
+                    <span className="flex items-center gap-2 text-primary">
+                      <Plus size={12} />
+                      New custom agent…
+                    </span>
+                  </SelectItem>
                 </>
               )}
-              <SelectSeparator />
-              <SelectItem value={AGENT_SELECT_NEW}>
-                <span className="flex items-center gap-2 text-primary">
-                  <Plus size={12} />
-                  New custom agent…
-                </span>
-              </SelectItem>
             </SelectContent>
           </Select>
+
+          {/* CLI/ACP mode toggle — column 2 (only for dual-mode agents) */}
+          {selectedEntry && selectedEntry.modes.length > 1 ? (
+            <div className="flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
+              {(['cli', 'acp'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => handleModeChange(mode)}
+                  className={cn(
+                    'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
+                    effectiveMode === mode
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  aria-pressed={effectiveMode === mode}
+                  aria-label={`Run as ${mode.toUpperCase()}`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span
+              className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+              title={`This agent runs as ${effectiveMode.toUpperCase()}`}
+            >
+              {effectiveMode}
+            </span>
+          )}
 
           {/* Divider */}
           <div className="h-6 w-px bg-border/50 justify-self-center" />
@@ -345,8 +477,8 @@ export function AgentLauncher({
                 ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
                 : 'text-muted-foreground/35'
             )}
-            aria-label={`Launch ${selectedAgent?.name ?? 'agent'}`}
-            title={isLaunching ? 'Launching…' : `Launch ${selectedAgent?.name ?? 'agent'}`}
+            aria-label={`Launch ${selectedEntry?.name ?? 'agent'}`}
+            title={isLaunching ? 'Launching…' : `Launch ${selectedEntry?.name ?? 'agent'}`}
           >
             {isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
           </button>
@@ -405,15 +537,35 @@ export function AgentLauncher({
   )
 }
 
-const AgentGlyph = memo(function AgentGlyph({
-  agent
+/** Protocol-tagged selector row: icon + name + mode badge(s). */
+function EntryRow({ entry }: { entry: UnifiedAgentEntry }): React.JSX.Element {
+  return (
+    <span className="flex items-center gap-2">
+      <EntryGlyph entry={entry} />
+      <span className="flex-1 truncate">{entry.name}</span>
+      <span className="flex items-center gap-1">
+        {entry.modes.map((mode) => (
+          <span
+            key={mode}
+            className="rounded bg-foreground/10 px-1 text-[9px] font-semibold uppercase text-muted-foreground"
+          >
+            {mode}
+          </span>
+        ))}
+      </span>
+    </span>
+  )
+}
+
+const EntryGlyph = memo(function EntryGlyph({
+  entry
 }: {
-  agent: TerminalAgentDefinition
+  entry: UnifiedAgentEntry | undefined
 }): React.JSX.Element {
   const normalized = useMemo(() => {
-    if (!agent.icon) return null
-    return sanitizeInlineAgentSvg(agent.icon)
-  }, [agent.icon])
+    if (!entry?.iconSvg) return null
+    return sanitizeInlineAgentSvg(entry.iconSvg)
+  }, [entry?.iconSvg])
 
   if (normalized) {
     return (
@@ -430,7 +582,7 @@ const AgentGlyph = memo(function AgentGlyph({
       aria-hidden="true"
       className="flex h-4 w-4 items-center justify-center rounded-sm bg-foreground/10 text-[9px] font-semibold uppercase"
     >
-      {agent.name.charAt(0)}
+      {entry?.name.charAt(0) ?? 'A'}
     </span>
   )
 })

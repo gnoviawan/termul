@@ -60,6 +60,7 @@ const {
   },
   mockWorkspaceStoreState: {
     activePaneId: 'pane-root',
+    agentLauncherPaneId: null,
     root: { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null },
     syncTerminalTabs: vi.fn(),
     getNextTabId: vi.fn(() => null),
@@ -142,20 +143,23 @@ vi.mock('@/stores/editor-store', () => ({
   }
 }))
 
-vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: {
-    getState: () => mockWorkspaceStoreState,
-    subscribe: () => vi.fn()
-  },
-  useActiveTab: () => undefined,
-  useFullscreenPaneId: () => null,
-  useLeafCount: () => 1,
-  usePaneRoot: () => ({ type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }),
-  editorTabId: (filePath: string) => `editor:${filePath}`,
-  getActiveTerminalIdFromTree: () => null,
-  getActiveFilePathFromTree: () => null,
-  findPaneContainingTab: () => null
-}))
+vi.mock('@/stores/workspace-store', () => {
+  const useWorkspaceStore = (selector?: (s: typeof mockWorkspaceStoreState) => unknown) =>
+    selector ? selector(mockWorkspaceStoreState) : mockWorkspaceStoreState
+  useWorkspaceStore.getState = () => mockWorkspaceStoreState
+  useWorkspaceStore.subscribe = () => vi.fn()
+  return {
+    useWorkspaceStore,
+    useActiveTab: () => undefined,
+    useFullscreenPaneId: () => null,
+    useLeafCount: () => 1,
+    usePaneRoot: () => ({ type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }),
+    editorTabId: (filePath: string) => `editor:${filePath}`,
+    getActiveTerminalIdFromTree: () => null,
+    getActiveFilePathFromTree: () => null,
+    findPaneContainingTab: () => null
+  }
+})
 
 vi.mock('@/stores/keyboard-shortcuts-store', () => ({
   useKeyboardShortcutsStore: () => ({
