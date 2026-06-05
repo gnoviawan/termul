@@ -166,9 +166,12 @@ command chmod \"\$@\"
 @test "require_tools fails early and names missing tools before download" {
   stub_uname Darwin arm64
   load_install
+  local saved_path="$PATH"
   PATH="$TERMUL_TEST_STUB_BIN"
 
   run main
+
+  PATH="$saved_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Missing required tools"* ]]
@@ -210,12 +213,12 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 
   run verify_sha256 "$payload" "Termul.Manager_9.9.9_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"integritas gagal, tidak menginstall apa pun"* ]]
+  [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
 
   run verify_sha256 "$payload" "Termul.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"integritas gagal, tidak menginstall apa pun"* ]]
+  [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
 }
 
@@ -334,7 +337,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (darwin-aarch64) to /Applications?"* ]]
+  [[ "$output" == *"Install Termul Manager v1.2.3 (darwin-aarch64) to $TERMUL_INSTALL_APPLICATIONS_DIR?"* ]]
   [ "$(grep -c "hdiutil attach" "$TERMUL_TEST_LOG")" -eq 1 ]
 }
 
@@ -381,7 +384,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run main
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"integritas gagal, tidak menginstall apa pun"* ]]
+  [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   ! grep -q "hdiutil" "$TERMUL_TEST_LOG"
   ! grep -q "^cp " "$TERMUL_TEST_LOG"
   ! grep -q "xattr" "$TERMUL_TEST_LOG"

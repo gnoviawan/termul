@@ -139,13 +139,13 @@ verify_sha256() {
   local actual
 
   expected="$(awk -v asset="$asset_name" '$2 == asset { print $1; found = 1; exit } END { if (!found) exit 1 }' "$sums_file")" || {
-    die "integritas gagal, tidak menginstall apa pun: checksum untuk ${asset_name} tidak ditemukan"
+    die "Integrity check failed, nothing was installed: checksum for ${asset_name} not found"
     return 1
   }
 
   actual="$(hash_file "$file")"
   if [[ "$actual" != "$expected" ]]; then
-    die "integritas gagal, tidak menginstall apa pun: checksum ${asset_name} tidak cocok"
+    die "Integrity check failed, nothing was installed: checksum for ${asset_name} did not match"
     return 1
   fi
 }
@@ -332,10 +332,10 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to /Applications?" || return 1
+      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${HOME}/.local/bin?" || return 1
+      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"

@@ -239,12 +239,12 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if git diff --quiet -- Casks/termul.rb; then
+          git add Casks/termul.rb
+          if git diff --cached --quiet -- Casks/termul.rb; then
             echo "Homebrew cask already up to date."
             exit 0
           fi
 
-          git add Casks/termul.rb
           git commit -m "Update to $VERSION"
           DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/ { print $NF }')"
           git fetch origin "$DEFAULT_BRANCH"
