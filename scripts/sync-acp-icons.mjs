@@ -176,6 +176,8 @@ function sanitizeDistribution(raw) {
       const cmd = safeStr(target.cmd)
       if (!cmd) continue
       const entry = { cmd }
+      const archive = safeStr(target.archive)
+      if (archive && isAllowedHttpsUrl(archive)) entry.archive = archive
       const args = safeStrArray(target.args)
       if (args.length > 0) entry.args = args
       const env = safeEnv(target.env)

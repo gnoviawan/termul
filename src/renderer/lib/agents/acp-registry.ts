@@ -20,6 +20,8 @@ export interface RegistryLauncher {
 /** A per-`platform-arch` binary target. */
 export interface RegistryBinaryTarget {
   cmd: string
+  /** HTTPS release archive (.zip or .tar.gz) from the ACP registry. */
+  archive?: string
   args?: string[]
   env?: Record<string, string>
 }
@@ -77,7 +79,13 @@ export const REGISTRY_AGENTS: readonly RegistryAgent[] = normalizeSnapshot(agent
  */
 export type DeriveResult =
   | { kind: 'runnable'; config: AgentConfig }
-  | { kind: 'needs-install'; cmd: string; args: string[]; env: Record<string, string> }
+  | {
+      kind: 'needs-install'
+      cmd: string
+      args: string[]
+      env: Record<string, string>
+      archiveUrl?: string
+    }
   | { kind: 'unavailable' }
 
 /**
@@ -135,11 +143,16 @@ export function deriveAgentConfig(agent: RegistryAgent, platformArch: string): D
 
   const target = dist.binary?.[platformArch]
   if (target) {
+    const archiveUrl =
+      typeof target.archive === 'string' && target.archive.startsWith('https://')
+        ? target.archive
+        : undefined
     return {
       kind: 'needs-install',
       cmd: target.cmd,
       args: [...(target.args ?? [])],
-      env: env(target.env)
+      env: env(target.env),
+      archiveUrl
     }
   }
 

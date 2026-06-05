@@ -1,5 +1,6 @@
 // Module declarations
 mod acp;
+mod acp_binary_install;
 mod browser_tab_manager;
 mod commands;
 mod agent_registry;
@@ -903,6 +904,7 @@ pub fn run() {
             acp::commands::acp_set_mode,
             acp::commands::acp_respond_permission,
             acp::commands::acp_authenticate,
+            acp_binary_install::acp_install_registry_binary,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

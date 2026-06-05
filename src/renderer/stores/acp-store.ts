@@ -123,6 +123,10 @@ interface AcpState {
   configToLiveAgent: Record<string, AgentId>
   /** Config ids whose background pre-warm spawn is currently in flight. */
   warmingConfigs: Record<string, true>
+  /** Background `session/new` results keyed by prepare key (see `prepareChat`). */
+  preparedSessions: Record<string, SessionId>
+  /** Prepare keys with `session/new` currently in flight. */
+  preparingChatKeys: Record<string, true>
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -159,6 +163,14 @@ interface AcpState {
    * failure — chat still lazy-spawns if warm-up fails.
    */
   prewarmAgent: (configId: string) => Promise<void>
+  /**
+   * Best-effort background `session/new` for a config+cwd (+ MCP selection) so
+   * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
+   * dedupes in-flight work for the same key.
+   */
+  prepareChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => void
+  /** Drop any prepared session for this key (e.g. dialog closed or inputs changed). */
+  cancelPreparedChat: (key: string) => void
   /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
   startChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
 
@@ -390,12 +402,46 @@ function persistSession(
  */
 const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
+/** Stable key for prepare/start dedupe (MCP list order-independent). */
+export function prepareChatKey(
+  configId: string,
+  cwd: string,
+  mcpServers: McpServer[] | undefined
+): string {
+  const mcpKey = (mcpServers ?? [])
+    .map((s) => JSON.stringify(s))
+    .sort()
+    .join('|')
+  return `${configId}\0${cwd}\0${mcpKey}`
+}
+
+/** In-flight `session/new` for a prepare key. */
+const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
+
+function cancelPreparedChatEntry(
+  key: string,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+): void {
+  inFlightPrepared.delete(key)
+  set((s) => {
+    if (!(key in s.preparedSessions) && !(key in s.preparingChatKeys)) return s
+    const preparedSessions = { ...s.preparedSessions }
+    const preparingChatKeys = { ...s.preparingChatKeys }
+    delete preparedSessions[key]
+    delete preparingChatKeys[key]
+    return { preparedSessions, preparingChatKeys }
+  })
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
   agentConfigs: [],
   configToLiveAgent: {},
   warmingConfigs: {},
+  /** Prepared `session/new` results keyed by {@link prepareChatKey}. */
+  preparedSessions: {},
+  preparingChatKeys: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -633,6 +679,73 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     await spawnPromise
   },
 
+  cancelPreparedChat: (key) => {
+    cancelPreparedChatEntry(key, set)
+  },
+
+  prepareChat: (configId, cwd, mcpServers) => {
+    const trimmedCwd = cwd.trim()
+    if (!configId || trimmedCwd.length === 0) return
+    const key = prepareChatKey(configId, trimmedCwd, mcpServers)
+    if (get().preparedSessions[key] || inFlightPrepared.has(key)) return
+    set((s) => ({ preparingChatKeys: { ...s.preparingChatKeys, [key]: true } }))
+
+    const task = (async (): Promise<SessionId | null> => {
+      try {
+        const config = get().agentConfigs.find((c) => c.id === configId)
+        if (!config) return null
+        const warming = inFlightWarms.get(configId)
+        if (warming) await warming
+        const existing = get().configToLiveAgent[configId]
+        const reuse = existing && get().agentStatus[existing] === 'connected' ? existing : null
+        let agentId: AgentId
+        if (reuse) {
+          agentId = reuse
+        } else {
+          agentId = await get().spawnAgent({
+            name: config.name,
+            command: config.command,
+            args: config.args,
+            env: config.env,
+            allowTerminal: config.allowTerminal
+          })
+          if (!get().agentConfigs.some((c) => c.id === configId)) {
+            try {
+              await get().killAgent(agentId)
+            } catch {
+              /* best-effort */
+            }
+            return null
+          }
+          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
+        }
+        if (get().pendingAuth[agentId]) return null
+        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
+        if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
+          return null
+        }
+        if (!inFlightPrepared.has(key)) {
+          return null
+        }
+        set((s) => ({
+          preparedSessions: { ...s.preparedSessions, [key]: sessionId }
+        }))
+        return sessionId
+      } catch (err) {
+        console.warn('[acp] prepareChat failed', configId, err)
+        return null
+      } finally {
+        inFlightPrepared.delete(key)
+        set((s) => {
+          const preparingChatKeys = { ...s.preparingChatKeys }
+          delete preparingChatKeys[key]
+          return { preparingChatKeys }
+        })
+      }
+    })()
+    inFlightPrepared.set(key, task)
+  },
+
   testConnection: async (config) => {
     let agentId: AgentId | null = null
     try {
@@ -684,8 +797,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   startChat: async (configId, cwd, mcpServers) => {
+    const trimmedCwd = cwd.trim()
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) throw new Error(`unknown agent config ${configId}`)
+    const key = prepareChatKey(configId, trimmedCwd, mcpServers)
+    const prepared = get().preparedSessions[key]
+    if (prepared) {
+      cancelPreparedChatEntry(key, set)
+      return prepared
+    }
+    const inFlight = inFlightPrepared.get(key)
+    if (inFlight) {
+      const sessionId = await inFlight
+      if (sessionId) {
+        cancelPreparedChatEntry(key, set)
+        return sessionId
+      }
+    }
     // If a background pre-warm is still spawning this config, wait for it instead
     // of racing a second spawn (which would orphan one of the two processes).
     const warming = inFlightWarms.get(configId)
@@ -713,7 +841,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (get().pendingAuth[agentId]) {
       throw new Error('This agent requires authentication before a chat can start.')
     }
-    return get().createSession(agentId, cwd, mcpServers)
+    return get().createSession(agentId, trimmedCwd, mcpServers)
   },
 
   loadSessionIndex: async () => {

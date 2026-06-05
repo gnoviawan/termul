@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/select'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { buildMcpServers } from '@/lib/acp-mcp-persistence'
-import { useAcpStore } from '@/stores/acp-store'
+import { prepareChatKey, useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { templateIcon } from './agent-templates'
@@ -48,6 +48,8 @@ export function NewChatDialog({
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
   const mcpServers = useAcpStore((s) => s.mcpServers)
   const startChat = useAcpStore((s) => s.startChat)
+  const prepareChat = useAcpStore((s) => s.prepareChat)
+  const cancelPreparedChat = useAcpStore((s) => s.cancelPreparedChat)
   const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
 
@@ -59,6 +61,18 @@ export function NewChatDialog({
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [prepareKey, setPrepareKey] = useState<string | null>(null)
+
+  const mcpWire = useMemo(() => buildMcpServers(mcpServers, selectedMcp), [mcpServers, selectedMcp])
+  const trimmedCwd = cwd.trim()
+  const mcpForChat = mcpWire.length > 0 ? mcpWire : undefined
+  const activePrepareKey = useMemo(() => {
+    if (!open || !configId || trimmedCwd.length === 0) return null
+    return prepareChatKey(configId, trimmedCwd, mcpForChat)
+  }, [open, configId, trimmedCwd, mcpForChat])
+  const sessionPreparing = useAcpStore((s) =>
+    Boolean(activePrepareKey && s.preparingChatKeys[activePrepareKey])
+  )
 
   // Keep defaults fresh when the dialog (re)opens.
   useEffect(() => {
@@ -70,6 +84,23 @@ export function NewChatDialog({
     }
   }, [open, agentConfigs, defaultCwd])
 
+  // Background session/new while the user picks agent, cwd, and MCP (same inputs as Start).
+  useEffect(() => {
+    if (!open || !activePrepareKey || !configId || trimmedCwd.length === 0) return
+    setPrepareKey((prev) => {
+      if (prev && prev !== activePrepareKey) cancelPreparedChat(prev)
+      return activePrepareKey
+    })
+    prepareChat(configId, trimmedCwd, mcpForChat)
+  }, [open, activePrepareKey, configId, trimmedCwd, mcpForChat, prepareChat, cancelPreparedChat])
+
+  useEffect(() => {
+    if (!open && prepareKey) {
+      cancelPreparedChat(prepareKey)
+      setPrepareKey(null)
+    }
+  }, [open, prepareKey, cancelPreparedChat])
+
   const canStart = useMemo(
     () => configId.length > 0 && cwd.trim().length > 0 && !starting,
     [configId, cwd, starting]
@@ -79,12 +110,7 @@ export function NewChatDialog({
     if (!canStart) return
     setStarting(true)
     try {
-      const servers = buildMcpServers(mcpServers, selectedMcp)
-      const sessionId = await startChat(
-        configId,
-        cwd.trim(),
-        servers.length > 0 ? servers : undefined
-      )
+      const sessionId = await startChat(configId, trimmedCwd, mcpForChat)
       addAgentChatTab(sessionId, targetPaneId)
       onOpenChange(false)
     } catch (err) {
@@ -96,9 +122,8 @@ export function NewChatDialog({
     canStart,
     startChat,
     configId,
-    cwd,
-    mcpServers,
-    selectedMcp,
+    trimmedCwd,
+    mcpForChat,
     addAgentChatTab,
     targetPaneId,
     onOpenChange
@@ -265,7 +290,7 @@ export function NewChatDialog({
                 Cancel
               </Button>
               <Button type="button" onClick={handleStart} disabled={!canStart}>
-                {starting ? 'Starting…' : 'Start Chat'}
+                {starting ? 'Starting…' : sessionPreparing ? 'Preparing session…' : 'Start Chat'}
               </Button>
             </DialogFooter>
           )}

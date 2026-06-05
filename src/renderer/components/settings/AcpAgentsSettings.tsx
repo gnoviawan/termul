@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { type AgentConfig, acpApi } from '@/lib/acp-api'
 import {
   currentPlatformArch,
   deriveAgentConfig,
@@ -48,19 +49,49 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
 
   const derived = useMemo(() => deriveAgentConfig(agent, platformArch), [agent, platformArch])
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${agent.id}`), [agent.id])
+  const [installing, setInstalling] = useState(false)
+  const canEnable =
+    derived.kind === 'runnable' || (derived.kind === 'needs-install' && Boolean(derived.archiveUrl))
   const runnable = derived.kind === 'runnable'
+
+  const enableWithConfig = async (config: AgentConfig): Promise<void> => {
+    await saveAgentConfig({
+      id: configId,
+      templateId: agent.id,
+      ...config
+    })
+    void prewarmAgent(configId)
+  }
 
   const handleToggle = async (next: boolean): Promise<void> => {
     try {
       if (next) {
-        if (derived.kind !== 'runnable') return
-        await saveAgentConfig({
-          id: configId,
-          templateId: agent.id,
-          ...derived.config
-        })
-        // Fire-and-forget warm-up so the first chat starts instantly.
-        void prewarmAgent(configId)
+        if (!canEnable) return
+        if (derived.kind === 'runnable') {
+          await enableWithConfig(derived.config)
+          return
+        }
+        if (derived.kind === 'needs-install' && derived.archiveUrl) {
+          setInstalling(true)
+          try {
+            const installed = await acpApi.installRegistryBinary({
+              agentId: agent.id,
+              archiveUrl: derived.archiveUrl,
+              cmd: derived.cmd,
+              args: derived.args
+            })
+            await enableWithConfig({
+              name: agent.name,
+              command: installed.command,
+              args: installed.args,
+              env: derived.env,
+              allowTerminal: false
+            })
+          } finally {
+            setInstalling(false)
+          }
+          return
+        }
       } else {
         await deleteAgentConfig(configId)
       }
@@ -120,7 +151,11 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
         {!runnable && (
           <p className="mt-1 text-[11px] text-amber-500">
             {derived.kind === 'needs-install'
-              ? 'Binary install required — not enabled automatically.'
+              ? derived.archiveUrl
+                ? installing
+                  ? 'Downloading and installing…'
+                  : 'Turn on to download the release binary for your platform.'
+                : 'Install the binary manually, then add a custom agent.'
               : 'Not available for your platform.'}
           </p>
         )}
@@ -129,7 +164,7 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
       <div className="shrink-0 pt-0.5">
         <Switch
           checked={enabled}
-          disabled={!runnable && !enabled}
+          disabled={(!canEnable && !enabled) || installing}
           onCheckedChange={handleToggle}
           aria-label={`Enable ${agent.name}`}
         />

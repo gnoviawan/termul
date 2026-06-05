@@ -73,12 +73,36 @@ describe('deriveAgentConfig', () => {
     })
   })
 
+  it('passes https archive URL into needs-install when present', () => {
+    const res = deriveAgentConfig(
+      agent({
+        binary: {
+          'windows-x86_64': {
+            cmd: './amp-acp.exe',
+            archive: 'https://example.com/amp.zip'
+          }
+        }
+      }),
+      'windows-x86_64'
+    )
+    expect(res).toMatchObject({
+      kind: 'needs-install',
+      archiveUrl: 'https://example.com/amp.zip'
+    })
+  })
+
   it('returns needs-install for a binary present on the current platform-arch', () => {
     const res = deriveAgentConfig(
       agent({ binary: { 'windows-x86_64': { cmd: './stakpak.exe', args: ['acp'] } } }),
       'windows-x86_64'
     )
-    expect(res).toEqual({ kind: 'needs-install', cmd: './stakpak.exe', args: ['acp'], env: {} })
+    expect(res).toEqual({
+      kind: 'needs-install',
+      cmd: './stakpak.exe',
+      args: ['acp'],
+      env: {},
+      archiveUrl: undefined
+    })
   })
 
   it('carries per-platform binary env into needs-install', () => {
@@ -94,7 +118,8 @@ describe('deriveAgentConfig', () => {
       kind: 'needs-install',
       cmd: 'vtcode.exe',
       args: ['acp'],
-      env: { VT_ACP_ENABLED: '1' }
+      env: { VT_ACP_ENABLED: '1' },
+      archiveUrl: undefined
     })
   })
 
@@ -104,7 +129,13 @@ describe('deriveAgentConfig', () => {
       'windows-x86_64'
     )
     // npx is skipped (unsafe package) -> falls through to the binary path.
-    expect(res).toEqual({ kind: 'needs-install', cmd: './x.exe', args: [], env: {} })
+    expect(res).toEqual({
+      kind: 'needs-install',
+      cmd: './x.exe',
+      args: [],
+      env: {},
+      archiveUrl: undefined
+    })
   })
 
   it('returns unavailable when no binary targets the current platform-arch', () => {

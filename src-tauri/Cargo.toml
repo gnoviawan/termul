@@ -36,6 +36,11 @@ chrono = "0.4"
 # only). rustls-tls matches the backend already pulled in by the updater plugin.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
 
+# ACP registry binary install (zip / tar.gz archives)
+zip = "2"
+tar = "0.4"
+flate2 = "1"
+
 # PTY and async runtime
 portable-pty = "0.9"
 anyhow = "1"

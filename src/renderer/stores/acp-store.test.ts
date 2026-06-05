@@ -719,6 +719,32 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().configToLiveAgent['cfg-1']).toBe('agent-9')
   })
 
+  it('startChat reuses a prepared session from prepareChat (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-1': 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    await vi.waitFor(() => {
+      expect(Object.values(useAcpStore.getState().preparedSessions).includes('sess-prep')).toBe(
+        true
+      )
+    })
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    expect(sessionId).toBe('sess-prep')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: undefined
+    })
+  })
+
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
     await useAcpStore
       .getState()
