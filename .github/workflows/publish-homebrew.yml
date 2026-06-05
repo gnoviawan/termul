@@ -1,0 +1,252 @@
+name: Publish Homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, with or without leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-homebrew-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  checksums:
+    name: Generate SHA256SUMS
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
+
+          VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([._+-][0-9A-Za-z]+)?$ ]]; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo gnoviawan/termul \
+            --dir release-assets
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          cd release-assets
+          mapfile -d '' assets < <(
+            find . -maxdepth 1 -type f \
+              ! -name '*.sig' \
+              ! -name 'latest.json' \
+              ! -name 'SHA256SUMS.txt' \
+              -printf '%f\0' | sort -z
+          )
+
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No binary release assets found to checksum." >&2
+            exit 1
+          fi
+
+          : > ../SHA256SUMS.txt
+          for asset in "${assets[@]}"; do
+            sha256sum "$asset" >> ../SHA256SUMS.txt
+          done
+
+      - name: Upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release upload "$TAG" SHA256SUMS.txt \
+            --repo gnoviawan/termul \
+            --clobber
+
+  homebrew:
+    name: Update Homebrew cask
+    needs: [checksums]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
+
+          VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([._+-][0-9A-Za-z]+)?$ ]]; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$VERSION" =~ (-[0-9A-Za-z]+|alpha|beta|rc) ]]; then
+            echo "Homebrew tap updates are skipped for prerelease version $VERSION."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download SHA256SUMS
+        if: steps.version.outputs.should_publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo gnoviawan/termul \
+            --pattern SHA256SUMS.txt \
+            --dir release-assets
+
+      - name: Resolve DMG checksums
+        if: steps.version.outputs.should_publish == 'true'
+        id: dmg
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd release-assets
+          ARM_DMG="Termul.Manager_${VERSION}_aarch64.dmg"
+          INTEL_DMG="Termul.Manager_${VERSION}_x64.dmg"
+
+          ARM_SHA256="$(awk -v file="$ARM_DMG" '$2 == file { print $1 }' SHA256SUMS.txt)"
+          INTEL_SHA256="$(awk -v file="$INTEL_DMG" '$2 == file { print $1 }' SHA256SUMS.txt)"
+
+          if [[ -z "$ARM_SHA256" ]]; then
+            echo "Missing checksum for $ARM_DMG" >&2
+            exit 1
+          fi
+
+          if [[ -z "$INTEL_SHA256" ]]; then
+            echo "Missing checksum for $INTEL_DMG" >&2
+            exit 1
+          fi
+
+          echo "arm_sha256=$ARM_SHA256" >> "$GITHUB_OUTPUT"
+          echo "intel_sha256=$INTEL_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Clone Homebrew tap
+        if: steps.version.outputs.should_publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN"
+          gh auth setup-git
+          gh repo clone gnoviawan/homebrew-termul tap -- --depth 1
+
+      - name: Configure Git
+        if: steps.version.outputs.should_publish == 'true'
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Write cask
+        if: steps.version.outputs.should_publish == 'true'
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARM_SHA256: ${{ steps.dmg.outputs.arm_sha256 }}
+          INTEL_SHA256: ${{ steps.dmg.outputs.intel_sha256 }}
+        run: |
+          mkdir -p Casks
+          cat > Casks/termul.rb <<EOF
+          cask "termul" do
+            arch arm: "aarch64", intel: "x64"
+
+            version "$VERSION"
+            sha256 arm:   "$ARM_SHA256",
+                   intel: "$INTEL_SHA256"
+
+            url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
+            name "Termul Manager"
+            desc "Terminal-native workspace and CLI agent manager"
+            homepage "https://github.com/gnoviawan/termul"
+
+            auto_updates true
+            depends_on macos: :catalina
+
+            app "Termul Manager.app"
+
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/Termul Manager.app"]
+            end
+
+            zap trash: [
+              "~/Library/Application Support/com.termul-manager.app",
+              "~/Library/Caches/com.termul-manager.app",
+              "~/Library/HTTPStorages/com.termul-manager.app",
+              "~/Library/Logs/com.termul-manager.app",
+              "~/Library/Preferences/com.termul-manager.app.plist",
+              "~/Library/Saved Application State/com.termul-manager.app.savedState",
+              "~/Library/WebKit/com.termul-manager.app",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        if: steps.version.outputs.should_publish == 'true'
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git add Casks/termul.rb
+          if git diff --cached --quiet -- Casks/termul.rb; then
+            echo "Homebrew cask already up to date."
+            exit 0
+          fi
+
+          git commit -m "Update to $VERSION"
+          DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/ { print $NF }')"
+          git fetch origin "$DEFAULT_BRANCH"
+          git rebase "origin/$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"
