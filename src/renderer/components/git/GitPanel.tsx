@@ -731,7 +731,7 @@ function SectionAction({
       className={cn(
         'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
         variant === 'danger'
-          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-400'
+          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
@@ -769,7 +769,7 @@ function RowAction({
       className={cn(
         'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
         variant === 'danger'
-          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-400'
+          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
       )}
     >

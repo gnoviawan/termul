@@ -96,12 +96,12 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     <div className="flex h-full flex-col bg-background">
       <AgentHeader session={session} agentStatus={agentStatus} />
       {session.lastError && (
-        <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1 text-[11px] text-red-400">
+        <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1 text-[11px] text-red-600 dark:text-red-400">
           {session.lastError}
         </div>
       )}
       {pendingAuth && pendingAuth.methods.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-400">
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
           <span>{pendingAuth.message ?? 'This agent requires authentication.'}</span>
           {pendingAuth.methods.map((m) => (
             <button

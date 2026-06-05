@@ -110,7 +110,7 @@ export function ConfirmDialog({
                 <button
                   onClick={secondaryAction.onClick}
                   disabled={isLoading}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {secondaryAction.label}
                 </button>

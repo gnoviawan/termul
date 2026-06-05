@@ -16,8 +16,8 @@ interface GitDiffViewProps {
 function lineClass(kind: ParsedDiffLine['kind']): string {
   return cn(
     'px-2 py-0.5 min-h-[1.25rem]',
-    kind === 'addition' && 'bg-green-500/10 text-green-400',
-    kind === 'deletion' && 'bg-red-500/10 text-red-400',
+    kind === 'addition' && 'bg-green-500/10 text-green-700 dark:text-green-400',
+    kind === 'deletion' && 'bg-red-500/10 text-red-700 dark:text-red-400',
     (kind === 'header' || kind === 'meta') && 'text-muted-foreground italic bg-muted/20',
     kind === 'context' && 'text-foreground/90'
   )

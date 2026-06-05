@@ -16,7 +16,7 @@ const STATUS_COLOR: Record<string, string> = {
   spawning: 'text-amber-500',
   idle: 'text-muted-foreground',
   error: 'text-red-500',
-  'needs-auth': 'text-amber-400'
+  'needs-auth': 'text-amber-500'
 }
 
 /**

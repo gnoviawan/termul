@@ -111,7 +111,7 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps): React.J
                 'w-full flex items-center px-2 py-1 text-xs transition-colors',
                 item.disabled && 'opacity-50 cursor-not-allowed',
                 item.variant === 'danger'
-                  ? 'text-red-400 hover:bg-red-500/10'
+                  ? 'text-red-600 dark:text-red-400 hover:bg-red-500/10'
                   : 'text-foreground hover:bg-secondary'
               )}
             >

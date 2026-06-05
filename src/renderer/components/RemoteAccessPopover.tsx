@@ -75,7 +75,10 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor size={14} className={cn('mr-0', isRunning ? 'text-green-300' : undefined)} />
+          <Monitor
+            size={14}
+            className={cn('mr-0', isRunning ? 'text-green-600 dark:text-green-300' : undefined)}
+          />
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>

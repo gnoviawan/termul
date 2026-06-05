@@ -101,9 +101,12 @@ export function RestoreSnapshotModal({
               </p>
 
               {hasRunningProcesses && (
-                <div className="bg-yellow-900/20 border border-yellow-800/50 rounded p-3 flex items-start gap-2">
-                  <AlertTriangle size={16} className="text-yellow-400 mt-0.5 flex-shrink-0" />
-                  <div className="text-sm text-yellow-400">
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded p-3 flex items-start gap-2">
+                  <AlertTriangle
+                    size={16}
+                    className="text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0"
+                  />
+                  <div className="text-sm text-yellow-700 dark:text-yellow-400">
                     <span className="font-medium">Warning:</span> You have terminals with running
                     processes. Restoring will terminate these processes.
                   </div>

@@ -7,15 +7,21 @@ interface PlanPanelProps {
 }
 
 const PRIORITY_DOT: Record<string, string> = {
-  high: 'bg-red-400',
-  medium: 'bg-amber-400',
+  high: 'bg-red-500',
+  medium: 'bg-amber-500',
   low: 'bg-muted-foreground/50'
 }
 
 function StatusIcon({ status }: { status?: string }): React.JSX.Element {
-  if (status === 'completed') return <CheckCircle2 size={13} className="text-green-400" />
+  if (status === 'completed')
+    return <CheckCircle2 size={13} className="text-green-600 dark:text-green-400" />
   if (status === 'in_progress')
-    return <Loader2 size={13} className="animate-spin text-amber-400 motion-reduce:animate-none" />
+    return (
+      <Loader2
+        size={13}
+        className="animate-spin text-amber-600 dark:text-amber-400 motion-reduce:animate-none"
+      />
+    )
   return <Circle size={13} className="text-muted-foreground/60" />
 }
 

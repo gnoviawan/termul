@@ -53,11 +53,23 @@ export interface StatusStyle {
 export function statusStyle(status: ToolCallStatus | undefined): StatusStyle {
   switch (status) {
     case 'in_progress':
-      return { label: 'running', className: 'text-amber-400 bg-amber-400/10', spinning: true }
+      return {
+        label: 'running',
+        className: 'text-amber-600 dark:text-amber-400 bg-amber-500/10',
+        spinning: true
+      }
     case 'completed':
-      return { label: 'done', className: 'text-green-400 bg-green-400/10', spinning: false }
+      return {
+        label: 'done',
+        className: 'text-green-600 dark:text-green-400 bg-green-500/10',
+        spinning: false
+      }
     case 'failed':
-      return { label: 'failed', className: 'text-red-400 bg-red-400/10', spinning: false }
+      return {
+        label: 'failed',
+        className: 'text-red-600 dark:text-red-400 bg-red-500/10',
+        spinning: false
+      }
     case 'pending':
     default:
       return { label: 'pending', className: 'text-muted-foreground bg-muted/40', spinning: false }

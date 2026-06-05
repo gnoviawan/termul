@@ -458,7 +458,9 @@ export default function ProjectSettings() {
                               placeholder="Value"
                               className={cn(
                                 'w-full bg-transparent border-none text-sm font-mono focus:ring-0 px-2 py-1',
-                                envVar.isSecret ? 'text-muted-foreground' : 'text-green-400'
+                                envVar.isSecret
+                                  ? 'text-muted-foreground'
+                                  : 'text-green-600 dark:text-green-400'
                               )}
                             />
                           </div>
