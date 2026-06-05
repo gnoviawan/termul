@@ -134,10 +134,59 @@ pub(super) fn is_directly_executable_windows(path: &str) -> bool {
 pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
     let content = std::fs::read_to_string(shim_path).ok()?;
     let shim_dir = std::path::Path::new(shim_path).parent()?;
+    let shim_dir_str = shim_dir.to_str().unwrap_or(".");
+
+    // Pre-scan `SET "VAR=value"` (and `SET VAR=value`) assignments so launcher
+    // shims that invoke through variable indirection — e.g. npm's own
+    // `npx.cmd` / `npm.cmd`, whose final line is `"%NODE_EXE%" "%NPX_CLI_JS%" %*`
+    // — can be resolved, not just the simple `"%dp0%\node.exe" "<script>"` form
+    // used by package bin shims. Without this, npm launchers fail to rewrite and
+    // the raw `.cmd` is handed to CreateProcessW (os error 193).
+    let mut vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let expand_dp0 = |val: &str| -> String {
+        val.replace("%dp0%", shim_dir_str)
+            .replace("%~dp0%", shim_dir_str)
+            .replace("%~dp0", shim_dir_str)
+    };
+    for line in content.lines() {
+        let t = line.trim();
+        let Some(rest) = t
+            .strip_prefix("SET ")
+            .or_else(|| t.strip_prefix("set "))
+            .or_else(|| t.strip_prefix("Set "))
+        else {
+            continue;
+        };
+        let rest = rest.trim();
+        // Accept both `SET "VAR=value"` and `SET VAR=value`.
+        let unquoted = rest.trim_matches('"');
+        if let Some((name, value)) = unquoted.split_once('=') {
+            let name = name.trim();
+            if !name.is_empty() {
+                // First assignment wins: it is the primary (unconditional) one;
+                // later `SET`s in npm launchers are `IF`-guarded fallbacks a
+                // static parser cannot evaluate.
+                vars.entry(name.to_ascii_uppercase())
+                    .or_insert_with(|| value.trim().to_string());
+            }
+        }
+    }
+    // Resolve a single `%VAR%` reference (one level of indirection is enough for
+    // real npm launchers) against the SET map, then expand %dp0% inside it.
+    let resolve_vars = |val: &str| -> String {
+        let trimmed = val.trim();
+        if trimmed.starts_with('%') && trimmed.ends_with('%') && trimmed.len() > 2 {
+            let key = trimmed[1..trimmed.len() - 1].to_ascii_uppercase();
+            if let Some(v) = vars.get(&key) {
+                return expand_dp0(v);
+            }
+        }
+        expand_dp0(trimmed)
+    };
 
     // Find the last line that contains a command invocation pattern:
     //   "<executable>" "<script>" %*
-    // or equivalently with %_prog% resolved.
+    // or equivalently with %_prog% / %VAR% resolved.
     // We look for lines containing both `"%dp0%` (or `")` and `%*`.
     for line in content.lines().rev() {
         let line = line.trim();
@@ -161,15 +210,10 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
             continue;
         }
 
-        // Resolve %dp0% / %~dp0 / %~dp0% to the shim's directory,
+        // Resolve %VAR% indirection first (npm launchers), then %dp0% / %~dp0,
         // and %_prog% to node.exe (either <dir>/node.exe or bare "node"
         // when the node executable is on PATH).
-        let resolve_dp0 = |val: &str| -> String {
-            let resolved = val.replace("%dp0%", shim_dir.to_str().unwrap_or("."));
-            let resolved = resolved.replace("%~dp0", shim_dir.to_str().unwrap_or("."));
-            let resolved = resolved.replace("%~dp0%", shim_dir.to_str().unwrap_or("."));
-            resolved.replace('"', "")
-        };
+        let resolve_dp0 = |val: &str| -> String { resolve_vars(val).replace('"', "") };
 
         let exe_path_str = resolve_dp0(raw_exe);
         // Handle %_prog%: check for node.exe in the shim directory first.
@@ -2282,6 +2326,52 @@ mod tests {
         );
 
         // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_npm_cmd_shim_rewrites_npm_launcher_with_set_indirection() {
+        // npm's own npx.cmd / npm.cmd invoke through SETLOCAL variables:
+        //   SET "NODE_EXE=%~dp0\node.exe"
+        //   SET "NPX_CLI_JS=%~dp0\node_modules\npm\bin\npx-cli.js"
+        //   "%NODE_EXE%" "%NPX_CLI_JS%" %*
+        // The parser must resolve the %VAR% indirection, not only the simple
+        // `"%dp0%\node.exe" "<script>"` package-bin form.
+        let dir = std::env::temp_dir().join("termul-test-npx-launcher-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\npm\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\npm\\bin\\npx-cli.js"), b"").unwrap();
+
+        let shim_path = dir.join("npx.cmd");
+        let shim_content = ":: Created by npm, please don't edit manually.\r\n".to_owned()
+            + "@ECHO OFF\r\n"
+            + "SETLOCAL\r\n"
+            + "SET \"NODE_EXE=%~dp0\\node.exe\"\r\n"
+            + "IF NOT EXIST \"%NODE_EXE%\" (\r\n"
+            + "  SET \"NODE_EXE=node\"\r\n"
+            + ")\r\n"
+            + "SET \"NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js\"\r\n"
+            + "\"%NODE_EXE%\" \"%NPX_CLI_JS%\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_npm_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse the npm launcher shim");
+        let resolved = resolved.unwrap();
+        assert!(
+            resolved.program.ends_with("node.exe"),
+            "expected node.exe, got: {}",
+            resolved.program
+        );
+        assert_eq!(resolved.prepend_args.len(), 1);
+        assert!(
+            resolved.prepend_args[0].contains("npm\\bin\\npx-cli.js"),
+            "expected npx-cli.js script path, got: {}",
+            resolved.prepend_args[0]
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

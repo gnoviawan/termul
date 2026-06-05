@@ -322,6 +322,24 @@ export const ACP_EVENTS = {
 
 // --- Command wrappers ------------------------------------------------------
 
+export interface InstallAcpRegistryBinaryRequest {
+  agentId: string
+  archiveUrl: string
+  cmd: string
+  args?: string[]
+}
+
+export interface InstallAcpRegistryBinaryOutcome {
+  command: string
+  args: string[]
+}
+
+export async function acpInstallRegistryBinary(
+  request: InstallAcpRegistryBinaryRequest
+): Promise<InstallAcpRegistryBinaryOutcome> {
+  return invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request })
+}
+
 export async function acpSpawnAgent(config: AgentConfig): Promise<AgentId> {
   return invoke<AgentId>('acp_spawn_agent', { config })
 }
@@ -470,5 +488,6 @@ export const acpApi = {
   setMode: acpSetMode,
   respondPermission: acpRespondPermission,
   authenticate: acpAuthenticate,
+  installRegistryBinary: acpInstallRegistryBinary,
   onEvent: onAcpEvent
 }

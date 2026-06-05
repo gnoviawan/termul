@@ -1,6 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import {
   AlertCircle,
+  Bot,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -12,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
+import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
 import {
   useResetAllShortcuts,
@@ -534,6 +536,25 @@ export default function AppPreferences(): React.JSX.Element {
                       New projects will use this color by default.
                     </p>
                   </div>
+                </div>
+              </div>
+            </section>
+
+            {/* AI Agents Section */}
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Bot size={18} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Enable ACP coding agents from the registry. Enabling one warms it in the
+                    background so chats start instantly.
+                  </p>
+                </div>
+                <div className="w-2/3">
+                  <AcpAgentsSettings />
                 </div>
               </div>
             </section>

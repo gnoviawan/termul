@@ -42,6 +42,10 @@ const FRESH = {
   agentStatus: {},
   agentConfigs: [],
   configToLiveAgent: {},
+  warmingConfigs: {},
+  preparedSessions: {},
+  preparingChatKeys: {},
+  pendingAuth: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -583,6 +587,128 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agentConfigs).toHaveLength(0)
   })
 
+  it('prewarmAgent spawns and registers a live agent for the config (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce('agent-warm')
+    await useAcpStore.getState().prewarmAgent('cfg-w')
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBe('agent-warm')
+    expect(useAcpStore.getState().agentStatus['agent-warm']).toBe('connected')
+  })
+
+  it('prewarmAgent is a no-op when the config is already connected (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agentStatus: { ...s.agentStatus, 'agent-warm': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-w': 'agent-warm' }
+    }))
+    await useAcpStore.getState().prewarmAgent('cfg-w')
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBe('agent-warm')
+  })
+
+  it('prewarmAgent stays silent and leaves no mapping when spawn fails (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('spawn boom')
+    await expect(useAcpStore.getState().prewarmAgent('cfg-w')).resolves.toBeUndefined()
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBeUndefined()
+  })
+
+  it('deleteAgentConfig kills the warmed agent and clears its mapping (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-warm': { id: 'agent-warm', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-warm': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-w': 'agent-warm' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().deleteAgentConfig('cfg-w')
+    expect(useAcpStore.getState().agentConfigs).toHaveLength(0)
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_kill_agent', { agentId: 'agent-warm' })
+  })
+
+  it('killAgent drops any configToLiveAgent entry pointing at it (GH-288)', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-warm': { id: 'agent-warm', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-warm': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-w': 'agent-warm' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().killAgent('agent-warm')
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBeUndefined()
+  })
+
+  it('disable while warming kills the spawned agent, leaving no orphan (GH-288 C1)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    // Spawn resolves later, simulating the slow `npx` warm-up window.
+    let resolveSpawn!: (id: string) => void
+    const spawnGate = new Promise<string>((r) => {
+      resolveSpawn = r
+    })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(spawnGate) // acp_spawn_agent (warm)
+      .mockResolvedValueOnce(undefined) // acp_kill_agent
+    const warm = useAcpStore.getState().prewarmAgent('cfg-w')
+    expect(useAcpStore.getState().warmingConfigs['cfg-w']).toBe(true)
+    // Disable before the spawn resolves; deleteAgentConfig must await the warm.
+    const del = useAcpStore.getState().deleteAgentConfig('cfg-w')
+    resolveSpawn('agent-orphan')
+    await Promise.all([warm, del])
+    expect(useAcpStore.getState().agentConfigs).toHaveLength(0)
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBeUndefined()
+    expect(useAcpStore.getState().warmingConfigs['cfg-w']).toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_kill_agent', { agentId: 'agent-orphan' })
+  })
+
+  it('concurrent prewarmAgent calls spawn only one process (GH-288 C2)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce('agent-warm')
+    await Promise.all([
+      useAcpStore.getState().prewarmAgent('cfg-w'),
+      useAcpStore.getState().prewarmAgent('cfg-w')
+    ])
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(1)
+    expect(useAcpStore.getState().configToLiveAgent['cfg-w']).toBe('agent-warm')
+  })
+
+  it('startChat awaits an in-flight warm instead of re-spawning (GH-288 C3)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    let resolveSpawn!: (id: string) => void
+    const spawnGate = new Promise<string>((r) => {
+      resolveSpawn = r
+    })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(spawnGate) // acp_spawn_agent (warm)
+      .mockResolvedValueOnce({ sessionId: 'sess-warm' }) // acp_new_session (reuse)
+    const warm = useAcpStore.getState().prewarmAgent('cfg-w')
+    const chat = useAcpStore.getState().startChat('cfg-w', '/work')
+    resolveSpawn('agent-warm')
+    const [, sessionId] = await Promise.all([warm, chat])
+    expect(sessionId).toBe('sess-warm')
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['sess-warm'].agentId).toBe('agent-warm')
+  })
+
   it('startChat spawns a configured agent then creates a session (P4)', async () => {
     await useAcpStore
       .getState()
@@ -594,6 +720,32 @@ describe('acp-store', () => {
     expect(sessionId).toBe('sess-9')
     expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
     expect(useAcpStore.getState().configToLiveAgent['cfg-1']).toBe('agent-9')
+  })
+
+  it('startChat reuses a prepared session from prepareChat (GH-288)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, 'cfg-1': 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    await vi.waitFor(() => {
+      expect(Object.values(useAcpStore.getState().preparedSessions).includes('sess-prep')).toBe(
+        true
+      )
+    })
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    expect(sessionId).toBe('sess-prep')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: undefined
+    })
   })
 
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
