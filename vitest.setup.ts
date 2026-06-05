@@ -29,7 +29,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn()
+  listen: vi.fn(() => Promise.resolve(() => {}))
 }))
 
 vi.mock('@tauri-apps/plugin-fs', () => ({

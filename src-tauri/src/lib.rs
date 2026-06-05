@@ -39,6 +39,8 @@ const MENU_ID_ZOOM_OUT: &str = "view-zoom-out";
 const MENU_ID_TOGGLE_FULLSCREEN: &str = "view-toggle-fullscreen";
 const MENU_ID_LEARN_MORE: &str = "help-learn-more";
 const MENU_ID_REVEAL_LOGS: &str = "help-reveal-logs";
+const MENU_ID_CLOSE_TAB: &str = "window-close-tab";
+const MENU_EVENT_CLOSE_TAB: &str = "menu:close-tab";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
@@ -456,7 +458,7 @@ fn build_app_menu<R: tauri::Runtime>(
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let file_menu = {
         #[cfg(target_os = "macos")]
-        let builder = SubmenuBuilder::new(app, "File").close_window();
+        let builder = SubmenuBuilder::new(app, "File");
 
         #[cfg(not(target_os = "macos"))]
         let builder = SubmenuBuilder::new(app, "File").quit();
@@ -511,6 +513,20 @@ fn build_app_menu<R: tauri::Runtime>(
             .build()?
     };
 
+    #[cfg(target_os = "macos")]
+    let window_menu = {
+        let close_tab = MenuItemBuilder::with_id(MENU_ID_CLOSE_TAB, "Close Tab")
+            .accelerator("Cmd+W")
+            .build(app)?;
+        SubmenuBuilder::new(app, "Window")
+            .minimize()
+            .maximize()
+            .separator()
+            .item(&close_tab)
+            .build()?
+    };
+
+    #[cfg(not(target_os = "macos"))]
     let window_menu = SubmenuBuilder::new(app, "Window")
         .minimize()
         .maximize()
@@ -597,6 +613,10 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
     } else if event.id() == MENU_ID_REVEAL_LOGS {
         if let Err(error) = reveal_log_dir(app) {
             log::error!("Failed to reveal log directory from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_CLOSE_TAB {
+        if let Err(error) = app.emit(MENU_EVENT_CLOSE_TAB, ()) {
+            log::error!("Failed to emit close-tab menu event: {}", error);
         }
     }
 }

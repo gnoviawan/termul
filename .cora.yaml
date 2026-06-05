@@ -1,0 +1,43 @@
+# Cora Code Review Configuration
+# See: https://github.com/codecoradev/cora-cli
+
+# Provider settings
+#provider:
+#  provider: openai
+#  model: gpt-4o-mini
+#  base_url: https://api.openai.com/v1
+
+# Review focus areas: security, performance, bugs, best-practice, style
+focus:
+  - security
+  - performance
+  - bugs
+
+# Custom rules / additional instructions for the reviewer
+rules: []
+# rules:
+#   - "Always check for SQL injection vulnerabilities"
+#   - "Ensure all public functions have error handling"
+
+# Ignore patterns
+ignore:
+  files:
+    - "*.lock"
+    - "package-lock.json"
+    - "yarn.lock"
+    - "vendor/"
+    - "node_modules/"
+  rules: []
+#   rules:
+#     - "style"  # ignore style issues
+
+# Hook settings
+hook:
+  mode: warn          # "warn" (print but allow) or "block" (fail commit)
+  min_severity: major # minimum severity to trigger hook action
+  max_diff_size: 50000000 # max diff chars before refusing
+
+# Output settings
+output:
+  format: pretty      # pretty, json, compact, sarif
+  color: true

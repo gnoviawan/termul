@@ -1,5 +1,6 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -324,6 +325,31 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // declaration-order dependency. The ref is updated each render.
   const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null)
 
+  /** Close the active tab (reused by keyboard shortcut and native menu event). */
+  const closeActiveTab = useCallback(() => {
+    if (!activeTab) return
+    if (activeTab.type === 'editor') {
+      const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
+      if (fileState?.isDirty) {
+        setDirtyCloseFilePath(activeTab.filePath)
+      } else {
+        const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
+        if (didClose) {
+          useWorkspaceStore.getState().removeTab(activeTab.id)
+        }
+      }
+    } else if (activeTab.type === 'git' || activeTab.type === 'git-history') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'terminal') {
+      handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
+    } else if (activeTab.type === 'browser') {
+      useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'agent-chat') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    }
+  }, [activeTab])
+
   // File watcher hook
   useFileWatcher()
 
@@ -564,6 +590,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
       return Promise.resolve(false)
     })
   }, [closeAppWithPersistenceFlush])
+
+  // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined
+    listen<void>('menu:close-tab', () => {
+      closeActiveTab()
+    })
+      .then((fn) => {
+        unlisten = fn
+      })
+      .catch(() => {
+        // Not in Tauri context — ignore
+      })
+    return () => {
+      unlisten?.()
+    }
+  }, [closeActiveTab])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -865,28 +908,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // On Windows/Linux: Ctrl+W closes tab
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
-        if (activeTab?.type === 'editor') {
-          const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
-          if (fileState?.isDirty) {
-            setDirtyCloseFilePath(activeTab.filePath)
-          } else {
-            const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
-            if (didClose) {
-              useWorkspaceStore.getState().removeTab(activeTab.id)
-            }
-          }
-        } else if (activeTab?.type === 'git') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'git-history') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'terminal') {
-          handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
-        } else if (activeTab?.type === 'browser') {
-          useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'agent-chat') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        }
+        closeActiveTab()
         return
       }
 
@@ -1077,7 +1099,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     updatePanelVisibility,
     isExplorerVisible,
     isSidebarVisible,
-    handleOpenThemePicker
+    handleOpenThemePicker,
+    closeActiveTab
   ])
 
   useEffect(() => {
