@@ -155,8 +155,8 @@ describe('AgentLauncher routing', () => {
     renderLauncher()
     await waitFor(() => expect(mockLoadAllAgents).toHaveBeenCalled())
 
-    // Dual-mode agent: switch to ACP.
-    fireEvent.click(screen.getByLabelText('Run as ACP'))
+    // Dual-mode agent: switch to ACP once the toggle has rendered.
+    fireEvent.click(await screen.findByLabelText('Run as ACP'))
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
     fireEvent.click(screen.getByLabelText(/Launch/))
 
@@ -189,6 +189,24 @@ describe('AgentLauncher routing', () => {
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'x' } })
     fireEvent.click(screen.getByLabelText(/Launch/))
     await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
+  })
+
+  it('migrates a legacy persisted ACP payload (no mode) and still routes to ACP', async () => {
+    acpConfigsRef.current = [ACP_CONFIG]
+    // Legacy record: agentId only, no mode field.
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp' }
+    })
+    renderLauncher()
+    await waitFor(() => expect(mockLoadAllAgents).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByLabelText(/Launch/))
+    // The ACP-only entry's single supported mode is 'acp', so resolution lands
+    // there even though the legacy payload migrates to mode 'cli' by default.
+    await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
+    expect(mockLaunchAgentInPane).not.toHaveBeenCalled()
   })
 
   it('has no launchable agent and does not route when none are available', async () => {

@@ -305,6 +305,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeTab = useActiveTab()
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
+  const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
     const pane = findPaneById(paneRoot, fullscreenPaneId)
@@ -791,9 +792,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAgentChat = useCallback(() => {
     if (!activeProject?.path) return
-    const paneId = useWorkspaceStore.getState().activePaneId
-    if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
-  }, [activeProject?.path])
+    const open = (): void => {
+      const paneId = useWorkspaceStore.getState().activePaneId
+      if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
+    }
+    // The launcher overlay only renders on the workspace route; navigate there
+    // first when invoked from a child route (e.g. preferences/settings).
+    if (location.pathname !== '/') {
+      navigate('/')
+      requestAnimationFrame(open)
+    } else {
+      open()
+    }
+  }, [activeProject?.path, location.pathname, navigate])
 
   const handleAddGitTab = useCallback(
     (paneId?: string) => {
@@ -1076,10 +1087,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   ])
 
   useEffect(() => {
-    // Hide the active browser webview while a modal/dialog is open, since native
+    // Hide the active browser webview while a modal/overlay is open, since native
     // child webviews paint above the DOM and would otherwise obscure it. Covers
-    // the New Project modal.
-    const modalOpen = isNewProjectModalOpen
+    // the New Project modal and the agent launcher overlay.
+    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen
     if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
@@ -1093,7 +1104,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, activeTab])
+  }, [isNewProjectModalOpen, isAgentLauncherOpen, activeTab])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
