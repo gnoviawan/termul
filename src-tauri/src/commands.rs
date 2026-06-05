@@ -1295,15 +1295,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
         "__pycache__",
         ".pytest_cache",
         "venv",
-        ".env",
         "coverage",
         ".nyc_output",
     ] {
         args.push("-g".to_string());
         args.push(format!("!**/{}/**", ignored));
     }
-    args.push("-g".to_string());
-    args.push("!**/.env".to_string());
 
     args.push("--".to_string());
     args.push(query.to_string());
@@ -1615,7 +1612,6 @@ pub async fn search_file_names(
                 "__pycache__",
                 ".pytest_cache",
                 "venv",
-                ".env",
                 "coverage",
                 ".nyc_output",
             ]

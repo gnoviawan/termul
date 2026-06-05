@@ -23,6 +23,8 @@ import {
 } from '@tauri-apps/plugin-fs'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
+// Names that are commonly git-ignored. Entries matching these are still shown in
+// the file tree but rendered dimmed (and skipped during recursive walks for perf).
 const ALWAYS_IGNORE = [
   'node_modules',
   '.git',
@@ -103,7 +105,11 @@ function sortDirectoryEntries(entries: DirectoryEntry[]): DirectoryEntry[] {
     if (a.type === 'directory' && b.type === 'file') return -1
     if (a.type === 'file' && b.type === 'directory') return 1
 
-    // Within same type, sort alphabetically by name (case-insensitive)
+    // Within same type, non-ignored entries come before ignored ones
+    if (!a.ignored && b.ignored) return -1
+    if (a.ignored && !b.ignored) return 1
+
+    // Within same type/ignored group, sort alphabetically by name (case-insensitive)
     const nameA = a.name.toLowerCase()
     const nameB = b.name.toLowerCase()
     return nameA.localeCompare(nameB)
@@ -188,7 +194,6 @@ export function createTauriFilesystemApi(): FilesystemApi {
         const filtered: DirectoryEntry[] = []
         for (const entry of entries) {
           const name = entry.name
-          if (shouldIgnore(name)) continue
 
           const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
           let size = 0
@@ -208,7 +213,8 @@ export function createTauriFilesystemApi(): FilesystemApi {
             type: isDir ? 'directory' : 'file',
             extension: isDir ? null : getExtension(name),
             size,
-            modifiedAt: modified
+            modifiedAt: modified,
+            ignored: shouldIgnore(name)
           })
         }
 

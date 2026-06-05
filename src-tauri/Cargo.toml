@@ -1,6 +1,6 @@
 [package]
 name = "termul-manager"
-version = "0.4.3"
+version = "0.4.4"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
@@ -108,6 +108,7 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 winapi = { version = "0.3", features = [
+    "jobapi2",
     "winbase",
     "winuser",
     "consoleapi",
