@@ -58,7 +58,7 @@ function matches(filter: string, ...fields: (string | null | undefined)[]): bool
   return fields.some((x) => (x ?? '').toLowerCase().includes(f))
 }
 
-const KNOWN_CATEGORY_HEADINGS: Record<string, string> = {
+export const KNOWN_CATEGORY_HEADINGS: Record<string, string> = {
   mode: 'Mode',
   model: 'Model',
   thought_level: 'Thinking Level'

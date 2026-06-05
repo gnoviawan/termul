@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { partitionConfigOptions } from './chat-input-bar-config'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import {
   applyCommandToInput,
@@ -47,6 +48,7 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
+  const { thoughtLevel, rest: genericConfigOptions } = partitionConfigOptions(usableConfigOptions)
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
@@ -172,14 +174,25 @@ export function ChatInputBar({
               <ChevronDown size={11} className="text-muted-foreground" />
             </span>
             {hasConfigOptions ? (
-              usableConfigOptions.map((option) => (
-                <ConfigChip
-                  key={option.id}
-                  option={option}
-                  disabled={disabled}
-                  onSelect={(valueId) => onSetConfig(option.id, valueId)}
-                />
-              ))
+              <>
+                {thoughtLevel && (
+                  <ConfigChip
+                    key={thoughtLevel.id}
+                    option={thoughtLevel}
+                    disabled={disabled}
+                    promoted
+                    onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
+                  />
+                )}
+                {genericConfigOptions.map((option) => (
+                  <ConfigChip
+                    key={option.id}
+                    option={option}
+                    disabled={disabled}
+                    onSelect={(valueId) => onSetConfig(option.id, valueId)}
+                  />
+                ))}
+              </>
             ) : (
               <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
             )}
