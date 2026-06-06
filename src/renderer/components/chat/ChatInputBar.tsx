@@ -149,82 +149,84 @@ export function ChatInputBar({
 
   return (
     <div className="px-5 pb-3.5 pt-3">
-      <div className="relative mx-auto w-full max-w-3xl overflow-hidden rounded-2xl bg-secondary/40">
+      <div className="relative mx-auto w-full max-w-3xl">
         {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
-        <div className="px-4 pb-1.5 pt-3.5">
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            disabled={disabled}
-            rows={1}
-            placeholder={disabled ? 'Session closed' : 'Ask anything… (/ for commands)'}
-            className={cn(
-              'w-full resize-none bg-transparent text-sm leading-relaxed',
-              'placeholder:text-muted-foreground focus:outline-none',
-              'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
-            )}
-          />
-        </div>
-        <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
-              <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
-              <ChevronDown size={11} className="text-muted-foreground" />
-            </span>
-            {hasConfigOptions ? (
-              <>
-                {thoughtLevel && (
-                  <ConfigChip
-                    key={thoughtLevel.id}
-                    option={thoughtLevel}
-                    disabled={disabled}
-                    promoted
-                    onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
-                  />
-                )}
-                {genericConfigOptions.map((option) => (
-                  <ConfigChip
-                    key={option.id}
-                    option={option}
-                    disabled={disabled}
-                    onSelect={(valueId) => onSetConfig(option.id, valueId)}
-                  />
-                ))}
-              </>
-            ) : (
-              <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
-            )}
+        <div className="overflow-hidden rounded-2xl bg-secondary/40">
+          <div className="px-4 pb-1.5 pt-3.5">
+            <textarea
+              ref={textareaRef}
+              value={value}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              disabled={disabled}
+              rows={1}
+              placeholder={disabled ? 'Session closed' : 'Ask anything… (/ for commands)'}
+              className={cn(
+                'w-full resize-none bg-transparent text-sm leading-relaxed',
+                'placeholder:text-muted-foreground focus:outline-none',
+                'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
+              )}
+            />
           </div>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            {busy ? (
-              <button
-                type="button"
-                onClick={onCancel}
-                title="Cancel turn"
-                aria-label="Cancel turn"
-                className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
-              >
-                <Square size={14} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!canSend}
-                title="Send"
-                aria-label="Send message"
-                className={cn(
-                  'flex h-[34px] w-[34px] items-center justify-center rounded-full transition-colors',
-                  canSend
-                    ? 'bg-foreground text-background hover:bg-foreground/90'
-                    : 'bg-foreground/20 text-background/70 cursor-not-allowed'
-                )}
-              >
-                <ArrowUp size={16} strokeWidth={2.5} />
-              </button>
-            )}
+          <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
+                <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
+                <ChevronDown size={11} className="text-muted-foreground" />
+              </span>
+              {hasConfigOptions ? (
+                <>
+                  {thoughtLevel && (
+                    <ConfigChip
+                      key={thoughtLevel.id}
+                      option={thoughtLevel}
+                      disabled={disabled}
+                      promoted
+                      onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
+                    />
+                  )}
+                  {genericConfigOptions.map((option) => (
+                    <ConfigChip
+                      key={option.id}
+                      option={option}
+                      disabled={disabled}
+                      onSelect={(valueId) => onSetConfig(option.id, valueId)}
+                    />
+                  ))}
+                </>
+              ) : (
+                <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
+              )}
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-2">
+              {busy ? (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  title="Cancel turn"
+                  aria-label="Cancel turn"
+                  className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
+                >
+                  <Square size={14} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={!canSend}
+                  title="Send"
+                  aria-label="Send message"
+                  className={cn(
+                    'flex h-[34px] w-[34px] items-center justify-center rounded-full transition-colors',
+                    canSend
+                      ? 'bg-foreground text-background hover:bg-foreground/90'
+                      : 'bg-foreground/20 text-background/70 cursor-not-allowed'
+                  )}
+                >
+                  <ArrowUp size={16} strokeWidth={2.5} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

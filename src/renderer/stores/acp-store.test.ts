@@ -973,6 +973,68 @@ describe('acp-store', () => {
     })
     // load strategy clears then agent replays; with no replay, messages stay empty
     expect(useAcpStore.getState().messages['s-closed']).toEqual([])
+    expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
+  })
+
+  it('openHistorySession resumes when session is cached but closed (P5)', async () => {
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessions: {
+        's-closed': {
+          id: 's-closed',
+          agentId: 'agent-1',
+          cwd: '/w',
+          status: 'closed',
+          title: 'Was open',
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      },
+      messages: { 's-closed': [] }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-closed',
+        agentId: 'agent-1',
+        title: 'Was open',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'from disk' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('s-closed')
+    expect(loadSessionPayload).toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
+      agentId: 'agent-1',
+      sessionId: 's-closed',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
   })
 
   it('openHistorySession restores the local transcript if load fails (P5)', async () => {

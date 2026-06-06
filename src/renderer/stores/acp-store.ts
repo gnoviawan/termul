@@ -301,6 +301,27 @@ function finalizeStreaming(
   return messages
 }
 
+/** Mark a reopened history session live after a successful load/resume IPC call. */
+function withSessionActive(
+  sessions: Record<SessionId, AcpSession>,
+  sessionId: SessionId
+): Record<SessionId, AcpSession> {
+  const session = sessions[sessionId]
+  if (!session) return sessions
+  return { ...sessions, [sessionId]: { ...session, status: 'active', lastError: null } }
+}
+
+/** Surface a failed history load/resume on the session without changing status. */
+function withSessionResumeError(
+  sessions: Record<SessionId, AcpSession>,
+  sessionId: SessionId,
+  err: unknown
+): Record<SessionId, AcpSession> {
+  const session = sessions[sessionId]
+  if (!session) return sessions
+  return { ...sessions, [sessionId]: { ...session, lastError: `Resume failed: ${String(err)}` } }
+}
+
 /** Remove all pending permissions belonging to a session. */
 function dropPermissionsForSession(
   pending: Record<string, PendingPermission>,
@@ -975,21 +996,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({ messages: { ...s.messages, [id]: [] } }))
       try {
         await acpApi.loadSession(meta.agentId, id, meta.cwd)
+        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
       } catch (err) {
         // Load failed — restore the local transcript so the user still sees history.
         set((s) => ({
           messages: { ...s.messages, [id]: payload.messages },
-          sessions: s.sessions[id]
-            ? {
-                ...s.sessions,
-                [id]: { ...s.sessions[id], lastError: `Resume failed: ${String(err)}` }
-              }
-            : s.sessions
+          sessions: withSessionResumeError(s.sessions, id, err)
         }))
         throw err
       }
     } else if (strategy === 'resume') {
-      await acpApi.resumeSession(meta.agentId, id, meta.cwd)
+      try {
+        await acpApi.resumeSession(meta.agentId, id, meta.cwd)
+        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+      } catch (err) {
+        set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
+        throw err
+      }
     }
     // 'local' → nothing more; the transcript is already shown.
   },
