@@ -975,6 +975,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({ messages: { ...s.messages, [id]: [] } }))
       try {
         await acpApi.loadSession(meta.agentId, id, meta.cwd)
+        set((s) => {
+          const session = s.sessions[id]
+          if (!session) return {}
+          return {
+            sessions: { ...s.sessions, [id]: { ...session, status: 'active', lastError: null } }
+          }
+        })
       } catch (err) {
         // Load failed — restore the local transcript so the user still sees history.
         set((s) => ({
@@ -990,6 +997,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     } else if (strategy === 'resume') {
       await acpApi.resumeSession(meta.agentId, id, meta.cwd)
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return {}
+        return {
+          sessions: { ...s.sessions, [id]: { ...session, status: 'active', lastError: null } }
+        }
+      })
     }
     // 'local' → nothing more; the transcript is already shown.
   },

@@ -973,6 +973,7 @@ describe('acp-store', () => {
     })
     // load strategy clears then agent replays; with no replay, messages stay empty
     expect(useAcpStore.getState().messages['s-closed']).toEqual([])
+    expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
   })
 
   it('openHistorySession restores the local transcript if load fails (P5)', async () => {
