@@ -1,5 +1,6 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,8 +11,6 @@ import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { AgentConfigDialog } from '@/components/chat/AgentConfigDialog'
-import { NewChatDialog } from '@/components/chat/NewChatDialog'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ResizeEdges } from '@/components/ResizeEdges'
@@ -41,7 +40,6 @@ import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
-import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -55,7 +53,7 @@ import {
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
-import { isMac } from '@/lib/platform'
+import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
@@ -133,10 +131,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   // Agent chat entry point (moved from the pane tab bar to the Activity Rail).
   // The dialogs are owned here so the rail button can open them globally; the
-  // New Chat dialog targets the active pane by default.
-  const [isNewChatOpen, setIsNewChatOpen] = useState(false)
-  const [isAgentConfigOpen, setIsAgentConfigOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<StoredAgentConfig | undefined>(undefined)
+
   const hiddenBrowserTabForModalRef = useRef<string | null>(null)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false)
@@ -311,6 +306,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeTab = useActiveTab()
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
+  const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
     const pane = findPaneById(paneRoot, fullscreenPaneId)
@@ -323,6 +319,31 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Ref for terminal close handler — used inside keydown effect to avoid
   // declaration-order dependency. The ref is updated each render.
   const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null)
+
+  /** Close the active tab (reused by keyboard shortcut and native menu event). */
+  const closeActiveTab = useCallback(() => {
+    if (!activeTab) return
+    if (activeTab.type === 'editor') {
+      const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
+      if (fileState?.isDirty) {
+        setDirtyCloseFilePath(activeTab.filePath)
+      } else {
+        const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
+        if (didClose) {
+          useWorkspaceStore.getState().removeTab(activeTab.id)
+        }
+      }
+    } else if (activeTab.type === 'git' || activeTab.type === 'git-history') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'terminal') {
+      handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
+    } else if (activeTab.type === 'browser') {
+      useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'agent-chat') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    }
+  }, [activeTab])
 
   // File watcher hook
   useFileWatcher()
@@ -565,6 +586,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [closeAppWithPersistenceFlush])
 
+  // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined
+    listen<void>('menu:close-tab', () => {
+      closeActiveTab()
+    })
+      .then((fn) => {
+        unlisten = fn
+      })
+      .catch(() => {
+        // Not in Tauri context — ignore
+      })
+    return () => {
+      unlisten?.()
+    }
+  }, [closeActiveTab])
+
   // Load snapshots when project changes
   useSnapshotLoader()
   // Load recent commands for command palette
@@ -797,8 +835,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAgentChat = useCallback(() => {
     if (!activeProject?.path) return
-    setIsNewChatOpen(true)
-  }, [activeProject?.path])
+    const open = (): void => {
+      const paneId = useWorkspaceStore.getState().activePaneId
+      if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
+    }
+    // The launcher overlay only renders on the workspace route; navigate there
+    // first when invoked from a child route (e.g. preferences/settings).
+    if (location.pathname !== '/') {
+      navigate('/')
+      requestAnimationFrame(open)
+    } else {
+      open()
+    }
+  }, [activeProject?.path, location.pathname, navigate])
 
   const handleAddGitTab = useCallback(
     (paneId?: string) => {
@@ -865,28 +914,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // On Windows/Linux: Ctrl+W closes tab
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
-        if (activeTab?.type === 'editor') {
-          const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
-          if (fileState?.isDirty) {
-            setDirtyCloseFilePath(activeTab.filePath)
-          } else {
-            const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
-            if (didClose) {
-              useWorkspaceStore.getState().removeTab(activeTab.id)
-            }
-          }
-        } else if (activeTab?.type === 'git') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'git-history') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'terminal') {
-          handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
-        } else if (activeTab?.type === 'browser') {
-          useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'agent-chat') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        }
+        closeActiveTab()
         return
       }
 
@@ -1077,14 +1105,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
     updatePanelVisibility,
     isExplorerVisible,
     isSidebarVisible,
-    handleOpenThemePicker
+    handleOpenThemePicker,
+    closeActiveTab
   ])
 
   useEffect(() => {
-    // Hide the active browser webview while a modal/dialog is open, since native
+    // Hide the active browser webview while a modal/overlay is open, since native
     // child webviews paint above the DOM and would otherwise obscure it. Covers
-    // the New Project modal and the ACP New Chat / Agent Config dialogs.
-    const modalOpen = isNewProjectModalOpen || isNewChatOpen || isAgentConfigOpen
+    // the New Project modal and the agent launcher overlay.
+    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen
     if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
@@ -1098,7 +1127,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, isNewChatOpen, isAgentConfigOpen, activeTab])
+  }, [isNewProjectModalOpen, isAgentLauncherOpen, activeTab])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
@@ -1349,19 +1378,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return (
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         <ResizeEdges />
-        <div className="flex-1 flex overflow-hidden min-h-0 h-full">
-          <ActivityRail
-            isShortcutsOpen={isShortcutMenuOpen}
-            onShortcutsOpenChange={setIsShortcutMenuOpen}
-            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-            canOpenGitChanges={false}
-          />
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* macOS: draggable band clearing native traffic lights over the content column */}
-            {isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
-            <TitleBar />
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-muted-foreground text-sm">Loading...</div>
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+          {isMac && (
+            <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+          )}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            <ActivityRail
+              isShortcutsOpen={isShortcutMenuOpen}
+              onShortcutsOpenChange={setIsShortcutMenuOpen}
+              onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              canOpenGitChanges={false}
+            />
+            <div className="flex-1 flex flex-col min-w-0">
+              <TitleBar />
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-muted-foreground text-sm">Loading...</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1372,185 +1404,165 @@ export default function WorkspaceLayout(): React.JSX.Element {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <ResizeEdges />
-      <div className="flex-1 flex overflow-hidden min-h-0 h-full">
-        <ActivityRail
-          isShortcutsOpen={isShortcutMenuOpen}
-          onShortcutsOpenChange={setIsShortcutMenuOpen}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-          onOpenGitChanges={() => handleAddGitTab()}
-          canOpenGitChanges={Boolean(activeProject?.path)}
-          onOpenGitHistory={() => handleAddGitHistoryTab()}
-          canOpenGitHistory={Boolean(activeProject?.path)}
-          isThemePickerOpen={isThemePickerOpen}
-          onToggleThemePicker={handleToggleThemePicker}
-          onOpenAgentChat={handleOpenAgentChat}
-          canOpenAgentChat={Boolean(activeProject?.path)}
-        />
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* macOS: draggable band clearing native traffic lights over the content column */}
-          {isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
-          <TitleBar />
+      <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+        {isMac && (
+          <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+        )}
+        <div className="flex-1 flex overflow-hidden min-h-0">
+          <ActivityRail
+            isShortcutsOpen={isShortcutMenuOpen}
+            onShortcutsOpenChange={setIsShortcutMenuOpen}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenGitChanges={() => handleAddGitTab()}
+            canOpenGitChanges={Boolean(activeProject?.path)}
+            onOpenGitHistory={() => handleAddGitHistoryTab()}
+            canOpenGitHistory={Boolean(activeProject?.path)}
+            isThemePickerOpen={isThemePickerOpen}
+            onToggleThemePicker={handleToggleThemePicker}
+            onOpenAgentChat={handleOpenAgentChat}
+            canOpenAgentChat={Boolean(activeProject?.path)}
+          />
+          <div className="flex-1 flex flex-col min-w-0">
+            <TitleBar />
 
-          <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
-            {/* Sidebar */}
-            {isSidebarVisible && (
-              <div className="mr-2">
-                <SidebarTabs
-                  projects={projects}
-                  activeProjectId={activeProjectId}
-                  onSelectProject={handleSelectProject}
-                  onNewProject={() => setIsNewProjectModalOpen(true)}
-                  onUpdateProject={updateProject}
-                  onDeleteProject={deleteProject}
-                  onArchiveProject={archiveProject}
-                  onRestoreProject={restoreProject}
-                  onReorderProjects={reorderProjects}
-                  onSSHConnect={handleSSHConnect}
-                  onSelectSSHProfile={handleSelectSSHProfile}
-                  activeSSHProfileId={activeSSHProfileId}
-                />
-              </div>
-            )}
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
+              {/* Sidebar */}
+              {isSidebarVisible && (
+                <div className="mr-2">
+                  <SidebarTabs
+                    projects={projects}
+                    activeProjectId={activeProjectId}
+                    onSelectProject={handleSelectProject}
+                    onNewProject={() => setIsNewProjectModalOpen(true)}
+                    onUpdateProject={updateProject}
+                    onDeleteProject={deleteProject}
+                    onArchiveProject={archiveProject}
+                    onRestoreProject={restoreProject}
+                    onReorderProjects={reorderProjects}
+                    onSSHConnect={handleSSHConnect}
+                    onSelectSSHProfile={handleSelectSSHProfile}
+                    activeSSHProfileId={activeSSHProfileId}
+                  />
+                </div>
+              )}
 
-            {/* Main Content and File Explorer Container */}
-            <PaneDndProvider>
-              <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
-                {/* Main Content Area */}
-                <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
-                  {activeSSHProfile ? (
-                    /* SSH Workspace */
-                    <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
-                  ) : projects.length === 0 ? (
-                    /* No Projects Empty State */
-                    <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ duration: 0.4, ease: 'easeOut' }}
-                        className="flex flex-col items-center text-center max-w-md"
-                      >
-                        <div className="mb-6">
-                          <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-foreground mb-2">
-                          No Projects Yet
-                        </h2>
-                        <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                          Create your first project to organize your terminals, snapshots, and
-                          commands
-                        </p>
-                        <button
-                          onClick={() => setIsNewProjectModalOpen(true)}
-                          className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                        >
-                          Create Your First Project
-                        </button>
-                      </motion.div>
-                    </div>
-                  ) : (
-                    <>
-                      {isWorkspaceRoute ? (
+              {/* Main Content and File Explorer Container */}
+              <PaneDndProvider>
+                <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+                  {/* Main Content Area */}
+                  <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+                    {activeSSHProfile ? (
+                      /* SSH Workspace */
+                      <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+                    ) : projects.length === 0 ? (
+                      /* No Projects Empty State */
+                      <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
                         <motion.div
-                          key={fullscreenPaneId ? 'fullscreen' : 'normal'}
-                          initial={{ opacity: 0.85, scale: 0.97 }}
+                          initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
-                          transition={{ duration: 0.2, ease: 'easeOut' }}
-                          className="flex-1 min-h-0 h-full overflow-hidden"
+                          transition={{ duration: 0.4, ease: 'easeOut' }}
+                          className="flex flex-col items-center text-center max-w-md"
                         >
-                          <PaneRenderer
-                            node={fullscreenPane ?? paneRoot}
-                            onAddTerminal={handleAddTerminal}
-                            onAddBrowserTab={handleNewBrowserTab}
-                            onCloseTerminal={handleCloseTerminal}
-                            onRenameTerminal={renameTerminal}
-                            onCloseEditorTab={handleCloseEditorTab}
-                            closingTerminalIds={closingTerminalIds}
-                            defaultShell={activeProject?.defaultShell || appDefaultShell}
-                          />
-                        </motion.div>
-                      ) : (
-                        <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
-                          <div className="w-full h-full">
-                            <Outlet />
+                          <div className="mb-6">
+                            <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
                           </div>
+                          <h2 className="text-xl font-semibold text-foreground mb-2">
+                            No Projects Yet
+                          </h2>
+                          <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                            Create your first project to organize your terminals, snapshots, and
+                            commands
+                          </p>
+                          <button
+                            onClick={() => setIsNewProjectModalOpen(true)}
+                            className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                          >
+                            Create Your First Project
+                          </button>
+                        </motion.div>
+                      </div>
+                    ) : (
+                      <>
+                        {isWorkspaceRoute ? (
+                          <motion.div
+                            key={fullscreenPaneId ? 'fullscreen' : 'normal'}
+                            initial={{ opacity: 0.85, scale: 0.97 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ duration: 0.2, ease: 'easeOut' }}
+                            className="flex-1 min-h-0 h-full overflow-hidden"
+                          >
+                            <PaneRenderer
+                              node={fullscreenPane ?? paneRoot}
+                              onAddTerminal={handleAddTerminal}
+                              onAddBrowserTab={handleNewBrowserTab}
+                              onCloseTerminal={handleCloseTerminal}
+                              onRenameTerminal={renameTerminal}
+                              onCloseEditorTab={handleCloseEditorTab}
+                              closingTerminalIds={closingTerminalIds}
+                              defaultShell={activeProject?.defaultShell || appDefaultShell}
+                            />
+                          </motion.div>
+                        ) : (
+                          <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
+                            <div className="w-full h-full">
+                              <Outlet />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Status Bar */}
+                        <StatusBar project={activeProject} />
+                      </>
+                    )}
+                  </main>
+
+                  {/* File Explorer - separate floating panel */}
+                  {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
+                    <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
+                      {isExplorerVisible && activeProject?.path && (
+                        <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
+                          <FileExplorer side="right" />
                         </div>
                       )}
-
-                      {/* Status Bar */}
-                      <StatusBar project={activeProject} />
-                    </>
-                  )}
-                </main>
-
-                {/* File Explorer - separate floating panel */}
-                {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
-                  <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
-                    {isExplorerVisible && activeProject?.path && (
-                      <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                        <FileExplorer side="right" />
-                      </div>
-                    )}
-                    {activeSSHProfile && (
-                      <div
-                        className={cn(
-                          'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
-                          !(isExplorerVisible && activeProject?.path) && 'w-64'
-                        )}
-                      >
-                        <SSHFileExplorer
-                          connectionId={sshConn.connectionId ?? ''}
-                          isConnected={sshConn.isConnected}
-                          sftpReady={sshConn.sftpReady}
-                          entries={sshConn.entries}
-                          currentPath={sshConn.currentPath}
-                          expandedDirs={sshConn.expandedDirs}
-                          childEntries={sshConn.childEntries}
-                          loadingDirs={sshConn.loadingDirs}
-                          isLoadingRoot={sshConn.isLoadingRoot}
-                          profileName={activeSSHProfile.name}
-                          onConnect={sshConn.handleConnect}
-                          onBrowseFiles={sshConn.handleBrowseFiles}
-                          onToggleDir={sshConn.toggleDirectory}
-                          onLoadDir={sshConn.loadDirectory}
-                          onMkdir={handleSSHMkdir}
-                          onCreateFile={handleSSHCreateFile}
-                          onDelete={handleSSHDelete}
-                          onRename={handleSSHRename}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </PaneDndProvider>
+                      {activeSSHProfile && (
+                        <div
+                          className={cn(
+                            'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
+                            !(isExplorerVisible && activeProject?.path) && 'w-64'
+                          )}
+                        >
+                          <SSHFileExplorer
+                            connectionId={sshConn.connectionId ?? ''}
+                            isConnected={sshConn.isConnected}
+                            sftpReady={sshConn.sftpReady}
+                            entries={sshConn.entries}
+                            currentPath={sshConn.currentPath}
+                            expandedDirs={sshConn.expandedDirs}
+                            childEntries={sshConn.childEntries}
+                            loadingDirs={sshConn.loadingDirs}
+                            isLoadingRoot={sshConn.isLoadingRoot}
+                            profileName={activeSSHProfile.name}
+                            onConnect={sshConn.handleConnect}
+                            onBrowseFiles={sshConn.handleBrowseFiles}
+                            onToggleDir={sshConn.toggleDirectory}
+                            onLoadDir={sshConn.loadDirectory}
+                            onMkdir={handleSSHMkdir}
+                            onCreateFile={handleSSHCreateFile}
+                            onDelete={handleSSHDelete}
+                            onRename={handleSSHRename}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </PaneDndProvider>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Modals */}
-      {isNewChatOpen && (
-        <NewChatDialog
-          open={isNewChatOpen}
-          onOpenChange={setIsNewChatOpen}
-          onAddAgent={() => {
-            setEditingAgent(undefined)
-            setIsAgentConfigOpen(true)
-          }}
-          onEditAgent={(cfg) => {
-            setEditingAgent(cfg)
-            setIsAgentConfigOpen(true)
-          }}
-        />
-      )}
-      {isAgentConfigOpen && (
-        <AgentConfigDialog
-          key={editingAgent?.id ?? 'new'}
-          open={isAgentConfigOpen}
-          onOpenChange={setIsAgentConfigOpen}
-          existing={editingAgent}
-        />
-      )}
-
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}

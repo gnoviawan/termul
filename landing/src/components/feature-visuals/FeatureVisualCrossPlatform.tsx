@@ -1,4 +1,4 @@
-import { AppleLogo, LinuxLogo, WindowsLogo } from '../OsBrandIcons';
+import { AppleLogo, LinuxLogo, WindowsLogo } from '../ui/OsBrandIcons';
 import { FeatureVisualFrameRoot, FeatureVisualFrameWindow } from './FeatureVisualFrame';
 
 export function FeatureVisualCrossPlatform() {

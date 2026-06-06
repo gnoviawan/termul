@@ -77,3 +77,9 @@ export function findBundledIconBySvg(svg: string): BundledIconEntry | undefined 
   if (!svg) return undefined
   return BUNDLED_ICON_CATALOG.find((entry) => entry.svg === svg)
 }
+
+/** Look up a bundled icon entry by its catalog key (e.g. `acp:gemini`). */
+export function findBundledIconByKey(key: string): BundledIconEntry | undefined {
+  if (!key) return undefined
+  return BUNDLED_ICON_CATALOG.find((entry) => entry.key === key)
+}

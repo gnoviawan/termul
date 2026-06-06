@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react';
 import { Outlet } from 'react-router';
 
-import Header from './components/Header';
-import Footer from './components/Footer';
-import { ScrollContainer } from './components/ScrollContainer';
+import { Header } from './components/layout/Header';
+import { Footer } from './components/layout/Footer';
+import { ScrollContainer } from './components/layout/ScrollContainer';
 
 export function App() {
   const [scrollTop, setScrollTop] = useState(0);
@@ -27,5 +27,3 @@ export function App() {
     </ScrollContainer>
   );
 }
-
-export default App;

@@ -134,10 +134,59 @@ pub(super) fn is_directly_executable_windows(path: &str) -> bool {
 pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
     let content = std::fs::read_to_string(shim_path).ok()?;
     let shim_dir = std::path::Path::new(shim_path).parent()?;
+    let shim_dir_str = shim_dir.to_str().unwrap_or(".");
+
+    // Pre-scan `SET "VAR=value"` (and `SET VAR=value`) assignments so launcher
+    // shims that invoke through variable indirection — e.g. npm's own
+    // `npx.cmd` / `npm.cmd`, whose final line is `"%NODE_EXE%" "%NPX_CLI_JS%" %*`
+    // — can be resolved, not just the simple `"%dp0%\node.exe" "<script>"` form
+    // used by package bin shims. Without this, npm launchers fail to rewrite and
+    // the raw `.cmd` is handed to CreateProcessW (os error 193).
+    let mut vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let expand_dp0 = |val: &str| -> String {
+        val.replace("%dp0%", shim_dir_str)
+            .replace("%~dp0%", shim_dir_str)
+            .replace("%~dp0", shim_dir_str)
+    };
+    for line in content.lines() {
+        let t = line.trim();
+        let Some(rest) = t
+            .strip_prefix("SET ")
+            .or_else(|| t.strip_prefix("set "))
+            .or_else(|| t.strip_prefix("Set "))
+        else {
+            continue;
+        };
+        let rest = rest.trim();
+        // Accept both `SET "VAR=value"` and `SET VAR=value`.
+        let unquoted = rest.trim_matches('"');
+        if let Some((name, value)) = unquoted.split_once('=') {
+            let name = name.trim();
+            if !name.is_empty() {
+                // First assignment wins: it is the primary (unconditional) one;
+                // later `SET`s in npm launchers are `IF`-guarded fallbacks a
+                // static parser cannot evaluate.
+                vars.entry(name.to_ascii_uppercase())
+                    .or_insert_with(|| value.trim().to_string());
+            }
+        }
+    }
+    // Resolve a single `%VAR%` reference (one level of indirection is enough for
+    // real npm launchers) against the SET map, then expand %dp0% inside it.
+    let resolve_vars = |val: &str| -> String {
+        let trimmed = val.trim();
+        if trimmed.starts_with('%') && trimmed.ends_with('%') && trimmed.len() > 2 {
+            let key = trimmed[1..trimmed.len() - 1].to_ascii_uppercase();
+            if let Some(v) = vars.get(&key) {
+                return expand_dp0(v);
+            }
+        }
+        expand_dp0(trimmed)
+    };
 
     // Find the last line that contains a command invocation pattern:
     //   "<executable>" "<script>" %*
-    // or equivalently with %_prog% resolved.
+    // or equivalently with %_prog% / %VAR% resolved.
     // We look for lines containing both `"%dp0%` (or `")` and `%*`.
     for line in content.lines().rev() {
         let line = line.trim();
@@ -161,15 +210,10 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
             continue;
         }
 
-        // Resolve %dp0% / %~dp0 / %~dp0% to the shim's directory,
+        // Resolve %VAR% indirection first (npm launchers), then %dp0% / %~dp0,
         // and %_prog% to node.exe (either <dir>/node.exe or bare "node"
         // when the node executable is on PATH).
-        let resolve_dp0 = |val: &str| -> String {
-            let resolved = val.replace("%dp0%", shim_dir.to_str().unwrap_or("."));
-            let resolved = resolved.replace("%~dp0", shim_dir.to_str().unwrap_or("."));
-            let resolved = resolved.replace("%~dp0%", shim_dir.to_str().unwrap_or("."));
-            resolved.replace('"', "")
-        };
+        let resolve_dp0 = |val: &str| -> String { resolve_vars(val).replace('"', "") };
 
         let exe_path_str = resolve_dp0(raw_exe);
         // Handle %_prog%: check for node.exe in the shim directory first.
@@ -492,6 +536,14 @@ pub struct TerminalInstance {
     pub last_activity: Arc<RwLock<Instant>>,
     pub orphan_since: Arc<RwLock<Option<Instant>>>,
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
+    /// When true, this terminal is still owned by an open project/tab and must
+    /// NOT be reaped by orphan detection — even if it currently has zero
+    /// renderer refs (e.g. its project is switched to the background, so the
+    /// `ConnectedTerminal` component unmounted). It is set true at spawn and
+    /// cleared only when the terminal is explicitly released (project closed or
+    /// terminal tab closed). This prevents busy background-project terminals
+    /// from being killed mid-task — the cause of the "Terminal not found"/hang.
+    pub protected: Arc<AtomicBool>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
     /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
@@ -543,9 +595,39 @@ impl TerminalInstance {
         self.renderer_refs.read().is_empty()
     }
 
+    /// Whether this terminal is eligible for orphan reaping right now.
+    ///
+    /// A terminal is reapable only when it is NOT protected (its project/tab is
+    /// genuinely closed), has no renderer refs, and has exceeded the timeout —
+    /// measured from when it became orphaned, or by inactivity if it never had
+    /// a renderer ref. Protected terminals (e.g. a backgrounded project's live
+    /// terminals) are never reaped, even with zero renderer refs.
+    pub fn is_orphan_reapable(&self, timeout: Duration) -> bool {
+        should_reap_orphan(
+            self.is_protected(),
+            self.is_orphan(),
+            self.orphan_since().map(|since| since.elapsed()),
+            self.inactive_duration(),
+            timeout,
+        )
+    }
+
     /// Returns when the terminal became orphaned, if ever.
     pub fn orphan_since(&self) -> Option<Instant> {
         *self.orphan_since.read()
+    }
+
+    /// Whether this terminal is protected from orphan reaping (still owned by an
+    /// open project/tab). See the `protected` field docs.
+    pub fn is_protected(&self) -> bool {
+        self.protected.load(Ordering::Relaxed)
+    }
+
+    /// Update the protection flag. Set false only when the terminal is genuinely
+    /// released (project closed / terminal tab closed), making it eligible for
+    /// orphan reaping once it also has no renderer refs.
+    pub fn set_protected(&self, protected: bool) {
+        self.protected.store(protected, Ordering::Relaxed);
     }
 
     /// Subscribe to live PTY output. Returns a receiver that yields raw byte batches.
@@ -569,6 +651,31 @@ impl TerminalInstance {
         let rx = self.broadcast_tx.subscribe();
         let snapshot: Vec<u8> = guard.iter().copied().collect();
         (snapshot, rx)
+    }
+}
+
+/// Pure decision for whether an orphaned terminal should be reaped.
+///
+/// Kept free-standing (no PTY handles) so it can be unit-tested in isolation.
+///
+/// * `protected` — terminal is still owned by an open project/tab; never reap.
+/// * `is_orphan` — terminal currently has zero renderer refs.
+/// * `orphaned_for` — elapsed time since it became orphaned, if it ever was.
+/// * `inactive_for` — elapsed time since last PTY activity.
+/// * `timeout` — configured orphan timeout.
+fn should_reap_orphan(
+    protected: bool,
+    is_orphan: bool,
+    orphaned_for: Option<Duration>,
+    inactive_for: Duration,
+    timeout: Duration,
+) -> bool {
+    if protected || !is_orphan {
+        return false;
+    }
+    match orphaned_for {
+        Some(elapsed) => elapsed > timeout,
+        None => inactive_for > timeout,
     }
 }
 
@@ -755,11 +862,12 @@ impl PtyManager {
                     .read()
                     .iter()
                     .filter(|(_, instance)| {
-                        instance.is_orphan()
-                            && instance
-                                .orphan_since()
-                                .map(|since| since.elapsed() > timeout)
-                                .unwrap_or_else(|| instance.inactive_duration() > timeout)
+                        // Never reap terminals that are still owned by an open
+                        // project/tab. A backgrounded project's terminals lose
+                        // their renderer refs (component unmount) but remain
+                        // live and may be running tasks — reaping them caused
+                        // the "Terminal not found"/hang bug.
+                        instance.is_orphan_reapable(timeout)
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
@@ -902,6 +1010,7 @@ impl PtyManager {
                 last_activity: Arc::new(RwLock::new(Instant::now())),
                 orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -1039,6 +1148,7 @@ impl PtyManager {
                 last_activity: Arc::new(RwLock::new(Instant::now())),
                 orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -1431,6 +1541,20 @@ impl PtyManager {
             .get(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))
             .map(|instance| instance.remove_renderer_ref(renderer_id))
+    }
+
+    /// Update a terminal's orphan-reaping protection.
+    ///
+    /// Protection is enabled at spawn and should be disabled only when the
+    /// terminal is genuinely released by the renderer (its project is closed or
+    /// the terminal tab is closed). Once unprotected AND lacking renderer refs,
+    /// the terminal becomes eligible for orphan reaping again. This is a no-op
+    /// (rather than an error) when the terminal is already gone, so callers can
+    /// release idempotently.
+    pub fn set_protected(&self, id: &str, protected: bool) {
+        if let Some(instance) = self.terminals.read().get(id) {
+            instance.set_protected(protected);
+        }
     }
 
     /// Get terminal by ID
@@ -2287,6 +2411,52 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn parse_npm_cmd_shim_rewrites_npm_launcher_with_set_indirection() {
+        // npm's own npx.cmd / npm.cmd invoke through SETLOCAL variables:
+        //   SET "NODE_EXE=%~dp0\node.exe"
+        //   SET "NPX_CLI_JS=%~dp0\node_modules\npm\bin\npx-cli.js"
+        //   "%NODE_EXE%" "%NPX_CLI_JS%" %*
+        // The parser must resolve the %VAR% indirection, not only the simple
+        // `"%dp0%\node.exe" "<script>"` package-bin form.
+        let dir = std::env::temp_dir().join("termul-test-npx-launcher-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\npm\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\npm\\bin\\npx-cli.js"), b"").unwrap();
+
+        let shim_path = dir.join("npx.cmd");
+        let shim_content = ":: Created by npm, please don't edit manually.\r\n".to_owned()
+            + "@ECHO OFF\r\n"
+            + "SETLOCAL\r\n"
+            + "SET \"NODE_EXE=%~dp0\\node.exe\"\r\n"
+            + "IF NOT EXIST \"%NODE_EXE%\" (\r\n"
+            + "  SET \"NODE_EXE=node\"\r\n"
+            + ")\r\n"
+            + "SET \"NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js\"\r\n"
+            + "\"%NODE_EXE%\" \"%NPX_CLI_JS%\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let resolved = parse_npm_cmd_shim(shim_path.to_str().unwrap());
+        assert!(resolved.is_some(), "should parse the npm launcher shim");
+        let resolved = resolved.unwrap();
+        assert!(
+            resolved.program.ends_with("node.exe"),
+            "expected node.exe, got: {}",
+            resolved.program
+        );
+        assert_eq!(resolved.prepend_args.len(), 1);
+        assert!(
+            resolved.prepend_args[0].contains("npm\\bin\\npx-cli.js"),
+            "expected npx-cli.js script path, got: {}",
+            resolved.prepend_args[0]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn parse_powershell_cmd_shim_rewrites_cursor_agent_style() {
         let dir = std::env::temp_dir().join("termul-test-ps-shim");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2492,6 +2662,79 @@ mod tests {
         let resolved = resolve_spawn_program("gemini").expect("unix passthrough");
         assert_eq!(resolved.program, "gemini");
         assert!(resolved.prepend_args.is_empty());
+    }
+
+    #[test]
+    fn test_should_reap_orphan_protected_never_reaped() {
+        let long_ago = Duration::from_secs(10_000);
+        let timeout = Duration::from_secs(600);
+        // Protected + orphaned + long past timeout => still not reapable.
+        assert!(!should_reap_orphan(
+            true,
+            true,
+            Some(long_ago),
+            long_ago,
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_attached_never_reaped() {
+        let long_ago = Duration::from_secs(10_000);
+        let timeout = Duration::from_secs(600);
+        // Not protected but still has a renderer ref (is_orphan == false).
+        assert!(!should_reap_orphan(
+            false,
+            false,
+            Some(long_ago),
+            long_ago,
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_orphaned_past_timeout_reaped() {
+        let timeout = Duration::from_secs(600);
+        // Unprotected, orphaned, past timeout => reapable.
+        assert!(should_reap_orphan(
+            false,
+            true,
+            Some(Duration::from_secs(601)),
+            Duration::from_secs(0),
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_orphaned_within_timeout_not_reaped() {
+        let timeout = Duration::from_secs(600);
+        assert!(!should_reap_orphan(
+            false,
+            true,
+            Some(Duration::from_secs(59)),
+            Duration::from_secs(0),
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_uses_inactivity_when_never_orphaned() {
+        let timeout = Duration::from_secs(600);
+        // Never had a renderer ref (orphaned_for None) => fall back to inactivity.
+        assert!(should_reap_orphan(
+            false,
+            true,
+            None,
+            Duration::from_secs(601),
+            timeout
+        ));
+        assert!(!should_reap_orphan(
+            false,
+            true,
+            None,
+            Duration::from_secs(59),
+            timeout
+        ));
     }
 
     #[test]

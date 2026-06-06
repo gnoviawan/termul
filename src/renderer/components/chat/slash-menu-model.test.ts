@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   applyCommandToInput,
   buildSlashSections,
@@ -49,6 +50,11 @@ const modes: SessionModeState = {
   ]
 }
 
+const skills: AgentSkillSummary[] = [
+  { name: 'investigate', description: 'Run an investigation', scope: 'project' },
+  { name: 'review', description: 'Review code', scope: 'global' }
+]
+
 describe('slash trigger detection', () => {
   it('opens on a lone slash and a leading slash token', () => {
     expect(isSlashTrigger('/')).toBe(true)
@@ -71,7 +77,19 @@ describe('slash trigger detection', () => {
 })
 
 describe('buildSlashSections', () => {
-  it('lists commands first', () => {
+  it('lists skills before commands', () => {
+    const sections = buildSlashSections({
+      commands,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    expect(sections[0].id).toBe('skills')
+    expect(sections[1].id).toBe('commands')
+  })
+
+  it('lists commands first when no skills', () => {
     const sections = buildSlashSections({ commands, configOptions: [], modes: null, filter: '' })
     expect(sections[0].id).toBe('commands')
     expect(sections[0].items).toHaveLength(2)

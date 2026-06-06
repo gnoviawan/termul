@@ -49,9 +49,8 @@ interface ActivityRailProps {
  * Vertical activity rail (VSCode-style) that hosts the app's global actions.
  *
  * Layout:
- * - macOS: a top spacer clears the native traffic lights and acts as a drag region.
- *   On macOS there is no separate top title strip, so this rail also carries the
- *   window-drag affordance at the top-left.
+ * - macOS: WorkspaceLayout provides a unified top drag strip for traffic-light
+ *   clearance; the rail brand row remains draggable for top-left window moves.
  * - Brand mark at the top, followed by a separator.
  * - Top group: projects (command palette), git changes, SSH panel toggle.
  * - Bottom group (pinned via `mt-auto`): sidebar toggle, file explorer toggle,
@@ -117,9 +116,6 @@ export function ActivityRail({
       className="w-12 flex flex-col items-center bg-background select-none shrink-0"
       aria-label="Global actions"
     >
-      {/* macOS: top spacer clears native traffic lights and stays draggable */}
-      {isMac && <div className="h-7 w-full shrink-0" data-tauri-drag-region />}
-
       {/* Brand mark. On Windows/Linux it also offsets the actions from the top edge. */}
       <div
         className="w-12 h-11 flex items-center justify-center text-foreground shrink-0"
