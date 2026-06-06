@@ -1,6 +1,12 @@
-import { ArrowUp, ChevronDown, Square } from 'lucide-react'
+import { ArrowUp, ChevronDown, Square, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import {
+  buildPromptWithLoadedSkill,
+  type LoadedAgentSkill,
+  useAgentSkills
+} from '@/hooks/use-agent-skills'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
@@ -18,6 +24,8 @@ import {
 interface ChatInputBarProps {
   /** Active session — drives the agent icon and selector chips. */
   session: AcpSession
+  /** Project/worktree root used to discover project-local skills. */
+  projectRoot?: string
   /** Whether a prompt turn is currently active (disables send, enables cancel). */
   busy: boolean
   /** Whether the session is closed/disconnected (fully disables input). */
@@ -36,6 +44,7 @@ interface ChatInputBarProps {
 
 export function ChatInputBar({
   session,
+  projectRoot,
   busy,
   disabled,
   onSend,
@@ -49,7 +58,10 @@ export function ChatInputBar({
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
   const { thoughtLevel, rest: genericConfigOptions } = partitionConfigOptions(usableConfigOptions)
+  const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
+  const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
+  const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
 
@@ -57,8 +69,11 @@ export function ChatInputBar({
   const filter = slashFilter(value)
 
   const sections = useMemo(
-    () => (menuOpen ? buildSlashSections({ commands, configOptions, modes, filter }) : []),
-    [menuOpen, commands, configOptions, modes, filter]
+    () =>
+      menuOpen
+        ? buildSlashSections({ commands, configOptions, modes, skills, filter })
+        : [],
+    [menuOpen, commands, configOptions, modes, skills, filter]
   )
 
   const resetHeight = useCallback(() => {
@@ -67,16 +82,48 @@ export function ChatInputBar({
     }
   }, [])
 
-  const submit = useCallback(() => {
-    const text = value.trim()
-    if (!text || busy || disabled) return
-    onSend(text)
-    setValue('')
-    resetHeight()
-  }, [value, busy, disabled, onSend, resetHeight])
+  const submit = useCallback(async () => {
+    const userText = value.trim()
+    if ((!userText && !loadedSkill) || busy || disabled || sending) return
+
+    setSending(true)
+    try {
+      const text = await buildPromptWithLoadedSkill(
+        loadedSkill,
+        userText,
+        projectRoot ?? session.cwd
+      )
+      if (!text.trim()) return
+      onSend(text)
+      setValue('')
+      setLoadedSkill(null)
+      resetHeight()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load skill')
+    } finally {
+      setSending(false)
+    }
+  }, [
+    value,
+    loadedSkill,
+    busy,
+    disabled,
+    sending,
+    onSend,
+    resetHeight,
+    projectRoot,
+    session.cwd
+  ])
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
+      if (item.kind === 'skill') {
+        setLoadedSkill({ name: item.name, description: item.description ?? '' })
+        setValue('')
+        resetHeight()
+        textareaRef.current?.focus()
+        return
+      }
       if (item.kind === 'command') {
         setValue(applyCommandToInput(value, item.name))
         textareaRef.current?.focus()
@@ -87,7 +134,6 @@ export function ChatInputBar({
       } else {
         onSetMode(item.modeId)
       }
-      // config/mode selections do not touch the input; close the menu by clearing the slash token
       setValue('')
       resetHeight()
     },
@@ -96,7 +142,6 @@ export function ChatInputBar({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // When the slash menu is open with items, route navigation/selection to it.
       if (menuOpen && sections.length > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault()
@@ -109,7 +154,6 @@ export function ChatInputBar({
           return
         }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && sections.length > 0) {
-          // Enter selects the highlighted item; it must NOT send the prompt.
           e.preventDefault()
           menuRef.current?.selectHighlighted()
           return
@@ -120,19 +164,16 @@ export function ChatInputBar({
           resetHeight()
           return
         }
-        // fall through for typing/Backspace so the filter updates
       }
 
-      // Esc cancels an in-flight turn (when the menu isn't open).
       if (e.key === 'Escape' && busy) {
         e.preventDefault()
         onCancel()
         return
       }
-      // Enter sends; Shift+Enter newline; ignore during IME composition.
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault()
-        submit()
+        void submit()
       }
     },
     [menuOpen, sections.length, busy, onCancel, submit, resetHeight]
@@ -145,22 +186,45 @@ export function ChatInputBar({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
-  const canSend = !disabled && value.trim().length > 0
+  const canSend = !disabled && !sending && (value.trim().length > 0 || loadedSkill !== null)
 
   return (
     <div className="px-5 pb-3.5 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
         {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
         <div className="overflow-hidden rounded-2xl bg-secondary/40">
+          {loadedSkill && (
+            <div className="flex items-start gap-2 border-b border-border/40 px-4 py-1.5">
+              <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+                Skill:{' '}
+                <span className="font-medium text-foreground break-words">{loadedSkill.name}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setLoadedSkill(null)}
+                className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="Remove loaded skill"
+                title="Remove skill"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           <div className="px-4 pb-1.5 pt-3.5">
             <textarea
               ref={textareaRef}
               value={value}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              disabled={disabled}
+              disabled={disabled || sending}
               rows={1}
-              placeholder={disabled ? 'Session closed' : 'Ask anything… (/ for commands)'}
+              placeholder={
+                disabled
+                  ? 'Session closed'
+                  : loadedSkill
+                    ? 'Add a message (optional)…'
+                    : 'Ask anything… (/ for commands & skills)'
+              }
               className={cn(
                 'w-full resize-none bg-transparent text-sm leading-relaxed',
                 'placeholder:text-muted-foreground focus:outline-none',
@@ -212,7 +276,7 @@ export function ChatInputBar({
               ) : (
                 <button
                   type="button"
-                  onClick={submit}
+                  onClick={() => void submit()}
                   disabled={!canSend}
                   title="Send"
                   aria-label="Send message"

@@ -1,7 +1,7 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { type LastSelectedAgent, PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon, X } from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,18 @@ import { prepareChatKey, useAcpStore } from '@/stores/acp-store'
 import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  buildPromptWithLoadedSkill,
+  type LoadedAgentSkill,
+  useAgentSkills
+} from '@/hooks/use-agent-skills'
+import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
+import {
+  buildSlashSections,
+  isSlashTrigger,
+  type SlashItem,
+  slashFilter
+} from '@/components/chat/slash-menu-model'
 import { CustomAgentDialog } from './CustomAgentDialog'
 
 /**
@@ -65,6 +77,9 @@ export function AgentLauncher({
 }: AgentLauncherProps): React.JSX.Element {
   const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
+  const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
+  const menuRef = useRef<SlashMenuHandle>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [loadedAgents, setLoadedAgents] =
     useState<readonly TerminalAgentDefinition[]>(BUILT_IN_AGENTS)
   const cliAgents = agentsProp ?? loadedAgents
@@ -134,6 +149,7 @@ export function AgentLauncher({
   }, [entries])
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
   const maxTerminals = useMaxTerminalsPerProject()
   const appDefaultShell = useDefaultShell()
 
@@ -180,6 +196,33 @@ export function AgentLauncher({
     if (!selectedEntry) return 'cli'
     return selectedEntry.modes.includes(selectedMode) ? selectedMode : selectedEntry.modes[0]
   }, [selectedEntry, selectedMode])
+
+  const { skills } = useAgentSkills(effectiveMode === 'acp' ? projectRoot : undefined)
+  const menuOpen = effectiveMode === 'acp' && isSlashTrigger(prompt)
+  const slashSections = useMemo(
+    () =>
+      menuOpen
+        ? buildSlashSections({
+            commands: [],
+            configOptions: [],
+            modes: null,
+            skills,
+            filter: slashFilter(prompt)
+          })
+        : [],
+    [menuOpen, skills, prompt]
+  )
+
+  useEffect(() => {
+    if (effectiveMode !== 'acp') setLoadedSkill(null)
+  }, [effectiveMode])
+
+  const handleSlashSelect = useCallback((item: SlashItem) => {
+    if (item.kind !== 'skill') return
+    setLoadedSkill({ name: item.name, description: item.description ?? '' })
+    setPrompt('')
+    textareaRef.current?.focus()
+  }, [])
 
   // When an ACP agent is selected with a resolvable cwd, prepare a session in
   // the background (best-effort, deduped by the store) so the eventual send
@@ -234,12 +277,14 @@ export function AgentLauncher({
       const cwd = getDefaultCwdForProject(activeProjectId as string)
       const sessionId = await useAcpStore.getState().startChat(configId, cwd)
       useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
-      if (prompt.trim().length > 0) {
-        void useAcpStore.getState().sendPrompt(sessionId, prompt.trim())
+      const text = await buildPromptWithLoadedSkill(loadedSkill, prompt, projectRoot)
+      if (text.trim().length > 0) {
+        void useAcpStore.getState().sendPrompt(sessionId, text.trim())
       }
+      setLoadedSkill(null)
       useWorkspaceStore.getState().hideAgentLauncher()
     },
-    [activeProjectId, paneId, prompt]
+    [activeProjectId, paneId, prompt, loadedSkill, projectRoot]
   )
 
   const launch = useCallback(
@@ -275,19 +320,42 @@ export function AgentLauncher({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (menuOpen && slashSections.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          menuRef.current?.move(1)
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          menuRef.current?.move(-1)
+          return
+        }
+        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+          e.preventDefault()
+          menuRef.current?.selectHighlighted()
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setPrompt('')
+          return
+        }
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
         void launch(selectedEntry, effectiveMode)
       }
-      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !menuOpen) {
         e.preventDefault()
         void launch(selectedEntry, effectiveMode)
       }
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !menuOpen) {
         useWorkspaceStore.getState().hideAgentLauncher()
       }
     },
-    [launch, selectedEntry, effectiveMode]
+    [launch, selectedEntry, effectiveMode, menuOpen, slashSections.length]
   )
 
   const handleSelectChange = useCallback(
@@ -377,13 +445,41 @@ export function AgentLauncher({
     }
   }, [])
 
-  const canLaunch = Boolean(selectedEntry) && !isLaunching
+  const canLaunch =
+    Boolean(selectedEntry) &&
+    !isLaunching &&
+    (effectiveMode !== 'acp' || prompt.trim().length > 0 || loadedSkill !== null)
 
   return (
     <div
       className={cn('absolute inset-0 flex flex-col items-center justify-center p-8', className)}
     >
       <div className="flex w-full max-w-xl flex-col gap-3">
+        <div className="relative">
+          {menuOpen && (
+            <SlashCommandMenu
+              ref={menuRef}
+              sections={slashSections}
+              onSelect={handleSlashSelect}
+            />
+          )}
+          {loadedSkill && effectiveMode === 'acp' && (
+            <div className="mb-1 flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-1.5">
+              <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+                Skill:{' '}
+                <span className="font-medium text-foreground break-words">{loadedSkill.name}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setLoadedSkill(null)}
+                className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="Remove loaded skill"
+                title="Remove skill"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
         {/* Chat-style input bar — grid layout for clean alignment */}
         <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
           {/* Agent selector — column 1 */}
@@ -474,10 +570,17 @@ export function AgentLauncher({
 
           {/* Textarea — column 2 (flex-1 via 1fr) */}
           <textarea
+            ref={textareaRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe what you want…"
+            placeholder={
+              effectiveMode === 'acp'
+                ? loadedSkill
+                  ? 'Add a message (optional)…'
+                  : 'Describe what you want… (/ for skills)'
+                : 'Describe what you want…'
+            }
             rows={1}
             aria-label="Agent prompt"
             autoFocus
@@ -506,6 +609,7 @@ export function AgentLauncher({
           >
             {isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
           </button>
+        </div>
         </div>
 
         {/* Hint */}
