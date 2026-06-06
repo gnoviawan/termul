@@ -29,7 +29,7 @@ import { persistenceApi, shellApi } from '@/lib/api'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { useAcpStore } from '@/stores/acp-store'
+import { prepareChatKey, useAcpStore } from '@/stores/acp-store'
 import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -180,6 +180,30 @@ export function AgentLauncher({
     if (!selectedEntry) return 'cli'
     return selectedEntry.modes.includes(selectedMode) ? selectedMode : selectedEntry.modes[0]
   }, [selectedEntry, selectedMode])
+
+  // When an ACP agent is selected with a resolvable cwd, prepare a session in
+  // the background (best-effort, deduped by the store) so the eventual send
+  // reuses it instead of paying spawn + initialize + session/new on the
+  // critical path. `startChat` consumes any prepared session for this key.
+  //
+  // The cleanup reaps an unconsumed prepared session when the selection changes
+  // or the launcher unmounts without launching — otherwise abandoning an ACP
+  // selection (dismiss, switch agent/mode, change project) would leak a live
+  // backend session and a phantom history entry. `cancelPreparedChat` is a
+  // no-op once `startChat` has consumed the key, and never reaps the session
+  // the user actually navigated to.
+  useEffect(() => {
+    if (effectiveMode !== 'acp' || !selectedEntry?.acp || !activeProjectId) return
+    const cwd = getDefaultCwdForProject(activeProjectId)
+    const trimmedCwd = cwd?.trim() ?? ''
+    if (trimmedCwd.length === 0) return
+    const configId = selectedEntry.acp.id
+    useAcpStore.getState().prepareChat(configId, trimmedCwd)
+    const key = prepareChatKey(configId, trimmedCwd, undefined)
+    return () => {
+      useAcpStore.getState().cancelPreparedChat(key)
+    }
+  }, [effectiveMode, selectedEntry, activeProjectId])
 
   const launchCli = useCallback(
     async (agent: TerminalAgentDefinition): Promise<void> => {
