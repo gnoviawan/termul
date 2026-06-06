@@ -1,4 +1,4 @@
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(target_os = "windows")]
@@ -179,6 +179,115 @@ const WINDOWS_POLL_MULTIPLIER: u32 = 2;
 /// Cooldown duration when status hasn't changed (Windows only)
 #[cfg(target_os = "windows")]
 const STATUS_UNCHANGED_COOLDOWN_MS: u64 = POLL_INTERVAL_MS * 3;
+
+/// Default timeout for git commands executed inside WSL.
+///
+/// Cold-start of the WSL service (first `wsl.exe` spawn in a session) can take
+/// 2-5s before the command itself runs, so the Windows-git timeout of 2s is
+/// far too tight. 8s comfortably covers a cold start plus the actual git
+/// work without making the UI feel hung.
+#[cfg(target_os = "windows")]
+const WSL_GIT_COMMAND_TIMEOUT_MS: u64 = 8000;
+
+/// Cache of `wslpath -u` translations keyed by the original Windows path.
+///
+/// `wslpath` is itself a `wsl.exe` spawn (cold-start cost), so a process-local
+/// cache is worth it for the polling loop which re-resolves the same project
+/// path every cycle. The map is bounded by the number of distinct WSL git
+/// projects Termul touches per session, which is small in practice.
+#[cfg(target_os = "windows")]
+static WSLPATH_CACHE: OnceLock<parking_lot::Mutex<HashMap<String, String>>> =
+    OnceLock::new();
+
+fn wslpath_cache() -> &'static parking_lot::Mutex<HashMap<String, String>> {
+    WSLPATH_CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
+
+}
+
+/// Returns true when `cwd` is a Windows UNC path that points into a WSL
+///
+/// distro's filesystem. Recognises both legacy `\\wsl$\<distro>\...` and
+/// modern `\\wsl.localhost\<distro>\...` forms, case-insensitively.
+#[cfg(target_os = "windows")]
+fn is_wsl_path(cwd: &str) -> bool {
+    extract_wsl_distro(cwd).is_some()
+
+}
+
+/// Extract the WSL distro name from a UNC path prefix.
+///
+/// Accepts `\\wsl$\<distro>\...` and `\\wsl.localhost\<distro>\...`. The
+/// distro segment may not contain `\` or `/`. Returns `None` for non-WSL
+/// paths or malformed prefixes (e.g. `\\wsl$\` with no distro segment).
+#[cfg(target_os = "windows")]
+fn extract_wsl_distro(cwd: &str) -> Option<&str> {
+    // ASCII-only lowercase is byte-preserving, so index math into the
+    // original string is safe after this point.
+    let lower = cwd.to_ascii_lowercase();
+
+    let after = if let Some(rest) = lower.strip_prefix("\\\\wsl$\\") {
+        rest
+    } else if let Some(rest) = lower.strip_prefix("\\\\wsl.localhost\\") {
+        rest
+    } else {
+        return None;
+    };
+
+    // Distro name extends to the next path separator. Reject empty distro
+    // (`\\wsl$\foo`) and slices beyond the prefix.
+    let end = after.find(['\\', '/']).unwrap_or(after.len());
+    let distro = &after[..end];
+    if distro.is_empty() {
+        return None;
+    }
+
+    // Slice back into the original (un-lowered) string for the caller. The
+    // prefix we matched is pure ASCII and ASCII lowercase is byte-preserving,
+    // so the byte offset is identical to the offset into `lower`.
+    let start = cwd.len() - after.len();
+    Some(&cwd[start..start + end])
+
+}
+
+/// Translate a Windows WSL path to its Linux-side equivalent via `wslpath -u`.
+///
+/// Result is cached because the call itself spawns `wsl.exe` (cold start
+/// cost on first invocation per session). Returns `None` if `wslpath` fails
+/// or returns empty output; the caller surfaces that as an IPC error.
+#[cfg(target_os = "windows")]
+fn wslpath_translate(cwd: &str, distro: &str) -> Option<String> {
+    if let Some(cached) = wslpath_cache().lock().get(cwd).cloned() {
+        return Some(cached);
+    }
+
+    let output = backend_command("wsl.exe")
+        .args(["-d", distro, "--exec", "wslpath", "-u", cwd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        log::warn!(
+            "[GitTracker] wslpath -u failed for {} (distro {}): {}",
+            cwd,
+            distro,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    let translated = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if translated.is_empty() {
+        return None;
+    }
+
+    wslpath_cache()
+        .lock()
+        .insert(cwd.to_string(), translated.clone());
+    Some(translated)
+}
 
 /// Git status information
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -648,6 +757,20 @@ impl GitTracker {
         .unwrap_or((None, None))
     }
 
+    /// Pick the right timeout for a git call: the WSL route is slower because
+    /// the WSL service may be cold, so the default 2s would mis-fire on the
+    /// first invocation per session. The WSL constant always wins on WSL
+    /// paths; non-WSL paths use whatever the caller asked for.
+    fn pick_git_timeout_ms(cwd: &str, requested_ms: u64) -> u64 {
+        #[cfg(target_os = "windows")]
+        {
+            if is_wsl_path(cwd) {
+                return WSL_GIT_COMMAND_TIMEOUT_MS.max(requested_ms);
+            }
+        }
+        requested_ms
+    }
+
     pub fn run_git_command(cwd: &str, args: &[&str]) -> Option<std::process::Output> {
         Self::run_git_command_with_timeout(cwd, args, GIT_COMMAND_TIMEOUT_MS)
     }
@@ -662,19 +785,68 @@ impl GitTracker {
         args: &[S],
         timeout_ms: u64,
     ) -> Option<std::process::Output> {
+        let effective_timeout = Self::pick_git_timeout_ms(cwd, timeout_ms);
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(distro) = extract_wsl_distro(cwd) {
+                if let Some(linux_path) = wslpath_translate(cwd, distro) {
+                    let mut command = backend_command("wsl.exe");
+                    command
+                        .args(["-d", distro, "--exec", "git", "-C", &linux_path])
+                        .args(args.iter().map(|a| a.as_ref()))
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    return Self::spawn_and_wait(command, args, cwd, effective_timeout);
+                }
+                log::warn!(
+                    "[GitTracker] wslpath unavailable for {} (distro {}); refusing to fall back to Windows git",
+                    cwd,
+                    distro
+                );
+                return None;
+            }
+        }
+
         let mut command = backend_command(resolve_git_binary());
         command
             .args(args.iter().map(|a| a.as_ref()))
             .current_dir(cwd)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        Self::spawn_and_wait(command, args, cwd, timeout_ms)
-    }
+        Self::spawn_and_wait(command, args, cwd, effective_timeout)
 
     /// Run `git push <args>` with the network timeout and `GIT_TERMINAL_PROMPT=0`
     /// so a remote that requires credentials fails fast ("could not read
     /// Username") instead of blocking on a terminal prompt until the timeout.
     pub fn run_git_push(cwd: &str, args: &[&str], timeout_ms: u64) -> Option<std::process::Output> {
+        let effective_timeout = Self::pick_git_timeout_ms(cwd, timeout_ms);
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(distro) = extract_wsl_distro(cwd) {
+                if let Some(linux_path) = wslpath_translate(cwd, distro) {
+                    let mut command = backend_command("wsl.exe");
+                    command
+                        .args(["-d", distro, "--exec", "git", "-C", &linux_path])
+                        .args(args)
+                        .env("GIT_TERMINAL_PROMPT", "0")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    return Self::spawn_and_wait(command, args, cwd, effective_timeout);
+                }
+                log::warn!(
+                    "[GitTracker] wslpath unavailable for {} (distro {}); refusing to fall back to Windows git",
+                    cwd,
+                    distro
+                );
+                return None;
+            }
+        }
+
         let mut command = backend_command(resolve_git_binary());
         command
             .args(args)
@@ -683,8 +855,9 @@ impl GitTracker {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        Self::spawn_and_wait(command, args, cwd, timeout_ms)
+        Self::spawn_and_wait(command, args, cwd, effective_timeout)
     }
+
 
     /// Spawn a prepared git `Command` and wait up to `timeout_ms`, killing the
     /// child on timeout. `args`/`cwd` are used only for the timeout log line.
@@ -2741,4 +2914,82 @@ mod tests {
         assert_eq!(ctx.last_body, "body text");
         std::fs::remove_dir_all(&repo).ok();
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_legacy_unc_form() {
+        assert_eq!(
+            extract_wsl_distro(r"\\wsl$\Ubuntu-24\home\abdul\termul"),
+            Some("Ubuntu-24")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_modern_unc_form() {
+        assert_eq!(
+            extract_wsl_distro(r"\\wsl.localhost\Ubuntu-24\home\abdul\termul"),
+            Some("Ubuntu-24")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_is_case_insensitive() {
+        assert_eq!(
+            extract_wsl_distro(r"\\WSL.LOCALHOST\Ubuntu-24\home\abdul\termul"),
+            Some("Ubuntu-24")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_preserves_distro_case() {
+        // Distro name is returned from the original (un-lowered) input, so
+        // the casing the user typed is preserved for the wsl.exe call.
+        let extracted =
+            extract_wsl_distro(r"\\wsl.localhost\UBUNTU-24\home\abdul\termul");
+        assert_eq!(extracted, Some("UBUNTU-24"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_rejects_native_windows_path() {
+        assert_eq!(extract_wsl_distro(r"C:\Users\abdul\termul"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_rejects_unix_path() {
+        assert_eq!(extract_wsl_distro("/home/abdul/termul"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_rejects_empty_distro_segment() {
+        // `\\wsl$\foo` — there's a path segment after the prefix, but no
+        // distro in between. Must not be treated as a WSL path.
+        assert_eq!(extract_wsl_distro(r"\\wsl$\"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_wsl_distro_handles_trailing_separator_only() {
+        assert_eq!(extract_wsl_distro(r"\\wsl.localhost\Ubuntu\"), Some("Ubuntu"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn is_wsl_path_matches_both_unc_forms() {
+        assert!(is_wsl_path(r"\\wsl$\Ubuntu-24\home\x"));
+        assert!(is_wsl_path(r"\\wsl.localhost\Ubuntu-24\home\x"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn is_wsl_path_rejects_native_paths() {
+        assert!(!is_wsl_path(r"C:\Users\abdul\termul"));
+        assert!(!is_wsl_path(r"\\server\share\project"));
+        assert!(!is_wsl_path("/home/abdul/termul"));
+        assert!(!is_wsl_path(""));
 }
