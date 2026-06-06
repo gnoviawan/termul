@@ -13,7 +13,7 @@ const windowControlClass =
  * minimize/maximize/close controls are required. The strip sits at the top of
  * the content column (right of the ActivityRail) and doubles as a window drag
  * region. On macOS this renders nothing — native traffic lights handle window
- * controls, and the ActivityRail carries the drag affordance instead.
+ * controls, and WorkspaceLayout provides a unified top drag strip instead.
  *
  * Global actions (sidebar/explorer toggles, shortcuts, preferences) no longer
  * live here; they moved to the ActivityRail.
