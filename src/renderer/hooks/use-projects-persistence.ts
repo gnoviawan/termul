@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { persistenceApi, secureStorageApi, terminalApi, worktreeApi } from '@/lib/api'
+import { setTerminalProtected } from '@/lib/terminal-api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
@@ -544,12 +545,9 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
           // reports success, so this only logs genuine failures).
           const result = await terminalApi.kill(terminal.ptyId)
           if (!result.success) {
-        try {
-          const killResult = await terminalApi.kill(terminal.ptyId)
-          if (!killResult.success) {
-            console.warn('Failed to kill PTY during project delete:', killResult.error)
+            console.warn('Failed to kill PTY during project delete:', result.error)
             // Best-effort fallback: allow orphan cleanup if PTY still exists
-            await terminalApi.setProtected(terminal.ptyId, false).catch((error) => {
+            await setTerminalProtected(terminal.ptyId, false).catch((error) => {
               console.warn('Failed to clear PTY protection during project delete:', error)
             })
           }
