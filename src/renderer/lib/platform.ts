@@ -11,6 +11,12 @@ const _platform: string = typeof navigator !== 'undefined' ? navigator.platform.
 /** True when running on macOS / Darwin. */
 export const isMac: boolean = _platform.includes('mac')
 
+/**
+ * Slim top inset for macOS overlay title bar / traffic-light clearance.
+ * Used as a single full-width drag strip above the workspace chrome.
+ */
+export const macOsTitlebarStripClass = 'h-6 shrink-0'
+
 /** True when running on Windows. */
 export const isWindows: boolean = _platform.includes('win')
 

@@ -53,7 +53,7 @@ import {
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
-import { isMac } from '@/lib/platform'
+import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
@@ -1378,19 +1378,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return (
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         <ResizeEdges />
-        <div className="flex-1 flex overflow-hidden min-h-0 h-full">
-          <ActivityRail
-            isShortcutsOpen={isShortcutMenuOpen}
-            onShortcutsOpenChange={setIsShortcutMenuOpen}
-            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-            canOpenGitChanges={false}
-          />
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* macOS: draggable band clearing native traffic lights over the content column */}
-            {isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
-            <TitleBar />
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-muted-foreground text-sm">Loading...</div>
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+          {isMac && (
+            <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+          )}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            <ActivityRail
+              isShortcutsOpen={isShortcutMenuOpen}
+              onShortcutsOpenChange={setIsShortcutMenuOpen}
+              onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              canOpenGitChanges={false}
+            />
+            <div className="flex-1 flex flex-col min-w-0">
+              <TitleBar />
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-muted-foreground text-sm">Loading...</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1401,157 +1404,160 @@ export default function WorkspaceLayout(): React.JSX.Element {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <ResizeEdges />
-      <div className="flex-1 flex overflow-hidden min-h-0 h-full">
-        <ActivityRail
-          isShortcutsOpen={isShortcutMenuOpen}
-          onShortcutsOpenChange={setIsShortcutMenuOpen}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-          onOpenGitChanges={() => handleAddGitTab()}
-          canOpenGitChanges={Boolean(activeProject?.path)}
-          onOpenGitHistory={() => handleAddGitHistoryTab()}
-          canOpenGitHistory={Boolean(activeProject?.path)}
-          isThemePickerOpen={isThemePickerOpen}
-          onToggleThemePicker={handleToggleThemePicker}
-          onOpenAgentChat={handleOpenAgentChat}
-          canOpenAgentChat={Boolean(activeProject?.path)}
-        />
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* macOS: draggable band clearing native traffic lights over the content column */}
-          {isMac && <div className="h-7 shrink-0" data-tauri-drag-region />}
-          <TitleBar />
+      <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+        {isMac && (
+          <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+        )}
+        <div className="flex-1 flex overflow-hidden min-h-0">
+          <ActivityRail
+            isShortcutsOpen={isShortcutMenuOpen}
+            onShortcutsOpenChange={setIsShortcutMenuOpen}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenGitChanges={() => handleAddGitTab()}
+            canOpenGitChanges={Boolean(activeProject?.path)}
+            onOpenGitHistory={() => handleAddGitHistoryTab()}
+            canOpenGitHistory={Boolean(activeProject?.path)}
+            isThemePickerOpen={isThemePickerOpen}
+            onToggleThemePicker={handleToggleThemePicker}
+            onOpenAgentChat={handleOpenAgentChat}
+            canOpenAgentChat={Boolean(activeProject?.path)}
+          />
+          <div className="flex-1 flex flex-col min-w-0">
+            <TitleBar />
 
-          <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
-            {/* Sidebar */}
-            {isSidebarVisible && (
-              <div className="mr-2">
-                <SidebarTabs
-                  projects={projects}
-                  activeProjectId={activeProjectId}
-                  onSelectProject={handleSelectProject}
-                  onNewProject={() => setIsNewProjectModalOpen(true)}
-                  onUpdateProject={updateProject}
-                  onDeleteProject={deleteProject}
-                  onArchiveProject={archiveProject}
-                  onRestoreProject={restoreProject}
-                  onReorderProjects={reorderProjects}
-                  onSSHConnect={handleSSHConnect}
-                  onSelectSSHProfile={handleSelectSSHProfile}
-                  activeSSHProfileId={activeSSHProfileId}
-                />
-              </div>
-            )}
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
+              {/* Sidebar */}
+              {isSidebarVisible && (
+                <div className="mr-2">
+                  <SidebarTabs
+                    projects={projects}
+                    activeProjectId={activeProjectId}
+                    onSelectProject={handleSelectProject}
+                    onNewProject={() => setIsNewProjectModalOpen(true)}
+                    onUpdateProject={updateProject}
+                    onDeleteProject={deleteProject}
+                    onArchiveProject={archiveProject}
+                    onRestoreProject={restoreProject}
+                    onReorderProjects={reorderProjects}
+                    onSSHConnect={handleSSHConnect}
+                    onSelectSSHProfile={handleSelectSSHProfile}
+                    activeSSHProfileId={activeSSHProfileId}
+                  />
+                </div>
+              )}
 
-            {/* Main Content and File Explorer Container */}
-            <PaneDndProvider>
-              <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
-                {/* Main Content Area */}
-                <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
-                  {activeSSHProfile ? (
-                    /* SSH Workspace */
-                    <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
-                  ) : projects.length === 0 ? (
-                    /* No Projects Empty State */
-                    <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ duration: 0.4, ease: 'easeOut' }}
-                        className="flex flex-col items-center text-center max-w-md"
-                      >
-                        <div className="mb-6">
-                          <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-foreground mb-2">
-                          No Projects Yet
-                        </h2>
-                        <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                          Create your first project to organize your terminals, snapshots, and
-                          commands
-                        </p>
-                        <button
-                          onClick={() => setIsNewProjectModalOpen(true)}
-                          className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                        >
-                          Create Your First Project
-                        </button>
-                      </motion.div>
-                    </div>
-                  ) : (
-                    <>
-                      {isWorkspaceRoute ? (
+              {/* Main Content and File Explorer Container */}
+              <PaneDndProvider>
+                <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+                  {/* Main Content Area */}
+                  <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+                    {activeSSHProfile ? (
+                      /* SSH Workspace */
+                      <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+                    ) : projects.length === 0 ? (
+                      /* No Projects Empty State */
+                      <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
                         <motion.div
-                          key={fullscreenPaneId ? 'fullscreen' : 'normal'}
-                          initial={{ opacity: 0.85, scale: 0.97 }}
+                          initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
-                          transition={{ duration: 0.2, ease: 'easeOut' }}
-                          className="flex-1 min-h-0 h-full overflow-hidden"
+                          transition={{ duration: 0.4, ease: 'easeOut' }}
+                          className="flex flex-col items-center text-center max-w-md"
                         >
-                          <PaneRenderer
-                            node={fullscreenPane ?? paneRoot}
-                            onAddTerminal={handleAddTerminal}
-                            onAddBrowserTab={handleNewBrowserTab}
-                            onCloseTerminal={handleCloseTerminal}
-                            onRenameTerminal={renameTerminal}
-                            onCloseEditorTab={handleCloseEditorTab}
-                            closingTerminalIds={closingTerminalIds}
-                            defaultShell={activeProject?.defaultShell || appDefaultShell}
-                          />
-                        </motion.div>
-                      ) : (
-                        <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
-                          <div className="w-full h-full">
-                            <Outlet />
+                          <div className="mb-6">
+                            <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
                           </div>
+                          <h2 className="text-xl font-semibold text-foreground mb-2">
+                            No Projects Yet
+                          </h2>
+                          <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+                            Create your first project to organize your terminals, snapshots, and
+                            commands
+                          </p>
+                          <button
+                            onClick={() => setIsNewProjectModalOpen(true)}
+                            className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
+                          >
+                            Create Your First Project
+                          </button>
+                        </motion.div>
+                      </div>
+                    ) : (
+                      <>
+                        {isWorkspaceRoute ? (
+                          <motion.div
+                            key={fullscreenPaneId ? 'fullscreen' : 'normal'}
+                            initial={{ opacity: 0.85, scale: 0.97 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ duration: 0.2, ease: 'easeOut' }}
+                            className="flex-1 min-h-0 h-full overflow-hidden"
+                          >
+                            <PaneRenderer
+                              node={fullscreenPane ?? paneRoot}
+                              onAddTerminal={handleAddTerminal}
+                              onAddBrowserTab={handleNewBrowserTab}
+                              onCloseTerminal={handleCloseTerminal}
+                              onRenameTerminal={renameTerminal}
+                              onCloseEditorTab={handleCloseEditorTab}
+                              closingTerminalIds={closingTerminalIds}
+                              defaultShell={activeProject?.defaultShell || appDefaultShell}
+                            />
+                          </motion.div>
+                        ) : (
+                          <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
+                            <div className="w-full h-full">
+                              <Outlet />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Status Bar */}
+                        <StatusBar project={activeProject} />
+                      </>
+                    )}
+                  </main>
+
+                  {/* File Explorer - separate floating panel */}
+                  {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
+                    <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
+                      {isExplorerVisible && activeProject?.path && (
+                        <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
+                          <FileExplorer side="right" />
                         </div>
                       )}
-
-                      {/* Status Bar */}
-                      <StatusBar project={activeProject} />
-                    </>
-                  )}
-                </main>
-
-                {/* File Explorer - separate floating panel */}
-                {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
-                  <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
-                    {isExplorerVisible && activeProject?.path && (
-                      <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                        <FileExplorer side="right" />
-                      </div>
-                    )}
-                    {activeSSHProfile && (
-                      <div
-                        className={cn(
-                          'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
-                          !(isExplorerVisible && activeProject?.path) && 'w-64'
-                        )}
-                      >
-                        <SSHFileExplorer
-                          connectionId={sshConn.connectionId ?? ''}
-                          isConnected={sshConn.isConnected}
-                          sftpReady={sshConn.sftpReady}
-                          entries={sshConn.entries}
-                          currentPath={sshConn.currentPath}
-                          expandedDirs={sshConn.expandedDirs}
-                          childEntries={sshConn.childEntries}
-                          loadingDirs={sshConn.loadingDirs}
-                          isLoadingRoot={sshConn.isLoadingRoot}
-                          profileName={activeSSHProfile.name}
-                          onConnect={sshConn.handleConnect}
-                          onBrowseFiles={sshConn.handleBrowseFiles}
-                          onToggleDir={sshConn.toggleDirectory}
-                          onLoadDir={sshConn.loadDirectory}
-                          onMkdir={handleSSHMkdir}
-                          onCreateFile={handleSSHCreateFile}
-                          onDelete={handleSSHDelete}
-                          onRename={handleSSHRename}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </PaneDndProvider>
+                      {activeSSHProfile && (
+                        <div
+                          className={cn(
+                            'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
+                            !(isExplorerVisible && activeProject?.path) && 'w-64'
+                          )}
+                        >
+                          <SSHFileExplorer
+                            connectionId={sshConn.connectionId ?? ''}
+                            isConnected={sshConn.isConnected}
+                            sftpReady={sshConn.sftpReady}
+                            entries={sshConn.entries}
+                            currentPath={sshConn.currentPath}
+                            expandedDirs={sshConn.expandedDirs}
+                            childEntries={sshConn.childEntries}
+                            loadingDirs={sshConn.loadingDirs}
+                            isLoadingRoot={sshConn.isLoadingRoot}
+                            profileName={activeSSHProfile.name}
+                            onConnect={sshConn.handleConnect}
+                            onBrowseFiles={sshConn.handleBrowseFiles}
+                            onToggleDir={sshConn.toggleDirectory}
+                            onLoadDir={sshConn.loadDirectory}
+                            onMkdir={handleSSHMkdir}
+                            onCreateFile={handleSSHCreateFile}
+                            onDelete={handleSSHDelete}
+                            onRename={handleSSHRename}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </PaneDndProvider>
+            </div>
           </div>
         </div>
       </div>
