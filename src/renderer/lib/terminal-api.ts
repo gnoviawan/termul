@@ -22,4 +22,4 @@ import { createTauriTerminalApi } from './tauri-terminal-api'
 export const terminalApi: TerminalApi = createTauriTerminalApi()
 
 // Re-export internal renderer ref methods for ConnectedTerminal component
-export { addRendererRef, removeRendererRef } from './tauri-terminal-api'
+export { addRendererRef, removeRendererRef, setTerminalProtected } from './tauri-terminal-api'

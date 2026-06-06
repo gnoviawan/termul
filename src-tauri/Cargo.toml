@@ -127,3 +127,10 @@ winapi = { version = "0.3", features = [
     "wincontypes",
     "ntdef",
 ] }
+
+# Termul patch: vendored copy of agent-client-protocol 0.12.1 with one change —
+# spawn_process sets CREATE_NO_WINDOW on Windows so ACP agent subprocesses do
+# not flash a console window. See vendor/agent-client-protocol/src/acp_agent.rs.
+# Keep the `= "0.12"` requirement above; this only redirects where it resolves.
+[patch.crates-io]
+agent-client-protocol = { path = "vendor/agent-client-protocol" }
