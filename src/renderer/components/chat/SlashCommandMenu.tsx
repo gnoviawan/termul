@@ -1,4 +1,4 @@
-import { Check, SlidersHorizontal, TerminalSquare } from 'lucide-react'
+import { Check, SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { SlashItem, SlashSection } from './slash-menu-model'
@@ -28,6 +28,8 @@ function itemKey(item: SlashItem): string {
       return `config:${item.configId}:${item.valueId}`
     case 'mode':
       return `mode:${item.modeId}`
+    case 'skill':
+      return `skill:${item.name}`
   }
 }
 
@@ -95,9 +97,19 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
               flatIndex += 1
               const isHighlighted = flatIndex === highlight
               const idx = flatIndex
-              const Icon = item.kind === 'command' ? TerminalSquare : SlidersHorizontal
-              const selected = item.kind !== 'command' && item.selected
-              const label = item.kind === 'command' ? `/${item.name}` : item.label
+              const Icon =
+                item.kind === 'command'
+                  ? TerminalSquare
+                  : item.kind === 'skill'
+                    ? Sparkles
+                    : SlidersHorizontal
+              const selected = item.kind !== 'command' && item.kind !== 'skill' && item.selected
+              const label =
+                item.kind === 'command'
+                  ? `/${item.name}`
+                  : item.kind === 'skill'
+                    ? `/${item.name}`
+                    : item.label
               const description = item.description
               return (
                 <button
@@ -111,14 +123,24 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
                   }}
                   onMouseEnter={() => setHighlight(idx)}
                   className={cn(
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm',
+                    'flex w-full gap-2 px-3 py-1.5 text-left text-sm',
+                    item.kind === 'skill' ? 'flex-wrap items-start' : 'items-center',
                     isHighlighted ? 'bg-accent text-accent-foreground' : 'text-foreground'
                   )}
                 >
                   <Icon size={13} className="shrink-0 text-muted-foreground" />
-                  <span className="truncate font-medium">{label}</span>
+                  <span
+                    className={cn(
+                      'font-medium',
+                      item.kind === 'skill' ? 'break-words' : 'min-w-0 truncate'
+                    )}
+                  >
+                    {label}
+                  </span>
                   {description && (
-                    <span className="truncate text-xs text-muted-foreground">{description}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {description}
+                    </span>
                   )}
                   {selected && <Check size={13} className="ml-auto shrink-0 text-primary" />}
                 </button>
