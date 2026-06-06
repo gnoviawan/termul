@@ -119,9 +119,14 @@ interface AcpState {
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
-  /** Maps a configured agent id to its live spawned AgentId (for reuse). */
+  /**
+   * Maps a per-project agent reuse key (`agentReuseKey(configId, cwd)`) to its
+   * live spawned AgentId (for reuse). Keyed by config+cwd — not config alone —
+   * so the same configured agent runs an independent process per project/cwd
+   * and one process's disconnect can't cascade to another project's sessions.
+   */
   configToLiveAgent: Record<string, AgentId>
-  /** Config ids whose background pre-warm spawn is currently in flight. */
+  /** Reuse keys (`agentReuseKey`) whose background pre-warm spawn is in flight. */
   warmingConfigs: Record<string, true>
   /** Background `session/new` results keyed by prepare key (see `prepareChat`). */
   preparedSessions: Record<string, SessionId>
@@ -158,11 +163,12 @@ interface AcpState {
   deleteAgentConfig: (id: string) => Promise<void>
   testConnection: (config: AgentConfig) => Promise<AgentCapabilities | null>
   /**
-   * Best-effort background spawn so a later `startChat` reuses a warm agent.
-   * Idempotent (dedupes against an in-flight or connected warm) and silent on
-   * failure — chat still lazy-spawns if warm-up fails.
+   * Best-effort background spawn so a later `startChat` reuses a warm agent for
+   * this config+cwd. Idempotent (dedupes against an in-flight or connected warm
+   * for the same reuse key) and silent on failure — chat still lazy-spawns if
+   * warm-up fails. No-op when `cwd` is empty.
    */
-  prewarmAgent: (configId: string) => Promise<void>
+  prewarmAgent: (configId: string, cwd: string) => Promise<void>
   /**
    * Best-effort background `session/new` for a config+cwd (+ MCP selection) so
    * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
@@ -369,9 +375,10 @@ function persistSession(
   const session = state.sessions[sessionId]
   if (!session) return
   const messages = state.messages[sessionId] ?? []
-  const agentConfigId = Object.keys(state.configToLiveAgent).find(
-    (cid) => state.configToLiveAgent[cid] === session.agentId
+  const reuseKey = Object.keys(state.configToLiveAgent).find(
+    (k) => state.configToLiveAgent[k] === session.agentId
   )
+  const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
@@ -395,10 +402,11 @@ function persistSession(
 }
 
 /**
- * In-flight pre-warm spawns, keyed by config id. Held outside reactive state
- * (promises don't belong in the store) so `prewarmAgent`, `startChat`, and
- * `deleteAgentConfig` can dedupe against a warm that is still spawning. The
- * reactive `warmingConfigs` flag mirrors membership for the UI.
+ * In-flight pre-warm spawns, keyed by `agentReuseKey(configId, cwd)`. Held
+ * outside reactive state (promises don't belong in the store) so `prewarmAgent`,
+ * `startChat`, and `deleteAgentConfig` can dedupe against a warm that is still
+ * spawning for the same config+cwd. The reactive `warmingConfigs` flag mirrors
+ * membership for the UI.
  */
 const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
@@ -410,6 +418,24 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
  */
 function isReusableStatus(status: AgentStatus | undefined): boolean {
   return status === 'connected' || status === 'needs-auth'
+}
+
+/**
+ * Identity of a live agent *process*: a configured agent + its working
+ * directory. Distinct from {@link prepareChatKey} (which also folds in MCP
+ * selection) because the agent process is MCP-agnostic — only the session is.
+ * Keying the reuse map by this gives each project/cwd its own process, so the
+ * same agent runs in parallel across projects and a crash in one is contained.
+ * `configId` never contains `\0`, so {@link configIdFromReuseKey} can recover it.
+ */
+export function agentReuseKey(configId: string, cwd: string): string {
+  return `${configId}\0${cwd.trim()}`
+}
+
+/** Recover the `configId` from an {@link agentReuseKey} (split on first NUL). */
+export function configIdFromReuseKey(key: string): string {
+  const nul = key.indexOf('\0')
+  return nul === -1 ? key : key.slice(0, nul)
 }
 
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
@@ -619,40 +645,56 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set({ agentConfigs: list })
       throw err
     }
-    // Tear down any warmed process for this config so it can't be reused stale.
-    // Await an in-flight warm first: its spawn may not have registered the
+    // Tear down every per-project warmed process for this config so none can be
+    // reused stale. The reuse map and warm map are keyed by config+cwd, so a
+    // single config may own several live processes (one per project/cwd).
+    // Await each in-flight warm first: its spawn may not have registered the
     // agent id yet, and without this the just-spawned process would leak.
-    const pending = inFlightWarms.get(id)
-    const warm = pending ? await pending : get().configToLiveAgent[id]
-    if (warm) {
+    const reuseKeys = new Set<string>([
+      ...Object.keys(get().configToLiveAgent),
+      ...inFlightWarms.keys()
+    ])
+    const targets = [...reuseKeys].filter((k) => configIdFromReuseKey(k) === id)
+    const warmAgents: AgentId[] = []
+    for (const key of targets) {
+      const pending = inFlightWarms.get(key)
+      const warm = pending ? await pending : get().configToLiveAgent[key]
+      if (warm) warmAgents.push(warm)
+    }
+    if (warmAgents.length > 0) {
       set((s) => {
         const map = { ...s.configToLiveAgent }
-        delete map[id]
+        for (const key of targets) delete map[key]
         return { configToLiveAgent: map }
       })
-      try {
-        await get().killAgent(warm)
-      } catch {
-        /* best-effort cleanup */
+      for (const warm of warmAgents) {
+        try {
+          await get().killAgent(warm)
+        } catch {
+          /* best-effort cleanup */
+        }
       }
     }
   },
 
-  prewarmAgent: async (configId) => {
+  prewarmAgent: async (configId, cwd) => {
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) return
+    const trimmedCwd = cwd.trim()
+    if (trimmedCwd.length === 0) return
+    const reuseKey = agentReuseKey(configId, trimmedCwd)
     // Dedupe: a warm already in flight, or a live reusable agent (connected or
-    // awaiting auth), is a no-op. Re-spawning would orphan the original and
-    // overwrite configToLiveAgent — matching prepareChat/startChat reuse.
-    const inFlight = inFlightWarms.get(configId)
+    // awaiting auth) for this config+cwd, is a no-op. Re-spawning would orphan
+    // the original and overwrite the reuse entry — matching prepareChat/startChat.
+    const inFlight = inFlightWarms.get(reuseKey)
     if (inFlight) {
       await inFlight
       return
     }
-    const existing = get().configToLiveAgent[configId]
+    const existing = get().configToLiveAgent[reuseKey]
     if (existing && isReusableStatus(get().agentStatus[existing])) return
 
-    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [configId]: true } }))
+    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
     const spawnPromise = (async (): Promise<AgentId | null> => {
       try {
         const agentId = await get().spawnAgent({
@@ -665,7 +707,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // Only register the warm agent if the config still exists (it may have
         // been disabled mid-spawn); otherwise kill the orphan immediately.
         if (get().agentConfigs.some((c) => c.id === configId)) {
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
+          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
           return agentId
         }
         try {
@@ -676,18 +718,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return null
       } catch (err) {
         // Silent: chat will lazy-spawn on demand if warm-up failed.
-        console.warn('[acp] prewarm failed for', configId, err)
+        console.warn('[acp] prewarm failed for', reuseKey, err)
         return null
       } finally {
-        inFlightWarms.delete(configId)
+        inFlightWarms.delete(reuseKey)
         set((s) => {
           const warming = { ...s.warmingConfigs }
-          delete warming[configId]
+          delete warming[reuseKey]
           return { warmingConfigs: warming }
         })
       }
     })()
-    inFlightWarms.set(configId, spawnPromise)
+    inFlightWarms.set(reuseKey, spawnPromise)
     await spawnPromise
   },
 
@@ -721,9 +763,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       try {
         const config = get().agentConfigs.find((c) => c.id === configId)
         if (!config) return null
-        const warming = inFlightWarms.get(configId)
+        const reuseKey = agentReuseKey(configId, trimmedCwd)
+        const warming = inFlightWarms.get(reuseKey)
         if (warming) await warming
-        const existing = get().configToLiveAgent[configId]
+        const existing = get().configToLiveAgent[reuseKey]
         const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
         let agentId: AgentId
         if (reuse) {
@@ -744,7 +787,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             }
             return null
           }
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
+          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         }
         if (get().pendingAuth[agentId]) return null
         const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
@@ -841,13 +884,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return sessionId
       }
     }
-    // If a background pre-warm is still spawning this config, wait for it instead
-    // of racing a second spawn (which would orphan one of the two processes).
-    const warming = inFlightWarms.get(configId)
+    // If a background pre-warm is still spawning this config+cwd, wait for it
+    // instead of racing a second spawn (which would orphan one of the processes).
+    const reuseKey = agentReuseKey(configId, trimmedCwd)
+    const warming = inFlightWarms.get(reuseKey)
     if (warming) await warming
-    // Reuse a live agent for this config when it is connected or awaiting auth
-    // (re-spawning a needs-auth agent would orphan the original); otherwise spawn.
-    const existing = get().configToLiveAgent[configId]
+    // Reuse a live agent for this config+cwd when it is connected or awaiting
+    // auth (re-spawning a needs-auth agent would orphan the original); else spawn.
+    // Keyed per-cwd so the same agent in another project gets its own process.
+    const existing = get().configToLiveAgent[reuseKey]
     const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
     let agentId: AgentId
     if (reuse) {
@@ -860,7 +905,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         env: config.env,
         allowTerminal: config.allowTerminal
       })
-      set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [configId]: agentId } }))
+      set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
     }
     // If the agent requires authentication, `newSession` will be rejected by the
     // agent. Fail fast with an actionable message instead of throwing an opaque
@@ -1462,12 +1507,46 @@ export interface AgentIdentity {
  */
 export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
   if (!agentId) return { name: null, templateId: null }
-  const configId = Object.keys(state.configToLiveAgent).find(
-    (cid) => state.configToLiveAgent[cid] === agentId
+  const reuseKey = Object.keys(state.configToLiveAgent).find(
+    (k) => state.configToLiveAgent[k] === agentId
   )
+  const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
   const config = configId ? state.agentConfigs.find((c) => c.id === configId) : undefined
   return { name: config?.name ?? null, templateId: config?.templateId ?? null }
 }
 
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
+
+/** Aggregate warm state for a config across all of its per-project processes. */
+export interface ConfigWarmState {
+  /** A live process for this config is connected (in any project/cwd). */
+  connected: boolean
+  /** A live process for this config is awaiting authentication. */
+  needsAuth: boolean
+  /** A background warm spawn for this config is in flight (any cwd). */
+  warming: boolean
+}
+
+/**
+ * Reduce the per-cwd reuse + warming maps to a single warm state for a config.
+ * The reuse map is keyed by `agentReuseKey(configId, cwd)`, so a config can own
+ * several live processes; the Settings badge wants one rolled-up status.
+ */
+export function selectConfigWarmState(state: AcpState, configId: string): ConfigWarmState {
+  let connected = false
+  let needsAuth = false
+  for (const [key, agentId] of Object.entries(state.configToLiveAgent)) {
+    if (configIdFromReuseKey(key) !== configId) continue
+    const status = state.agentStatus[agentId]
+    if (status === 'connected') connected = true
+    else if (status === 'needs-auth') needsAuth = true
+  }
+  const warming = Object.keys(state.warmingConfigs).some(
+    (key) => configIdFromReuseKey(key) === configId
+  )
+  return { connected, needsAuth, warming }
+}
+
+export const useConfigWarmState = (configId: string): ConfigWarmState =>
+  useAcpStore(useShallow((s) => selectConfigWarmState(s, configId)))
