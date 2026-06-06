@@ -156,7 +156,10 @@ function ensureFileNameStreamSubscription(
     if (event.searchId !== activeId) return
 
     // Ensure final count is set even if no batch was emitted
-    if (state.searchFileNameMatches === null || state.searchFileNameMatches.length !== event.totalFiles) {
+    if (
+      state.searchFileNameMatches === null ||
+      state.searchFileNameMatches.length !== event.totalFiles
+    ) {
       set({ searchFileNameMatches: state.searchFileNameMatches ?? [] })
     }
   })

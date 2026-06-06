@@ -240,10 +240,12 @@ describe('FileExplorer', () => {
     mockExplorerState.searchQuery = 'term'
     mockExplorerState.searchLastCompletedQuery = 'term'
     mockExplorerState.searchLoading = true
-    mockExplorerState.searchResults = [{
-      filePath: '/project/src/FileExplorer.tsx',
-      matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
-    }]
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
     mockExplorerState.searchFileNameMatches = null
 
     render(<FileExplorer />)

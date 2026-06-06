@@ -1004,7 +1004,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     {searchLoading && <LoaderCircle size={10} className="animate-spin" />}
                     Files{' '}
                     <span className="text-muted-foreground">
-                      {fileNameMatchesPending ? "…" : safeSearchFileNameMatches.length}
+                      {fileNameMatchesPending ? '…' : safeSearchFileNameMatches.length}
                     </span>
                   </button>
                 </div>

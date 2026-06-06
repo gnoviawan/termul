@@ -393,11 +393,7 @@ export interface FilesystemApi {
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: {
-      searchId: string
-      files: string[]
-      truncated: boolean
-    }) => void
+    callback: (event: { searchId: string; files: string[]; truncated: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
