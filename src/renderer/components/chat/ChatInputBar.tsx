@@ -1,12 +1,12 @@
-import { ArrowUp, ChevronDown, Square, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { ArrowUp, ChevronDown, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import {
   buildPromptWithLoadedSkill,
   type LoadedAgentSkill,
   useAgentSkills
 } from '@/hooks/use-agent-skills'
+import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'

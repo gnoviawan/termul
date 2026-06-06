@@ -48,7 +48,12 @@ export async function buildPromptWithLoadedSkill(
   const trimmed = userText.trim()
   if (!loadedSkill) return trimmed
 
-  const skill = await skillsApi.readSkill(loadedSkill.name, projectRoot)
-  const { formatPromptWithSkill } = await import('@/lib/skills-prompt')
-  return formatPromptWithSkill(skill.body, trimmed)
+  try {
+    const skill = await skillsApi.readSkill(loadedSkill.name, projectRoot)
+    const { formatPromptWithSkill } = await import('@/lib/skills-prompt')
+    return formatPromptWithSkill(skill.body, trimmed)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to load skill '${loadedSkill.name}': ${detail}`)
+  }
 }
