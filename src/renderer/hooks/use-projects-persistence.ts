@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { persistenceApi, secureStorageApi, worktreeApi } from '@/lib/api'
+import { persistenceApi, secureStorageApi, terminalApi, worktreeApi } from '@/lib/api'
 import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
   PersistedProject,
@@ -526,6 +527,22 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     // Delete secrets from secure storage
     if (project) {
       await deleteSecrets(project.id, project.envVars)
+    }
+
+    // Kill the project's live PTYs so the backend reclaims them. The terminals
+    // are genuinely released here (the project is being deleted), so they must
+    // not stay alive/protected and leak. kill() removes them from the backend
+    // terminal map; we also drop them from the renderer store.
+    const projectTerminals = useTerminalStore.getState().terminals.filter((t) => t.projectId === id)
+    for (const terminal of projectTerminals) {
+      if (terminal.ptyId) {
+        try {
+          await terminalApi.kill(terminal.ptyId)
+        } catch (error) {
+          console.warn('Failed to kill PTY during project delete:', error)
+        }
+      }
+      useTerminalStore.getState().closeTerminal(terminal.id, id)
     }
 
     // Delete the project from the store

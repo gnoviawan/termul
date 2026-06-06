@@ -125,6 +125,14 @@ pub struct RendererRefRequest {
     pub renderer_id: String,
 }
 
+/// Request to update a terminal's orphan-reaping protection.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTerminalProtectedRequest {
+    pub terminal_id: String,
+    pub protected: bool,
+}
+
 // ==================== Terminal Commands ====================
 
 /// Spawn a new terminal with binary data channel
@@ -255,6 +263,23 @@ pub async fn terminal_remove_renderer_ref(
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<()>, String> {
     match pty_manager.remove_renderer_ref(&request.terminal_id, &request.renderer_id) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
+    }
+}
+
+/// Update a terminal's orphan-reaping protection.
+///
+/// Protection is enabled automatically at spawn. The renderer calls this with
+/// `protected = false` only when a terminal is genuinely released (its project
+/// is closed or its tab is closed), so orphan detection may reclaim it. This
+/// keeps live background-project terminals from being killed mid-task.
+#[tauri::command]
+pub async fn terminal_set_protected(
+    request: SetTerminalProtectedRequest,
+    pty_manager: State<'_, Arc<PtyManager>>,
+) -> Result<IpcResult<()>, String> {
+    match pty_manager.set_protected(&request.terminal_id, request.protected) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
     }

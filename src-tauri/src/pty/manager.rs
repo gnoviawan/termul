@@ -536,6 +536,14 @@ pub struct TerminalInstance {
     pub last_activity: Arc<RwLock<Instant>>,
     pub orphan_since: Arc<RwLock<Option<Instant>>>,
     pub renderer_refs: Arc<RwLock<HashSet<String>>>,
+    /// When true, this terminal is still owned by an open project/tab and must
+    /// NOT be reaped by orphan detection — even if it currently has zero
+    /// renderer refs (e.g. its project is switched to the background, so the
+    /// `ConnectedTerminal` component unmounted). It is set true at spawn and
+    /// cleared only when the terminal is explicitly released (project closed or
+    /// terminal tab closed). This prevents busy background-project terminals
+    /// from being killed mid-task — the cause of the "Terminal not found"/hang.
+    pub protected: Arc<AtomicBool>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
     /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
@@ -587,9 +595,39 @@ impl TerminalInstance {
         self.renderer_refs.read().is_empty()
     }
 
+    /// Whether this terminal is eligible for orphan reaping right now.
+    ///
+    /// A terminal is reapable only when it is NOT protected (its project/tab is
+    /// genuinely closed), has no renderer refs, and has exceeded the timeout —
+    /// measured from when it became orphaned, or by inactivity if it never had
+    /// a renderer ref. Protected terminals (e.g. a backgrounded project's live
+    /// terminals) are never reaped, even with zero renderer refs.
+    pub fn is_orphan_reapable(&self, timeout: Duration) -> bool {
+        should_reap_orphan(
+            self.is_protected(),
+            self.is_orphan(),
+            self.orphan_since().map(|since| since.elapsed()),
+            self.inactive_duration(),
+            timeout,
+        )
+    }
+
     /// Returns when the terminal became orphaned, if ever.
     pub fn orphan_since(&self) -> Option<Instant> {
         *self.orphan_since.read()
+    }
+
+    /// Whether this terminal is protected from orphan reaping (still owned by an
+    /// open project/tab). See the `protected` field docs.
+    pub fn is_protected(&self) -> bool {
+        self.protected.load(Ordering::Relaxed)
+    }
+
+    /// Update the protection flag. Set false only when the terminal is genuinely
+    /// released (project closed / terminal tab closed), making it eligible for
+    /// orphan reaping once it also has no renderer refs.
+    pub fn set_protected(&self, protected: bool) {
+        self.protected.store(protected, Ordering::Relaxed);
     }
 
     /// Subscribe to live PTY output. Returns a receiver that yields raw byte batches.
@@ -613,6 +651,31 @@ impl TerminalInstance {
         let rx = self.broadcast_tx.subscribe();
         let snapshot: Vec<u8> = guard.iter().copied().collect();
         (snapshot, rx)
+    }
+}
+
+/// Pure decision for whether an orphaned terminal should be reaped.
+///
+/// Kept free-standing (no PTY handles) so it can be unit-tested in isolation.
+///
+/// * `protected` — terminal is still owned by an open project/tab; never reap.
+/// * `is_orphan` — terminal currently has zero renderer refs.
+/// * `orphaned_for` — elapsed time since it became orphaned, if it ever was.
+/// * `inactive_for` — elapsed time since last PTY activity.
+/// * `timeout` — configured orphan timeout.
+fn should_reap_orphan(
+    protected: bool,
+    is_orphan: bool,
+    orphaned_for: Option<Duration>,
+    inactive_for: Duration,
+    timeout: Duration,
+) -> bool {
+    if protected || !is_orphan {
+        return false;
+    }
+    match orphaned_for {
+        Some(elapsed) => elapsed > timeout,
+        None => inactive_for > timeout,
     }
 }
 
@@ -799,11 +862,12 @@ impl PtyManager {
                     .read()
                     .iter()
                     .filter(|(_, instance)| {
-                        instance.is_orphan()
-                            && instance
-                                .orphan_since()
-                                .map(|since| since.elapsed() > timeout)
-                                .unwrap_or_else(|| instance.inactive_duration() > timeout)
+                        // Never reap terminals that are still owned by an open
+                        // project/tab. A backgrounded project's terminals lose
+                        // their renderer refs (component unmount) but remain
+                        // live and may be running tasks — reaping them caused
+                        // the "Terminal not found"/hang bug.
+                        instance.is_orphan_reapable(timeout)
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
@@ -946,6 +1010,7 @@ impl PtyManager {
                 last_activity: Arc::new(RwLock::new(Instant::now())),
                 orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -1083,6 +1148,7 @@ impl PtyManager {
                 last_activity: Arc::new(RwLock::new(Instant::now())),
                 orphan_since: Arc::new(RwLock::new(None)),
                 renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -1475,6 +1541,20 @@ impl PtyManager {
             .get(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))
             .map(|instance| instance.remove_renderer_ref(renderer_id))
+    }
+
+    /// Update a terminal's orphan-reaping protection.
+    ///
+    /// Protection is enabled at spawn and should be disabled only when the
+    /// terminal is genuinely released by the renderer (its project is closed or
+    /// the terminal tab is closed). Once unprotected AND lacking renderer refs,
+    /// the terminal becomes eligible for orphan reaping again. Returns Ok even
+    /// if the terminal is already gone, so callers can release idempotently.
+    pub fn set_protected(&self, id: &str, protected: bool) -> Result<(), String> {
+        if let Some(instance) = self.terminals.read().get(id) {
+            instance.set_protected(protected);
+        }
+        Ok(())
     }
 
     /// Get terminal by ID
@@ -2582,6 +2662,79 @@ mod tests {
         let resolved = resolve_spawn_program("gemini").expect("unix passthrough");
         assert_eq!(resolved.program, "gemini");
         assert!(resolved.prepend_args.is_empty());
+    }
+
+    #[test]
+    fn test_should_reap_orphan_protected_never_reaped() {
+        let long_ago = Duration::from_secs(10_000);
+        let timeout = Duration::from_secs(600);
+        // Protected + orphaned + long past timeout => still not reapable.
+        assert!(!should_reap_orphan(
+            true,
+            true,
+            Some(long_ago),
+            long_ago,
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_attached_never_reaped() {
+        let long_ago = Duration::from_secs(10_000);
+        let timeout = Duration::from_secs(600);
+        // Not protected but still has a renderer ref (is_orphan == false).
+        assert!(!should_reap_orphan(
+            false,
+            false,
+            Some(long_ago),
+            long_ago,
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_orphaned_past_timeout_reaped() {
+        let timeout = Duration::from_secs(600);
+        // Unprotected, orphaned, past timeout => reapable.
+        assert!(should_reap_orphan(
+            false,
+            true,
+            Some(Duration::from_secs(601)),
+            Duration::from_secs(0),
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_orphaned_within_timeout_not_reaped() {
+        let timeout = Duration::from_secs(600);
+        assert!(!should_reap_orphan(
+            false,
+            true,
+            Some(Duration::from_secs(59)),
+            Duration::from_secs(0),
+            timeout
+        ));
+    }
+
+    #[test]
+    fn test_should_reap_orphan_uses_inactivity_when_never_orphaned() {
+        let timeout = Duration::from_secs(600);
+        // Never had a renderer ref (orphaned_for None) => fall back to inactivity.
+        assert!(should_reap_orphan(
+            false,
+            true,
+            None,
+            Duration::from_secs(601),
+            timeout
+        ));
+        assert!(!should_reap_orphan(
+            false,
+            true,
+            None,
+            Duration::from_secs(59),
+            timeout
+        ));
     }
 
     #[test]
