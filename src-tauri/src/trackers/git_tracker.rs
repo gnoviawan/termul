@@ -830,9 +830,17 @@ impl GitTracker {
                 if let Some(linux_path) = wslpath_translate(cwd, distro) {
                     let mut command = backend_command("wsl.exe");
                     command
-                        .args(["-d", distro, "--exec", "git", "-C", &linux_path])
+                        .args([
+                            "-d",
+                            distro,
+                            "--exec",
+                            "env",
+                            "GIT_TERMINAL_PROMPT=0",
+                            "git",
+                            "-C",
+                            &linux_path,
+                        ])
                         .args(args)
-                        .env("GIT_TERMINAL_PROMPT", "0")
                         .stdin(Stdio::null())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped());
