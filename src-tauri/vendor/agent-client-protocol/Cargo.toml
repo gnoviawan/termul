@@ -62,45 +62,9 @@ unstable_session_usage = ["agent-client-protocol-schema/unstable_session_usage"]
 name = "agent_client_protocol"
 path = "src/lib.rs"
 
-[[example]]
-name = "simple_agent"
-path = "examples/simple_agent.rs"
-
-[[example]]
-name = "yolo_one_shot_client"
-path = "examples/yolo_one_shot_client.rs"
-
-[[test]]
-name = "derive_macros"
-path = "tests/derive_macros.rs"
-
-[[test]]
-name = "jsonrpc_advanced"
-path = "tests/jsonrpc_advanced.rs"
-
-[[test]]
-name = "jsonrpc_connection_builder"
-path = "tests/jsonrpc_connection_builder.rs"
-
-[[test]]
-name = "jsonrpc_edge_cases"
-path = "tests/jsonrpc_edge_cases.rs"
-
-[[test]]
-name = "jsonrpc_error_handling"
-path = "tests/jsonrpc_error_handling.rs"
-
-[[test]]
-name = "jsonrpc_hello"
-path = "tests/jsonrpc_hello.rs"
-
-[[test]]
-name = "match_dispatch"
-path = "tests/match_dispatch.rs"
-
-[[test]]
-name = "schema_session_delete"
-path = "tests/schema_session_delete.rs"
+# Termul vendor: examples/ and tests/ were removed to keep the vendored copy
+# minimal (they are not part of the library build). Their [[example]]/[[test]]
+# entries and the clap/expect-test dev-deps they required are removed with them.
 
 [dependencies.agent-client-protocol-derive]
 version = "0.11.1"
@@ -168,13 +132,6 @@ version = "0.1"
 [dependencies.uuid]
 version = "1.18"
 features = ["v4"]
-
-[dev-dependencies.clap]
-version = "4.5"
-features = ["derive"]
-
-[dev-dependencies.expect-test]
-version = "1.5"
 
 [lints.clippy]
 doc_markdown = "allow"
