@@ -1,6 +1,6 @@
-import { ProductCta } from './ProductCta';
+import { ProductCta } from '../ui/ProductCta';
 
-const Hero = () => {
+export const Hero = () => {
   return (
     <section className="relative pt-40 pb-20 px-6 flex flex-col items-center justify-center text-center overflow-hidden">
       <img
@@ -43,5 +43,3 @@ const Hero = () => {
     </section>
   );
 };
-
-export default Hero;

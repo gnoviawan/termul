@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useSeoMeta } from '@unhead/react';
 
-import { Button } from '../components/Button';
-import { SectionHeader } from '../components/SectionHeader';
+import { Button } from '../components/ui/Button';
+import { SectionHeader } from '../components/ui/SectionHeader';
 import { submitTestimonial } from '../lib/testimonials-api';
 import {
   testimonialFileInputClass,

@@ -1,9 +1,9 @@
 import { HugeiconsIcon } from '@hugeicons/react';
 
-import { SectionHeader } from './SectionHeader';
-import { moreFeatures } from '../data/more-features';
+import { SectionHeader } from '../ui/SectionHeader';
+import { moreFeatures } from '../../data/more-features';
 
-const MoreFeaturesSection = () => {
+export const MoreFeaturesSection = () => {
   return (
     <section id="more-features" className="py-32 px-6 max-w-7xl mx-auto">
       <SectionHeader
@@ -33,5 +33,3 @@ const MoreFeaturesSection = () => {
     </section>
   );
 };
-
-export default MoreFeaturesSection;

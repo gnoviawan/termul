@@ -1,5 +1,5 @@
 import React from 'react';
-import { cn } from '../lib/utils';
+import { cn } from '../../lib/utils';
 
 type ButtonOwnProps<E extends React.ElementType> = {
   variant?: 'primary' | 'secondary' | 'dark' | 'outline';

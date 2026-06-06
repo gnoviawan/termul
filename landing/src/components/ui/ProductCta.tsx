@@ -1,7 +1,7 @@
 import { ArrowRight01Icon, GithubIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 
-import { GITHUB_REPO_URL, LATEST_RELEASE_URL } from '../lib/links';
+import { GITHUB_REPO_URL, LATEST_RELEASE_URL } from '../../lib/links';
 import { Button } from './Button';
 
 type ProductCtaVariant = 'hero' | 'footer';

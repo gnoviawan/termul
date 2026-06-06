@@ -1,7 +1,7 @@
 import { FooterColumn, FooterLink, type FooterLink as FooterLinkData } from './FooterLinks';
-import { Logo } from "./Logo";
-import { ProductCta } from './ProductCta';
-import { SectionHeader } from './SectionHeader';
+import { Logo } from "../ui/Logo";
+import { ProductCta } from '../ui/ProductCta';
+import { SectionHeader } from '../ui/SectionHeader';
 import {
   CONTRIBUTING_URL,
   DOCS_URL,
@@ -10,7 +10,7 @@ import {
   LATEST_RELEASE_URL,
   LICENSE_URL,
   PULLS_URL,
-} from "../lib/links";
+} from "../../lib/links";
 
 const footerColumns: { title: string; links: FooterLinkData[] }[] = [
   {
@@ -41,7 +41,7 @@ const footerColumns: { title: string; links: FooterLinkData[] }[] = [
   },
 ];
 
-const Footer = () => {
+export const Footer = () => {
   return (
     <footer id="download" className="mt-20 border-t border-border-subtle pt-20 pb-10 px-6 bg-background">
       <div className="max-w-6xl mx-auto">
@@ -78,5 +78,3 @@ const Footer = () => {
     </footer>
   );
 };
-
-export default Footer;

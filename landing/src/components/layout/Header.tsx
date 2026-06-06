@@ -1,12 +1,12 @@
 import { useState, useEffect, type MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, GithubIcon, Menu01Icon } from "@hugeicons/core-free-icons";
-import { Button } from "./Button";
-import { Logo } from "./Logo";
-import { cn } from "../lib/utils";
-import { useReducedMotion } from "../lib/useReducedMotion";
-import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../lib/links";
-import { HEADER_SCROLL_OFFSET, smoothScrollToHash } from "../lib/smooth-scroll";
+import { Button } from "../ui/Button";
+import { Logo } from "../ui/Logo";
+import { cn } from "../../lib/utils";
+import { useReducedMotion } from "../../lib/useReducedMotion";
+import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../../lib/links";
+import { HEADER_SCROLL_OFFSET, smoothScrollToHash } from "../../lib/smooth-scroll";
 
 export type HeaderProps = {
   /** Scroll offset of the real scroll container (e.g. OverlayScrollbars viewport). When omitted, uses `window`. */
@@ -21,7 +21,7 @@ const navLinks = [
   { href: DOCS_URL, label: "Docs", external: true },
 ] as const;
 
-const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
+export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
   const [windowScrollY, setWindowScrollY] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -245,5 +245,3 @@ const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     </>
   );
 };
-
-export default Header;

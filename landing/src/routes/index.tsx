@@ -1,9 +1,9 @@
 import type { RouteObject } from 'react-router';
 
-import { App } from './App';
-import { HomePage } from './pages/HomePage';
-import { TestimonialListPage } from './pages/TestimonialListPage';
-import { TestimonialSubmitPage } from './pages/TestimonialSubmitPage';
+import { App } from '../App';
+import { HomePage } from './HomePage';
+import { TestimonialListPage } from './TestimonialListPage';
+import { TestimonialSubmitPage } from './TestimonialSubmitPage';
 
 export const routes: RouteObject[] = [
   {

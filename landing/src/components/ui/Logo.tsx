@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 
-import { cn } from '../lib/utils';
+import { cn } from '../../lib/utils';
 
 interface LogoProps {
   className?: string;
