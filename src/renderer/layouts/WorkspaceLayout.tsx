@@ -1,5 +1,6 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,8 +11,6 @@ import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { AgentConfigDialog } from '@/components/chat/AgentConfigDialog'
-import { NewChatDialog } from '@/components/chat/NewChatDialog'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ResizeEdges } from '@/components/ResizeEdges'
@@ -41,7 +40,6 @@ import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
-import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -133,10 +131,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   // Agent chat entry point (moved from the pane tab bar to the Activity Rail).
   // The dialogs are owned here so the rail button can open them globally; the
-  // New Chat dialog targets the active pane by default.
-  const [isNewChatOpen, setIsNewChatOpen] = useState(false)
-  const [isAgentConfigOpen, setIsAgentConfigOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<StoredAgentConfig | undefined>(undefined)
+
   const hiddenBrowserTabForModalRef = useRef<string | null>(null)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isShortcutMenuOpen, setIsShortcutMenuOpen] = useState(false)
@@ -311,6 +306,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const activeTab = useActiveTab()
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
+  const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
     const pane = findPaneById(paneRoot, fullscreenPaneId)
@@ -323,6 +319,31 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Ref for terminal close handler — used inside keydown effect to avoid
   // declaration-order dependency. The ref is updated each render.
   const handleCloseTerminalRef = useRef<((id: string, tabId: string) => void) | null>(null)
+
+  /** Close the active tab (reused by keyboard shortcut and native menu event). */
+  const closeActiveTab = useCallback(() => {
+    if (!activeTab) return
+    if (activeTab.type === 'editor') {
+      const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
+      if (fileState?.isDirty) {
+        setDirtyCloseFilePath(activeTab.filePath)
+      } else {
+        const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
+        if (didClose) {
+          useWorkspaceStore.getState().removeTab(activeTab.id)
+        }
+      }
+    } else if (activeTab.type === 'git' || activeTab.type === 'git-history') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'terminal') {
+      handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
+    } else if (activeTab.type === 'browser') {
+      useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    } else if (activeTab.type === 'agent-chat') {
+      useWorkspaceStore.getState().removeTab(activeTab.id)
+    }
+  }, [activeTab])
 
   // File watcher hook
   useFileWatcher()
@@ -565,6 +586,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [closeAppWithPersistenceFlush])
 
+  // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined
+    listen<void>('menu:close-tab', () => {
+      closeActiveTab()
+    })
+      .then((fn) => {
+        unlisten = fn
+      })
+      .catch(() => {
+        // Not in Tauri context — ignore
+      })
+    return () => {
+      unlisten?.()
+    }
+  }, [closeActiveTab])
+
   // Load snapshots when project changes
   useSnapshotLoader()
   // Load recent commands for command palette
@@ -797,8 +835,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleOpenAgentChat = useCallback(() => {
     if (!activeProject?.path) return
-    setIsNewChatOpen(true)
-  }, [activeProject?.path])
+    const open = (): void => {
+      const paneId = useWorkspaceStore.getState().activePaneId
+      if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
+    }
+    // The launcher overlay only renders on the workspace route; navigate there
+    // first when invoked from a child route (e.g. preferences/settings).
+    if (location.pathname !== '/') {
+      navigate('/')
+      requestAnimationFrame(open)
+    } else {
+      open()
+    }
+  }, [activeProject?.path, location.pathname, navigate])
 
   const handleAddGitTab = useCallback(
     (paneId?: string) => {
@@ -865,28 +914,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // On Windows/Linux: Ctrl+W closes tab
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
-        if (activeTab?.type === 'editor') {
-          const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
-          if (fileState?.isDirty) {
-            setDirtyCloseFilePath(activeTab.filePath)
-          } else {
-            const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
-            if (didClose) {
-              useWorkspaceStore.getState().removeTab(activeTab.id)
-            }
-          }
-        } else if (activeTab?.type === 'git') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'git-history') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'terminal') {
-          handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
-        } else if (activeTab?.type === 'browser') {
-          useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        } else if (activeTab?.type === 'agent-chat') {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        }
+        closeActiveTab()
         return
       }
 
@@ -1077,14 +1105,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
     updatePanelVisibility,
     isExplorerVisible,
     isSidebarVisible,
-    handleOpenThemePicker
+    handleOpenThemePicker,
+    closeActiveTab
   ])
 
   useEffect(() => {
-    // Hide the active browser webview while a modal/dialog is open, since native
+    // Hide the active browser webview while a modal/overlay is open, since native
     // child webviews paint above the DOM and would otherwise obscure it. Covers
-    // the New Project modal and the ACP New Chat / Agent Config dialogs.
-    const modalOpen = isNewProjectModalOpen || isNewChatOpen || isAgentConfigOpen
+    // the New Project modal and the agent launcher overlay.
+    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen
     if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
@@ -1098,7 +1127,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, isNewChatOpen, isAgentConfigOpen, activeTab])
+  }, [isNewProjectModalOpen, isAgentLauncherOpen, activeTab])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
@@ -1528,29 +1557,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
       </div>
 
       {/* Modals */}
-      {isNewChatOpen && (
-        <NewChatDialog
-          open={isNewChatOpen}
-          onOpenChange={setIsNewChatOpen}
-          onAddAgent={() => {
-            setEditingAgent(undefined)
-            setIsAgentConfigOpen(true)
-          }}
-          onEditAgent={(cfg) => {
-            setEditingAgent(cfg)
-            setIsAgentConfigOpen(true)
-          }}
-        />
-      )}
-      {isAgentConfigOpen && (
-        <AgentConfigDialog
-          key={editingAgent?.id ?? 'new'}
-          open={isAgentConfigOpen}
-          onOpenChange={setIsAgentConfigOpen}
-          existing={editingAgent}
-        />
-      )}
-
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}

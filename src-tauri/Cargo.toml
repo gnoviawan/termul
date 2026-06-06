@@ -1,6 +1,6 @@
 [package]
 name = "termul-manager"
-version = "0.4.3"
+version = "0.4.4"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
@@ -35,6 +35,11 @@ chrono = "0.4"
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
 # only). rustls-tls matches the backend already pulled in by the updater plugin.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
+
+# ACP registry binary install (zip / tar.gz archives)
+zip = "2"
+tar = "0.4"
+flate2 = "1"
 
 # PTY and async runtime
 portable-pty = "0.9"
@@ -108,6 +113,7 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 winapi = { version = "0.3", features = [
+    "jobapi2",
     "winbase",
     "winuser",
     "consoleapi",
@@ -121,3 +127,10 @@ winapi = { version = "0.3", features = [
     "wincontypes",
     "ntdef",
 ] }
+
+# Termul patch: vendored copy of agent-client-protocol 0.12.1 with one change —
+# spawn_process sets CREATE_NO_WINDOW on Windows so ACP agent subprocesses do
+# not flash a console window. See vendor/agent-client-protocol/src/acp_agent.rs.
+# Keep the `= "0.12"` requirement above; this only redirects where it resolves.
+[patch.crates-io]
+agent-client-protocol = { path = "vendor/agent-client-protocol" }

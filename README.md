@@ -93,6 +93,23 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 ![Termul Manager Screenshot](img/termul.png)
 
+## 📦 Install
+
+### Homebrew (macOS)
+
+```bash
+brew tap gnoviawan/termul
+brew install --cask termul
+```
+
+### curl (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/main/scripts/install.sh | bash
+```
+
+Windows users should install the `.exe` or `.msi` from [GitHub Releases](https://github.com/gnoviawan/termul/releases). Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer Homebrew or curl.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
