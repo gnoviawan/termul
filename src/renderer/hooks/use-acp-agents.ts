@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
+import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 
 /**
  * Load persisted ACP agent configs once at app mount, then warm them up in the
@@ -23,8 +25,11 @@ export function useAcpAgents(): void {
     void (async () => {
       await loadAgentConfigs()
       const { agentConfigs, prewarmAgent } = useAcpStore.getState()
+      const activeProjectId = useProjectStore.getState().activeProjectId
+      const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
+      if (cwd.trim().length === 0) return
       for (const config of agentConfigs) {
-        void prewarmAgent(config.id)
+        void prewarmAgent(config.id, cwd)
       }
     })()
   }, [loadAgentConfigs])
