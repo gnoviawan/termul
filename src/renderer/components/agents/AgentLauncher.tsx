@@ -1,10 +1,12 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { type LastSelectedAgent, PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon, X } from 'lucide-react'
+import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { LoadedSkillChip } from '@/components/chat/LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
+import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
 import {
   buildSlashSections,
   isSlashTrigger,
@@ -197,8 +199,8 @@ export function AgentLauncher({
     return selectedEntry.modes.includes(selectedMode) ? selectedMode : selectedEntry.modes[0]
   }, [selectedEntry, selectedMode])
 
-  const { skills } = useAgentSkills(effectiveMode === 'acp' ? projectRoot : undefined)
-  const menuOpen = effectiveMode === 'acp' && isSlashTrigger(prompt)
+  const { skills } = useAgentSkills(projectRoot)
+  const menuOpen = isSlashTrigger(prompt)
   const slashSections = useMemo(
     () =>
       menuOpen
@@ -212,10 +214,6 @@ export function AgentLauncher({
         : [],
     [menuOpen, skills, prompt]
   )
-
-  useEffect(() => {
-    if (effectiveMode !== 'acp') setLoadedSkill(null)
-  }, [effectiveMode])
 
   const handleSlashSelect = useCallback((item: SlashItem) => {
     if (item.kind !== 'skill') return
@@ -252,12 +250,13 @@ export function AgentLauncher({
     async (agent: TerminalAgentDefinition): Promise<void> => {
       const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
       const cwd = getDefaultCwdForProject(activeProjectId as string)
+      const launchPrompt = await buildPromptWithLoadedSkill(loadedSkill, prompt, projectRoot)
       const result = await launchAgentInPane(
         paneId,
         activeProjectId as string,
         cwd,
         agent,
-        prompt,
+        launchPrompt,
         {
           envVars: project?.envVars,
           maxTerminalsPerProject: maxTerminals
@@ -267,9 +266,10 @@ export function AgentLauncher({
         toast.error(result.error || 'Failed to launch agent')
         return
       }
+      setLoadedSkill(null)
       useWorkspaceStore.getState().hideAgentLauncher()
     },
-    [activeProjectId, maxTerminals, paneId, prompt]
+    [activeProjectId, maxTerminals, paneId, prompt, loadedSkill, projectRoot]
   )
 
   const launchAcp = useCallback(
@@ -320,27 +320,15 @@ export function AgentLauncher({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (menuOpen && slashSections.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          menuRef.current?.move(1)
-          return
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          menuRef.current?.move(-1)
-          return
-        }
-        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-          e.preventDefault()
-          menuRef.current?.selectHighlighted()
-          return
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          setPrompt('')
-          return
-        }
+      if (
+        tryHandleSlashMenuKeyDown(e, {
+          menuOpen,
+          sectionsLength: slashSections.length,
+          menuRef,
+          onClearInput: () => setPrompt('')
+        })
+      ) {
+        return
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -459,158 +447,147 @@ export function AgentLauncher({
           {menuOpen && (
             <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
           )}
-          {loadedSkill && effectiveMode === 'acp' && (
-            <div className="mb-1 flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-1.5">
-              <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-                Skill:{' '}
-                <span className="font-medium text-foreground break-words">{loadedSkill.name}</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setLoadedSkill(null)}
-                className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                aria-label="Remove loaded skill"
-                title="Remove skill"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )}
-          {/* Chat-style input bar — grid layout for clean alignment */}
-          <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
-            {/* Agent selector — column 1 */}
-            <Select value={selectedKey} onValueChange={handleSelectChange}>
-              <SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
-                <SelectValue>
-                  <span className="flex items-center gap-1.5">
-                    <EntryGlyph entry={selectedEntry} />
-                    <span className="max-w-[100px] truncate text-xs font-medium">
-                      {selectedEntry?.name ?? 'Agent'}
-                    </span>
-                  </span>
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {entries.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={openAgentSettings}
-                    className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-primary hover:bg-muted/40"
-                  >
-                    <Settings2 size={12} />
-                    Enable an agent in Settings…
-                  </button>
-                ) : (
-                  <>
-                    {entries
-                      .filter((e) => e.isBuiltIn)
-                      .map((entry) => (
-                        <SelectItem key={entry.key} value={entry.key}>
-                          <EntryRow entry={entry} />
-                        </SelectItem>
-                      ))}
-                    {entries.some((e) => e.isBuiltIn) && entries.some((e) => !e.isBuiltIn) && (
-                      <SelectSeparator />
-                    )}
-                    {entries
-                      .filter((e) => !e.isBuiltIn)
-                      .map((entry) => (
-                        <SelectItem key={entry.key} value={entry.key}>
-                          <EntryRow entry={entry} />
-                        </SelectItem>
-                      ))}
-                    <SelectSeparator />
-                    <SelectItem value={AGENT_SELECT_NEW}>
-                      <span className="flex items-center gap-2 text-primary">
-                        <Plus size={12} />
-                        New custom agent…
-                      </span>
-                    </SelectItem>
-                  </>
-                )}
-              </SelectContent>
-            </Select>
-
-            {/* CLI/ACP mode toggle — column 2 (only for dual-mode agents) */}
-            {selectedEntry && selectedEntry.modes.length > 1 ? (
-              <div className="flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
-                {(['cli', 'acp'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => handleModeChange(mode)}
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
-                      effectiveMode === mode
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                    aria-pressed={effectiveMode === mode}
-                    aria-label={`Run as ${mode.toUpperCase()}`}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <span
-                className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
-                title={`This agent runs as ${effectiveMode.toUpperCase()}`}
-              >
-                {effectiveMode}
-              </span>
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
+            {loadedSkill && (
+              <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
             )}
+            <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center">
+              {/* Agent selector — column 1 */}
+              <Select value={selectedKey} onValueChange={handleSelectChange}>
+                <SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+                  <SelectValue>
+                    <span className="flex items-center gap-1.5">
+                      <EntryGlyph entry={selectedEntry} />
+                      <span className="max-w-[100px] truncate text-xs font-medium">
+                        {selectedEntry?.name ?? 'Agent'}
+                      </span>
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {entries.length === 0 ? (
+                    <button
+                      type="button"
+                      onClick={openAgentSettings}
+                      className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-primary hover:bg-muted/40"
+                    >
+                      <Settings2 size={12} />
+                      Enable an agent in Settings…
+                    </button>
+                  ) : (
+                    <>
+                      {entries
+                        .filter((e) => e.isBuiltIn)
+                        .map((entry) => (
+                          <SelectItem key={entry.key} value={entry.key}>
+                            <EntryRow entry={entry} />
+                          </SelectItem>
+                        ))}
+                      {entries.some((e) => e.isBuiltIn) && entries.some((e) => !e.isBuiltIn) && (
+                        <SelectSeparator />
+                      )}
+                      {entries
+                        .filter((e) => !e.isBuiltIn)
+                        .map((entry) => (
+                          <SelectItem key={entry.key} value={entry.key}>
+                            <EntryRow entry={entry} />
+                          </SelectItem>
+                        ))}
+                      <SelectSeparator />
+                      <SelectItem value={AGENT_SELECT_NEW}>
+                        <span className="flex items-center gap-2 text-primary">
+                          <Plus size={12} />
+                          New custom agent…
+                        </span>
+                      </SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
 
-            {/* Divider */}
-            <div className="h-6 w-px bg-border/50 justify-self-center" />
+              {/* CLI/ACP mode toggle — column 2 (only for dual-mode agents) */}
+              {selectedEntry && selectedEntry.modes.length > 1 ? (
+                <div className="flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
+                  {(['cli', 'acp'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => handleModeChange(mode)}
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
+                        effectiveMode === mode
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      aria-pressed={effectiveMode === mode}
+                      aria-label={`Run as ${mode.toUpperCase()}`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <span
+                  className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+                  title={`This agent runs as ${effectiveMode.toUpperCase()}`}
+                >
+                  {effectiveMode}
+                </span>
+              )}
 
-            {/* Textarea — column 2 (flex-1 via 1fr) */}
-            <textarea
-              ref={textareaRef}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                effectiveMode === 'acp'
-                  ? loadedSkill
+              {/* Divider */}
+              <div className="h-6 w-px bg-border/50 justify-self-center" />
+
+              {/* Textarea — column 2 (flex-1 via 1fr) */}
+              <textarea
+                ref={textareaRef}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  loadedSkill
                     ? 'Add a message (optional)…'
                     : 'Describe what you want… (/ for skills)'
-                  : 'Describe what you want…'
-              }
-              rows={1}
-              aria-label="Agent prompt"
-              autoFocus
-              className="min-w-0 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
-              style={{ minHeight: '44px', maxHeight: '120px' }}
-              onInput={(e) => {
-                const el = e.currentTarget
-                el.style.height = 'auto'
-                el.style.height = `${Math.min(el.scrollHeight, 120)}px`
-              }}
-            />
+                }
+                rows={1}
+                aria-label="Agent prompt"
+                autoFocus
+                className="min-w-0 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
+                style={{ minHeight: '44px', maxHeight: '120px' }}
+                onInput={(e) => {
+                  const el = e.currentTarget
+                  el.style.height = 'auto'
+                  el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                }}
+              />
 
-            {/* Launch button — column 3 */}
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canLaunch}
-              className={cn(
-                'mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-transparent transition-colors',
-                canLaunch
-                  ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                  : 'text-muted-foreground/35'
-              )}
-              aria-label={`Launch ${selectedEntry?.name ?? 'agent'}`}
-              title={isLaunching ? 'Launching…' : `Launch ${selectedEntry?.name ?? 'agent'}`}
-            >
-              {isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
-            </button>
+              {/* Launch button — column 3 */}
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!canLaunch}
+                className={cn(
+                  'mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-transparent transition-colors',
+                  canLaunch
+                    ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                    : 'text-muted-foreground/35'
+                )}
+                aria-label={`Launch ${selectedEntry?.name ?? 'agent'}`}
+                title={isLaunching ? 'Launching…' : `Launch ${selectedEntry?.name ?? 'agent'}`}
+              >
+                {isLaunching ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <ArrowUp size={16} />
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Hint */}
         <span className="text-center text-[11px] text-muted-foreground/50">
-          Enter to launch · Shift+Enter for newline · Esc to dismiss
+          Tab to complete · Enter to launch · Shift+Enter for newline · Esc to dismiss
         </span>
 
         {/* Plain terminal */}

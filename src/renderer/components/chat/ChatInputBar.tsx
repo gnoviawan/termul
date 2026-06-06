@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, Square, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, Square } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -12,7 +12,9 @@ import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { partitionConfigOptions } from './chat-input-bar-config'
+import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
+import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
   applyCommandToInput,
   buildSlashSections,
@@ -129,28 +131,18 @@ export function ChatInputBar({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (menuOpen && sections.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          menuRef.current?.move(1)
-          return
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          menuRef.current?.move(-1)
-          return
-        }
-        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && sections.length > 0) {
-          e.preventDefault()
-          menuRef.current?.selectHighlighted()
-          return
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          setValue('')
-          resetHeight()
-          return
-        }
+      if (
+        tryHandleSlashMenuKeyDown(e, {
+          menuOpen,
+          sectionsLength: sections.length,
+          menuRef,
+          onClearInput: () => {
+            setValue('')
+            resetHeight()
+          }
+        })
+      ) {
+        return
       }
 
       if (e.key === 'Escape' && busy) {
@@ -181,21 +173,7 @@ export function ChatInputBar({
         {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
         <div className="overflow-hidden rounded-2xl bg-secondary/40">
           {loadedSkill && (
-            <div className="flex items-start gap-2 border-b border-border/40 px-4 py-1.5">
-              <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-                Skill:{' '}
-                <span className="font-medium text-foreground break-words">{loadedSkill.name}</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setLoadedSkill(null)}
-                className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                aria-label="Remove loaded skill"
-                title="Remove skill"
-              >
-                <X size={12} />
-              </button>
-            </div>
+            <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
           )}
           <div className="px-4 pb-1.5 pt-3.5">
             <textarea
