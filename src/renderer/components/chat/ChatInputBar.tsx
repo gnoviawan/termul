@@ -1,5 +1,5 @@
-import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { ArrowUp, ChevronDown, Square, X } from 'lucide-react'
+import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   buildPromptWithLoadedSkill,
@@ -69,10 +69,7 @@ export function ChatInputBar({
   const filter = slashFilter(value)
 
   const sections = useMemo(
-    () =>
-      menuOpen
-        ? buildSlashSections({ commands, configOptions, modes, skills, filter })
-        : [],
+    () => (menuOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
     [menuOpen, commands, configOptions, modes, skills, filter]
   )
 
@@ -103,17 +100,7 @@ export function ChatInputBar({
     } finally {
       setSending(false)
     }
-  }, [
-    value,
-    loadedSkill,
-    busy,
-    disabled,
-    sending,
-    onSend,
-    resetHeight,
-    projectRoot,
-    session.cwd
-  ])
+  }, [value, loadedSkill, busy, disabled, sending, onSend, resetHeight, projectRoot, session.cwd])
 
   const handleSelect = useCallback(
     (item: SlashItem) => {

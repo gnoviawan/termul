@@ -20,6 +20,7 @@ export function useAgentSkills(projectRoot: string | undefined): {
   }, [])
 
   useEffect(() => {
+    void reloadToken
     let cancelled = false
     setLoading(true)
     void (async () => {

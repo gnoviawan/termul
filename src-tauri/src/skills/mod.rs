@@ -81,7 +81,11 @@ pub fn parse_skill_md(content: &str) -> Result<(HashMap<String, String>, String)
             continue;
         };
         let key = key.trim().to_string();
-        let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
+        let value = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
         if !key.is_empty() {
             map.insert(key, value);
         }
@@ -145,9 +149,7 @@ pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSum
     scan_skills_dir(&home_skills_root()?, "global", &mut by_name)?;
 
     if let Some(root) = project_root.filter(|s| !s.is_empty()) {
-        let project_skills = PathBuf::from(root)
-            .join(".agents")
-            .join("skills");
+        let project_skills = PathBuf::from(root).join(".agents").join("skills");
         scan_skills_dir(&project_skills, "project", &mut by_name)?;
     }
 
@@ -179,7 +181,10 @@ fn resolve_skill_path(name: &str, project_root: Option<&str>) -> Result<(PathBuf
 }
 
 /// Read a skill's markdown body. Project-local overrides global.
-pub fn read_agent_skill(name: &str, project_root: Option<&str>) -> Result<AgentSkillContent, String> {
+pub fn read_agent_skill(
+    name: &str,
+    project_root: Option<&str>,
+) -> Result<AgentSkillContent, String> {
     let (path, scope) = resolve_skill_path(name, project_root)?;
     let raw = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let (frontmatter, body) = parse_skill_md(&raw)?;
@@ -208,7 +213,10 @@ mod tests {
         let raw = "---\nname: demo\ndescription: A demo skill\n---\n\n## Steps\n\nDo things.\n";
         let (fm, body) = parse_skill_md(raw).unwrap();
         assert_eq!(fm.get("name").map(String::as_str), Some("demo"));
-        assert_eq!(fm.get("description").map(String::as_str), Some("A demo skill"));
+        assert_eq!(
+            fm.get("description").map(String::as_str),
+            Some("A demo skill")
+        );
         assert!(body.contains("## Steps"));
     }
 
@@ -225,7 +233,9 @@ mod tests {
 
         let root = temp.to_string_lossy().to_string();
         let listed = list_agent_skills(Some(&root)).unwrap();
-        assert!(listed.iter().any(|s| s.name == "demo-skill" && s.scope == "project"));
+        assert!(listed
+            .iter()
+            .any(|s| s.name == "demo-skill" && s.scope == "project"));
 
         let content = read_agent_skill("demo-skill", Some(&root)).unwrap();
         assert_eq!(content.name, "demo-skill");
@@ -239,7 +249,11 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("termul-skill-sec-{}", std::process::id()));
         let skill_dir = temp.join(".agents").join("skills").join("safe-skill");
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "---\nname: safe-skill\n---\n\nok\n").unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: safe-skill\n---\n\nok\n",
+        )
+        .unwrap();
         let root = temp.to_string_lossy().to_string();
 
         for malicious in [
@@ -262,7 +276,8 @@ mod tests {
 
     #[test]
     fn list_agent_skills_ignores_invalid_directory_names() {
-        let temp = std::env::temp_dir().join(format!("termul-skill-list-sec-{}", std::process::id()));
+        let temp =
+            std::env::temp_dir().join(format!("termul-skill-list-sec-{}", std::process::id()));
         let skills_root = temp.join(".agents").join("skills");
         fs::create_dir_all(skills_root.join("valid-skill")).unwrap();
         fs::write(
