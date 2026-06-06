@@ -4,6 +4,13 @@ import { ArrowUp, Loader2, Plus, Settings2, Terminal as TerminalIcon, X } from '
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
+import {
+  buildSlashSections,
+  isSlashTrigger,
+  type SlashItem,
+  slashFilter
+} from '@/components/chat/slash-menu-model'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -13,6 +20,11 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import {
+  buildPromptWithLoadedSkill,
+  type LoadedAgentSkill,
+  useAgentSkills
+} from '@/hooks/use-agent-skills'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
 import { loadAllAgents, upsertCustomAgent } from '@/lib/agents/custom-agents'
@@ -33,18 +45,6 @@ import { prepareChatKey, useAcpStore } from '@/stores/acp-store'
 import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import {
-  buildPromptWithLoadedSkill,
-  type LoadedAgentSkill,
-  useAgentSkills
-} from '@/hooks/use-agent-skills'
-import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
-import {
-  buildSlashSections,
-  isSlashTrigger,
-  type SlashItem,
-  slashFilter
-} from '@/components/chat/slash-menu-model'
 import { CustomAgentDialog } from './CustomAgentDialog'
 
 /**
@@ -457,11 +457,7 @@ export function AgentLauncher({
       <div className="flex w-full max-w-xl flex-col gap-3">
         <div className="relative">
           {menuOpen && (
-            <SlashCommandMenu
-              ref={menuRef}
-              sections={slashSections}
-              onSelect={handleSlashSelect}
-            />
+            <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
           )}
           {loadedSkill && effectiveMode === 'acp' && (
             <div className="mb-1 flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-1.5">
@@ -480,136 +476,136 @@ export function AgentLauncher({
               </button>
             </div>
           )}
-        {/* Chat-style input bar — grid layout for clean alignment */}
-        <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
-          {/* Agent selector — column 1 */}
-          <Select value={selectedKey} onValueChange={handleSelectChange}>
-            <SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
-              <SelectValue>
-                <span className="flex items-center gap-1.5">
-                  <EntryGlyph entry={selectedEntry} />
-                  <span className="max-w-[100px] truncate text-xs font-medium">
-                    {selectedEntry?.name ?? 'Agent'}
-                  </span>
-                </span>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {entries.length === 0 ? (
-                <button
-                  type="button"
-                  onClick={openAgentSettings}
-                  className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-primary hover:bg-muted/40"
-                >
-                  <Settings2 size={12} />
-                  Enable an agent in Settings…
-                </button>
-              ) : (
-                <>
-                  {entries
-                    .filter((e) => e.isBuiltIn)
-                    .map((entry) => (
-                      <SelectItem key={entry.key} value={entry.key}>
-                        <EntryRow entry={entry} />
-                      </SelectItem>
-                    ))}
-                  {entries.some((e) => e.isBuiltIn) && entries.some((e) => !e.isBuiltIn) && (
-                    <SelectSeparator />
-                  )}
-                  {entries
-                    .filter((e) => !e.isBuiltIn)
-                    .map((entry) => (
-                      <SelectItem key={entry.key} value={entry.key}>
-                        <EntryRow entry={entry} />
-                      </SelectItem>
-                    ))}
-                  <SelectSeparator />
-                  <SelectItem value={AGENT_SELECT_NEW}>
-                    <span className="flex items-center gap-2 text-primary">
-                      <Plus size={12} />
-                      New custom agent…
+          {/* Chat-style input bar — grid layout for clean alignment */}
+          <div className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:bg-muted/35 focus-within:border-border/80 focus-within:bg-muted/20 focus-within:ring-1 focus-within:ring-border/50 focus-within:ring-offset-0">
+            {/* Agent selector — column 1 */}
+            <Select value={selectedKey} onValueChange={handleSelectChange}>
+              <SelectTrigger className="h-11 w-auto gap-1.5 border-0 bg-transparent pl-3 pr-1 shadow-none hover:bg-muted/40 focus:ring-0 focus:ring-offset-0 [&>svg]:opacity-60">
+                <SelectValue>
+                  <span className="flex items-center gap-1.5">
+                    <EntryGlyph entry={selectedEntry} />
+                    <span className="max-w-[100px] truncate text-xs font-medium">
+                      {selectedEntry?.name ?? 'Agent'}
                     </span>
-                  </SelectItem>
-                </>
-              )}
-            </SelectContent>
-          </Select>
+                  </span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {entries.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={openAgentSettings}
+                    className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-primary hover:bg-muted/40"
+                  >
+                    <Settings2 size={12} />
+                    Enable an agent in Settings…
+                  </button>
+                ) : (
+                  <>
+                    {entries
+                      .filter((e) => e.isBuiltIn)
+                      .map((entry) => (
+                        <SelectItem key={entry.key} value={entry.key}>
+                          <EntryRow entry={entry} />
+                        </SelectItem>
+                      ))}
+                    {entries.some((e) => e.isBuiltIn) && entries.some((e) => !e.isBuiltIn) && (
+                      <SelectSeparator />
+                    )}
+                    {entries
+                      .filter((e) => !e.isBuiltIn)
+                      .map((entry) => (
+                        <SelectItem key={entry.key} value={entry.key}>
+                          <EntryRow entry={entry} />
+                        </SelectItem>
+                      ))}
+                    <SelectSeparator />
+                    <SelectItem value={AGENT_SELECT_NEW}>
+                      <span className="flex items-center gap-2 text-primary">
+                        <Plus size={12} />
+                        New custom agent…
+                      </span>
+                    </SelectItem>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
 
-          {/* CLI/ACP mode toggle — column 2 (only for dual-mode agents) */}
-          {selectedEntry && selectedEntry.modes.length > 1 ? (
-            <div className="flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
-              {(['cli', 'acp'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => handleModeChange(mode)}
-                  className={cn(
-                    'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
-                    effectiveMode === mode
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  aria-pressed={effectiveMode === mode}
-                  aria-label={`Run as ${mode.toUpperCase()}`}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <span
-              className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
-              title={`This agent runs as ${effectiveMode.toUpperCase()}`}
-            >
-              {effectiveMode}
-            </span>
-          )}
-
-          {/* Divider */}
-          <div className="h-6 w-px bg-border/50 justify-self-center" />
-
-          {/* Textarea — column 2 (flex-1 via 1fr) */}
-          <textarea
-            ref={textareaRef}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              effectiveMode === 'acp'
-                ? loadedSkill
-                  ? 'Add a message (optional)…'
-                  : 'Describe what you want… (/ for skills)'
-                : 'Describe what you want…'
-            }
-            rows={1}
-            aria-label="Agent prompt"
-            autoFocus
-            className="min-w-0 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
-            style={{ minHeight: '44px', maxHeight: '120px' }}
-            onInput={(e) => {
-              const el = e.currentTarget
-              el.style.height = 'auto'
-              el.style.height = `${Math.min(el.scrollHeight, 120)}px`
-            }}
-          />
-
-          {/* Launch button — column 3 */}
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canLaunch}
-            className={cn(
-              'mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-transparent transition-colors',
-              canLaunch
-                ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                : 'text-muted-foreground/35'
+            {/* CLI/ACP mode toggle — column 2 (only for dual-mode agents) */}
+            {selectedEntry && selectedEntry.modes.length > 1 ? (
+              <div className="flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
+                {(['cli', 'acp'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => handleModeChange(mode)}
+                    className={cn(
+                      'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
+                      effectiveMode === mode
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    aria-pressed={effectiveMode === mode}
+                    aria-label={`Run as ${mode.toUpperCase()}`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span
+                className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+                title={`This agent runs as ${effectiveMode.toUpperCase()}`}
+              >
+                {effectiveMode}
+              </span>
             )}
-            aria-label={`Launch ${selectedEntry?.name ?? 'agent'}`}
-            title={isLaunching ? 'Launching…' : `Launch ${selectedEntry?.name ?? 'agent'}`}
-          >
-            {isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
-          </button>
-        </div>
+
+            {/* Divider */}
+            <div className="h-6 w-px bg-border/50 justify-self-center" />
+
+            {/* Textarea — column 2 (flex-1 via 1fr) */}
+            <textarea
+              ref={textareaRef}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                effectiveMode === 'acp'
+                  ? loadedSkill
+                    ? 'Add a message (optional)…'
+                    : 'Describe what you want… (/ for skills)'
+                  : 'Describe what you want…'
+              }
+              rows={1}
+              aria-label="Agent prompt"
+              autoFocus
+              className="min-w-0 resize-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground/60"
+              style={{ minHeight: '44px', maxHeight: '120px' }}
+              onInput={(e) => {
+                const el = e.currentTarget
+                el.style.height = 'auto'
+                el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+              }}
+            />
+
+            {/* Launch button — column 3 */}
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canLaunch}
+              className={cn(
+                'mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-transparent transition-colors',
+                canLaunch
+                  ? 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                  : 'text-muted-foreground/35'
+              )}
+              aria-label={`Launch ${selectedEntry?.name ?? 'agent'}`}
+              title={isLaunching ? 'Launching…' : `Launch ${selectedEntry?.name ?? 'agent'}`}
+            >
+              {isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
+            </button>
+          </div>
         </div>
 
         {/* Hint */}
