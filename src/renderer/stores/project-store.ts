@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
+import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
   // State
@@ -12,7 +12,13 @@ export interface ProjectState {
 
   // Actions
   selectProject: (id: string) => void
-  addProject: (name: string, color: ProjectColor, path?: string, defaultShell?: string) => Project
+  addProject: (
+    name: string,
+    color: ProjectColor,
+    path?: string,
+    defaultShell?: string,
+    envVars?: EnvVariable[]
+  ) => Project
   updateProject: (id: string, updates: Partial<Project>) => void
   deleteProject: (id: string) => void
   archiveProject: (id: string) => void
@@ -61,14 +67,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     name: string,
     color: ProjectColor,
     path?: string,
-    defaultShell?: string
+    defaultShell?: string,
+    envVars?: EnvVariable[]
   ): Project => {
     const newProject: Project = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       name,
       color,
       path,
       defaultShell,
+      envVars,
       gitBranch: 'main'
     }
     set((state) => ({
