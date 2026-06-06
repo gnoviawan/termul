@@ -544,7 +544,14 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
           // reports success, so this only logs genuine failures).
           const result = await terminalApi.kill(terminal.ptyId)
           if (!result.success) {
-            console.warn('Failed to kill PTY during project delete:', result.error)
+        try {
+          const killResult = await terminalApi.kill(terminal.ptyId)
+          if (!killResult.success) {
+            console.warn('Failed to kill PTY during project delete:', killResult.error)
+            // Best-effort fallback: allow orphan cleanup if PTY still exists
+            await terminalApi.setProtected(terminal.ptyId, false).catch((error) => {
+              console.warn('Failed to clear PTY protection during project delete:', error)
+            })
           }
         } catch (error) {
           console.warn('Failed to kill PTY during project delete:', error)
