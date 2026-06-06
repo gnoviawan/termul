@@ -8,6 +8,8 @@ import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 const {
   mockLaunchAgentInPane,
   mockStartChat,
+  mockPrepareChat,
+  mockCancelPreparedChat,
   mockSendPrompt,
   mockAddAgentChatTab,
   mockHideAgentLauncher,
@@ -21,6 +23,8 @@ const {
 } = vi.hoisted(() => ({
   mockLaunchAgentInPane: vi.fn(),
   mockStartChat: vi.fn(),
+  mockPrepareChat: vi.fn(),
+  mockCancelPreparedChat: vi.fn(),
   mockSendPrompt: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
@@ -82,11 +86,18 @@ vi.mock('@/stores/workspace-store', () => {
 })
 
 vi.mock('@/stores/acp-store', () => {
-  const getState = () => ({ startChat: mockStartChat, sendPrompt: mockSendPrompt })
+  const getState = () => ({
+    startChat: mockStartChat,
+    prepareChat: mockPrepareChat,
+    cancelPreparedChat: mockCancelPreparedChat,
+    sendPrompt: mockSendPrompt
+  })
   const useAcpStore = (sel?: (s: { agentConfigs: StoredAgentConfig[] }) => unknown) =>
     sel ? sel({ agentConfigs: acpConfigsRef.current }) : getState()
   useAcpStore.getState = getState
-  return { useAcpStore }
+  // Mirror the store's real key builder so the cleanup assertion matches.
+  const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
+  return { useAcpStore, prepareChatKey }
 })
 
 const CLI_AGENT: TerminalAgentDefinition = {
@@ -165,6 +176,48 @@ describe('AgentLauncher routing', () => {
     await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
     expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
     expect(mockLaunchAgentInPane).not.toHaveBeenCalled()
+  })
+
+  it('prepares an ACP session in the background when ACP mode is selected', async () => {
+    acpConfigsRef.current = [ACP_CONFIG]
+    renderLauncher()
+    await waitFor(() => expect(mockLoadAllAgents).toHaveBeenCalled())
+
+    fireEvent.click(await screen.findByLabelText('Run as ACP'))
+
+    // Selecting ACP with a resolvable cwd should warm a session ahead of send.
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:claude-acp', '/work')
+    )
+    expect(mockStartChat).not.toHaveBeenCalled()
+  })
+
+  it('does not prepare a session for a CLI-mode selection', async () => {
+    renderLauncher()
+    await waitFor(() => expect(mockLoadAllAgents).toHaveBeenCalled())
+
+    // Default selection is the CLI agent; no ACP prepare should fire.
+    expect(mockPrepareChat).not.toHaveBeenCalled()
+  })
+
+  it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
+    acpConfigsRef.current = [ACP_CONFIG]
+    const { unmount } = render(
+      <MemoryRouter>
+        <AgentLauncher paneId="pane1" />
+      </MemoryRouter>
+    )
+    await waitFor(() => expect(mockLoadAllAgents).toHaveBeenCalled())
+    fireEvent.click(await screen.findByLabelText('Run as ACP'))
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:claude-acp', '/work')
+    )
+
+    unmount()
+
+    // Cleanup cancels the prepared session for the exact key so an abandoned
+    // selection does not leak a live backend session + phantom history entry.
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith('acp-registry:claude-acp\0/work\0')
   })
 
   it('locks a single-mode CLI agent to cli (no toggle rendered)', async () => {
