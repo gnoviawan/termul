@@ -13,7 +13,9 @@ import {
 } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 
 /** Persisted-config id for a registry agent. */
 function registryConfigId(regId: string): string {
@@ -40,9 +42,10 @@ interface AgentRowProps {
 function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
   const configId = registryConfigId(agent.id)
   const enabled = useAcpStore((s) => s.agentConfigs.some((c) => c.id === configId))
-  const warming = useAcpStore((s) => Boolean(s.warmingConfigs[configId]))
-  const liveAgentId = useAcpStore((s) => s.configToLiveAgent[configId])
-  const warmStatus = useAcpStore((s) => (liveAgentId ? s.agentStatus[liveAgentId] : undefined))
+  // Warm state is rolled up across every per-project process for this config
+  // (the reuse/warming maps are keyed by config+cwd, so one config may own
+  // several live processes).
+  const warmState = useConfigWarmState(configId)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
   const prewarmAgent = useAcpStore((s) => s.prewarmAgent)
@@ -60,7 +63,11 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
       templateId: agent.id,
       ...config
     })
-    void prewarmAgent(configId)
+    // Warm the process for the active project's cwd (skip if no project/cwd).
+    // Other projects warm lazily on first use — each gets its own process.
+    const activeProjectId = useProjectStore.getState().activeProjectId
+    const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
+    if (cwd.trim().length > 0) void prewarmAgent(configId, cwd)
   }
 
   const handleToggle = async (next: boolean): Promise<void> => {
@@ -100,15 +107,16 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
     }
   }
 
-  // Warm state for the badge: an enabled agent is warming while its background
-  // spawn is in flight, ready once connected, needs auth, or failed.
+  // Warm state for the badge: an enabled agent is warming while a background
+  // spawn is in flight (any project), ready once any process is connected,
+  // needs auth, or idle.
   const warmBadge: { label: string; tone: 'ready' | 'auth' | 'muted' } | null = !enabled
     ? null
-    : warmStatus === 'connected'
+    : warmState.connected
       ? { label: 'Ready', tone: 'ready' }
-      : warmStatus === 'needs-auth'
+      : warmState.needsAuth
         ? { label: 'Auth required', tone: 'auth' }
-        : warming
+        : warmState.warming
           ? { label: 'Warming…', tone: 'muted' }
           : null
 
