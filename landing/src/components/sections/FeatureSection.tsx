@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 
-import { useReducedMotion } from '../lib/useReducedMotion';
-import { HEADER_SCROLL_OFFSET, smoothScrollToElement } from '../lib/smooth-scroll';
-import { features, featureBackgroundImage } from '../data/features';
-import { FeatureVisual } from './feature-visuals';
-import { SectionHeader } from './SectionHeader';
-import { FeatureVideo } from './FeatureVideo';
+import { useReducedMotion } from '../../lib/useReducedMotion';
+import { HEADER_SCROLL_OFFSET, smoothScrollToElement } from '../../lib/smooth-scroll';
+import { features, featureBackgroundImage } from '../../data/features';
+import { FeatureVisual } from '../feature-visuals';
+import { SectionHeader } from '../ui/SectionHeader';
+import { FeatureVideo } from '../ui/FeatureVideo';
 
-const FeatureSection = () => {
+export const FeatureSection = () => {
   const [activeFeature, setActiveFeature] = useState('01');
   const observerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const reducedMotion = useReducedMotion();
@@ -163,5 +163,3 @@ const FeatureSection = () => {
     </section>
   );
 };
-
-export default FeatureSection;

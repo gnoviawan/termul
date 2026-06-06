@@ -9,11 +9,11 @@ import {
 } from '@/components/ui/avatar';
 import { InfiniteSlider } from '@/components/ui/infinite-slider';
 
-import { testimonials, type Testimonial } from '../data/testimonials';
-import { fetchApprovedTestimonials } from '../lib/testimonials-api';
-import type { PublicTestimonial } from '../types/testimonials';
-import { cn } from '../lib/utils';
-import { SectionHeader } from './SectionHeader';
+import { testimonials, type Testimonial } from '../../data/testimonials';
+import { fetchApprovedTestimonials } from '../../lib/testimonials-api';
+import type { PublicTestimonial } from '../../types/testimonials';
+import { cn } from '../../lib/utils';
+import { SectionHeader } from '../ui/SectionHeader';
 
 type DisplayTestimonial = {
   id: string;

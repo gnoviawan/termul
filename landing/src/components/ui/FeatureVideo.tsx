@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { FeatureId, FeatureVideo as FeatureVideoData } from '../data/features';
-import { FeatureVisual } from './feature-visuals';
+import type { FeatureId, FeatureVideo as FeatureVideoData } from '../../data/features';
+import { FeatureVisual } from '../feature-visuals';
 
 type FeatureVideoProps = {
   id: FeatureId;
@@ -87,5 +87,3 @@ export function FeatureVideo({ id, video, title }: FeatureVideoProps) {
     </div>
   );
 }
-
-export default FeatureVideo;
