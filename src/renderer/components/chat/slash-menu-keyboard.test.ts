@@ -1,4 +1,4 @@
-import { createRef } from 'react'
+import type { KeyboardEvent, RefObject } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -15,7 +15,7 @@ function keyEvent(key: string, extra: Partial<KeyboardEvent> = {}): KeyboardEven
 
 describe('tryHandleSlashMenuKeyDown', () => {
   it('returns false when the menu is closed', () => {
-    const menuRef = createRef<SlashMenuHandle>()
+    const menuRef: RefObject<SlashMenuHandle | null> = { current: null }
     const handled = tryHandleSlashMenuKeyDown(keyEvent('Tab'), {
       menuOpen: false,
       sectionsLength: 2,
@@ -26,9 +26,10 @@ describe('tryHandleSlashMenuKeyDown', () => {
   })
 
   it('selects the highlighted item on Tab', () => {
-    const menuRef = createRef<SlashMenuHandle>()
     const selectHighlighted = vi.fn(() => true)
-    menuRef.current = { move: vi.fn(), selectHighlighted }
+    const menuRef: RefObject<SlashMenuHandle | null> = {
+      current: { move: vi.fn(), selectHighlighted }
+    }
 
     const handled = tryHandleSlashMenuKeyDown(keyEvent('Tab'), {
       menuOpen: true,
