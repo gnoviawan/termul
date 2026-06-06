@@ -1,3 +1,4 @@
+import { ContributorsSection } from '../components/sections/ContributorsSection';
 import { FeatureSection } from '../components/sections/FeatureSection';
 import { MoreFeaturesSection } from '../components/sections/MoreFeaturesSection';
 import { Hero } from '../components/sections/Hero';
@@ -11,6 +12,7 @@ export function HomePage() {
         <FeatureSection />
         <MoreFeaturesSection />
         <TestimonialsSection />
+        <ContributorsSection />
       </main>
     </>
   );
