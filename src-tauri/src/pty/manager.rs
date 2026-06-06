@@ -1548,13 +1548,13 @@ impl PtyManager {
     /// Protection is enabled at spawn and should be disabled only when the
     /// terminal is genuinely released by the renderer (its project is closed or
     /// the terminal tab is closed). Once unprotected AND lacking renderer refs,
-    /// the terminal becomes eligible for orphan reaping again. Returns Ok even
-    /// if the terminal is already gone, so callers can release idempotently.
-    pub fn set_protected(&self, id: &str, protected: bool) -> Result<(), String> {
+    /// the terminal becomes eligible for orphan reaping again. This is a no-op
+    /// (rather than an error) when the terminal is already gone, so callers can
+    /// release idempotently.
+    pub fn set_protected(&self, id: &str, protected: bool) {
         if let Some(instance) = self.terminals.read().get(id) {
             instance.set_protected(protected);
         }
-        Ok(())
     }
 
     /// Get terminal by ID

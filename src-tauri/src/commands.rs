@@ -279,10 +279,10 @@ pub async fn terminal_set_protected(
     request: SetTerminalProtectedRequest,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.set_protected(&request.terminal_id, request.protected) {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
-    }
+    // `set_protected` is intentionally idempotent and infallible (it is a no-op
+    // when the terminal is already gone), so there is no error case to map.
+    pty_manager.set_protected(&request.terminal_id, request.protected);
+    Ok(IpcResult::success(()))
 }
 
 /// Set visibility state (affects polling behavior and PTY kill deferral)

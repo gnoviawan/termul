@@ -537,7 +537,15 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     for (const terminal of projectTerminals) {
       if (terminal.ptyId) {
         try {
-          await terminalApi.kill(terminal.ptyId)
+          // kill() returns an IpcResult; a soft failure does not throw. The
+          // project is being deleted regardless, so we always proceed to drop
+          // the renderer record below — we just surface a failed kill in logs
+          // (e.g. the backend deferring a kill while the window is hidden still
+          // reports success, so this only logs genuine failures).
+          const result = await terminalApi.kill(terminal.ptyId)
+          if (!result.success) {
+            console.warn('Failed to kill PTY during project delete:', result.error)
+          }
         } catch (error) {
           console.warn('Failed to kill PTY during project delete:', error)
         }
