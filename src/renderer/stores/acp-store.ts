@@ -675,6 +675,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     }
+    // Drop prepared sessions for this config so a later re-enable can't consume
+    // stale prepare keys (prepareChatKey also starts with configId\0…).
+    const prepareKeys = new Set<string>([
+      ...Object.keys(get().preparedSessions),
+      ...Object.keys(get().preparingChatKeys),
+      ...inFlightPrepared.keys()
+    ])
+    for (const key of prepareKeys) {
+      if (configIdFromReuseKey(key) !== id) continue
+      get().cancelPreparedChat(key)
+    }
   },
 
   prewarmAgent: async (configId, cwd) => {

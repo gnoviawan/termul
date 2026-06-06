@@ -38,6 +38,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   agentReuseKey,
   configIdFromReuseKey,
+  prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
   useAcpStore
@@ -655,6 +656,20 @@ describe('acp-store', () => {
     expect(
       useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-w', '/work')]
     ).toBeUndefined()
+  })
+
+  it('deleteAgentConfig clears preparedSessions for the config (GH-288)', async () => {
+    const key = prepareChatKey('cfg-w', '/work', undefined)
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      preparedSessions: { ...s.preparedSessions, [key]: 'sess-prep' },
+      preparingChatKeys: { ...s.preparingChatKeys, [key]: true }
+    }))
+    await useAcpStore.getState().deleteAgentConfig('cfg-w')
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
   })
 
   it('deleteAgentConfig kills every per-cwd process and clears their mappings (GH-288)', async () => {
