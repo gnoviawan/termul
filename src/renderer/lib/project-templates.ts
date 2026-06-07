@@ -212,7 +212,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         path: 'src/App.tsx',
         content: `import React, { useState } from 'react'
 
-fn App() {
+function App() {
   const [count, setCount] = useState(0)
 
   return (
@@ -361,7 +361,14 @@ export async function scaffoldProject(
   template: ProjectTemplate
 ): Promise<IpcResult<void>> {
   try {
-    const normalizedPath = projectPath.replace(/\\/g, '/')
+    const normalizedPath = projectPath.replace(/\\/g, '/').replace(/\/+$/, '')
+
+    const joinPath = (base: string, child: string) => {
+      const isBaseUnc = base.startsWith('//')
+      const baseContent = isBaseUnc ? base.slice(2) : base
+      const joined = `${baseContent}/${child}`.replace(/\/+/g, '/')
+      return isBaseUnc ? `//${joined}` : joined
+    }
 
     const baseDirResult = await filesystemApi.createDirectory(normalizedPath)
     if (!baseDirResult.success) {
@@ -374,7 +381,7 @@ export async function scaffoldProject(
 
     if (template.dirs) {
       for (const dir of template.dirs) {
-        const subPath = `${normalizedPath}/${dir}`.replace(/\/+/g, '/')
+        const subPath = joinPath(normalizedPath, dir)
         const dirResult = await filesystemApi.createDirectory(subPath)
         if (!dirResult.success) {
           return {
@@ -388,7 +395,7 @@ export async function scaffoldProject(
 
     if (template.files) {
       for (const file of template.files) {
-        const filePath = `${normalizedPath}/${file.path}`.replace(/\/+/g, '/')
+        const filePath = joinPath(normalizedPath, file.path)
         const content = interpolate(file.content, projectName)
         const fileResult = await filesystemApi.createFile(filePath, content)
         if (!fileResult.success) {

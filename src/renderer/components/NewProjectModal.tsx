@@ -141,8 +141,6 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           }))
         : undefined
 
-      onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse, envVarsToPass)
-
       // Scaffold template files and initialize git asynchronously
       const runScaffoldAndGit = async () => {
         // Ensure root directory exists
@@ -151,10 +149,12 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           throw new Error(dirResult.error || 'Failed to create root directory')
         }
 
+        let gitInitSucceeded = false
         // Initialize git repository if requested
         if (initGit) {
           try {
             await gitApi.init(trimmedPath)
+            gitInitSucceeded = true
           } catch (err) {
             console.error('Git init failed during scaffolding:', err)
             // Continue even if git init fails, so files are still scaffolded
@@ -168,6 +168,10 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             throw new Error(res.error || 'Failed to scaffold template files')
           }
         }
+
+        onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse, envVarsToPass)
+
+        return { gitInitSucceeded }
       }
 
       const operationPromise = runScaffoldAndGit()
@@ -175,10 +179,13 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         loading: initGit
           ? `Initializing git and scaffolding ${selectedTemplate.name}...`
           : `Scaffolding ${selectedTemplate.name}...`,
-        success: () => {
-          return initGit
-            ? `Git repository initialized and ${selectedTemplate.name} template scaffolded successfully!`
-            : `${selectedTemplate.name} template scaffolded successfully!`
+        success: (res) => {
+          if (initGit) {
+            return res.gitInitSucceeded
+              ? `Git repository initialized and ${selectedTemplate.name} template scaffolded successfully!`
+              : `${selectedTemplate.name} template scaffolded successfully! (Git initialization failed)`
+          }
+          return `${selectedTemplate.name} template scaffolded successfully!`
         },
         error: (err: Error) => `Setup failed: ${err.message}`
       })

@@ -75,4 +75,23 @@ describe('Project Templates Scaffolding', () => {
       expect.fail('Expected scaffolding to fail')
     }
   })
+
+  it('preserves leading double slash for UNC paths', async () => {
+    const mockCreateDir = vi.mocked(filesystemApi.createDirectory)
+    const mockCreateFile = vi.mocked(filesystemApi.createFile)
+
+    mockCreateDir.mockResolvedValue({ success: true, data: undefined })
+    mockCreateFile.mockResolvedValue({ success: true, data: undefined })
+
+    const nodeTemplate = BUILT_IN_TEMPLATES.find((t) => t.id === 'node')!
+    const result = await scaffoldProject('//server/share/path', 'UNC Project', nodeTemplate)
+
+    expect(result.success).toBe(true)
+    expect(mockCreateDir).toHaveBeenCalledWith('//server/share/path')
+    expect(mockCreateDir).toHaveBeenCalledWith('//server/share/path/src')
+    expect(mockCreateFile).toHaveBeenCalledWith(
+      '//server/share/path/package.json',
+      expect.any(String)
+    )
+  })
 })
