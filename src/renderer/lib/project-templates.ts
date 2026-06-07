@@ -34,7 +34,25 @@ export const BUILT_IN_TEMPLATES: ProjectTemplate[] = [
       },
       {
         path: 'src/index.js',
-        content: `console.log("Hello from Termul Node.js project!");
+        content: `const http = require('http');
+
+const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+const server = http.createServer((req, res) => {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify({
+    status: "success",
+    message: "Welcome to your Node.js server created with Termul Manager!",
+    environment: NODE_ENV,
+    timestamp: new Date().toISOString()
+  }));
+});
+
+server.listen(PORT, () => {
+  console.log(\`[\${NODE_ENV}] Server is running at http://localhost:\${PORT}/\`);
+});
 `
       },
       {
@@ -70,8 +88,15 @@ edition = "2021"
       },
       {
         path: 'src/main.rs',
-        content: `fn main() {
-    println!("Hello from Termul Rust project!");
+        content: `use std::env;
+
+fn main() {
+    let app_name = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "Termul Rust App".to_string());
+    println!("=======================================");
+    println!(" Welcome to {}!", app_name);
+    println!(" Created with Termul Manager");
+    println!("=======================================");
+    println!("Running in target directory: {:?}", env::current_dir().unwrap());
 }
 `
       },
@@ -185,13 +210,49 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       },
       {
         path: 'src/App.tsx',
-        content: `import React from 'react'
+        content: `import React, { useState } from 'react'
 
-function App() {
+fn App() {
+  const [count, setCount] = useState(0)
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'system-ui, sans-serif' }}>
-      <h1>Hello from React + Vite!</h1>
-      <p>Created with Termul Manager</p>
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: '100vh',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      backgroundColor: '#121214',
+      color: '#e1e1e6'
+    }}>
+      <div style={{
+        textAlign: 'center',
+        padding: '2rem',
+        borderRadius: '8px',
+        backgroundColor: '#202024',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+      }}>
+        <h1 style={{ color: '#00b37e', margin: '0 0 1rem 0' }}>React + Vite Template</h1>
+        <p style={{ margin: '0 0 2rem 0', opacity: 0.8 }}>Ready-to-use boilerplate from Termul Manager</p>
+        
+        <button 
+          onClick={() => setCount(c => c + 1)}
+          style={{
+            backgroundColor: '#00b37e',
+            color: '#ffffff',
+            border: 'none',
+            padding: '0.75rem 1.5rem',
+            fontSize: '1rem',
+            fontWeight: 'bold',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            transition: 'background-color 0.2s'
+          }}
+        >
+          Count is {count}
+        </button>
+      </div>
     </div>
   )
 }
@@ -230,13 +291,37 @@ dist-ssr/
       {
         path: 'main.py',
         content: `import os
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+import json
 
-def main():
-    port = os.getenv("PORT", "5000")
-    print(f"Hello from Python project! Running on port: {port}")
+class APIHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            response = {
+                "status": "success",
+                "message": "Welcome to your Python server created with Termul Manager!",
+                "timestamp": self.date_time_string()
+            }
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+        else:
+            super().do_GET()
+
+def run():
+    port = int(os.getenv("PORT", 5000))
+    server_address = ("", port)
+    httpd = HTTPServer(server_address, APIHandler)
+    print(f"Server is running at http://localhost:{port}/")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\\nShutting down server...")
+        httpd.server_close()
 
 if __name__ == "__main__":
-    main()
+    run()
 `
       },
       {

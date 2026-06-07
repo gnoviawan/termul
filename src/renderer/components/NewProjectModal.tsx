@@ -5,7 +5,7 @@ import { ChevronDown, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
-import { dialogApi, shellApi } from '@/lib/api'
+import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { cn } from '@/lib/utils'
@@ -33,6 +33,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   const [selectedShell, setSelectedShell] = useState<string>('')
   const [shellsLoading, setShellsLoading] = useState(true)
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(BUILT_IN_TEMPLATES[0])
+  const [isFolderEmpty, setIsFolderEmpty] = useState(false)
+  const [initGit, setInitGit] = useState(false)
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -60,6 +62,29 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     void fetchShells()
   }, [fallbackShell])
 
+  // Check if chosen directory is empty
+  useEffect(() => {
+    const checkEmpty = async () => {
+      const trimmed = path.trim()
+      if (!trimmed) {
+        setIsFolderEmpty(false)
+        return
+      }
+      try {
+        const result = await filesystemApi.readDirectory(trimmed)
+        if (result.success && result.data) {
+          setIsFolderEmpty(result.data.length === 0)
+        } else {
+          // If directory doesn't exist yet, treat it as empty
+          setIsFolderEmpty(true)
+        }
+      } catch {
+        setIsFolderEmpty(true)
+      }
+    }
+    void checkEmpty()
+  }, [path])
+
   // Reset form when modal opens (use defaults)
   useEffect(() => {
     if (isOpen) {
@@ -68,6 +93,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       setPath('')
       setSelectedShell(shells?.default?.name || fallbackShell)
       setSelectedTemplate(BUILT_IN_TEMPLATES[0])
+      setIsFolderEmpty(false)
+      setInitGit(false)
     }
   }, [isOpen, defaultColor, shells?.default?.name, fallbackShell])
 
@@ -116,19 +143,45 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
       onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse, envVarsToPass)
 
-      if (selectedTemplate.id !== 'empty') {
-        const scaffoldPromise = scaffoldProject(trimmedPath, trimmedName, selectedTemplate)
-        toast.promise(scaffoldPromise, {
-          loading: `Scaffolding ${selectedTemplate.name}...`,
-          success: (res) => {
-            if (res.success) {
-              return `${selectedTemplate.name} template scaffolded successfully!`
-            }
-            throw new Error(res.error || 'Failed to scaffold files')
-          },
-          error: (err: Error) => `Scaffolding failed: ${err.message}`
-        })
+      // Scaffold template files and initialize git asynchronously
+      const runScaffoldAndGit = async () => {
+        // Ensure root directory exists
+        const dirResult = await filesystemApi.createDirectory(trimmedPath)
+        if (!dirResult.success) {
+          throw new Error(dirResult.error || 'Failed to create root directory')
+        }
+
+        // Initialize git repository if requested
+        if (initGit) {
+          try {
+            await gitApi.init(trimmedPath)
+          } catch (err) {
+            console.error('Git init failed during scaffolding:', err)
+            // Continue even if git init fails, so files are still scaffolded
+          }
+        }
+
+        // Scaffold template files
+        if (selectedTemplate.id !== 'empty') {
+          const res = await scaffoldProject(trimmedPath, trimmedName, selectedTemplate)
+          if (!res.success) {
+            throw new Error(res.error || 'Failed to scaffold template files')
+          }
+        }
       }
+
+      const operationPromise = runScaffoldAndGit()
+      toast.promise(operationPromise, {
+        loading: initGit
+          ? `Initializing git and scaffolding ${selectedTemplate.name}...`
+          : `Scaffolding ${selectedTemplate.name}...`,
+        success: () => {
+          return initGit
+            ? `Git repository initialized and ${selectedTemplate.name} template scaffolded successfully!`
+            : `${selectedTemplate.name} template scaffolded successfully!`
+        },
+        error: (err: Error) => `Setup failed: ${err.message}`
+      })
 
       onClose()
     }
@@ -139,6 +192,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     selectedShell,
     fallbackShell,
     selectedTemplate,
+    initGit,
     onCreateProject,
     onClose
   ])
@@ -270,6 +324,24 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                     Browse
                   </button>
                 </div>
+
+                {isFolderEmpty && (
+                  <div className="flex items-center gap-2 mt-2 px-1">
+                    <input
+                      type="checkbox"
+                      id="init-git"
+                      checked={initGit}
+                      onChange={(e) => setInitGit(e.target.checked)}
+                      className="rounded border-border text-primary bg-secondary focus:ring-primary h-3.5 w-3.5"
+                    />
+                    <label
+                      htmlFor="init-git"
+                      className="text-xs text-muted-foreground select-none cursor-pointer"
+                    >
+                      Initialize Git repository in this directory
+                    </label>
+                  </div>
+                )}
               </div>
 
               <div>
