@@ -249,48 +249,50 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
             <div className="p-4 space-y-4 overflow-y-auto flex-1">
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-2">
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
                   Project Template
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {BUILT_IN_TEMPLATES.map((tpl) => (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => handleSelectTemplate(tpl)}
-                      className={cn(
-                        'flex flex-col items-start p-2.5 rounded border text-left transition-all outline-none',
-                        selectedTemplate.id === tpl.id
-                          ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                          : 'border-border bg-secondary/30 hover:bg-secondary/60'
-                      )}
-                    >
-                      <span className="text-xs font-semibold text-foreground">{tpl.name}</span>
-                      <span className="text-[10px] text-muted-foreground mt-0.5 leading-snug line-clamp-2">
-                        {tpl.description}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-
-                {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
-                  <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
-                    <span className="text-[10px] font-semibold text-muted-foreground block mb-1.5">
-                      Included Environment Variables:
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedTemplate.envVars.map((ev) => (
-                        <span
-                          key={ev.key}
-                          className="text-[10px] font-mono bg-background border border-border/80 px-2 py-0.5 rounded text-secondary-foreground"
-                        >
-                          {ev.key}={ev.value}
-                        </span>
-                      ))}
-                    </div>
+                <div className="relative">
+                  <select
+                    value={selectedTemplate.id}
+                    onChange={(e) => {
+                      const tpl = BUILT_IN_TEMPLATES.find((t) => t.id === e.target.value)
+                      if (tpl) handleSelectTemplate(tpl)
+                    }}
+                    className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                  >
+                    {BUILT_IN_TEMPLATES.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+                    <ChevronDown size={14} />
                   </div>
-                )}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                  {selectedTemplate.description}
+                </p>
               </div>
+
+              {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
+                <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
+                  <span className="text-[10px] font-semibold text-muted-foreground block mb-1.5">
+                    Included Environment Variables:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedTemplate.envVars.map((ev) => (
+                      <span
+                        key={ev.key}
+                        className="text-[10px] font-mono bg-background border border-border/80 px-2 py-0.5 rounded text-secondary-foreground"
+                      >
+                        {ev.key}={ev.value}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
