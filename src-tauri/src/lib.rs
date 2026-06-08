@@ -692,12 +692,28 @@ fn reveal_log_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), St
     open_external_url(&log_dir.to_string_lossy())
 }
 
+fn show_log_action_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: &str) {
+    app.dialog()
+        .message(message)
+        .title("Error")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
 fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-    let log_path = logging::log_file_path(app)
-        .ok_or_else(|| "Could not resolve log file path".to_string())?;
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
 
     if !log_path.exists() {
-        return Err("Log file does not exist yet".to_string());
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
     }
 
     let app_handle = app.clone();
@@ -735,11 +751,19 @@ fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), S
 }
 
 fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-    let log_path = logging::log_file_path(app)
-        .ok_or_else(|| "Could not resolve log file path".to_string())?;
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
 
     if !log_path.exists() {
-        return Err("Log file does not exist yet".to_string());
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
     }
 
     let app_handle = app.clone();
@@ -777,23 +801,36 @@ fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(),
 }
 
 fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-    let log_path = logging::log_file_path(app)
-        .ok_or_else(|| "Could not resolve log file path".to_string())?;
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
 
     if !log_path.exists() {
-        return Err("Log file does not exist yet".to_string());
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
     }
 
-    let default_dir = app
+    let default_dir = match app
         .path()
         .download_dir()
         .or_else(|_| app.path().desktop_dir())
-        .map_err(|e| {
-            format!(
+    {
+        Ok(dir) => dir,
+        Err(e) => {
+            let msg = format!(
                 "Could not resolve a default directory (Downloads or Desktop): {}",
                 e
-            )
-        })?;
+            );
+            show_log_action_error(app, &msg);
+            return Err(msg);
+        }
+    };
 
     let dest_path = default_dir.join("termul.log");
     let app_handle = app.clone();
