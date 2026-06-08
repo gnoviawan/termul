@@ -32,9 +32,12 @@
       connect-src:
         [
           "'self'",
+          "google-analytics.com",
           "*.google-analytics.com",
           "*.analytics.google.com",
+          "analytics.google.com",
           "https://www.googletagmanager.com",
+          "https://cloudflareinsights.com"
         ]
       base-uri: ["'none'"]
       form-action: ["'self'"]
