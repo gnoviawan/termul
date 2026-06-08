@@ -3,8 +3,11 @@ import {
   AlertCircle,
   Bot,
   CheckCircle2,
+  Clipboard,
   Download,
   ExternalLink,
+  FileText,
+  FolderOpen,
   Keyboard,
   RotateCcw,
   X
@@ -20,7 +23,7 @@ import {
   useResetShortcut,
   useUpdateShortcut
 } from '@/hooks/use-keyboard-shortcuts'
-import { shellApi, terminalApi } from '@/lib/api'
+import { logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
@@ -748,6 +751,79 @@ export default function AppPreferences(): React.JSX.Element {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-start gap-6 border-b border-border pb-8">
+                <div className="w-1/3 pt-1">
+                  <div className="flex items-center gap-2">
+                    <FileText size={18} className="text-primary" />
+                    <h2 className="text-lg font-medium text-foreground">Diagnostics & Logs</h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Export or copy application logs to troubleshoot issues.
+                  </p>
+                </div>
+                <div className="w-2/3 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void logApi.revealLogDir()}
+                      className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    >
+                      <FolderOpen size={16} className="text-muted-foreground" />
+                      <div className="text-left">
+                        <div>Reveal Log Folder</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          Open in file explorer
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void logApi.exportLogFile()}
+                      className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    >
+                      <FileText size={16} className="text-muted-foreground" />
+                      <div className="text-left">
+                        <div>Export Log File...</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          Save to a custom location
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void logApi.copyLogContents()}
+                      className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    >
+                      <Clipboard size={16} className="text-muted-foreground" />
+                      <div className="text-left">
+                        <div>Copy Log Contents</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          Copy logs to clipboard
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void logApi.exportLogToDefault()}
+                      className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    >
+                      <Download size={16} className="text-muted-foreground" />
+                      <div className="text-left">
+                        <div>Export to Default Directory</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          Save directly to Downloads
+                        </div>
+                      </div>
+                    </button>
+                  </div>
                 </div>
               </div>
             </section>
