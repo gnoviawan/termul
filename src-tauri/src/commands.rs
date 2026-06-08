@@ -2530,6 +2530,21 @@ pub async fn git_get_commit_context(
     crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
 }
 
+#[tauri::command]
+pub async fn git_init(cwd: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&cwd, &["init"])
+            .ok_or_else(|| "Failed to run git init".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git init task failed: {e}"))?
+}
+
 /// Cap on any single renderer-supplied field to keep one forwarded error from
 /// ballooning the log file.
 const MAX_FRONTEND_FIELD_LEN: usize = 4096;
