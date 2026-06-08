@@ -2,9 +2,9 @@
   headers:
     Content-Security-Policy:
       default-src: ["'self'"]
-      script-src: ["'self'", "{{CSP_SCRIPT_HASHES}}", "https://www.googletagmanager.com"]
+      script-src: ["'self'", "{{CSP_SCRIPT_HASHES}}", "https://www.googletagmanager.com", "https://static.cloudflareinsights.com"]
       style-src: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
-      img-src: ["'self'", "data:", "https://www.googletagmanager.com", "*.google-analytics.com", "*.analytics.google.com", "*.github.com", "*.unavatar.io", "*.cloudflareinsights.com"]
+      img-src: ["'self'", "data:", "https://www.googletagmanager.com", "*.google-analytics.com", "*.analytics.google.com", "github.com", "githubusercontent.com",  "*.githubusercontent.com",  "*.github.com", "*.unavatar.io", "unavatar.io", "api.dicebear.com", "*.cloudflareinsights.com"]
       media-src: ["'self'", "https://d8j0ntlcm91z4.cloudfront.net"]
       font-src: ["'self'", "https://fonts.gstatic.com"]
       frame-src: ["'self'", "https://www.googletagmanager.com"]
