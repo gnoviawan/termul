@@ -2,9 +2,11 @@ import type { GitFileStatus, GitStatusDetail } from '@shared/types/ipc.types'
 import {
   AlignLeft,
   Archive,
+  ArchiveRestore,
   ArrowUp,
   Check,
   ChevronDown,
+  ClipboardPaste,
   Columns2,
   FileCode,
   FileQuestion,
@@ -13,7 +15,6 @@ import {
   GitCommit,
   Minus,
   Pencil,
-  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -609,8 +610,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
         </div>
 
-        <ScrollArea className="flex-1">
-          <div className="p-2 space-y-4">
+        <ScrollArea className="flex-1 w-full">
+          <div className="p-2 pr-3 space-y-4 w-[303px]">
             {stagedFiles.length > 0 && (
               <div className="space-y-1">
                 <SectionHeader
@@ -707,13 +708,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             </div>
 
             {stashes.length > 0 && (
-              <div className="space-y-1 pt-2 border-t border-border/30">
+              <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
                 <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
-                <div className="space-y-0.5">
+                <div className="space-y-0.5 w-full min-w-0">
                   {stashes.map((s) => (
                     <div
                       key={s.index}
-                      className="group flex items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
+                      className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
                     >
                       <div className="flex flex-col min-w-0 flex-1 pr-1.5">
                         <span className="font-semibold text-muted-foreground text-[10px]">{`stash@{${s.index}}`}</span>
@@ -731,7 +732,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                           onClick={() => handleApplyStash(s.index)}
                           className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                         >
-                          <RotateCcw size={11} />
+                          <ClipboardPaste size={11} />
                         </button>
                         <button
                           type="button"
@@ -739,7 +740,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                           onClick={() => handlePopStash(s.index)}
                           className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                         >
-                          <Play size={11} />
+                          <ArchiveRestore size={11} />
                         </button>
                         <button
                           type="button"
