@@ -2545,6 +2545,235 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     .map_err(|e| format!("git init task failed: {e}"))?
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashInfo {
+    pub index: usize,
+    pub name: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn git_stash_save(
+    cwd: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut args = vec!["stash", "push"];
+        if let Some(true) = include_untracked {
+            args.push("-u");
+        }
+        let msg;
+        if let Some(ref m) = message {
+            args.push("-m");
+            msg = m.clone();
+            args.push(&msg);
+        }
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
+            .ok_or_else(|| "Failed to run git stash push".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash push task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["stash", "list"])
+            .ok_or_else(|| "Failed to run git stash list".to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut stashes = Vec::new();
+        for line in stdout.lines() {
+            if let Some((stash_part, rest)) = line.split_once(':') {
+                let name = stash_part.trim().to_string();
+                if let Some(start) = name.find('{') {
+                    if let Some(end) = name.find('}') {
+                        if let Ok(index) = name[start + 1..end].parse::<usize>() {
+                            let message = rest.trim().to_string();
+                            stashes.push(GitStashInfo { index, name, message });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(stashes)
+    })
+    .await
+    .map_err(|e| format!("git stash list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "apply", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash apply".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash apply task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "pop", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash pop".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash pop task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "drop", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash drop".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash drop task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_list(cwd: String) -> Result<Vec<String>, String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["branch", "-a", "--format=%(refname:short)"],
+        )
+        .ok_or_else(|| "Failed to run git branch".to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut branches = Vec::new();
+        for line in stdout.lines() {
+            let name = line.trim();
+            if !name.is_empty() {
+                branches.push(name.to_string());
+            }
+        }
+        Ok(branches)
+    })
+    .await
+    .map_err(|e| format!("git branch list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_switch(cwd: String, name: String) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["checkout", &name])
+            .ok_or_else(|| "Failed to run git checkout".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git branch switch task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_create(cwd: String, name: String) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["checkout", "-b", &name],
+        )
+        .ok_or_else(|| "Failed to run git checkout -b".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git branch create task failed: {e}"))?
+}
+
 /// Cap on any single renderer-supplied field to keep one forwarded error from
 /// ballooning the log file.
 const MAX_FRONTEND_FIELD_LEN: usize = 4096;

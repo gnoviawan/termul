@@ -12,7 +12,15 @@ vi.mock('@/lib/git-api', () => ({
     discard: vi.fn(),
     commit: vi.fn(),
     push: vi.fn(),
-    getCommitContext: vi.fn()
+    getCommitContext: vi.fn(),
+    stashSave: vi.fn(),
+    stashList: vi.fn(),
+    stashApply: vi.fn(),
+    stashPop: vi.fn(),
+    stashDrop: vi.fn(),
+    branchList: vi.fn(),
+    branchSwitch: vi.fn(),
+    branchCreate: vi.fn()
   }
 }))
 
@@ -30,6 +38,14 @@ const { gitApi } = gitApiModule as unknown as {
     commit: ReturnType<typeof vi.fn>
     push: ReturnType<typeof vi.fn>
     getCommitContext: ReturnType<typeof vi.fn>
+    stashSave: ReturnType<typeof vi.fn>
+    stashList: ReturnType<typeof vi.fn>
+    stashApply: ReturnType<typeof vi.fn>
+    stashPop: ReturnType<typeof vi.fn>
+    stashDrop: ReturnType<typeof vi.fn>
+    branchList: ReturnType<typeof vi.fn>
+    branchSwitch: ReturnType<typeof vi.fn>
+    branchCreate: ReturnType<typeof vi.fn>
   }
 }
 
@@ -53,12 +69,16 @@ beforeEach(() => {
     statuses: {},
     diffs: {},
     commitContexts: {},
+    stashes: {},
+    branches: {},
     selectedFile: null,
     isFetchingStatus: false,
     statusFetchCount: 0
   })
   gitApi.getStatus.mockResolvedValue([] as GitStatusDetail[])
   gitApi.getCommitContext.mockResolvedValue(makeContext())
+  gitApi.stashList.mockResolvedValue([])
+  gitApi.branchList.mockResolvedValue([])
 })
 
 describe('git-status-store commit footer', () => {
@@ -200,5 +220,71 @@ describe('git-status-store batch staging', () => {
     // reflects the first file that did stage.
     expect(gitApi.stage).toHaveBeenCalledTimes(2)
     expect(gitApi.getStatus).toHaveBeenCalledOnce()
+  })
+})
+
+describe('git-status-store stash and branch actions', () => {
+  it('fetchStashes fetches and stores stashes', async () => {
+    const mockStashes = [{ index: 0, name: 'stash@{0}', message: 'WIP' }]
+    gitApi.stashList.mockResolvedValue(mockStashes)
+
+    await useGitStatusStore.getState().fetchStashes(CWD)
+    expect(gitApi.stashList).toHaveBeenCalledWith(CWD)
+    expect(useGitStatusStore.getState().stashes[CWD]).toEqual(mockStashes)
+  })
+
+  it('fetchBranches fetches and stores branches', async () => {
+    const mockBranches = ['main', 'feature/test']
+    gitApi.branchList.mockResolvedValue(mockBranches)
+
+    await useGitStatusStore.getState().fetchBranches(CWD)
+    expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
+    expect(useGitStatusStore.getState().branches[CWD]).toEqual(mockBranches)
+  })
+
+  it('stashSave stashes changes and triggers refresh', async () => {
+    await useGitStatusStore.getState().stashSave(CWD, 'my stash', true)
+    expect(gitApi.stashSave).toHaveBeenCalledWith(CWD, 'my stash', true)
+    expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
+    expect(gitApi.stashList).toHaveBeenCalledWith(CWD)
+    expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
+  })
+
+  it('stashApply applies stash and triggers status/context refresh', async () => {
+    await useGitStatusStore.getState().stashApply(CWD, 1)
+    expect(gitApi.stashApply).toHaveBeenCalledWith(CWD, 1)
+    expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
+  })
+
+  it('stashPop pops stash and triggers refresh', async () => {
+    await useGitStatusStore.getState().stashPop(CWD, 0)
+    expect(gitApi.stashPop).toHaveBeenCalledWith(CWD, 0)
+    expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
+    expect(gitApi.stashList).toHaveBeenCalledWith(CWD)
+  })
+
+  it('stashDrop drops stash and updates stash list', async () => {
+    await useGitStatusStore.getState().stashDrop(CWD, 2)
+    expect(gitApi.stashDrop).toHaveBeenCalledWith(CWD, 2)
+    expect(gitApi.stashList).toHaveBeenCalledWith(CWD)
+    expect(gitApi.getStatus).not.toHaveBeenCalled()
+  })
+
+  it('branchSwitch switches branch, resets selectedFile, and refreshes', async () => {
+    useGitStatusStore.setState({ selectedFile: 'somefile.ts' })
+    await useGitStatusStore.getState().branchSwitch(CWD, 'feature/cool')
+    expect(gitApi.branchSwitch).toHaveBeenCalledWith(CWD, 'feature/cool')
+    expect(useGitStatusStore.getState().selectedFile).toBeNull()
+    expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
+    expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
+  })
+
+  it('branchCreate creates branch, resets selectedFile, and refreshes', async () => {
+    useGitStatusStore.setState({ selectedFile: 'somefile.ts' })
+    await useGitStatusStore.getState().branchCreate(CWD, 'feature/new')
+    expect(gitApi.branchCreate).toHaveBeenCalledWith(CWD, 'feature/new')
+    expect(useGitStatusStore.getState().selectedFile).toBeNull()
+    expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
+    expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
   })
 })

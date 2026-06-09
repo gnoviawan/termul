@@ -1,4 +1,9 @@
-import type { GitCommit, GitCommitContext, GitStatusDetail } from '@shared/types/ipc.types'
+import type {
+  GitCommit,
+  GitCommitContext,
+  GitStashInfo,
+  GitStatusDetail
+} from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 
 export const gitApi = {
@@ -22,5 +27,22 @@ export const gitApi = {
 
   getCommitContext: (cwd: string) => invoke<GitCommitContext>('git_get_commit_context', { cwd }),
 
-  init: (cwd: string) => invoke<void>('git_init', { cwd })
+  init: (cwd: string) => invoke<void>('git_init', { cwd }),
+
+  stashSave: (cwd: string, message?: string, includeUntracked?: boolean) =>
+    invoke<void>('git_stash_save', { cwd, message, includeUntracked }),
+
+  stashList: (cwd: string) => invoke<GitStashInfo[]>('git_stash_list', { cwd }),
+
+  stashApply: (cwd: string, index: number) => invoke<void>('git_stash_apply', { cwd, index }),
+
+  stashPop: (cwd: string, index: number) => invoke<void>('git_stash_pop', { cwd, index }),
+
+  stashDrop: (cwd: string, index: number) => invoke<void>('git_stash_drop', { cwd, index }),
+
+  branchList: (cwd: string) => invoke<string[]>('git_branch_list', { cwd }),
+
+  branchSwitch: (cwd: string, name: string) => invoke<void>('git_branch_switch', { cwd, name }),
+
+  branchCreate: (cwd: string, name: string) => invoke<void>('git_branch_create', { cwd, name })
 }
