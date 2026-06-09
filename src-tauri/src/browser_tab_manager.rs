@@ -2,6 +2,27 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
+/// Allowed URL schemes for browser tabs
+const ALLOWED_SCHEMES: [&str; 3] = ["http", "https", "about"];
+
+/// Validates that a URL uses an allowed scheme (http, https, or about).
+/// Returns the parsed URL if valid, or a descriptive error message if invalid.
+fn validate_browser_url(url: &str) -> Result<tauri::Url, String> {
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| format!("Invalid URL: {}", e))?;
+
+    let scheme = parsed.scheme();
+    if !ALLOWED_SCHEMES.contains(&scheme) {
+        return Err(format!(
+            "URL scheme '{}' is not allowed. Only http, https, and about schemes are permitted.",
+            scheme
+        ));
+    }
+
+    Ok(parsed)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserTabInfo {
@@ -180,9 +201,7 @@ impl BrowserTabManager {
         bounds: BrowserBounds,
     ) -> Result<BrowserTabInfo, String> {
         let window = self.get_window()?;
-        let parsed_url: tauri::Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
+        let parsed_url = validate_browser_url(&url)?;
 
         let builder = tauri::webview::WebviewBuilder::new(
             tab_id.clone(),
@@ -395,9 +414,7 @@ impl BrowserTabManager {
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
         self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
-        let parsed_url: tauri::Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
+        let parsed_url = validate_browser_url(&url)?;
         webview
             .navigate(parsed_url)
             .map_err(|e| format!("Navigation failed: {}", e))?;
@@ -499,5 +516,81 @@ impl BrowserTabManager {
 impl Drop for BrowserTabManager {
     fn drop(&mut self) {
         self.destroy_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_browser_url_accepts_http() {
+        let result = validate_browser_url("http://example.com");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().scheme(), "http");
+    }
+
+    #[test]
+    fn test_validate_browser_url_accepts_https() {
+        let result = validate_browser_url("https://example.com");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().scheme(), "https");
+    }
+
+    #[test]
+    fn test_validate_browser_url_accepts_about_blank() {
+        let result = validate_browser_url("about:blank");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().scheme(), "about");
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_file_scheme() {
+        let result = validate_browser_url("file:///etc/passwd");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("file"));
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_javascript_scheme() {
+        let result = validate_browser_url("javascript:alert('xss')");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("javascript"));
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_data_scheme() {
+        let result = validate_browser_url("data:text/html,<script>alert('xss')</script>");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("data"));
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_vbscript_scheme() {
+        let result = validate_browser_url("vbscript:msgbox('xss')");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("vbscript"));
+        assert!(err.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_invalid_url() {
+        let result = validate_browser_url("not a valid url");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Invalid URL"));
+    }
+
+    #[test]
+    fn test_validate_browser_url_rejects_empty_string() {
+        let result = validate_browser_url("");
+        assert!(result.is_err());
     }
 }
