@@ -406,6 +406,7 @@ pub async fn worktree_branches(
                     is_remote: e.is_remote,
                     is_current: e.is_current,
                     upstream: e.upstream,
+                    has_other_worktree: e.has_other_worktree,
                 })
                 .collect();
             Ok(IpcResult::success(infos))
@@ -640,6 +641,7 @@ pub struct BranchInfo {
     pub is_current: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    pub has_other_worktree: bool,
 }
 
 impl From<BranchEntry> for BranchInfo {
@@ -649,6 +651,7 @@ impl From<BranchEntry> for BranchInfo {
             is_remote: entry.is_remote,
             is_current: entry.is_current,
             upstream: entry.upstream,
+            has_other_worktree: entry.has_other_worktree,
         }
     }
 }
@@ -2543,6 +2546,39 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("git init task failed: {e}"))?
+}
+
+/// Check out an existing local or remote-tracking branch.
+#[tauri::command]
+pub async fn git_checkout_branch(
+    cwd: String,
+    branch: String,
+    is_remote: Option<bool>,
+) -> Result<(), String> {
+    let is_remote = is_remote.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_checkout_branch(&cwd, &branch, is_remote)
+    })
+    .await
+    .map_err(|e| format!("git checkout task failed: {e}"))?
+}
+
+/// Create a new branch from `start_ref` (defaults to HEAD) and check it out.
+#[tauri::command]
+pub async fn git_create_branch(
+    cwd: String,
+    branch: String,
+    start_ref: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_create_branch(
+            &cwd,
+            &branch,
+            start_ref.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("git create branch task failed: {e}"))?
 }
 
 /// Cap on any single renderer-supplied field to keep one forwarded error from

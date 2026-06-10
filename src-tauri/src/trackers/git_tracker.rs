@@ -893,12 +893,22 @@ fn is_safe_relative_path(path: &str) -> bool {
     })
 }
 
-fn git_command_result(
+fn git_command_result(cwd: &str, args: &[&str], failure_context: &str) -> Result<(), String> {
+    let output = GitTracker::run_git_command(cwd, args)
+        .ok_or_else(|| format!("Failed to run {failure_context}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn git_command_result_with_long_timeout(
     cwd: &str,
     args: &[&str],
     failure_context: &str,
 ) -> Result<(), String> {
-    let output = GitTracker::run_git_command(cwd, args)
+    let output = GitTracker::run_git_command_with_timeout(cwd, args, GIT_NETWORK_TIMEOUT_MS)
         .ok_or_else(|| format!("Failed to run {failure_context}"))?;
     if output.status.success() {
         Ok(())
@@ -912,6 +922,41 @@ fn repo_has_head(cwd: &str) -> bool {
     GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Check out an existing branch. Remote branches use `--track`.
+pub fn git_checkout_branch(cwd: &str, branch: &str, is_remote: bool) -> Result<(), String> {
+    if branch.trim().is_empty() {
+        return Err("Branch name is required".to_string());
+    }
+
+    if is_remote {
+        git_command_result_with_long_timeout(
+            cwd,
+            &["checkout", "-q", "--track", branch],
+            "git checkout --track",
+        )
+    } else {
+        git_command_result_with_long_timeout(cwd, &["checkout", "-q", branch], "git checkout")
+    }
+}
+
+/// Create a new branch from `start_ref` (defaults to HEAD) and check it out.
+pub fn git_create_branch(cwd: &str, branch: &str, start_ref: Option<&str>) -> Result<(), String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("Branch name is required".to_string());
+    }
+
+    let start = start_ref
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("HEAD");
+    git_command_result_with_long_timeout(
+        cwd,
+        &["checkout", "-q", "-b", branch, start],
+        "git checkout -b",
+    )
 }
 
 /// Stage a single file (`git add -- <path>`). Works for modified and untracked files.
@@ -2513,6 +2558,37 @@ mod tests {
     fn count_commits(repo: &std::path::Path) -> usize {
         let out = git(repo, &["rev-list", "--count", "HEAD"]);
         String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    }
+
+    #[test]
+    fn it_checkout_and_create_branch() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("checkout-branch");
+        let cwd = repo.to_str().unwrap();
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+
+        let default_branch =
+            String::from_utf8_lossy(&git(&repo, &["branch", "--show-current"]).stdout)
+                .trim()
+                .to_string();
+
+        git_create_branch(cwd, "feature/test", None).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&git(&repo, &["branch", "--show-current"]).stdout).trim(),
+            "feature/test"
+        );
+
+        git_checkout_branch(cwd, &default_branch, false).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&git(&repo, &["branch", "--show-current"]).stdout).trim(),
+            default_branch
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]
