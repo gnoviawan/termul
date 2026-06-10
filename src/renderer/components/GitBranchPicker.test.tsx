@@ -1,3 +1,4 @@
+import type { BranchInfo } from '@shared/types/ipc.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitBranchPicker } from './GitBranchPicker'
@@ -5,6 +6,11 @@ import { GitBranchPicker } from './GitBranchPicker'
 const mockBranches = vi.fn()
 const mockCheckout = vi.fn()
 const mockCreateBranch = vi.fn()
+
+type BranchLoadSuccess = {
+  success: true
+  data: BranchInfo[]
+}
 
 vi.mock('@/lib/worktree-api', () => ({
   worktreeApi: {
@@ -45,6 +51,20 @@ const defaultProps = {
   repoPath: '/repo',
   currentBranch: 'dev',
   projectId: 'project-1'
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (error: Error) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
 }
 
 async function openPicker(): Promise<void> {
@@ -111,5 +131,59 @@ describe('GitBranchPicker', () => {
 
     expect(screen.getByText('No branches match your search.')).toBeDefined()
     expect(screen.queryByText('No branches yet.')).toBeNull()
+  })
+
+  it('ignores stale branch loads from a previous repo path', async () => {
+    const firstLoad = deferred<BranchLoadSuccess>()
+    const secondLoad = deferred<BranchLoadSuccess>()
+
+    mockBranches.mockReturnValueOnce(firstLoad.promise).mockReturnValueOnce(secondLoad.promise)
+
+    const { rerender } = render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    rerender(<GitBranchPicker {...defaultProps} repoPath="/next-repo" />)
+    await waitFor(() => {
+      expect(mockBranches).toHaveBeenCalledTimes(2)
+    })
+
+    firstLoad.resolve({
+      success: true,
+      data: [
+        { name: 'old-repo-branch', isRemote: false, isCurrent: false, hasOtherWorktree: false }
+      ]
+    })
+    secondLoad.resolve({
+      success: true,
+      data: [
+        { name: 'next-repo-branch', isRemote: false, isCurrent: false, hasOtherWorktree: false }
+      ]
+    })
+
+    expect(await screen.findByText('next-repo-branch')).toBeDefined()
+    expect(screen.queryByText('old-repo-branch')).toBeNull()
+  })
+
+  it('disables branch creation while branches are loading', async () => {
+    const load = deferred<BranchLoadSuccess>()
+    mockBranches.mockReturnValue(load.promise)
+
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    expect(screen.getByRole('button', { name: 'Create and checkout new branch...' })).toBeDisabled()
+  })
+
+  it('disables branch creation when branch loading errors', async () => {
+    mockBranches.mockResolvedValue({
+      success: false,
+      error: 'Not a git repository.',
+      code: 'NOT_A_GIT_REPO'
+    })
+
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    expect(screen.getByRole('button', { name: 'Create and checkout new branch...' })).toBeDisabled()
   })
 })

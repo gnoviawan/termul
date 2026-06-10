@@ -893,12 +893,22 @@ fn is_safe_relative_path(path: &str) -> bool {
     })
 }
 
-fn git_command_result(
+fn git_command_result(cwd: &str, args: &[&str], failure_context: &str) -> Result<(), String> {
+    let output = GitTracker::run_git_command(cwd, args)
+        .ok_or_else(|| format!("Failed to run {failure_context}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn git_command_result_with_long_timeout(
     cwd: &str,
     args: &[&str],
     failure_context: &str,
 ) -> Result<(), String> {
-    let output = GitTracker::run_git_command(cwd, args)
+    let output = GitTracker::run_git_command_with_timeout(cwd, args, GIT_NETWORK_TIMEOUT_MS)
         .ok_or_else(|| format!("Failed to run {failure_context}"))?;
     if output.status.success() {
         Ok(())
@@ -921,25 +931,28 @@ pub fn git_checkout_branch(cwd: &str, branch: &str, is_remote: bool) -> Result<(
     }
 
     if is_remote {
-        git_command_result(cwd, &["checkout", "-q", "--track", branch], "git checkout --track")
+        git_command_result_with_long_timeout(
+            cwd,
+            &["checkout", "-q", "--track", branch],
+            "git checkout --track",
+        )
     } else {
-        git_command_result(cwd, &["checkout", "-q", branch], "git checkout")
+        git_command_result_with_long_timeout(cwd, &["checkout", "-q", branch], "git checkout")
     }
 }
 
 /// Create a new branch from `start_ref` (defaults to HEAD) and check it out.
-pub fn git_create_branch(
-    cwd: &str,
-    branch: &str,
-    start_ref: Option<&str>,
-) -> Result<(), String> {
+pub fn git_create_branch(cwd: &str, branch: &str, start_ref: Option<&str>) -> Result<(), String> {
     let branch = branch.trim();
     if branch.is_empty() {
         return Err("Branch name is required".to_string());
     }
 
-    let start = start_ref.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("HEAD");
-    git_command_result(
+    let start = start_ref
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("HEAD");
+    git_command_result_with_long_timeout(
         cwd,
         &["checkout", "-q", "-b", branch, start],
         "git checkout -b",

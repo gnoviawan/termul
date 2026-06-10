@@ -1,6 +1,6 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { AlertCircle, ChevronDown, GitBranch, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { gitApi } from '@/lib/git-api'
@@ -53,16 +53,31 @@ export function GitBranchPicker({
   const [isSwitching, setIsSwitching] = useState(false)
   const [isCreatingMode, setIsCreatingMode] = useState(false)
   const [newBranchName, setNewBranchName] = useState('')
+  const branchLoadRequestId = useRef(0)
+  const latestRepoPath = useRef(repoPath)
+  const latestOpen = useRef(open)
+  latestRepoPath.current = repoPath
+  latestOpen.current = open
 
   const updateProject = useProjectStore((state) => state.updateProject)
   const activeTerminalId = useTerminalStore((state) => state.activeTerminalId)
   const updateTerminalGitBranch = useTerminalStore((state) => state.updateTerminalGitBranch)
 
   const loadBranches = useCallback(async (): Promise<void> => {
+    const requestId = branchLoadRequestId.current + 1
+    branchLoadRequestId.current = requestId
+    const requestRepoPath = repoPath
+    const isCurrentRequest = (): boolean =>
+      branchLoadRequestId.current === requestId &&
+      latestRepoPath.current === requestRepoPath &&
+      latestOpen.current
+
     setBranchesLoading(true)
     setLoadError(null)
     try {
       const result = await worktreeApi.branches(repoPath)
+      if (!isCurrentRequest()) return
+
       if (result.success && result.data) {
         setBranches(result.data)
         setLoadError(null)
@@ -74,22 +89,32 @@ export function GitBranchPicker({
         setLoadError('Failed to load branches.')
       }
     } catch (error) {
+      if (!isCurrentRequest()) return
+
       setBranches([])
       setLoadError(error instanceof Error ? error.message : 'Failed to load branches.')
     } finally {
-      setBranchesLoading(false)
+      if (isCurrentRequest()) {
+        setBranchesLoading(false)
+      }
     }
   }, [repoPath])
 
   useEffect(() => {
     if (!open) {
+      branchLoadRequestId.current += 1
       setIsCreatingMode(false)
       setNewBranchName('')
       setBranchSearch('')
       setLoadError(null)
+      setBranchesLoading(false)
       return
     }
     void loadBranches()
+
+    return () => {
+      branchLoadRequestId.current += 1
+    }
   }, [open, loadBranches])
 
   const localBranches = useMemo(() => branches.filter((branch) => !branch.isRemote), [branches])
@@ -111,6 +136,8 @@ export function GitBranchPicker({
     if (branchSearch.trim()) return 'No branches match your search.'
     return null
   }, [branchSearch, branchesLoading, loadError, localBranches.length])
+
+  const canCreateBranch = !branchesLoading && !loadError
 
   const resolveCheckedOutBranch = (branch: BranchInfo): string => {
     if (!branch.isRemote) return branch.name
@@ -143,6 +170,15 @@ export function GitBranchPicker({
   }
 
   const handleCreateBranch = async (): Promise<void> => {
+    if (branchesLoading) {
+      toast.error('Wait for branches to finish loading')
+      return
+    }
+    if (loadError) {
+      toast.error('Branches must load successfully before creating a new branch')
+      return
+    }
+
     const sanitized = sanitizeBranchName(newBranchName.trim())
     if (!sanitized) {
       toast.error('Enter a valid branch name')
@@ -279,7 +315,7 @@ export function GitBranchPicker({
               <button
                 type="button"
                 onClick={() => void handleCreateBranch()}
-                disabled={isSwitching || !newBranchName.trim()}
+                disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
                 className="text-xs px-2 py-1.5 rounded bg-primary text-primary-foreground disabled:opacity-50"
               >
                 Create
@@ -289,7 +325,7 @@ export function GitBranchPicker({
             <button
               type="button"
               onClick={() => setIsCreatingMode(true)}
-              disabled={isSwitching}
+              disabled={isSwitching || !canCreateBranch}
               className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
             >
               <Plus size={12} />
