@@ -649,11 +649,11 @@
   {
     "id": "pi-acp",
     "name": "pi ACP",
-    "version": "0.0.27",
-    "description": "ACP adapter for pi coding agent",
+    "version": "0.0.27-termul.1",
+    "description": "ACP adapter for pi coding agent (Termul fork: model-aware thinking levels)",
     "distribution": {
       "npx": {
-        "package": "pi-acp@0.0.27"
+        "package": "pi-acp@0.0.27-termul.1"
       }
     }
   },

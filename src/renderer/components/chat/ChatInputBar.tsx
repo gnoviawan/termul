@@ -7,10 +7,11 @@ import {
   useAgentSkills
 } from '@/hooks/use-agent-skills'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import { resolveSessionModes } from '@/lib/acp-thinking'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
-import { ConfigChip, ModeChip } from './AgentHeader'
+import { ConfigChip, ModeChip, ModelChip } from './AgentHeader'
 import { partitionConfigOptions } from './chat-input-bar-config'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
@@ -42,6 +43,8 @@ interface ChatInputBarProps {
   onSetConfig: (configId: string, valueId: string) => void
   /** Apply a legacy mode immediately. */
   onSetMode: (modeId: string) => void
+  /** Apply an unstable session model (pi-acp `session/set_model`). */
+  onSetSessionModel: (modelId: string) => void
 }
 
 export function ChatInputBar({
@@ -55,10 +58,15 @@ export function ChatInputBar({
   configOptions,
   modes,
   onSetConfig,
-  onSetMode
+  onSetMode,
+  onSetSessionModel
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
+  const effectiveModes = useMemo(
+    () => resolveSessionModes(modes, session.models),
+    [modes, session.models]
+  )
   const { thoughtLevel, rest: genericConfigOptions } = partitionConfigOptions(usableConfigOptions)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
@@ -71,8 +79,18 @@ export function ChatInputBar({
   const filter = slashFilter(value)
 
   const sections = useMemo(
-    () => (menuOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
-    [menuOpen, commands, configOptions, modes, skills, filter]
+    () =>
+      menuOpen
+        ? buildSlashSections({
+            commands,
+            configOptions,
+            modes: effectiveModes,
+            models: session.models,
+            skills,
+            filter
+          })
+        : [],
+    [menuOpen, commands, configOptions, effectiveModes, session.models, skills, filter]
   )
 
   const resetHeight = useCallback(() => {
@@ -120,13 +138,15 @@ export function ChatInputBar({
       }
       if (item.kind === 'config') {
         onSetConfig(item.configId, item.valueId)
+      } else if (item.kind === 'sessionModel') {
+        onSetSessionModel(item.modelId)
       } else {
         onSetMode(item.modeId)
       }
       setValue('')
       resetHeight()
     },
-    [value, onSetConfig, onSetMode, resetHeight]
+    [value, onSetConfig, onSetMode, onSetSessionModel, resetHeight]
   )
 
   const handleKeyDown = useCallback(
@@ -203,6 +223,13 @@ export function ChatInputBar({
                 <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
                 <ChevronDown size={11} className="text-muted-foreground" />
               </span>
+              {session.models && session.models.availableModels.length > 0 && (
+                <ModelChip
+                  models={session.models}
+                  disabled={disabled}
+                  onSelect={onSetSessionModel}
+                />
+              )}
               {hasConfigOptions ? (
                 <>
                   {thoughtLevel && (

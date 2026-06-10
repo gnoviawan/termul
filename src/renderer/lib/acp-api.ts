@@ -52,6 +52,29 @@ export interface SessionModeState {
   availableModes: SessionMode[]
 }
 
+/** Unstable ACP session model state (`session/set_model`). */
+export interface ModelInfo {
+  modelId: string
+  name: string
+  description?: string | null
+  /** Pi model `reasoning` flag (pi-acp-termul fork). */
+  reasoning?: boolean
+  /** Per-level provider mapping; `null` means unsupported (pi-acp-termul fork). */
+  thinkingLevelMap?: Record<string, string | null> | null
+}
+
+export interface SessionModelState {
+  currentModelId: string
+  availableModels: ModelInfo[]
+}
+
+/** Modes/models/config returned when a session is created or reattached. */
+export interface SessionStateOutcome {
+  modes?: SessionModeState | null
+  models?: SessionModelState | null
+  configOptions?: SessionConfigOption[] | null
+}
+
 export interface SessionConfigOptionValue {
   value: string
   name: string
@@ -206,10 +229,8 @@ export interface AgentConfig {
   allowTerminal?: boolean
 }
 
-export interface NewSessionOutcome {
+export interface NewSessionOutcome extends SessionStateOutcome {
   sessionId: SessionId
-  modes?: SessionModeState | null
-  configOptions?: SessionConfigOption[] | null
 }
 
 export interface ListSessionsResponse {
@@ -228,6 +249,7 @@ export interface SessionCreatedEvent {
   agentId: AgentId
   sessionId: SessionId
   modes?: SessionModeState | null
+  models?: SessionModelState | null
   configOptions?: SessionConfigOption[] | null
 }
 export interface MessageChunkEvent {
@@ -364,16 +386,16 @@ export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await invoke('acp_load_session', { agentId, sessionId, cwd })
+): Promise<SessionStateOutcome> {
+  return invoke<SessionStateOutcome>('acp_load_session', { agentId, sessionId, cwd })
 }
 
 export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await invoke('acp_resume_session', { agentId, sessionId, cwd })
+): Promise<SessionStateOutcome> {
+  return invoke<SessionStateOutcome>('acp_resume_session', { agentId, sessionId, cwd })
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
@@ -424,6 +446,14 @@ export async function acpSetMode(
   modeId: string
 ): Promise<void> {
   await invoke('acp_set_mode', { agentId, sessionId, modeId })
+}
+
+export async function acpSetSessionModel(
+  agentId: AgentId,
+  sessionId: SessionId,
+  modelId: string
+): Promise<void> {
+  await invoke('acp_set_session_model', { agentId, sessionId, modelId })
 }
 
 export async function acpRespondPermission(
@@ -486,6 +516,7 @@ export const acpApi = {
   cancelPrompt: acpCancelPrompt,
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
+  setSessionModel: acpSetSessionModel,
   respondPermission: acpRespondPermission,
   authenticate: acpAuthenticate,
   installRegistryBinary: acpInstallRegistryBinary,
