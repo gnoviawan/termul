@@ -1,7 +1,9 @@
 import type { GitCommitContext, GitStatusDetail } from '@shared/types/ipc.types'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as gitApiModule from '@/lib/git-api'
 import { diffKey, useGitStatusStore } from './git-status-store'
+import { useProjectStore } from './project-store'
+import { useTerminalStore } from './terminal-store'
 
 vi.mock('@/lib/git-api', () => ({
   gitApi: {
@@ -286,5 +288,66 @@ describe('git-status-store stash and branch actions', () => {
     expect(useGitStatusStore.getState().selectedFile).toBeNull()
     expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
     expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
+  })
+})
+
+describe('git-status-store branch sync cross-store', () => {
+  const originalPlatform = process.platform
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', {
+      value: originalPlatform,
+      configurable: true
+    })
+    useProjectStore.setState({ projects: [] })
+    useTerminalStore.setState({ terminals: [] })
+  })
+
+  it('updates project and terminal branches case-insensitively on Windows', async () => {
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true
+    })
+
+    useProjectStore.setState({
+      projects: [
+        { id: 'proj-1', path: 'C:\\\\Users\\\\Test\\\\Project', gitBranch: 'old-branch' } as any
+      ]
+    })
+
+    useTerminalStore.setState({
+      terminals: [
+        { id: 'term-1', cwd: 'c:\\\\users\\\\test\\\\project', gitBranch: 'old-branch' } as any
+      ]
+    })
+
+    await useGitStatusStore.getState().branchSwitch('C:\\\\Users\\\\Test\\\\Project', 'new-branch')
+
+    expect(useProjectStore.getState().projects[0].gitBranch).toBe('new-branch')
+    expect(useTerminalStore.getState().terminals[0].gitBranch).toBe('new-branch')
+  })
+
+  it('preserves case sensitivity on non-Windows platforms', async () => {
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true
+    })
+
+    useProjectStore.setState({
+      projects: [{ id: 'proj-1', path: '/Users/Test/Project', gitBranch: 'old-branch' } as any]
+    })
+
+    useTerminalStore.setState({
+      terminals: [{ id: 'term-1', cwd: '/Users/Test/Project', gitBranch: 'old-branch' } as any]
+    })
+
+    await useGitStatusStore.getState().branchSwitch('/users/test/project', 'new-branch')
+
+    expect(useProjectStore.getState().projects[0].gitBranch).toBe('old-branch')
+    expect(useTerminalStore.getState().terminals[0].gitBranch).toBe('old-branch')
+
+    await useGitStatusStore.getState().branchSwitch('/Users/Test/Project', 'new-branch-exact')
+    expect(useProjectStore.getState().projects[0].gitBranch).toBe('new-branch-exact')
+    expect(useTerminalStore.getState().terminals[0].gitBranch).toBe('new-branch-exact')
   })
 })

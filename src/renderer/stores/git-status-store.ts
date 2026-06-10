@@ -255,18 +255,29 @@ async function updateStoresWithBranch(cwd: string, branchName: string) {
     const { useProjectStore } = await import('./project-store')
     const { useTerminalStore } = await import('./terminal-store')
 
-    const normalizePath = (p?: string) => (p ? p.toLowerCase().replace(/\\/g, '/') : '')
+    const normalizePath = (p?: string) => (p ? p.replace(/\\/g, '/') : '')
     const normalizedCwd = normalizePath(cwd)
 
+    const isWindows =
+      typeof process !== 'undefined'
+        ? process.platform === 'win32'
+        : navigator.platform.toLowerCase().includes('win')
+    const matchPath = (otherPath?: string) => {
+      const normalizedOther = normalizePath(otherPath)
+      return isWindows
+        ? normalizedOther.toLowerCase() === normalizedCwd.toLowerCase()
+        : normalizedOther === normalizedCwd
+    }
+
     const projectStore = useProjectStore.getState()
-    const project = projectStore.projects.find((p) => normalizePath(p.path) === normalizedCwd)
+    const project = projectStore.projects.find((p) => matchPath(p.path))
     if (project) {
       projectStore.updateProject(project.id, { gitBranch: branchName })
     }
 
     const terminalStore = useTerminalStore.getState()
     for (const t of terminalStore.terminals) {
-      if (normalizePath(t.cwd) === normalizedCwd) {
+      if (matchPath(t.cwd)) {
         terminalStore.updateTerminalGitBranch(t.id, branchName)
       }
     }

@@ -179,6 +179,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     return { stagedFiles: staged, unstagedFiles: unstaged }
   }, [filteredStatuses])
 
+  const allStatuses = statuses[cwd] ?? []
+  const hasUncommittedChanges = allStatuses.length > 0
+
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set())
     setSelectionSection(null)
@@ -386,7 +389,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
   const handleSwitchBranch = useCallback(
     async (name: string) => {
-      const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0
+      const hasChanges = hasUncommittedChanges
       if (hasChanges) {
         setPendingBranchName(name)
         setConfirmBranchSwitchOpen(true)
@@ -403,7 +406,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         setIsMutating(false)
       }
     },
-    [cwd, branchSwitch, stagedFiles, unstagedFiles]
+    [cwd, branchSwitch, hasUncommittedChanges]
   )
 
   const handleExecuteSwitchBranch = useCallback(
@@ -589,7 +592,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
               title="Stash changes"
               onClick={() => setIsStashOpen(true)}
-              disabled={unstagedFiles.length === 0 && stagedFiles.length === 0}
+              disabled={!hasUncommittedChanges}
             >
               <Archive size={14} />
             </Button>
