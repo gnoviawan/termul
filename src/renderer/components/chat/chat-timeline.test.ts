@@ -43,4 +43,16 @@ describe('buildTimeline', () => {
   it('returns an empty timeline when there is nothing', () => {
     expect(buildTimeline([], [])).toEqual([])
   })
+
+  it('omits thought messages when showThoughts is false', () => {
+    const messages = [
+      msg('user', 'user', 100),
+      msg('thought', 'thought', 110),
+      msg('agent', 'agent', 120)
+    ]
+    const order = buildTimeline(messages, [], { showThoughts: false }).map((i) =>
+      i.kind === 'message' ? i.message.id : i.kind
+    )
+    expect(order).toEqual(['user', 'agent'])
+  })
 })

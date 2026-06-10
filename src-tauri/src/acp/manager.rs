@@ -34,7 +34,8 @@ use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer,
     NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
     RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigOption,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
+    SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SetSessionModelRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
@@ -60,15 +61,25 @@ const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Modes, models, and config options returned when a session is created or reattached.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStateOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<SessionModelState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_options: Option<Vec<SessionConfigOption>>,
+}
+
 /// Outcome of creating a new session, returned to the command caller.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionOutcome {
     pub session_id: SessionId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config_options: Option<Vec<SessionConfigOption>>,
+    #[serde(flatten)]
+    pub state: SessionStateOutcome,
 }
 
 /// Commands sent from Tauri command handlers to an agent's driver thread.
@@ -85,12 +96,12 @@ enum AcpCommand {
     LoadSession {
         session_id: SessionId,
         cwd: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<SessionStateOutcome, String>>,
     },
     ResumeSession {
         session_id: SessionId,
         cwd: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<SessionStateOutcome, String>>,
     },
     CloseSession {
         session_id: SessionId,
@@ -111,6 +122,11 @@ enum AcpCommand {
     SetMode {
         session_id: SessionId,
         mode_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    SetSessionModel {
+        session_id: SessionId,
+        model_id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
     SetConfigOption {
@@ -347,7 +363,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
-    ) -> Result<(), String> {
+    ) -> Result<SessionStateOutcome, String> {
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -365,7 +381,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
-    ) -> Result<(), String> {
+    ) -> Result<SessionStateOutcome, String> {
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -440,6 +456,22 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::SetMode {
             session_id,
             mode_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Set the session's active model (unstable ACP `session/set_model`).
+    pub async fn set_session_model(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+        model_id: String,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::SetSessionModel {
+            session_id,
+            model_id,
             reply,
         })
         .await
@@ -1180,23 +1212,25 @@ async fn run_command_loop(
                             req_state
                                 .lock()
                                 .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                            let state = SessionStateOutcome {
+                                modes: response.modes.clone(),
+                                models: response.models.clone(),
+                                config_options: response.config_options.clone(),
+                            };
                             events::emit(
                                 &req_app,
                                 events::EVENT_SESSION_CREATED,
                                 SessionCreatedEvent {
                                     agent_id: req_agent_id,
                                     session_id: session_id.clone(),
-                                    modes: response.modes.clone(),
-                                    config_options: response.config_options.clone(),
+                                    modes: state.modes.clone(),
+                                    models: state.models.clone(),
+                                    config_options: state.config_options.clone(),
                                 },
                             );
                             send_reply(
                                 &task_slot,
-                                Ok(NewSessionOutcome {
-                                    session_id,
-                                    modes: response.modes,
-                                    config_options: response.config_options,
-                                }),
+                                Ok(NewSessionOutcome { session_id, state }),
                             );
                         }
                         Err(e) => send_reply(&task_slot, Err(e.to_string())),
@@ -1216,12 +1250,22 @@ async fn run_command_loop(
                 spawn_request(&cx, slot, async move {
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
                     let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                    match result {
+                        Ok(response) => {
+                            req_state
+                                .lock()
+                                .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                            send_reply(
+                                &task_slot,
+                                Ok(SessionStateOutcome {
+                                    modes: response.modes,
+                                    models: response.models,
+                                    config_options: response.config_options,
+                                }),
+                            );
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
                     }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
                 });
             }
 
@@ -1237,12 +1281,22 @@ async fn run_command_loop(
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
                     let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                    match result {
+                        Ok(response) => {
+                            req_state
+                                .lock()
+                                .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                            send_reply(
+                                &task_slot,
+                                Ok(SessionStateOutcome {
+                                    modes: response.modes,
+                                    models: response.models,
+                                    config_options: response.config_options,
+                                }),
+                            );
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
                     }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
                 });
             }
 
@@ -1417,6 +1471,21 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     let request = SetSessionModeRequest::new(&session_id, mode_id);
+                    let result = req_cx.send_request(request).block_task().await;
+                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                });
+            }
+
+            AcpCommand::SetSessionModel {
+                session_id,
+                model_id,
+                reply,
+            } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_cx = cx.clone();
+                spawn_request(&cx, slot, async move {
+                    let request = SetSessionModelRequest::new(&session_id, model_id);
                     let result = req_cx.send_request(request).block_task().await;
                     send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
                 });

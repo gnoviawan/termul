@@ -86,6 +86,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
         activeTurn,
         openTurnId: activeTurn ? 'seed-turn' : null,
         modes: null,
+        models: null,
         configOptions: [],
         lastError: null,
         createdAt: Date.now()
@@ -174,6 +175,53 @@ describe('acp-store', () => {
     expect(msgs[1].role).toBe('agent')
   })
 
+  it('drops thought chunks when thinking mode is off', () => {
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: 'turn-1',
+          modes: {
+            currentModeId: 'off',
+            availableModes: [
+              { id: 'off', name: 'Thinking: off' },
+              { id: 'high', name: 'Thinking: high' }
+            ]
+          },
+          models: {
+            currentModelId: 'cursor/grok-build-0.1',
+            availableModels: [{ modelId: 'cursor/grok-build-0.1', name: 'grok', reasoning: true }]
+          },
+          configOptions: [],
+          lastError: null,
+          createdAt: Date.now()
+        }
+      },
+      messages: { s1: [] }
+    })
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'thought',
+      content: { type: 'text', text: 'hidden reasoning' }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'hello' }
+    })
+    const msgs = useAcpStore.getState().messages['s1']
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('agent')
+  })
+
   it('prompt_complete clears the active turn and finalizes the streaming message', async () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()
@@ -228,6 +276,7 @@ describe('acp-store', () => {
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: 0
@@ -241,6 +290,7 @@ describe('acp-store', () => {
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: 0
@@ -540,6 +590,7 @@ describe('acp-store', () => {
           activeTurn: true,
           openTurnId: 'turn',
           modes: null,
+          models: null,
           configOptions: [],
           lastError: 'early error',
           createdAt: 1
@@ -934,6 +985,7 @@ describe('acp-store', () => {
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: 1
@@ -963,7 +1015,7 @@ describe('acp-store', () => {
         }
       ]
     })
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({})
     await useAcpStore.getState().openHistorySession('s-closed')
     expect(loadSessionPayload).toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
@@ -996,6 +1048,7 @@ describe('acp-store', () => {
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: 1
@@ -1025,7 +1078,7 @@ describe('acp-store', () => {
         }
       ]
     })
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({})
     await useAcpStore.getState().openHistorySession('s-closed')
     expect(loadSessionPayload).toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
@@ -1107,6 +1160,106 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
   })
 
+  it('setSessionModel updates currentModelId after backend call', async () => {
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/w',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: {
+            currentModelId: 'openai/gpt-4o',
+            availableModels: [
+              { modelId: 'openai/gpt-4o', name: 'openai/gpt-4o', reasoning: true },
+              {
+                modelId: 'anthropic/claude-sonnet',
+                name: 'anthropic/claude-sonnet',
+                reasoning: true
+              }
+            ]
+          },
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().setSessionModel('s1', 'anthropic/claude-sonnet')
+    expect(invoke).toHaveBeenCalledWith('acp_set_session_model', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modelId: 'anthropic/claude-sonnet'
+    })
+    expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe(
+      'anthropic/claude-sonnet'
+    )
+  })
+
+  it('setSessionModel clamps thinking level when new model lacks xhigh', async () => {
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/w',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: {
+            currentModeId: 'xhigh',
+            availableModes: [
+              { id: 'high', name: 'Thinking: high' },
+              { id: 'xhigh', name: 'Thinking: xhigh' }
+            ]
+          },
+          models: {
+            currentModelId: 'openai/gpt-5.2',
+            availableModels: [
+              {
+                modelId: 'openai/gpt-5.2',
+                name: 'openai/gpt-5.2',
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: 'off',
+                  minimal: 'minimal',
+                  low: 'low',
+                  medium: 'medium',
+                  high: 'high',
+                  xhigh: 'xhigh'
+                }
+              },
+              {
+                modelId: 'cursor/grok-build-0.1',
+                name: 'cursor/grok-build-0.1',
+                reasoning: true
+              }
+            ]
+          },
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().setSessionModel('s1', 'cursor/grok-build-0.1')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'acp_set_mode', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modeId: 'high'
+    })
+    expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('high')
+  })
+
   it('startChat forwards selected MCP servers to new_session (P6)', async () => {
     await useAcpStore
       .getState()
@@ -1172,6 +1325,7 @@ describe('acp-store multi-project isolation', () => {
       activeTurn: false,
       openTurnId: null,
       modes: null,
+      models: null,
       configOptions: [],
       lastError: null,
       createdAt: Date.now()

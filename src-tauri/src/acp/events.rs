@@ -11,7 +11,7 @@
 use crate::acp::config::{AgentId, SessionId};
 use agent_client_protocol::schema::{
     AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan, SessionConfigOption,
-    SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
+    SessionMode, SessionModeId, SessionModelState, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -101,6 +101,8 @@ pub struct SessionCreatedEvent {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<SessionConfigOption>>,
 }
@@ -253,6 +255,7 @@ mod tests {
             agent_id: AgentId("agent-1".to_string()),
             session_id: SessionId::new("sess-1"),
             modes: None,
+            models: None,
             config_options: None,
         };
         let value = serde_json::to_value(&event).unwrap();
