@@ -120,7 +120,7 @@ export function SSHFileExplorer({
     return (
       <div key={entry.path}>
         <div
-          className="flex items-center gap-1 px-2 py-0.5 hover:bg-accent/50 cursor-pointer group text-xs"
+          className="group flex min-w-0 items-center gap-1 overflow-hidden px-2 py-0.5 text-xs hover:bg-accent/50 cursor-pointer"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           onClick={() => (isDir ? onToggleDir(entry.path) : handleOpenFile(entry))}
         >
@@ -142,13 +142,13 @@ export function SSHFileExplorer({
               isDir ? 'text-blue-400' : 'text-muted-foreground'
             )}
           />
-          <span className="flex-1 truncate">{entry.name}</span>
+          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
           {!isDir && (
-            <span className="text-[10px] text-muted-foreground hidden group-hover:inline">
+            <span className="hidden shrink-0 text-[10px] text-muted-foreground group-hover:inline">
               {formatSize(entry.size)}
             </span>
           )}
-          <div className="hidden group-hover:flex items-center gap-0.5">
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
             {!isDir && (
               <button
                 onClick={(e) => {

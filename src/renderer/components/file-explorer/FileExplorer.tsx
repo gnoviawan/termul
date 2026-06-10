@@ -825,7 +825,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     <div
       id="file-explorer-panel"
       ref={containerRef}
-      className="relative flex flex-col bg-background text-foreground rounded-xl flex-shrink-0 h-full"
+      className="relative flex h-full min-w-0 flex-shrink-0 flex-col overflow-hidden rounded-xl bg-background text-foreground"
       style={{ width: explorerWidth }}
     >
       {/* Header */}

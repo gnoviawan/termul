@@ -89,7 +89,7 @@ export function FileTreeNode({
     <>
       <div
         className={cn(
-          'group relative flex items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
+          'group relative flex min-w-0 items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
           isIgnored && 'opacity-50',
           isSelected && 'bg-accent text-accent-foreground'
         )}
@@ -102,27 +102,32 @@ export function FileTreeNode({
         draggable={!isDir}
         onDragStart={handleDragStart}
       >
-        {isDir && (
-          <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
-            {isLoading ? (
-              <Loader2 size={12} className="animate-spin text-muted-foreground" />
-            ) : (
-              <ChevronRight
-                size={12}
-                className={cn(
-                  'text-muted-foreground transition-transform',
-                  isExpanded && 'rotate-90'
-                )}
-              />
+        <div className="flex min-w-0 flex-1 items-center overflow-hidden">
+          {isDir && (
+            <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
+              {isLoading ? (
+                <Loader2 size={12} className="animate-spin text-muted-foreground" />
+              ) : (
+                <ChevronRight
+                  size={12}
+                  className={cn(
+                    'text-muted-foreground transition-transform',
+                    isExpanded && 'rotate-90'
+                  )}
+                />
+              )}
+            </span>
+          )}
+          {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
+          <Icon
+            size={14}
+            className={cn(
+              'flex-shrink-0 mr-1.5',
+              isDir ? 'text-blue-400' : 'text-muted-foreground'
             )}
-          </span>
-        )}
-        {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
-        <Icon
-          size={14}
-          className={cn('flex-shrink-0 mr-1.5', isDir ? 'text-blue-400' : 'text-muted-foreground')}
-        />
-        <span className="truncate">{entry.name}</span>
+          />
+          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        </div>
 
         {showTooltip && (
           <div className="pointer-events-none absolute left-2 top-[calc(100%+2px)] z-50 max-w-[420px] rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">
