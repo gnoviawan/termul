@@ -220,12 +220,19 @@ describe('file-explorer-store', () => {
       })
     })
 
-    it('should collapse a directory and remove its contents', async () => {
+    it('should collapse a directory and defer content removal until finalize', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
 
-      const state = useFileExplorerStore.getState()
+      let state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project')).toBe(false)
+      expect(state.directoryContents.has('/project')).toBe(true)
+      expect(state.pendingCollapses.has('/project')).toBe(true)
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
+
+      state = useFileExplorerStore.getState()
       expect(state.directoryContents.has('/project')).toBe(false)
+      expect(state.pendingCollapses.has('/project')).toBe(false)
     })
 
     it('should also collapse child directories', async () => {
@@ -233,11 +240,16 @@ describe('file-explorer-store', () => {
 
       const state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project/src')).toBe(false)
-      expect(state.directoryContents.has('/project/src')).toBe(false)
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
+      expect(useFileExplorerStore.getState().directoryContents.has('/project/src')).toBe(false)
     })
 
-    it('should unwatch collapsed directory and its children', async () => {
+    it('should unwatch collapsed directory and its children after finalize', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
+      vi.clearAllMocks()
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
 
       expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project')
       expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project/src')

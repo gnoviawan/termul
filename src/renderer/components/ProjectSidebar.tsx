@@ -1,5 +1,5 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
-import { AnimatePresence, LayoutGroup, motion, Reorder } from 'framer-motion'
+import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
   AlertCircle,
   AlertTriangle,
@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
@@ -1250,134 +1251,124 @@ export function ProjectSidebar({
                         </div>
 
                         {/* Projects in Group */}
-                        <AnimatePresence initial={false}>
-                          {(!isCollapsed || isSearching) && gpProjects.length > 0 && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: 'auto', opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              transition={{ duration: 0.15, ease: 'easeInOut' }}
-                              className="overflow-hidden"
-                            >
-                              <Reorder.Group
-                                axis="y"
-                                values={gpProjects}
-                                onReorder={(reordered) => {
-                                  if (isSearching) return
-                                  reorderProjectInGroup(
-                                    group.id,
-                                    reordered.map((p) => p.id)
-                                  )
-                                }}
-                                className="pl-4 flex flex-col"
-                                data-group-container-id={group.id}
-                              >
-                                {gpProjects.map((project) => {
-                                  const hasActivity = projectActivityIds.includes(project.id)
-                                  const shortcutIndex = activeIndexById.get(project.id) ?? -1
-                                  return (
-                                    <Reorder.Item
-                                      key={project.id}
-                                      value={project}
-                                      drag={isSearching ? false : 'y'}
-                                      layout="position"
-                                      className="list-none"
-                                      whileDrag={{
-                                        scale: 1.02,
-                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                        pointerEvents: 'none'
-                                      }}
-                                      onDrag={(_event, info) => {
-                                        const element = document.elementFromPoint(
-                                          info.point.x,
-                                          info.point.y
-                                        )
-                                        const container = element?.closest(
-                                          '[data-group-container-id]'
-                                        )
-                                        const folderHeader = element?.closest('[data-group-id]')
-                                        const groupId =
-                                          container?.getAttribute('data-group-container-id') ||
-                                          folderHeader?.getAttribute('data-group-id') ||
-                                          null
-                                        if (groupId !== activeDragOverGroupId) {
-                                          setActiveDragOverGroupId(groupId)
-                                          activeDragOverGroupIdRef.current = groupId
-                                        }
-                                      }}
-                                      onDragEnd={() => {
-                                        const targetGroupId = activeDragOverGroupIdRef.current
-                                        if (targetGroupId) {
-                                          const nextGroupId =
-                                            targetGroupId === 'root' ? null : targetGroupId
-                                          const currentGroup = groups.find((g) =>
-                                            g.projectIds.includes(project.id)
-                                          )
-                                          const currentGroupId = currentGroup?.id ?? null
-                                          if (nextGroupId !== currentGroupId) {
-                                            moveProjectToGroup(project.id, nextGroupId)
-                                          }
-                                        }
-                                        setActiveDragOverGroupId(null)
-                                        activeDragOverGroupIdRef.current = null
-                                      }}
-                                    >
-                                      <ProjectItem
-                                        project={project}
-                                        isActive={project.id === activeProjectId}
-                                        isExpanded={expandedProjects.has(project.id)}
-                                        onToggleExpand={() => toggleProjectExpanded(project.id)}
-                                        isEditing={editingId === project.id}
-                                        editName={editName}
-                                        shortcut={
-                                          shortcutIndex >= 0 && shortcutIndex < 9
-                                            ? `Ctrl+${shortcutIndex + 1}`
-                                            : undefined
-                                        }
-                                        hasActivity={hasActivity}
-                                        hasError={projectErrorIds.has(project.id)}
-                                        onClick={() => {
-                                          onSelectProject(project.id)
-                                          navigate('/')
-                                        }}
-                                        onContextMenu={(e) => handleContextMenu(e, project.id)}
-                                        onEditNameChange={setEditName}
-                                        onSaveRename={() => handleSaveRename(project.id)}
-                                        onCancelRename={handleCancelRename}
-                                        onSettingsClick={() => {
-                                          selectProject(project.id)
-                                          navigate('/settings')
-                                        }}
-                                        onWorktreeSelect={(worktreeId) =>
-                                          handleWorktreeSelect(project.id, worktreeId)
-                                        }
-                                        onWorktreeContextMenu={(e, worktree) =>
-                                          handleWorktreeContextMenu(e, project.id, worktree)
-                                        }
-                                        onOpenTerminalInWorktree={(
-                                          worktreeId,
-                                          worktreePath,
-                                          worktreeName
-                                        ) =>
-                                          void handleOpenTerminalInWorktree(
-                                            project.id,
-                                            worktreeId,
-                                            worktreePath,
-                                            worktreeName
-                                          )
-                                        }
-                                        isWorktreeOperationLocked={isWorktreeOperationLocked}
-                                        onNewWorktree={(pId) =>
-                                          setNewWorktreeModal({ isOpen: true, projectId: pId })
-                                        }
-                                      />
-                                    </Reorder.Item>
-                                  )
-                                })}
-                              </Reorder.Group>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                        <CollapseExpandMotion
+                          open={(!isCollapsed || isSearching) && gpProjects.length > 0}
+                        >
+                          <Reorder.Group
+                            axis="y"
+                            values={gpProjects}
+                            onReorder={(reordered) => {
+                              if (isSearching) return
+                              reorderProjectInGroup(
+                                group.id,
+                                reordered.map((p) => p.id)
+                              )
+                            }}
+                            className="pl-4 flex flex-col"
+                            data-group-container-id={group.id}
+                          >
+                            {gpProjects.map((project) => {
+                              const hasActivity = projectActivityIds.includes(project.id)
+                              const shortcutIndex = activeIndexById.get(project.id) ?? -1
+                              return (
+                                <Reorder.Item
+                                  key={project.id}
+                                  value={project}
+                                  drag={isSearching ? false : 'y'}
+                                  layout="position"
+                                  className="list-none"
+                                  whileDrag={{
+                                    scale: 1.02,
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                    pointerEvents: 'none'
+                                  }}
+                                  onDrag={(_event, info) => {
+                                    const element = document.elementFromPoint(
+                                      info.point.x,
+                                      info.point.y
+                                    )
+                                    const container = element?.closest('[data-group-container-id]')
+                                    const folderHeader = element?.closest('[data-group-id]')
+                                    const groupId =
+                                      container?.getAttribute('data-group-container-id') ||
+                                      folderHeader?.getAttribute('data-group-id') ||
+                                      null
+                                    if (groupId !== activeDragOverGroupId) {
+                                      setActiveDragOverGroupId(groupId)
+                                      activeDragOverGroupIdRef.current = groupId
+                                    }
+                                  }}
+                                  onDragEnd={() => {
+                                    const targetGroupId = activeDragOverGroupIdRef.current
+                                    if (targetGroupId) {
+                                      const nextGroupId =
+                                        targetGroupId === 'root' ? null : targetGroupId
+                                      const currentGroup = groups.find((g) =>
+                                        g.projectIds.includes(project.id)
+                                      )
+                                      const currentGroupId = currentGroup?.id ?? null
+                                      if (nextGroupId !== currentGroupId) {
+                                        moveProjectToGroup(project.id, nextGroupId)
+                                      }
+                                    }
+                                    setActiveDragOverGroupId(null)
+                                    activeDragOverGroupIdRef.current = null
+                                  }}
+                                >
+                                  <ProjectItem
+                                    project={project}
+                                    isActive={project.id === activeProjectId}
+                                    isExpanded={expandedProjects.has(project.id)}
+                                    onToggleExpand={() => toggleProjectExpanded(project.id)}
+                                    isEditing={editingId === project.id}
+                                    editName={editName}
+                                    shortcut={
+                                      shortcutIndex >= 0 && shortcutIndex < 9
+                                        ? `Ctrl+${shortcutIndex + 1}`
+                                        : undefined
+                                    }
+                                    hasActivity={hasActivity}
+                                    hasError={projectErrorIds.has(project.id)}
+                                    onClick={() => {
+                                      onSelectProject(project.id)
+                                      navigate('/')
+                                    }}
+                                    onContextMenu={(e) => handleContextMenu(e, project.id)}
+                                    onEditNameChange={setEditName}
+                                    onSaveRename={() => handleSaveRename(project.id)}
+                                    onCancelRename={handleCancelRename}
+                                    onSettingsClick={() => {
+                                      selectProject(project.id)
+                                      navigate('/settings')
+                                    }}
+                                    onWorktreeSelect={(worktreeId) =>
+                                      handleWorktreeSelect(project.id, worktreeId)
+                                    }
+                                    onWorktreeContextMenu={(e, worktree) =>
+                                      handleWorktreeContextMenu(e, project.id, worktree)
+                                    }
+                                    onOpenTerminalInWorktree={(
+                                      worktreeId,
+                                      worktreePath,
+                                      worktreeName
+                                    ) =>
+                                      void handleOpenTerminalInWorktree(
+                                        project.id,
+                                        worktreeId,
+                                        worktreePath,
+                                        worktreeName
+                                      )
+                                    }
+                                    isWorktreeOperationLocked={isWorktreeOperationLocked}
+                                    onNewWorktree={(pId) =>
+                                      setNewWorktreeModal({ isOpen: true, projectId: pId })
+                                    }
+                                  />
+                                </Reorder.Item>
+                              )
+                            })}
+                          </Reorder.Group>
+                        </CollapseExpandMotion>
                       </div>
                     </Reorder.Item>
                   )
@@ -1977,139 +1968,132 @@ const ProjectItem = memo(function ProjectItem({
       </div>
 
       {/* Worktree sub-items */}
-      <AnimatePresence initial={false}>
-        {isExpanded && hasWorktrees && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.15, ease: 'easeInOut' }}
-            className="ml-5 border-l border-sidebar-border overflow-hidden"
-          >
-            {/* Worktree search bar - visible at 10+ worktrees, flat style matching the file explorer */}
-            {worktrees.length >= 10 && (
-              <div className="px-2 py-1">
-                <div className="relative">
-                  <Search
-                    size={12}
-                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                  <input
-                    type="search"
-                    placeholder="Search worktrees…"
-                    value={worktreeSearchQuery}
-                    onChange={(e) => setWorktreeSearchQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape' && worktreeSearchQuery) {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        setWorktreeSearchQuery('')
-                      }
-                    }}
-                    className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
-                    aria-label="Search worktrees"
-                  />
-                  {worktreeSearchQuery && (
-                    <button
-                      onClick={() => setWorktreeSearchQuery('')}
-                      className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-                      title="Clear search"
-                      aria-label="Clear worktree search"
-                    >
-                      <X size={11} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            {/* Root item */}
-            <WorktreeItem
-              name="Root"
-              branch={project.gitBranch ?? 'main'}
-              path={project.path ?? ''}
-              isRoot
-              isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
-              onClick={() => onWorktreeSelect(null)}
-              onOpenTerminal={
-                project.path
-                  ? () => onOpenTerminalInWorktree(null, project.path as string, 'project root')
-                  : undefined
-              }
-            />
-            {/* Grouped worktree items with search filter */}
-            {(() => {
-              const filtered = worktreeSearchQuery
-                ? filterWorktrees(worktrees, { searchQuery: worktreeSearchQuery })
-                : worktrees
-              const groups = groupWorktrees(filtered)
-              return groups.map((group) => {
-                const isCollapsed = collapsedGroups.has(group.id)
-                return (
-                  <div key={group.id} className="mb-1">
-                    {group.id !== 'other' && group.items.length > 1 && (
-                      <button
-                        onClick={() => {
-                          setCollapsedGroups((prev) => {
-                            const next = new Set(prev)
-                            if (next.has(group.id)) {
-                              next.delete(group.id)
-                            } else {
-                              next.add(group.id)
-                            }
-                            return next
-                          })
-                        }}
-                        className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
-                      >
-                        <span>{isCollapsed ? '▶' : '▼'}</span>
-                        <span className="ml-1">{group.name}</span>
-                        <span className="ml-auto text-[9px] font-normal text-muted-foreground/40">
-                          {group.items.length}
-                        </span>
-                      </button>
-                    )}
-                    {(!isCollapsed || group.id === 'other' || group.items.length <= 1) &&
-                      group.items.map((wt) => (
-                        <WorktreeItem
-                          key={wt.id}
-                          name={wt.name}
-                          branch={wt.branch}
-                          path={wt.path}
-                          worktreeId={wt.id}
-                          isActive={project.activeWorktreeId === wt.id}
-                          isTermulManaged={isWorktreeTermulManaged(wt)}
-                          onClick={() => onWorktreeSelect(wt.id)}
-                          onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
-                          onOpenTerminal={() => onOpenTerminalInWorktree(wt.id, wt.path, wt.name)}
-                        />
-                      ))}
-                  </div>
-                )
-              })
-            })()}
-            {/* New Worktree button */}
-            {project.isGitRepo && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onNewWorktree(project.id)
+      <CollapseExpandMotion
+        open={Boolean(isExpanded && hasWorktrees)}
+        className="ml-5 border-l border-sidebar-border"
+      >
+        {/* Worktree search bar - visible at 10+ worktrees, flat style matching the file explorer */}
+        {worktrees.length >= 10 && (
+          <div className="px-2 py-1">
+            <div className="relative">
+              <Search
+                size={12}
+                className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                placeholder="Search worktrees…"
+                value={worktreeSearchQuery}
+                onChange={(e) => setWorktreeSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && worktreeSearchQuery) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setWorktreeSearchQuery('')
+                  }
                 }}
-                disabled={isWorktreeOperationLocked}
-                className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
-                title={
-                  isWorktreeOperationLocked
-                    ? 'Another worktree operation in progress'
-                    : 'Create new worktree'
-                }
-              >
-                <Plus size={10} className="mr-1.5" />
-                New Worktree
-              </button>
-            )}
-          </motion.div>
+                className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
+                aria-label="Search worktrees"
+              />
+              {worktreeSearchQuery && (
+                <button
+                  onClick={() => setWorktreeSearchQuery('')}
+                  className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+                  title="Clear search"
+                  aria-label="Clear worktree search"
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+          </div>
         )}
-      </AnimatePresence>
+        {/* Root item */}
+        <WorktreeItem
+          name="Root"
+          branch={project.gitBranch ?? 'main'}
+          path={project.path ?? ''}
+          isRoot
+          isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
+          onClick={() => onWorktreeSelect(null)}
+          onOpenTerminal={
+            project.path
+              ? () => onOpenTerminalInWorktree(null, project.path as string, 'project root')
+              : undefined
+          }
+        />
+        {/* Grouped worktree items with search filter */}
+        {(() => {
+          const filtered = worktreeSearchQuery
+            ? filterWorktrees(worktrees, { searchQuery: worktreeSearchQuery })
+            : worktrees
+          const groups = groupWorktrees(filtered)
+          return groups.map((group) => {
+            const isCollapsed = collapsedGroups.has(group.id)
+            return (
+              <div key={group.id} className="mb-1">
+                {group.id !== 'other' && group.items.length > 1 && (
+                  <button
+                    onClick={() => {
+                      setCollapsedGroups((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(group.id)) {
+                          next.delete(group.id)
+                        } else {
+                          next.add(group.id)
+                        }
+                        return next
+                      })
+                    }}
+                    className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
+                  >
+                    <span>{isCollapsed ? '▶' : '▼'}</span>
+                    <span className="ml-1">{group.name}</span>
+                    <span className="ml-auto text-[9px] font-normal text-muted-foreground/40">
+                      {group.items.length}
+                    </span>
+                  </button>
+                )}
+                {(!isCollapsed || group.id === 'other' || group.items.length <= 1) &&
+                  group.items.map((wt) => (
+                    <WorktreeItem
+                      key={wt.id}
+                      name={wt.name}
+                      branch={wt.branch}
+                      path={wt.path}
+                      worktreeId={wt.id}
+                      isActive={project.activeWorktreeId === wt.id}
+                      isTermulManaged={isWorktreeTermulManaged(wt)}
+                      onClick={() => onWorktreeSelect(wt.id)}
+                      onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
+                      onOpenTerminal={() => onOpenTerminalInWorktree(wt.id, wt.path, wt.name)}
+                    />
+                  ))}
+              </div>
+            )
+          })
+        })()}
+        {/* New Worktree button */}
+        {project.isGitRepo && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onNewWorktree(project.id)
+            }}
+            disabled={isWorktreeOperationLocked}
+            className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
+            title={
+              isWorktreeOperationLocked
+                ? 'Another worktree operation in progress'
+                : 'Create new worktree'
+            }
+          >
+            <Plus size={10} className="mr-1.5" />
+            New Worktree
+          </button>
+        )}
+      </CollapseExpandMotion>
     </div>
   )
 })
