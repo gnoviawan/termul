@@ -46,7 +46,9 @@ import {
   type SessionCreatedEvent,
   type SessionId,
   type SessionMode,
+  type SessionModelState,
   type SessionModeState,
+  type SessionStateOutcome,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
@@ -68,6 +70,7 @@ import {
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
+import { isThinkingVisible, resolveSessionModes } from '@/lib/acp-thinking'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error' | 'needs-auth'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -97,6 +100,8 @@ export interface AcpSession {
    */
   openTurnId: string | null
   modes: SessionModeState | null
+  /** Unstable ACP model picker state (pi-acp and similar agents). */
+  models: SessionModelState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
   createdAt: number
@@ -197,6 +202,7 @@ interface AcpState {
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
+  setSessionModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
@@ -309,6 +315,25 @@ function withSessionActive(
   const session = sessions[sessionId]
   if (!session) return sessions
   return { ...sessions, [sessionId]: { ...session, status: 'active', lastError: null } }
+}
+
+/** Merge modes/models/config from a backend session state payload. */
+function withSessionState(
+  sessions: Record<SessionId, AcpSession>,
+  sessionId: SessionId,
+  state: SessionStateOutcome | null | undefined
+): Record<SessionId, AcpSession> {
+  const session = sessions[sessionId]
+  if (!session || state == null) return sessions
+  return {
+    ...sessions,
+    [sessionId]: {
+      ...session,
+      modes: state.modes ?? session.modes,
+      models: state.models ?? session.models,
+      configOptions: state.configOptions ?? session.configOptions
+    }
+  }
 }
 
 /** Surface a failed history load/resume on the session without changing status. */
@@ -587,6 +612,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: existing?.activeTurn ?? false,
             openTurnId: existing?.openTurnId ?? null,
             modes: outcome.modes ?? existing?.modes ?? null,
+            models: outcome.models ?? existing?.models ?? null,
             configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
             createdAt: existing?.createdAt ?? Date.now()
@@ -983,6 +1009,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: meta.createdAt
@@ -995,8 +1022,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Agent replays history via session/update; clear local copy to avoid dupes.
       set((s) => ({ messages: { ...s.messages, [id]: [] } }))
       try {
-        await acpApi.loadSession(meta.agentId, id, meta.cwd)
-        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+        const state = await acpApi.loadSession(meta.agentId, id, meta.cwd)
+        set((s) => ({
+          sessions: withSessionState(withSessionActive(s.sessions, id), id, state)
+        }))
       } catch (err) {
         // Load failed — restore the local transcript so the user still sees history.
         set((s) => ({
@@ -1007,8 +1036,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     } else if (strategy === 'resume') {
       try {
-        await acpApi.resumeSession(meta.agentId, id, meta.cwd)
-        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+        const state = await acpApi.resumeSession(meta.agentId, id, meta.cwd)
+        set((s) => ({
+          sessions: withSessionState(withSessionActive(s.sessions, id), id, state)
+        }))
       } catch (err) {
         set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
         throw err
@@ -1137,6 +1168,33 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     await acpApi.setMode(session.agentId, sessionId, modeId)
   },
 
+  setSessionModel: async (sessionId, modelId) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    const priorModeId = session.modes?.currentModeId
+    await acpApi.setSessionModel(session.agentId, sessionId, modelId)
+    const updatedModels = session.models ? { ...session.models, currentModelId: modelId } : null
+    const resolvedModes = resolveSessionModes(session.modes, updatedModels)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            models: updatedModels ?? current.models,
+            modes: resolvedModes ?? current.modes
+          }
+        }
+      }
+    })
+    const clampedModeId = resolvedModes?.currentModeId
+    if (clampedModeId && clampedModeId !== priorModeId) {
+      await get().setMode(sessionId, clampedModeId)
+    }
+  },
+
   respondPermission: async (requestId, optionId) => {
     const pending = get().pendingPermissions[requestId]
     if (!pending) return
@@ -1206,6 +1264,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
               modes: e.modes ?? s.sessions[e.sessionId].modes,
+              models: e.models ?? s.sessions[e.sessionId].models,
               configOptions: e.configOptions ?? s.sessions[e.sessionId].configOptions
             }
           }
@@ -1223,6 +1282,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: false,
             openTurnId: null,
             modes: e.modes ?? null,
+            models: e.models ?? null,
             configOptions: e.configOptions ?? [],
             lastError: null,
             createdAt: Date.now()
@@ -1240,6 +1300,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const list = s.messages[e.sessionId] ?? []
       const last = list[list.length - 1]
       const role = e.role as MessageRole
+      if (
+        role === 'thought' &&
+        !isThinkingVisible(session.modes, session.models, session.configOptions)
+      ) {
+        return {}
+      }
       // Attach to the trailing assistant/user message for this turn (including
       // chunks that arrive after streaming was finalized but IPC lagged).
       if (last && last.role === role && (last.streaming || hasActiveAssistantTail(list, role))) {
@@ -1304,12 +1370,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         e.availableModes && e.availableModes.length > 0
           ? e.availableModes
           : (session.modes?.availableModes ?? [])
+      const merged = { currentModeId: e.currentModeId, availableModes }
+      const resolved = resolveSessionModes(merged, session.models)
       return {
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
             ...session,
-            modes: { currentModeId: e.currentModeId, availableModes }
+            modes: resolved ?? merged
           }
         }
       }

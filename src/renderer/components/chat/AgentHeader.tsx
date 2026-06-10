@@ -1,6 +1,7 @@
-import { Brain, ChevronDown, Circle } from 'lucide-react'
+import { Brain, ChevronDown, Circle, Cpu } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionModelState } from '@/lib/acp-api'
+import { resolveSessionModes } from '@/lib/acp-thinking'
 import { cn } from '@/lib/utils'
 import type { AcpSession, AgentStatus } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
@@ -86,6 +87,56 @@ export function ConfigChip({
   )
 }
 
+/** A popover selector for the unstable ACP session model API (pi-acp, etc.). */
+export function ModelChip({
+  models,
+  disabled,
+  onSelect
+}: {
+  models: SessionModelState
+  disabled: boolean
+  onSelect: (modelId: string) => void
+}): React.JSX.Element | null {
+  if (models.availableModels.length === 0) return null
+  const current = models.availableModels.find((m) => m.modelId === models.currentModelId)
+  return (
+    <Popover>
+      <PopoverTrigger asChild disabled={disabled}>
+        <button
+          type="button"
+          disabled={disabled}
+          className="flex h-[30px] max-w-[220px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Cpu size={13} className="shrink-0 text-muted-foreground" />
+          <span className="truncate">{current?.name ?? models.currentModelId}</span>
+          <ChevronDown size={11} className="shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" side="top" className="w-72 max-h-80 overflow-y-auto p-1">
+        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          Model
+        </div>
+        {models.availableModels.map((m) => (
+          <button
+            key={m.modelId}
+            type="button"
+            onClick={() => onSelect(m.modelId)}
+            className={cn(
+              'flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent',
+              m.modelId === models.currentModelId && 'bg-accent/50'
+            )}
+          >
+            <span className="font-medium">{m.name}</span>
+            {m.description && (
+              <span className="text-xs text-muted-foreground">{m.description}</span>
+            )}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** A popover selector for the legacy modes API. */
 export function ModeChip({
   session,
@@ -96,7 +147,7 @@ export function ModeChip({
   disabled: boolean
   onSelect: (modeId: string) => void
 }): React.JSX.Element | null {
-  const modes = session.modes
+  const modes = resolveSessionModes(session.modes, session.models)
   if (!modes || modes.availableModes.length === 0) return null
   const current = modes.availableModes.find((m) => m.id === modes.currentModeId)
   return (

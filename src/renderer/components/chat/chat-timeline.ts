@@ -28,10 +28,21 @@ function toolTs(tool: ToolCall): number {
  * turns, but agent text is pinned to the end of its own turn so tool calls and
  * thinking that share (or slightly trail) its timestamp still render first.
  */
-export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): TimelineItem[] {
+export interface BuildTimelineOptions {
+  /** When false, thought/reasoning messages are omitted from the timeline. */
+  showThoughts?: boolean
+}
+
+export function buildTimeline(
+  messages: ChatMessage[],
+  toolCalls: ToolCall[],
+  options?: BuildTimelineOptions
+): TimelineItem[] {
+  const showThoughts = options?.showThoughts ?? true
   const stamped: Stamped[] = []
 
   messages.forEach((message, i) => {
+    if (!showThoughts && message.role === 'thought') return
     stamped.push({
       item: { kind: 'message', key: message.id, message },
       ts: message.timestamp,

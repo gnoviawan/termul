@@ -15,6 +15,7 @@ import {
   acpRespondPermission,
   acpSendPrompt,
   acpSetConfigOption,
+  acpSetSessionModel,
   acpSpawnAgent,
   onAcpEvent
 } from './acp-api'
@@ -61,6 +62,16 @@ describe('acp-api command wrappers', () => {
       sessionId: 's1',
       configId: 'mode',
       valueId: 'code'
+    })
+  })
+
+  it('acpSetSessionModel forwards modelId', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    await acpSetSessionModel('agent-1', 's1', 'anthropic/claude-sonnet')
+    expect(invoke).toHaveBeenCalledWith('acp_set_session_model', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modelId: 'anthropic/claude-sonnet'
     })
   })
 

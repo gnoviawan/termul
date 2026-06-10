@@ -8,6 +8,7 @@ import type {
   AvailableCommand,
   SessionConfigOption,
   SessionMode,
+  SessionModelState,
   SessionModeState
 } from '@/lib/acp-api'
 import type { AgentSkillSummary } from '@/lib/skills-api'
@@ -35,6 +36,14 @@ export interface SlashModeItem {
   selected: boolean
 }
 
+export interface SlashSessionModelItem {
+  kind: 'sessionModel'
+  modelId: string
+  label: string
+  description: string | null
+  selected: boolean
+}
+
 export interface SlashSkillItem {
   kind: 'skill'
   name: string
@@ -42,7 +51,12 @@ export interface SlashSkillItem {
   scope: string
 }
 
-export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem | SlashSkillItem
+export type SlashItem =
+  | SlashCommandItem
+  | SlashConfigItem
+  | SlashModeItem
+  | SlashSessionModelItem
+  | SlashSkillItem
 
 export interface SlashSection {
   /** Stable key for the section. */
@@ -56,6 +70,8 @@ export interface SlashMenuInput {
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
+  /** Unstable ACP session models (pi-acp `session/set_model`). */
+  models?: SessionModelState | null
   skills?: AgentSkillSummary[]
   /** The text after the leading `/`, used to filter. */
   filter: string
@@ -82,13 +98,14 @@ function headingForCategory(category: string | null | undefined, fallbackName: s
 /**
  * Build ordered menu sections from the active session's ACP state.
  *
- * Order: Commands first, then each config option as its own section (preserving
- * the agent's array order). When `configOptions` is non-empty, the legacy
- * `modes` section is omitted entirely (precedence). When it is empty, a single
- * legacy Modes section is emitted if modes exist.
+ * Order: Skills first (if present), then Commands, then Models (unstable
+ * session model API, if available), then each config option as its own section
+ * (preserving the agent's array order). When `configOptions` is non-empty, the
+ * legacy `modes` section is omitted entirely (precedence). When it is empty, a
+ * single legacy Modes section is emitted if modes exist.
  */
 export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
-  const { commands, configOptions, modes, skills = [], filter } = input
+  const { commands, configOptions, modes, models = null, skills = [], filter } = input
   const sections: SlashSection[] = []
 
   const skillItems: SlashItem[] = skills
@@ -108,6 +125,21 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
     .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
   if (commandItems.length > 0) {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
+  }
+
+  if (models && models.availableModels.length > 0) {
+    const items: SlashItem[] = models.availableModels
+      .filter((m) => matches(filter, m.name, m.description, m.modelId))
+      .map((m) => ({
+        kind: 'sessionModel',
+        modelId: m.modelId,
+        label: m.name,
+        description: m.description ?? null,
+        selected: m.modelId === models.currentModelId
+      }))
+    if (items.length > 0) {
+      sections.push({ id: 'session-models', heading: 'Model', items })
+    }
   }
 
   if (configOptions.length > 0) {

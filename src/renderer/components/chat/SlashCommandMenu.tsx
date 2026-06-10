@@ -28,6 +28,8 @@ function itemKey(item: SlashItem): string {
       return `config:${item.configId}:${item.valueId}`
     case 'mode':
       return `mode:${item.modeId}`
+    case 'sessionModel':
+      return `sessionModel:${item.modelId}`
     case 'skill':
       return `skill:${item.name}`
   }

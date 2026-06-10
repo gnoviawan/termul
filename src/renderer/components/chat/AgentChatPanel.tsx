@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import type { AvailableCommand, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { isThinkingVisible } from '@/lib/acp-thinking'
 import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentHeader } from './AgentHeader'
 import { ChatInputBar } from './ChatInputBar'
@@ -41,6 +42,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
+  const setSessionModel = useAcpStore((s) => s.setSessionModel)
 
   const handleSend = useCallback(
     (text: string) => {
@@ -75,7 +77,24 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     [setMode, sessionId]
   )
 
-  const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
+  const handleSetSessionModel = useCallback(
+    (modelId: string) => {
+      void setSessionModel(sessionId, modelId).catch((err) => {
+        toast.error(`Failed to set model: ${String(err)}`)
+      })
+    },
+    [setSessionModel, sessionId]
+  )
+
+  const showThoughts = useMemo(
+    () =>
+      isThinkingVisible(session?.modes ?? null, session?.models ?? null, session?.configOptions),
+    [session?.modes, session?.models, session?.configOptions]
+  )
+  const timeline = useMemo(
+    () => buildTimeline(messages, toolCalls, { showThoughts }),
+    [messages, toolCalls, showThoughts]
+  )
   // Show the typing indicator while a turn is active but no agent text has
   // streamed yet (a trailing agent message means text is already rendering).
   const lastMessage = messages[messages.length - 1]
@@ -133,6 +152,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         modes={session.modes}
         onSetConfig={handleSetConfig}
         onSetMode={handleSetMode}
+        onSetSessionModel={handleSetSessionModel}
       />
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>

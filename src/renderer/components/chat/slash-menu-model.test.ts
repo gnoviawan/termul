@@ -118,6 +118,25 @@ describe('buildSlashSections', () => {
     expect((modeSection!.items[0] as SlashModeItem).kind).toBe('mode')
   })
 
+  it('renders unstable session models in their own section', () => {
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: [],
+      modes: null,
+      models: {
+        currentModelId: 'anthropic/claude-sonnet',
+        availableModels: [
+          { modelId: 'anthropic/claude-sonnet', name: 'anthropic/claude-sonnet' },
+          { modelId: 'openai/gpt-4o', name: 'openai/gpt-4o' }
+        ]
+      },
+      filter: ''
+    })
+    const modelSection = sections.find((s) => s.id === 'session-models')
+    expect(modelSection?.heading).toBe('Model')
+    expect(modelSection?.items).toHaveLength(2)
+  })
+
   it('marks the current config value and mode as selected', () => {
     const cfg = buildSlashSections({ commands: [], configOptions, modes: null, filter: '' })
     const modeItems = cfg.find((s) => s.id === 'config:mode')!.items as SlashConfigItem[]

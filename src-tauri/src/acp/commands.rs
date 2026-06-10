@@ -13,7 +13,7 @@ use agent_client_protocol::schema::{
 use tauri::State;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
-use crate::acp::manager::{AcpManager, NewSessionOutcome};
+use crate::acp::manager::{AcpManager, NewSessionOutcome, SessionStateOutcome};
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 #[tauri::command]
@@ -59,7 +59,7 @@ pub async fn acp_load_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionStateOutcome, String> {
     manager.load_session(&agent_id, session_id, cwd).await
 }
 
@@ -70,7 +70,7 @@ pub async fn acp_resume_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionStateOutcome, String> {
     manager.resume_session(&agent_id, session_id, cwd).await
 }
 
@@ -146,6 +146,19 @@ pub async fn acp_set_mode(
     mode_id: String,
 ) -> Result<(), String> {
     manager.set_mode(&agent_id, session_id, mode_id).await
+}
+
+/// Set the active session model (unstable ACP `session/set_model`).
+#[tauri::command]
+pub async fn acp_set_session_model(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+    model_id: String,
+) -> Result<(), String> {
+    manager
+        .set_session_model(&agent_id, session_id, model_id)
+        .await
 }
 
 /// Run the ACP `authenticate` method for an agent. `methodId` must be one of
