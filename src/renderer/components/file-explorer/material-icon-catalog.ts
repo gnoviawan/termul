@@ -7,14 +7,11 @@ import {
   resolveMaterialIconKey
 } from './material-icon-resolver'
 
-const svgModules = import.meta.glob<string>(
-  '../../../../node_modules/material-icon-theme/icons/*.svg',
-  {
-    eager: true,
-    query: '?raw',
-    import: 'default'
-  }
-)
+const svgModules = import.meta.glob<string>('@material-icons/*.svg', {
+  eager: true,
+  query: '?raw',
+  import: 'default'
+})
 
 const svgByFileName = new Map<string, string>()
 
