@@ -191,6 +191,7 @@ export interface BranchInfo {
   isRemote: boolean
   isCurrent: boolean
   upstream?: string | null
+  hasOtherWorktree: boolean
 }
 
 export interface DirtyStatus {

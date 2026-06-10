@@ -94,6 +94,8 @@ pub struct BranchEntry {
     pub is_remote: bool,
     pub is_current: bool,
     pub upstream: Option<String>,
+    /// True when this branch is checked out in a different git worktree.
+    pub has_other_worktree: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -510,6 +512,15 @@ impl WorktreeManager {
     /// List branches for a git repo.
     /// Returns local and remote branches with metadata.
     pub fn branches(project_path: &str) -> Result<Vec<BranchEntry>, WorktreeError> {
+        let (top_stdout, _) = run_git(&["rev-parse", "--show-toplevel"], Some(project_path))?;
+        let current_worktree = top_stdout.trim().to_string();
+
+        let worktree_branches: std::collections::HashMap<String, String> = Self::list(project_path)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| (entry.branch, entry.path))
+            .collect();
+
         // Get local branches
         let (local_stdout, _) = run_git(
             &[
@@ -542,10 +553,16 @@ impl WorktreeManager {
                 None
             };
 
+            let has_other_worktree = worktree_branches
+                .get(&name)
+                .map(|path| path != &current_worktree)
+                .unwrap_or(false);
+
             entries.push(BranchEntry {
                 is_current: name == current_branch,
                 is_remote: false,
                 upstream,
+                has_other_worktree,
                 name,
             });
         }
@@ -573,6 +590,7 @@ impl WorktreeManager {
                     is_current: false,
                     is_remote: true,
                     upstream: None,
+                    has_other_worktree: false,
                     name,
                 });
             }

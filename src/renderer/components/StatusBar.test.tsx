@@ -19,7 +19,27 @@ vi.mock('@/stores/terminal-store', () => ({
       untracked: 3
     },
     lastExitCode: 0
-  }))
+  })),
+  useTerminalStore: vi.fn((selector: (state: unknown) => unknown) =>
+    selector({
+      activeTerminalId: 'test-terminal',
+      updateTerminalGitBranch: vi.fn()
+    })
+  )
+}))
+
+vi.mock('@/stores/project-store', () => ({
+  useProjectStore: vi.fn((selector: (state: unknown) => unknown) =>
+    selector({
+      updateProject: vi.fn()
+    })
+  )
+}))
+
+vi.mock('@/lib/worktree-api', () => ({
+  worktreeApi: {
+    branches: vi.fn(() => Promise.resolve({ success: true, data: [] }))
+  }
 }))
 
 // Mock remote status store (StatusBar hosts RemoteAccessPopover)
@@ -85,10 +105,11 @@ function renderWithProviders(ui: React.ReactElement) {
 
 describe('StatusBar', () => {
   describe('conditional rendering based on visibility settings', () => {
-    it('should render git branch when showGitBranch is true', () => {
+    it('should render git branch picker when showGitBranch is true', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
       expect(screen.getByText('feature-branch')).toBeDefined()
+      expect(screen.getByLabelText('Switch git branch')).toBeDefined()
     })
 
     it('should not render git branch when showGitBranch is false', () => {

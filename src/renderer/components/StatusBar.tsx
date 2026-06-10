@@ -1,16 +1,6 @@
-import {
-  ArrowDown,
-  ArrowUp,
-  Bell,
-  Download,
-  FileQuestion,
-  Folder,
-  GitBranch,
-  Pencil,
-  Plus,
-  Server
-} from 'lucide-react'
+import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
+import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
@@ -73,36 +63,14 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
               {project.name.toLowerCase().replace(/\s+/g, '-')}
             </StatusItem>
 
-            {showGitBranch && gitBranch && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div>
-                    <StatusItem icon={<GitBranch size={14} />}>
-                      {gitBranch}
-                      {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
-                        <span className="ml-2 flex items-center space-x-1.5 border-l border-white/20 pl-2">
-                          {gitStatus.ahead > 0 && (
-                            <span className="flex items-center gap-0.5">
-                              <ArrowUp size={12} />
-                              {gitStatus.ahead}
-                            </span>
-                          )}
-                          {gitStatus.behind > 0 && (
-                            <span className="flex items-center gap-0.5">
-                              <ArrowDown size={12} />
-                              {gitStatus.behind}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </StatusItem>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  {gitBranch} {gitStatus?.ahead ? `(${gitStatus.ahead} ahead)` : ''}{' '}
-                  {gitStatus?.behind ? `(${gitStatus.behind} behind)` : ''}
-                </TooltipContent>
-              </Tooltip>
+            {showGitBranch && displayPath && (
+              <GitBranchPicker
+                repoPath={displayPath}
+                currentBranch={gitBranch}
+                projectId={project.id}
+                ahead={gitStatus?.ahead}
+                behind={gitStatus?.behind}
+              />
             )}
 
             {showGitStatus && gitStatus?.hasChanges && (

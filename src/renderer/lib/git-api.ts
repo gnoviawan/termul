@@ -22,5 +22,11 @@ export const gitApi = {
 
   getCommitContext: (cwd: string) => invoke<GitCommitContext>('git_get_commit_context', { cwd }),
 
-  init: (cwd: string) => invoke<void>('git_init', { cwd })
+  init: (cwd: string) => invoke<void>('git_init', { cwd }),
+
+  checkoutBranch: (cwd: string, branch: string, isRemote = false) =>
+    invoke<void>('git_checkout_branch', { cwd, branch, isRemote }),
+
+  createBranch: (cwd: string, branch: string, startRef?: string) =>
+    invoke<void>('git_create_branch', { cwd, branch, startRef })
 }

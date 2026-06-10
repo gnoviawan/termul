@@ -1134,6 +1134,8 @@ pub fn run() {
             commands::git_push,
             commands::git_get_commit_context,
             commands::git_init,
+            commands::git_checkout_branch,
+            commands::git_create_branch,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
