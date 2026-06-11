@@ -21,7 +21,7 @@ export default defineConfig({
       '@renderer': resolve('src/renderer'),
       '@/types': resolve('src/renderer/types'),
       '@shared': resolve('src/shared'),
-      '@material-icons': materialIconsDir
+      '@material-icons/': `${materialIconsDir}/`
     }
   }
 })
