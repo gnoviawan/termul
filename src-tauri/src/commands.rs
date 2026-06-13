@@ -9,7 +9,7 @@ use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
@@ -1145,19 +1145,31 @@ pub struct SearchContentDoneEvent {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+ #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesRequest {
+pub struct SearchFileNamesStreamRequest {
     pub scope_root: String,
     pub root_path: String,
     pub query: String,
+    pub search_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesResponse {
+pub struct SearchFileNamesBatchEvent {
+    pub search_id: String,
     pub files: Vec<String>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesDoneEvent {
+    pub search_id: String,
+    pub truncated: bool,
+    pub total_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1170,10 +1182,15 @@ pub struct RgInfoResponse {
 }
 
 static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
+static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
 fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn filename_search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+    FILENAME_SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(target_os = "windows")]
@@ -1578,15 +1595,38 @@ pub async fn search_content_cancel(
 }
 
 #[tauri::command]
-pub async fn search_file_names(
-    request: SearchFileNamesRequest,
-) -> Result<IpcResult<SearchFileNamesResponse>, String> {
-    let trimmed_query = request.query.trim().to_lowercase();
+pub async fn search_file_names_cancel(
+    request: SearchContentCancelRequest,
+) -> Result<IpcResult<()>, String> {
+    let mut guard = filename_search_processes().lock().map_err(|e| e.to_string())?;
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+    }
+    Ok(IpcResult::success(()))
+}
+
+
+#[tauri::command]
+pub async fn search_file_names_stream(
+    request: SearchFileNamesStreamRequest,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    let trimmed_query = request.query.trim().to_string();
+    let search_id = request.search_id.clone();
     if trimmed_query.is_empty() {
-        return Ok(IpcResult::success(SearchFileNamesResponse {
-            files: vec![],
-            truncated: false,
-        }));
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated: false,
+                total_files: 0,
+                error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
     }
 
     let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
@@ -1605,24 +1645,43 @@ pub async fn search_file_names(
         }
     };
 
-    let mut stack = vec![validated_root];
-    let mut matches: Vec<String> = Vec::new();
-    let mut truncated = false;
+    // Use ripgrep --files with --iglob for instant, multi-threaded filename matching
+    let glob_pattern = format!("*{}*", trimmed_query);
     let max_files = 100;
 
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
+    let mut args = vec![
+        "--files".to_string(),
+        "--iglob".to_string(),
+        glob_pattern,
+        "--max-filesize".to_string(),
+        "1M".to_string(),
+    ];
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name,
-                None => continue,
-            };
+    for ignored in [
+        "node_modules",
+        ".git",
+        ".next",
+        ".cache",
+        ".turbo",
+        "dist",
+        "build",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        "venv",
+        ".env",
+        "coverage",
+        ".nyc_output",
+    ] {
+        args.push("-g".to_string());
+        args.push(format!("!**/{}/**", ignored));
+    }
+    args.push("-g".to_string());
+    args.push("!**/.env".to_string());
 
+    args.push(validated_root.clone());
             if [
                 "node_modules",
                 ".git",
@@ -1645,30 +1704,135 @@ pub async fn search_file_names(
                 continue;
             }
 
-            if path.is_dir() {
-                stack.push(path.to_string_lossy().to_string());
-                continue;
-            }
+    let rg_path = detect_rg_path();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    configure_background_command(&mut rg_command);
 
-            if file_name.to_lowercase().contains(&trimmed_query) {
-                matches.push(path.to_string_lossy().replace('\\', "/"));
-                if matches.len() >= max_files {
-                    truncated = true;
-                    break;
-                }
-            }
+    let mut child = match rg_command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
+                },
+            );
+            return Ok(IpcResult::error(
+                format!("rg spawn failed (path: {}): {}", rg_path, e),
+                "RG_SPAWN_FAILED",
+            ));
         }
+    };
 
-        if truncated {
-            break;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().ok();
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    error: Some("failed to capture rg stdout".to_string()),
+                },
+            );
+            return Ok(IpcResult::error(
+                "failed to capture rg stdout".to_string(),
+                "RG_STDOUT_FAILED",
+            ));
         }
+    };
+
+    let stderr = child.stderr.take();
+
+    let child_handle = Arc::new(Mutex::new(child));
+    {
+        let mut guard = filename_search_processes().lock().map_err(|e| e.to_string())?;
+        guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
+    let child = child_handle;
 
-    Ok(IpcResult::success(SearchFileNamesResponse {
-        files: matches,
-        truncated,
-    }))
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = BufReader::new(stdout);
+        let mut files: Vec<String> = Vec::new();
+        let mut truncated = false;
+        let batch_size = 10;
+
+        for line in reader.lines().map_while(Result::ok) {
+            let normalized = line.replace('\\', "/");
+            files.push(normalized);
+
+            if files.len() >= max_files {
+                truncated = true;
+                break;
+            }
+
+            if files.len() % batch_size == 0 {
+                let _ = app_handle.emit(
+                    "search-file-names-batch",
+                    SearchFileNamesBatchEvent {
+                        search_id: search_id.clone(),
+                        files: files.clone(),
+                        truncated: false,
+                    },
+                );
+            }
+        }
+
+        let exit_status = if let Ok(mut c) = child.lock() {
+            c.try_wait().or_else(|_| c.wait().map(Some)).ok().flatten()
+        } else {
+            None
+        };
+        if let Ok(mut guard) = filename_search_processes().lock() {
+            guard.remove(&search_id);
+        }
+
+        // Determine error from exit status / stderr
+        let error = if exit_status.is_some_and(|s| !s.success()) {
+            let mut stderr_text = String::new();
+            if let Some(stderr_reader) = stderr {
+                let _ = BufReader::new(stderr_reader).read_to_string(&mut stderr_text);
+            }
+            let msg = if stderr_text.is_empty() {
+                format!("rg exited with status: {:?}", exit_status)
+            } else {
+                stderr_text.trim().to_string()
+            };
+            Some(msg)
+        } else {
+            None
+        };
+
+        // Final batch with all files
+        let _ = app_handle.emit(
+            "search-file-names-batch",
+            SearchFileNamesBatchEvent {
+                search_id: search_id.clone(),
+                files: files.clone(),
+                truncated,
+            },
+        );
+
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated,
+                total_files: files.len(),
+                error,
+            },
+        );
+    });
+
+    Ok(IpcResult::success(()))
 }
+
 
 #[tauri::command]
 pub async fn search_content(
