@@ -363,39 +363,6 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
 }
 
 /**
- * Hook that reconciles worktrees for the active project.
- * Runs on project selection and periodically (every 60s).
- * Also reconciles all projects on initial load.
- */
-export function useWorktreeReconciler(): void {
-  const activeProjectId = useProjectStore((state) => state.activeProjectId)
-  // Use a stable selector that returns only what we need to avoid retriggers on store writes
-  const projectRef = useRef<Project | null>(null)
-
-  useEffect(() => {
-    const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
-    if (!project?.path) return
-
-    projectRef.current = project
-
-    // Reconcile on project selection
-    reconcileProjectWorktrees(project)
-
-    // Periodic reconciliation every 60s for active project
-    const interval = setInterval(() => {
-      const currentProject = useProjectStore
-        .getState()
-        .projects.find((p) => p.id === activeProjectId)
-      if (currentProject?.path) {
-        reconcileProjectWorktrees(currentProject)
-      }
-    }, 60_000)
-
-    return () => clearInterval(interval)
-  }, [activeProjectId])
-}
-
-/**
  * Force-reconcile worktrees for a specific project after create/remove operations.
  * Always re-lists from git to ensure consistency.
  */

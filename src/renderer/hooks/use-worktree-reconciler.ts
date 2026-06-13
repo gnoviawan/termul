@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react'
+import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { worktreeApi } from '@/lib/api'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Worktree } from '@/types/project'
@@ -26,13 +27,33 @@ export function useWorktreeReconciler(projectId: string) {
   const { removeWorktree, updateProject } = useProjectActions()
 
   const reconcile = useCallback(async () => {
+    const initial = useProjectStore.getState().projects.find((p) => p.id === projectId)
+    if (!initial?.path) return
+
+    // Self-heal stale git-repo detection. A project can be marked non-git if git
+    // was not available when it was first detected (e.g. the GUI app's PATH differs
+    // from the shell at startup, or the repo was initialised afterwards). Re-run the
+    // shared reconciler, which executes `git worktree list` and flips `isGitRepo`.
+    if (!initial.isGitRepo) {
+      await reconcileProjectWorktreesNow(projectId)
+    }
+
+    // Re-read the latest state (covers the heal above and any concurrent store writes).
     const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+    if (!project?.isGitRepo || !project.path) return
     // Allow empty worktrees array (still reconcile to discover newly created worktrees)
-    if (!project?.path || !project.isGitRepo || project.worktrees === undefined) return
+    if (project.worktrees === undefined) return
 
     try {
       const result = await worktreeApi.list(project.path)
-      if (!result.success || !result.data) return
+      if (!result.success) {
+        // Heal the reverse case: `.git` was removed after the project was marked a repo.
+        if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
+          updateProject(projectId, { isGitRepo: false })
+        }
+        return
+      }
+      if (!result.data) return
 
       // Build set of actual worktree paths from git
       const actualPaths = new Set(result.data.map((w) => w.path))
