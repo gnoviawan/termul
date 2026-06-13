@@ -398,13 +398,21 @@
   .chat-prose p {
     margin: 0 0 0.7em;
   }
-  .chat-prose ul,
+  .chat-prose ul {
+    margin: 0 0 0.7em 1.3em;
+    padding-left: 0.4em;
+    list-style-type: disc;
+    color: hsl(var(--muted-foreground));
+  }
   .chat-prose ol {
     margin: 0 0 0.7em 1.3em;
+    padding-left: 0.4em;
+    list-style-type: decimal;
     color: hsl(var(--muted-foreground));
   }
   .chat-prose li {
     margin: 0.15em 0;
+    padding-left: 0.2em;
   }
   .chat-prose li::marker {
     color: hsl(var(--muted-foreground) / 0.7);
