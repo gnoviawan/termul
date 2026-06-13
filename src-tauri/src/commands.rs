@@ -41,7 +41,7 @@ fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Resu
 /// Returns the canonicalized path or an error if the path is invalid or inaccessible.
 fn validate_project_path(path: &str) -> Result<PathBuf, String> {
     let path_buf = PathBuf::from(path);
-    
+
     // Canonicalize to resolve symlinks and relative paths
     let canonical = path_buf.canonicalize().map_err(|e| {
         log::warn!(
@@ -51,9 +51,16 @@ fn validate_project_path(path: &str) -> Result<PathBuf, String> {
         );
         format!("Invalid or inaccessible path: {}", e)
     })?;
-    
-    log::debug!("[Security] Path validated: {} -> {:?}", path, canonical);
-    Ok(canonical)
+
+    // On Windows, `canonicalize()` returns a verbatim (`\\?\…`) path. That prefix
+    // defeats external tools such as `git.exe` (e.g. `git worktree add` fails with
+    // "could not create leading directories …: Invalid argument"). Strip it so the
+    // validated path stays tool-friendly while keeping the canonicalization benefits.
+    let canonical_str = canonical.to_string_lossy();
+    let simplified = path_validation::strip_verbatim_prefix(&canonical_str);
+
+    log::debug!("[Security] Path validated: {} -> {}", path, simplified);
+    Ok(PathBuf::from(simplified))
 }
 
 /// Macro to validate a path and convert it to a String, returning early with an IpcResult error if validation fails.
