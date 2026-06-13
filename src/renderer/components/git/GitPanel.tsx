@@ -1,9 +1,12 @@
 import type { GitFileStatus, GitStatusDetail } from '@shared/types/ipc.types'
 import {
   AlignLeft,
+  Archive,
+  ArchiveRestore,
   ArrowUp,
   Check,
   ChevronDown,
+  ClipboardPaste,
   Columns2,
   FileCode,
   FileQuestion,
@@ -15,13 +18,28 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  Search
+  Search,
+  Trash2
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { GitDiffView } from '@/components/git/GitDiffView'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   type GitDiffViewMode,
@@ -53,7 +71,20 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const commit = useGitStatusStore((state) => state.commit)
   const push = useGitStatusStore((state) => state.push)
 
+  const stashesState = useGitStatusStore((state) => state.stashes)
+  const branchesState = useGitStatusStore((state) => state.branches)
+  const fetchStashes = useGitStatusStore((state) => state.fetchStashes)
+  const fetchBranches = useGitStatusStore((state) => state.fetchBranches)
+  const stashSave = useGitStatusStore((state) => state.stashSave)
+  const stashApply = useGitStatusStore((state) => state.stashApply)
+  const stashPop = useGitStatusStore((state) => state.stashPop)
+  const stashDrop = useGitStatusStore((state) => state.stashDrop)
+  const branchSwitch = useGitStatusStore((state) => state.branchSwitch)
+  const branchCreate = useGitStatusStore((state) => state.branchCreate)
+
   const commitContext = commitContexts[cwd] ?? null
+  const stashes = stashesState[cwd] ?? []
+  const branches = branchesState[cwd] ?? []
 
   const [searchQuery, setSearchQuery] = useState('')
   // Track which side (staged vs unstaged) of the selected path is shown, since
@@ -71,6 +102,19 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   // Discard is confirmed through the app dialog; remember what it targets.
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false)
   const [discardTargets, setDiscardTargets] = useState<string[]>([])
+
+  // Create branch modal state
+  const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false)
+  const [branchNameInput, setBranchNameInput] = useState('')
+
+  // Stash modal state
+  const [isStashOpen, setIsStashOpen] = useState(false)
+  const [stashMessage, setStashMessage] = useState('')
+  const [stashIncludeUntracked, setStashIncludeUntracked] = useState(false)
+
+  // Branch switch confirmation modal state
+  const [confirmBranchSwitchOpen, setConfirmBranchSwitchOpen] = useState(false)
+  const [pendingBranchName, setPendingBranchName] = useState('')
 
   // Commit footer state.
   const [summary, setSummary] = useState('')
@@ -90,8 +134,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     if (isVisible) {
       refreshStatus(cwd)
       fetchCommitContext(cwd)
+      fetchStashes(cwd)
+      fetchBranches(cwd)
     }
-  }, [isVisible, cwd, refreshStatus, fetchCommitContext])
+  }, [isVisible, cwd, refreshStatus, fetchCommitContext, fetchStashes, fetchBranches])
 
   // Reset the commit footer and any multi-selection when the repo (cwd) changes
   // so half-typed messages or stale selections never carry over between repos.
@@ -132,6 +178,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     const unstaged = filteredStatuses.filter((s: GitStatusDetail) => !s.staged)
     return { stagedFiles: staged, unstagedFiles: unstaged }
   }, [filteredStatuses])
+
+  const allStatuses = statuses[cwd] ?? []
+  const hasUncommittedChanges = allStatuses.length > 0
 
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set())
@@ -338,6 +387,139 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     }
   }
 
+  const handleSwitchBranch = useCallback(
+    async (name: string) => {
+      const hasChanges = hasUncommittedChanges
+      if (hasChanges) {
+        setPendingBranchName(name)
+        setConfirmBranchSwitchOpen(true)
+        return
+      }
+
+      setIsMutating(true)
+      try {
+        await branchSwitch(cwd, name)
+        toast.success(`Switched to branch ${name}`)
+      } catch (error) {
+        toast.error(`Failed to switch branch: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+      }
+    },
+    [cwd, branchSwitch, hasUncommittedChanges]
+  )
+
+  const handleExecuteSwitchBranch = useCallback(
+    async (strategy: 'bring' | 'stash') => {
+      const name = pendingBranchName
+      if (!name) return
+      setConfirmBranchSwitchOpen(false)
+      setIsMutating(true)
+
+      try {
+        if (strategy === 'stash') {
+          await stashSave(cwd, `Auto-stash before checkout to ${name}`, true)
+          await branchSwitch(cwd, name)
+          try {
+            await stashPop(cwd, 0)
+            toast.success(`Switched to branch ${name} and reapplied changes`)
+          } catch (popErr) {
+            console.error('Auto-stash pop failed:', popErr)
+            toast.warning(
+              `Switched to branch ${name}, but changes were left in stash@{0} due to conflicts`
+            )
+          }
+        } else {
+          await branchSwitch(cwd, name)
+          toast.success(`Switched to branch ${name} (changes carried over)`)
+        }
+      } catch (error) {
+        toast.error(`Failed to switch branch: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+        setPendingBranchName('')
+      }
+    },
+    [cwd, pendingBranchName, branchSwitch, stashSave, stashPop]
+  )
+
+  const handleCreateBranch = useCallback(async () => {
+    const name = branchNameInput.trim()
+    if (!name) return
+    setIsMutating(true)
+    try {
+      await branchCreate(cwd, name)
+      toast.success(`Created and switched to branch ${name}`)
+      setIsCreateBranchOpen(false)
+      setBranchNameInput('')
+    } catch (error) {
+      toast.error(`Failed to create branch: ${String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }, [cwd, branchNameInput, branchCreate])
+
+  const handleStashSave = useCallback(async () => {
+    const msg = stashMessage.trim() || undefined
+    setIsMutating(true)
+    try {
+      await stashSave(cwd, msg, stashIncludeUntracked)
+      toast.success('Changes stashed successfully')
+      setIsStashOpen(false)
+      setStashMessage('')
+      setStashIncludeUntracked(false)
+    } catch (error) {
+      toast.error(`Failed to stash changes: ${String(error)}`)
+    } finally {
+      setIsMutating(false)
+    }
+  }, [cwd, stashMessage, stashIncludeUntracked, stashSave])
+
+  const handleApplyStash = useCallback(
+    async (index: number) => {
+      setIsMutating(true)
+      try {
+        await stashApply(cwd, index)
+        toast.success(`Stash@{${index}} applied`)
+      } catch (error) {
+        toast.error(`Failed to apply stash: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+      }
+    },
+    [cwd, stashApply]
+  )
+
+  const handlePopStash = useCallback(
+    async (index: number) => {
+      setIsMutating(true)
+      try {
+        await stashPop(cwd, index)
+        toast.success(`Stash@{${index}} popped`)
+      } catch (error) {
+        toast.error(`Failed to pop stash: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+      }
+    },
+    [cwd, stashPop]
+  )
+
+  const handleDropStash = useCallback(
+    async (index: number) => {
+      setIsMutating(true)
+      try {
+        await stashDrop(cwd, index)
+        toast.success(`Stash@{${index}} dropped`)
+      } catch (error) {
+        toast.error(`Failed to drop stash: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+      }
+    },
+    [cwd, stashDrop]
+  )
+
   const onBranch = !!commitContext?.branch
   const ahead = commitContext?.ahead ?? 0
   const behind = commitContext?.behind ?? 0
@@ -358,7 +540,64 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     <div className="flex h-full w-full bg-background overflow-hidden">
       {/* File List Sidebar */}
       <div className="w-80 border-r border-border flex flex-col shrink-0">
-        <div className="p-3 border-b border-border">
+        <div className="p-3 border-b border-border flex flex-col gap-2 bg-muted/20">
+          <div className="flex items-center justify-between">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
+                >
+                  <GitBranch size={13} className="text-muted-foreground shrink-0" />
+                  <span className="truncate">{commitContext?.branch ?? 'Detached HEAD'}</span>
+                  <ChevronDown size={12} className="text-muted-foreground opacity-50 shrink-0" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="w-56 max-h-[300px] overflow-y-auto z-50"
+              >
+                <DropdownMenuItem
+                  onClick={() => setIsCreateBranchOpen(true)}
+                  className="flex items-center gap-2 text-xs cursor-pointer"
+                >
+                  <Plus size={12} />
+                  Create new branch...
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {branches.length === 0 ? (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">No branches found</div>
+                ) : (
+                  branches.map((b) => (
+                    <DropdownMenuItem
+                      key={b}
+                      onClick={() => handleSwitchBranch(b)}
+                      className={cn(
+                        'flex items-center justify-between text-xs cursor-pointer',
+                        b === commitContext?.branch && 'bg-accent font-semibold'
+                      )}
+                    >
+                      <span className="truncate">{b}</span>
+                      {b === commitContext?.branch && <Check size={12} className="text-primary" />}
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
+              title="Stash changes"
+              onClick={() => setIsStashOpen(true)}
+              disabled={!hasUncommittedChanges}
+            >
+              <Archive size={14} />
+            </Button>
+          </div>
+
           <div className="relative">
             <Search
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -374,8 +613,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
         </div>
 
-        <ScrollArea className="flex-1">
-          <div className="p-2 space-y-4">
+        <ScrollArea className="flex-1 w-full">
+          <div className="p-2 pr-3 space-y-4 w-[303px]">
             {stagedFiles.length > 0 && (
               <div className="space-y-1">
                 <SectionHeader
@@ -470,6 +709,56 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 })
               )}
             </div>
+
+            {stashes.length > 0 && (
+              <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
+                <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
+                <div className="space-y-0.5 w-full min-w-0">
+                  {stashes.map((s) => (
+                    <div
+                      key={s.index}
+                      className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
+                    >
+                      <div className="flex flex-col min-w-0 flex-1 pr-1.5">
+                        <span className="font-semibold text-muted-foreground text-[10px]">{`stash@{${s.index}}`}</span>
+                        <span
+                          className="truncate text-muted-foreground text-[11px] leading-tight"
+                          title={s.message}
+                        >
+                          {s.message || 'No message'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <button
+                          type="button"
+                          title="Apply stash (keeps stash entry)"
+                          onClick={() => handleApplyStash(s.index)}
+                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <ClipboardPaste size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Pop stash (applies and drops)"
+                          onClick={() => handlePopStash(s.index)}
+                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <ArchiveRestore size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Drop stash"
+                          onClick={() => handleDropStash(s.index)}
+                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </ScrollArea>
 
@@ -677,6 +966,121 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         onConfirm={runCommit}
         onCancel={() => setConfirmAmendOpen(false)}
       />
+
+      <Dialog open={isCreateBranchOpen} onOpenChange={setIsCreateBranchOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Branch</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2 text-xs">
+            <div className="space-y-1">
+              <label className="text-muted-foreground">Branch name</label>
+              <input
+                type="text"
+                className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+                placeholder="e.g. feature/new-login"
+                value={branchNameInput}
+                onChange={(e) => setBranchNameInput(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setIsCreateBranchOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleCreateBranch}
+              disabled={!branchNameInput.trim() || isMutating}
+            >
+              Create & Switch
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isStashOpen} onOpenChange={setIsStashOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Stash Changes</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2 text-xs">
+            <div className="space-y-1">
+              <label className="text-muted-foreground">Message (optional)</label>
+              <input
+                type="text"
+                className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+                placeholder="WIP on current branch..."
+                value={stashMessage}
+                onChange={(e) => setStashMessage(e.target.value)}
+              />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px]">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-primary"
+                checked={stashIncludeUntracked}
+                onChange={(e) => setStashIncludeUntracked(e.target.checked)}
+              />
+              Include untracked files
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setIsStashOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="default" size="sm" onClick={handleStashSave} disabled={isMutating}>
+              Stash
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmBranchSwitchOpen} onOpenChange={setConfirmBranchSwitchOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Uncommitted Changes</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 text-xs text-muted-foreground space-y-2">
+            <p>
+              You have uncommitted changes on your current branch. How would you like to handle them
+              before switching to <strong>{pendingBranchName}</strong>?
+            </p>
+            <ul className="list-disc pl-4 space-y-1">
+              <li>
+                <strong>Bring Changes:</strong> Keep your changes and carry them over to the new
+                branch.
+              </li>
+              <li>
+                <strong>Stash &amp; Switch:</strong> Stash your changes on this branch, switch, and
+                try to re-apply them on the new branch.
+              </li>
+            </ul>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" size="sm" onClick={() => setConfirmBranchSwitchOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleExecuteSwitchBranch('bring')}
+              disabled={isMutating}
+            >
+              Bring Changes
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => handleExecuteSwitchBranch('stash')}
+              disabled={isMutating}
+            >
+              Stash &amp; Switch
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
