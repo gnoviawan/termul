@@ -20,5 +20,7 @@ export const gitApi = {
 
   push: (cwd: string) => invoke<void>('git_push', { cwd }),
 
-  getCommitContext: (cwd: string) => invoke<GitCommitContext>('git_get_commit_context', { cwd })
+  getCommitContext: (cwd: string) => invoke<GitCommitContext>('git_get_commit_context', { cwd }),
+
+  init: (cwd: string) => invoke<void>('git_init', { cwd })
 }

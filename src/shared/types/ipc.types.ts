@@ -261,7 +261,14 @@ export interface SystemApi {
 
 // Keyboard shortcut callback for main -> renderer communication
 export type KeyboardShortcutCallback = (
-  shortcut: 'nextTerminal' | 'prevTerminal' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'sidebarToggle'
+  shortcut:
+    | 'nextTerminal'
+    | 'prevTerminal'
+    | 'zoomIn'
+    | 'zoomOut'
+    | 'zoomReset'
+    | 'sidebarToggle'
+    | 'colorThemePicker'
 ) => void
 
 // Keyboard API for renderer

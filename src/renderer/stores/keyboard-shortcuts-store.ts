@@ -37,7 +37,7 @@ export const useKeyboardShortcutsStore = create<KeyboardShortcutsState>((set) =>
           ...state.shortcuts,
           [id]: {
             ...shortcut,
-            customKey: customKey === shortcut.defaultKey ? undefined : customKey
+            customKey: shortcutsEqual(customKey, shortcut.defaultKey) ? undefined : customKey
           }
         }
       }
@@ -71,11 +71,27 @@ export function findConflictingShortcut(
   for (const shortcut of Object.values(shortcuts)) {
     if (shortcut.id === excludeId) continue
     const activeKey = shortcut.customKey ?? shortcut.defaultKey
-    if (activeKey === key) {
+    if (shortcutsEqual(activeKey, key)) {
       return shortcut
     }
   }
   return undefined
+}
+
+const MODIFIER_ORDER = ['ctrl', 'cmd', 'shift', 'alt'] as const
+
+function canonicalizeShortcutKey(key: string): string {
+  const parts = key.split('+').filter(Boolean)
+  const shortcutKey = parts[parts.length - 1]
+  if (!shortcutKey) return key
+
+  const modifiers = new Set(parts.slice(0, -1))
+  const orderedModifiers = MODIFIER_ORDER.filter((modifier) => modifiers.has(modifier))
+  return [...orderedModifiers, shortcutKey].join('+')
+}
+
+function shortcutsEqual(left: string, right: string): boolean {
+  return canonicalizeShortcutKey(left) === canonicalizeShortcutKey(right)
 }
 
 // Helper: Normalize a keyboard event to our key format.
@@ -90,9 +106,7 @@ export function findConflictingShortcut(
 export function normalizeKeyEvent(e: KeyboardEvent): string {
   const parts: string[] = []
 
-  // Add modifiers in canonical order: alt → cmd/ctrl → shift
-  if (e.altKey) parts.push('alt')
-
+  // Add modifiers in canonical order matching persisted defaults.
   if (isMac) {
     // macOS: prefer cmd (metaKey) but also track ctrl if only ctrl is held.
     // This lets us distinguish ⌘+K from Ctrl+K on macOS.
@@ -104,6 +118,7 @@ export function normalizeKeyEvent(e: KeyboardEvent): string {
   }
 
   if (e.shiftKey) parts.push('shift')
+  if (e.altKey) parts.push('alt')
 
   // Add the key itself (lowercase)
   let key = e.key.toLowerCase()
@@ -171,7 +186,7 @@ export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean 
   if (isMac && e.ctrlKey && !e.metaKey) return false
 
   const normalized = normalizeKeyEvent(e)
-  if (normalized === shortcutKey) return true
+  if (shortcutsEqual(normalized, shortcutKey)) return true
 
   // macOS cross-modifier alias: 'cmd+x' matches 'ctrl+x' config and vice-versa.
   // This lets the same 'ctrl+k' default work with both ⌘+K and Ctrl+K on Mac.
@@ -181,7 +196,7 @@ export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean 
       : normalized.startsWith('ctrl+')
         ? `cmd+${normalized.slice(5)}`
         : normalized
-    return aliased === shortcutKey
+    return shortcutsEqual(aliased, shortcutKey)
   }
 
   return false

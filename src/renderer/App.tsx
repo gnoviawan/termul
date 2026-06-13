@@ -5,6 +5,7 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
@@ -29,6 +30,10 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
 import { isWindows } from '@/lib/platform'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { useAcpAgents } from './hooks/use-acp-agents'
+import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpListeners } from './hooks/use-acp-listeners'
+import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
@@ -86,10 +91,15 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedColorThemeSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
   useMenuUpdaterListener()
+  useAcpListeners()
+  useAcpAgents()
+  useAcpHistory()
+  useAcpMcp()
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()

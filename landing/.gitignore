@@ -29,3 +29,8 @@ dist-ssr
 *.sln
 *.sw?
 .dev.vars
+
+# Playwright (keep __snapshots__ baselines committed)
+test-results/
+playwright-report/
+blob-report/

@@ -114,6 +114,32 @@ describe('ActivityRail', () => {
     expect(screen.getByRole('button', { name: 'Open keyboard shortcuts menu' })).toBeInTheDocument()
   })
 
+  it('disables color themes when no toggle handler is provided', () => {
+    renderRail()
+
+    const themeButton = screen.getByRole('button', { name: 'Color themes' })
+    expect(themeButton).toBeDisabled()
+    expect(themeButton).toHaveAttribute('aria-disabled', 'true')
+    expect(themeButton).not.toHaveAttribute('aria-pressed')
+  })
+
+  it('toggles color themes when a toggle handler is provided', () => {
+    const onToggleThemePicker = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail isThemePickerOpen onToggleThemePicker={onToggleThemePicker} />
+      </MemoryRouter>
+    )
+
+    const themeButton = screen.getByRole('button', { name: 'Color themes' })
+    expect(themeButton).not.toBeDisabled()
+    expect(themeButton).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(themeButton)
+
+    expect(onToggleThemePicker).toHaveBeenCalledTimes(1)
+  })
+
   it('renders the Termul brand mark', () => {
     renderRail()
 
@@ -158,6 +184,33 @@ describe('ActivityRail', () => {
     expect(gitButton).toBeDisabled()
     fireEvent.click(gitButton)
     expect(onOpenGitChanges).not.toHaveBeenCalled()
+  })
+
+  it('opens a new agent chat when a project is available', () => {
+    const onOpenAgentChat = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenAgentChat={onOpenAgentChat} canOpenAgentChat />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'New agent chat' }))
+
+    expect(onOpenAgentChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables new agent chat when no project is available', () => {
+    const onOpenAgentChat = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenAgentChat={onOpenAgentChat} canOpenAgentChat={false} />
+      </MemoryRouter>
+    )
+
+    const chatButton = screen.getByRole('button', { name: 'New agent chat' })
+    expect(chatButton).toBeDisabled()
+    fireEvent.click(chatButton)
+    expect(onOpenAgentChat).not.toHaveBeenCalled()
   })
 
   it('toggles the SSH panel via persistence-aware updater on click', async () => {

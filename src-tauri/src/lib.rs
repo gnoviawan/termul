@@ -1,7 +1,9 @@
 // Module declarations
+mod acp;
+mod acp_binary_install;
+mod agent_registry;
 mod browser_tab_manager;
 mod commands;
-mod agent_registry;
 mod logging;
 mod migrations;
 mod path_validation;
@@ -9,6 +11,7 @@ mod pty;
 mod remote;
 mod secure_storage;
 mod shell_paths;
+mod skills;
 mod ssh;
 mod trackers;
 mod worktree;
@@ -24,6 +27,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, RunEvent};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -37,6 +42,11 @@ const MENU_ID_ZOOM_OUT: &str = "view-zoom-out";
 const MENU_ID_TOGGLE_FULLSCREEN: &str = "view-toggle-fullscreen";
 const MENU_ID_LEARN_MORE: &str = "help-learn-more";
 const MENU_ID_REVEAL_LOGS: &str = "help-reveal-logs";
+const MENU_ID_EXPORT_LOG_FILE: &str = "help-export-log-file";
+const MENU_ID_COPY_LOG_CONTENTS: &str = "help-copy-log-contents";
+const MENU_ID_EXPORT_LOG_DEFAULT: &str = "help-export-log-default";
+const MENU_ID_CLOSE_TAB: &str = "window-close-tab";
+const MENU_EVENT_CLOSE_TAB: &str = "menu:close-tab";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
@@ -104,6 +114,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
+pub use acp::AcpManager;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 
@@ -162,6 +173,26 @@ fn get_home_directory() -> Result<String, String> {
     {
         Ok(env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     }
+}
+
+#[tauri::command]
+fn reveal_log_dir_command(app: tauri::AppHandle) -> Result<(), String> {
+    reveal_log_dir(&app)
+}
+
+#[tauri::command]
+fn export_log_file_command(app: tauri::AppHandle) -> Result<(), String> {
+    export_log_file(&app)
+}
+
+#[tauri::command]
+fn copy_log_contents_command(app: tauri::AppHandle) -> Result<(), String> {
+    copy_log_contents(&app)
+}
+
+#[tauri::command]
+fn export_log_to_default_command(app: tauri::AppHandle) -> Result<(), String> {
+    export_log_to_default(&app)
 }
 
 fn get_default_shell_info() -> Option<ShellInfo> {
@@ -453,7 +484,7 @@ fn build_app_menu<R: tauri::Runtime>(
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let file_menu = {
         #[cfg(target_os = "macos")]
-        let builder = SubmenuBuilder::new(app, "File").close_window();
+        let builder = SubmenuBuilder::new(app, "File");
 
         #[cfg(not(target_os = "macos"))]
         let builder = SubmenuBuilder::new(app, "File").quit();
@@ -508,6 +539,20 @@ fn build_app_menu<R: tauri::Runtime>(
             .build()?
     };
 
+    #[cfg(target_os = "macos")]
+    let window_menu = {
+        let close_tab = MenuItemBuilder::with_id(MENU_ID_CLOSE_TAB, "Close Tab")
+            .accelerator("Cmd+W")
+            .build(app)?;
+        SubmenuBuilder::new(app, "Window")
+            .minimize()
+            .maximize()
+            .separator()
+            .item(&close_tab)
+            .build()?
+    };
+
+    #[cfg(not(target_os = "macos"))]
     let window_menu = SubmenuBuilder::new(app, "Window")
         .minimize()
         .maximize()
@@ -522,11 +567,23 @@ fn build_app_menu<R: tauri::Runtime>(
     let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
     let reveal_logs =
         MenuItemBuilder::with_id(MENU_ID_REVEAL_LOGS, "Reveal Log File").build(app)?;
+    let export_log_file =
+        MenuItemBuilder::with_id(MENU_ID_EXPORT_LOG_FILE, "Export Log File...").build(app)?;
+    let copy_log_contents =
+        MenuItemBuilder::with_id(MENU_ID_COPY_LOG_CONTENTS, "Copy Log Contents").build(app)?;
+    let export_log_default = MenuItemBuilder::with_id(
+        MENU_ID_EXPORT_LOG_DEFAULT,
+        "Export Log to Default Directory",
+    )
+    .build(app)?;
 
     let help_menu = SubmenuBuilder::new(app, "Help")
         .item(&check_for_updates)
         .separator()
         .item(&reveal_logs)
+        .item(&export_log_file)
+        .item(&copy_log_contents)
+        .item(&export_log_default)
         .item(&learn_more)
         .build()?;
 
@@ -595,6 +652,25 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
         if let Err(error) = reveal_log_dir(app) {
             log::error!("Failed to reveal log directory from menu: {}", error);
         }
+    } else if event.id() == MENU_ID_EXPORT_LOG_FILE {
+        if let Err(error) = export_log_file(app) {
+            log::error!("Failed to export log file from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_COPY_LOG_CONTENTS {
+        if let Err(error) = copy_log_contents(app) {
+            log::error!("Failed to copy log contents from menu: {}", error);
+        }
+    } else if event.id() == MENU_ID_EXPORT_LOG_DEFAULT {
+        if let Err(error) = export_log_to_default(app) {
+            log::error!(
+                "Failed to export log to default directory from menu: {}",
+                error
+            );
+        }
+    } else if event.id() == MENU_ID_CLOSE_TAB {
+        if let Err(error) = app.emit(MENU_EVENT_CLOSE_TAB, ()) {
+            log::error!("Failed to emit close-tab menu event: {}", error);
+        }
     }
 }
 
@@ -614,6 +690,176 @@ fn reveal_log_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), St
     }
 
     open_external_url(&log_dir.to_string_lossy())
+}
+
+fn show_log_action_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: &str) {
+    app.dialog()
+        .message(message)
+        .title("Error")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
+
+    if !log_path.exists() {
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
+    }
+
+    let app_handle = app.clone();
+    app.dialog()
+        .file()
+        .add_filter("Log Files", &["log"])
+        .set_file_name("termul.log")
+        .save_file(move |file_path| {
+            if let Some(tauri_plugin_dialog::FilePath::Path(dest_path)) = file_path {
+                match std::fs::copy(&log_path, &dest_path) {
+                    Ok(_) => {
+                        app_handle
+                            .dialog()
+                            .message(format!(
+                                "Log file successfully exported to {}",
+                                dest_path.display()
+                            ))
+                            .title("Success")
+                            .kind(MessageDialogKind::Info)
+                            .show(|_| {});
+                    }
+                    Err(e) => {
+                        app_handle
+                            .dialog()
+                            .message(format!("Failed to export log file: {}", e))
+                            .title("Error")
+                            .kind(MessageDialogKind::Error)
+                            .show(|_| {});
+                    }
+                }
+            }
+        });
+
+    Ok(())
+}
+
+fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
+
+    if !log_path.exists() {
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match std::fs::read_to_string(&log_path) {
+            Ok(contents) => {
+                if let Err(e) = app_handle.clipboard().write_text(contents) {
+                    app_handle
+                        .dialog()
+                        .message(format!("Failed to copy to clipboard: {}", e))
+                        .title("Error")
+                        .kind(MessageDialogKind::Error)
+                        .show(|_| {});
+                } else {
+                    app_handle
+                        .dialog()
+                        .message("Log contents successfully copied to clipboard.")
+                        .title("Copied")
+                        .kind(MessageDialogKind::Info)
+                        .show(|_| {});
+                }
+            }
+            Err(e) => {
+                app_handle
+                    .dialog()
+                    .message(format!("Failed to read log file: {}", e))
+                    .title("Error")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let log_path = match logging::log_file_path(app) {
+        Some(path) => path,
+        None => {
+            let msg = "Could not resolve log file path";
+            show_log_action_error(app, msg);
+            return Err(msg.to_string());
+        }
+    };
+
+    if !log_path.exists() {
+        let msg = "Log file does not exist yet";
+        show_log_action_error(app, msg);
+        return Err(msg.to_string());
+    }
+
+    let default_dir = match app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().desktop_dir())
+    {
+        Ok(dir) => dir,
+        Err(e) => {
+            let msg = format!(
+                "Could not resolve a default directory (Downloads or Desktop): {}",
+                e
+            );
+            show_log_action_error(app, &msg);
+            return Err(msg);
+        }
+    };
+
+    let dest_path = default_dir.join("termul.log");
+    let app_handle = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        match std::fs::copy(&log_path, &dest_path) {
+            Ok(_) => {
+                app_handle
+                    .dialog()
+                    .message(format!(
+                        "Log file successfully exported to {}",
+                        dest_path.display()
+                    ))
+                    .title("Success")
+                    .kind(MessageDialogKind::Info)
+                    .show(|_| {});
+            }
+            Err(e) => {
+                app_handle
+                    .dialog()
+                    .message(format!("Failed to export log file: {}", e))
+                    .title("Error")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
+    });
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -708,6 +954,10 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
+            // Create ACP Manager — spawns/owns ACP agent subprocesses
+            let acp_manager = Arc::new(AcpManager::new(handle.clone()));
+            app.manage(acp_manager);
+
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
             app.manage(ssh_manager);
@@ -782,6 +1032,10 @@ pub fn run() {
             detect_shells,
             get_default_shell,
             get_home_directory,
+            reveal_log_dir_command,
+            export_log_file_command,
+            copy_log_contents_command,
+            export_log_to_default_command,
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_write,
@@ -794,6 +1048,7 @@ pub fn run() {
             commands::terminal_update_orphan_detection,
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
+            commands::terminal_set_protected,
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
             commands::agent_registry_fetch,
@@ -879,10 +1134,30 @@ pub fn run() {
             commands::git_commit,
             commands::git_push,
             commands::git_get_commit_context,
+            commands::git_init,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
             secure_storage::secure_storage_delete,
+            // ACP (Agent Client Protocol) commands — ADR-003 P0
+            acp::commands::acp_spawn_agent,
+            acp::commands::acp_kill_agent,
+            acp::commands::acp_list_agents,
+            acp::commands::acp_new_session,
+            acp::commands::acp_load_session,
+            acp::commands::acp_resume_session,
+            acp::commands::acp_close_session,
+            acp::commands::acp_list_sessions,
+            acp::commands::acp_send_prompt,
+            acp::commands::acp_cancel_prompt,
+            acp::commands::acp_set_config_option,
+            acp::commands::acp_set_mode,
+            acp::commands::acp_respond_permission,
+            acp::commands::acp_authenticate,
+            acp_binary_install::acp_install_registry_binary,
+            // Agent Skills (Zed-compatible SKILL.md packages)
+            skills::commands::list_agent_skills_cmd,
+            skills::commands::read_agent_skill_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,
@@ -909,6 +1184,10 @@ pub fn run() {
                 .try_state::<Arc<RemoteServerState>>()
                 .map(|state| state.inner().clone());
 
+            let acp_manager = app_handle
+                .try_state::<Arc<AcpManager>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
@@ -924,10 +1203,22 @@ pub fn run() {
                         let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
+                    if let Some(acp_manager) = acp_manager {
+                        acp_manager.kill_all().await;
+                    }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
                     // After cleanup completes, allow the app to exit with code 0
+                    app_handle_clone.exit(0);
+                });
+            } else if let Some(acp_manager) = acp_manager {
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    acp_manager.kill_all().await;
+                    if let Some(browser_tab_manager) = browser_tab_manager {
+                        browser_tab_manager.destroy_all();
+                    }
                     app_handle_clone.exit(0);
                 });
             } else {
@@ -942,7 +1233,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
-                    // No PTY manager, just exit
+                    // No PTY or ACP manager, just exit
                     app_handle_clone.exit(0);
                 });
             }

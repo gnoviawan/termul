@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
+import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
   // State
@@ -12,7 +12,13 @@ export interface ProjectState {
 
   // Actions
   selectProject: (id: string) => void
-  addProject: (name: string, color: ProjectColor, path?: string, defaultShell?: string) => Project
+  addProject: (
+    name: string,
+    color: ProjectColor,
+    path?: string,
+    defaultShell?: string,
+    envVars?: EnvVariable[]
+  ) => Project
   updateProject: (id: string, updates: Partial<Project>) => void
   deleteProject: (id: string) => void
   archiveProject: (id: string) => void
@@ -32,6 +38,7 @@ export interface ProjectState {
   moveProjectToGroup: (projectId: string, targetGroupId: string | null, index?: number) => void
   reorderGroups: (groupIds: string[]) => void
   reorderProjectInGroup: (groupId: string, projectIds: string[]) => void
+  updateGroup: (id: string, updates: Partial<Omit<ProjectGroup, 'id'>>) => void
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -60,14 +67,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     name: string,
     color: ProjectColor,
     path?: string,
-    defaultShell?: string
+    defaultShell?: string,
+    envVars?: EnvVariable[]
   ): Project => {
     const newProject: Project = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       name,
       color,
       path,
       defaultShell,
+      envVars,
       gitBranch: 'main'
     }
     set((state) => ({
@@ -131,8 +140,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         .map((id) => projectMap.get(id))
         .filter((p): p is Project => p !== undefined)
 
-      // Combine reordered active projects with archived projects
-      return { projects: [...reorderedActive, ...archivedProjects] }
+      // Preserve active projects that were not in the reordered list (e.g. grouped projects)
+      const reorderedIdsSet = new Set(activeProjectIds)
+      const remainingActive = activeProjects.filter((p) => !reorderedIdsSet.has(p.id))
+
+      // Combine reordered active projects, remaining active projects, and archived projects
+      return { projects: [...reorderedActive, ...remainingActive, ...archivedProjects] }
     })
   },
 
@@ -241,7 +254,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             } else {
               newProjectIds.push(projectId)
             }
-            return { ...g, projectIds: newProjectIds }
+            return { ...g, projectIds: newProjectIds, isCollapsed: false }
           }
           return g
         })
@@ -255,13 +268,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const reorderedGroups = groupIds
         .map((id) => groupMap.get(id))
         .filter((g): g is ProjectGroup => g !== undefined)
-      return { groups: reorderedGroups }
+
+      // Preserve groups that were not in the reordered list
+      const reorderedIdsSet = new Set(groupIds)
+      const remainingGroups = state.groups.filter((g) => !reorderedIdsSet.has(g.id))
+
+      return { groups: [...reorderedGroups, ...remainingGroups] }
     })
   },
 
   reorderProjectInGroup: (groupId: string, projectIds: string[]): void => {
     set((state) => ({
       groups: state.groups.map((g) => (g.id === groupId ? { ...g, projectIds } : g))
+    }))
+  },
+
+  updateGroup: (id: string, updates: Partial<Omit<ProjectGroup, 'id'>>): void => {
+    set((state) => ({
+      groups: state.groups.map((g) => (g.id === id ? { ...g, ...updates } : g))
     }))
   }
 }))
@@ -309,6 +333,7 @@ export function useProjectActions(): Pick<
   | 'moveProjectToGroup'
   | 'reorderGroups'
   | 'reorderProjectInGroup'
+  | 'updateGroup'
 > {
   return useProjectStore(
     useShallow((state) => ({
@@ -329,7 +354,8 @@ export function useProjectActions(): Pick<
       toggleGroupCollapse: state.toggleGroupCollapse,
       moveProjectToGroup: state.moveProjectToGroup,
       reorderGroups: state.reorderGroups,
-      reorderProjectInGroup: state.reorderProjectInGroup
+      reorderProjectInGroup: state.reorderProjectInGroup,
+      updateGroup: state.updateGroup
     }))
   )
 }

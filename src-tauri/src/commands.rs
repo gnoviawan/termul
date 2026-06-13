@@ -125,6 +125,14 @@ pub struct RendererRefRequest {
     pub renderer_id: String,
 }
 
+/// Request to update a terminal's orphan-reaping protection.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTerminalProtectedRequest {
+    pub terminal_id: String,
+    pub protected: bool,
+}
+
 // ==================== Terminal Commands ====================
 
 /// Spawn a new terminal with binary data channel
@@ -258,6 +266,23 @@ pub async fn terminal_remove_renderer_ref(
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "TERMINAL_NOT_FOUND")),
     }
+}
+
+/// Update a terminal's orphan-reaping protection.
+///
+/// Protection is enabled automatically at spawn. The renderer calls this with
+/// `protected = false` only when a terminal is genuinely released (its project
+/// is closed or its tab is closed), so orphan detection may reclaim it. This
+/// keeps live background-project terminals from being killed mid-task.
+#[tauri::command]
+pub async fn terminal_set_protected(
+    request: SetTerminalProtectedRequest,
+    pty_manager: State<'_, Arc<PtyManager>>,
+) -> Result<IpcResult<()>, String> {
+    // `set_protected` is intentionally idempotent and infallible (it is a no-op
+    // when the terminal is already gone), so there is no error case to map.
+    pty_manager.set_protected(&request.terminal_id, request.protected);
+    Ok(IpcResult::success(()))
 }
 
 /// Set visibility state (affects polling behavior and PTY kill deferral)
@@ -1312,15 +1337,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
         "__pycache__",
         ".pytest_cache",
         "venv",
-        ".env",
         "coverage",
         ".nyc_output",
     ] {
         args.push("-g".to_string());
         args.push(format!("!**/{}/**", ignored));
     }
-    args.push("-g".to_string());
-    args.push("!**/.env".to_string());
 
     args.push("--".to_string());
     args.push(query.to_string());
@@ -1660,6 +1682,27 @@ pub async fn search_file_names_stream(
     args.push("!**/.env".to_string());
 
     args.push(validated_root.clone());
+            if [
+                "node_modules",
+                ".git",
+                ".next",
+                ".cache",
+                ".turbo",
+                "dist",
+                "build",
+                ".output",
+                ".nuxt",
+                ".svelte-kit",
+                "__pycache__",
+                ".pytest_cache",
+                "venv",
+                "coverage",
+                ".nyc_output",
+            ]
+            .contains(&file_name)
+            {
+                continue;
+            }
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -2649,6 +2692,21 @@ pub async fn git_get_commit_context(
     cwd: String,
 ) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
     crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
+}
+
+#[tauri::command]
+pub async fn git_init(cwd: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&cwd, &["init"])
+            .ok_or_else(|| "Failed to run git init".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git init task failed: {e}"))?
 }
 
 /// Cap on any single renderer-supplied field to keep one forwarded error from

@@ -3,7 +3,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useRef } from 'react'
-import { TERMINAL_THEME } from '../components/terminal/terminal-config'
+import { getActiveTerminalTheme } from '@/lib/themes'
 
 export interface UseXtermOptions {
   onData?: (data: string) => void
@@ -92,7 +92,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
       fontFamily,
       fontSize,
       lineHeight: 1.2,
-      theme: TERMINAL_THEME,
+      theme: getActiveTerminalTheme(),
       cursorBlink: true,
       cursorStyle: 'block',
       allowTransparency: false,

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { persistenceApi, secureStorageApi, worktreeApi } from '@/lib/api'
+import { persistenceApi, secureStorageApi, terminalApi, worktreeApi } from '@/lib/api'
+import { setTerminalProtected } from '@/lib/terminal-api'
 import { useProjectStore } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
   PersistedProject,
@@ -448,7 +450,18 @@ export function useProjectsAutoSave(): void {
   useEffect(() => {
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
-      // Skip the first state change (from loading)
+      // Skip auto-saving if the store is not yet loaded
+      if (!state.isLoaded) {
+        return
+      }
+
+      // If we just transitioned to loaded, mark it initialized and skip saving
+      if (!prevState.isLoaded) {
+        hasInitialized.current = true
+        return
+      }
+
+      // Skip the first state change (only if we haven't initialized yet, e.g. in tests where isLoaded starts as true)
       if (!hasInitialized.current) {
         hasInitialized.current = true
         return
@@ -515,6 +528,34 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     // Delete secrets from secure storage
     if (project) {
       await deleteSecrets(project.id, project.envVars)
+    }
+
+    // Kill the project's live PTYs so the backend reclaims them. The terminals
+    // are genuinely released here (the project is being deleted), so they must
+    // not stay alive/protected and leak. kill() removes them from the backend
+    // terminal map; we also drop them from the renderer store.
+    const projectTerminals = useTerminalStore.getState().terminals.filter((t) => t.projectId === id)
+    for (const terminal of projectTerminals) {
+      if (terminal.ptyId) {
+        try {
+          // kill() returns an IpcResult; a soft failure does not throw. The
+          // project is being deleted regardless, so we always proceed to drop
+          // the renderer record below — we just surface a failed kill in logs
+          // (e.g. the backend deferring a kill while the window is hidden still
+          // reports success, so this only logs genuine failures).
+          const result = await terminalApi.kill(terminal.ptyId)
+          if (!result.success) {
+            console.warn('Failed to kill PTY during project delete:', result.error)
+            // Best-effort fallback: allow orphan cleanup if PTY still exists
+            await setTerminalProtected(terminal.ptyId, false).catch((error) => {
+              console.warn('Failed to clear PTY protection during project delete:', error)
+            })
+          }
+        } catch (error) {
+          console.warn('Failed to kill PTY during project delete:', error)
+        }
+      }
+      useTerminalStore.getState().closeTerminal(terminal.id, id)
     }
 
     // Delete the project from the store

@@ -5,6 +5,8 @@ export interface DirectoryEntry {
   extension: string | null
   size: number
   modifiedAt: number
+  /** True when the entry matches a commonly-ignored name (e.g. node_modules, .env, dist). Shown dimmed but still accessible. */
+  ignored?: boolean
 }
 
 export interface FileContent {

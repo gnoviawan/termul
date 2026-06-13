@@ -1,8 +1,8 @@
 export function FeatureVisualGitPanel() {
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden pointer-events-none">
-      <div className="relative w-[90%] max-w-md bg-[#0a0a0a] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden min-h-[180px]">
-        <div className="h-8 bg-[#161616] border-b border-white/10 flex items-center px-3 gap-2">
+      <div className="relative w-[90%] max-w-md bg-graphite rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden min-h-[180px]">
+        <div className="h-8 bg-deep-slate border-b border-white/10 flex items-center px-3 gap-2">
           <div className="text-[10px] text-emerald-400/90 font-mono">Git</div>
           <div className="text-[9px] text-gray-600">•</div>
           <div className="text-[10px] text-gray-500 font-mono flex items-center gap-1.5">
@@ -12,7 +12,7 @@ export function FeatureVisualGitPanel() {
           <div className="ml-auto text-[9px] text-gray-500 font-mono">↑ 2</div>
         </div>
         <div className="flex flex-1 min-h-[150px]">
-          <div className="flex-1 bg-[#0d0d0d] p-3 font-mono text-[10px] flex flex-col gap-1 border-r border-white/5">
+          <div className="flex-1 bg-deep-slate p-3 font-mono text-[10px] flex flex-col gap-1 border-r border-white/5">
             <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Staged</div>
             <div className="flex items-center gap-2 text-gray-300">
               <span className="text-emerald-400">M</span> src/App.tsx
@@ -27,7 +27,7 @@ export function FeatureVisualGitPanel() {
               <span className="text-amber-400">M</span> README.md
             </div>
           </div>
-          <div className="flex-1 bg-[#0a0a0a] p-3 flex flex-col gap-2">
+          <div className="flex-1 bg-graphite p-3 flex flex-col gap-2">
             <div className="text-[9px] text-gray-500 font-mono uppercase tracking-wide">
               History
             </div>
@@ -45,7 +45,7 @@ export function FeatureVisualGitPanel() {
             </div>
           </div>
         </div>
-        <div className="h-7 border-t border-white/10 bg-[#161616] flex items-center px-3 gap-3">
+        <div className="h-7 border-t border-white/10 bg-deep-slate flex items-center px-3 gap-3">
           <span className="text-[9px] text-emerald-300/90 font-mono">Commit</span>
           <span className="text-[9px] text-gray-600">|</span>
           <span className="text-[9px] text-gray-500 font-mono">Amend</span>

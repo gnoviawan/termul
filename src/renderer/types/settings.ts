@@ -58,7 +58,18 @@ export interface AppSettings {
   sshPanelVisible: boolean
   /** Remote server bind: localhost (127.0.0.1) or all interfaces (0.0.0.0). */
   remoteBindMode: RemoteBindMode
+  /** App-wide color theme family id (without `-light` suffix). */
+  colorTheme: string
+  /** Light, dark, or follow OS (maps to `{colorTheme}` / `{colorTheme}-light`). */
+  appearanceMode: 'light' | 'dark'
 }
+
+export type AppPanelVisibilitySettingKey =
+  | 'sidebarVisible'
+  | 'fileExplorerVisible'
+  | 'sshPanelVisible'
+
+export type AppSettingsUpdate = Partial<Omit<AppSettings, AppPanelVisibilitySettingKey>>
 
 // Terminal buffer size options
 export const BUFFER_SIZE_OPTIONS = [
@@ -147,7 +158,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sidebarVisible: true,
   fileExplorerVisible: true,
   sshPanelVisible: true,
-  remoteBindMode: 'localhost'
+  remoteBindMode: 'localhost',
+  colorTheme: 'termul',
+  appearanceMode: 'dark'
 }
 
 // Persistence key for app settings
@@ -324,6 +337,12 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Switch to Project Root',
     description: 'Switch active context to the project root directory',
     defaultKey: 'ctrl+shift+home'
+  },
+  colorThemePicker: {
+    id: 'colorThemePicker',
+    label: 'Change Color Theme',
+    description: 'Open the color theme picker with live preview',
+    defaultKey: 'ctrl+alt+t'
   }
 }
 

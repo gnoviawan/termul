@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import { BrowserPanel } from '@/components/browser/BrowserPanel'
+import { AgentChatPanel } from '@/components/chat/AgentChatPanel'
 import { EditorPanel } from '@/components/editor/EditorPanel'
 import { GitHistoryPanel } from '@/components/git/GitHistoryPanel'
 import { GitPanel } from '@/components/git/GitPanel'
@@ -380,6 +381,20 @@ export function PaneContent({
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
                     <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'agent-chat' } => t.type === 'agent-chat')
+              .map((tab) => {
+                const isVisible = activeTab?.id === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <AgentChatPanel sessionId={tab.sessionId} />
                   </div>
                 )
               })}

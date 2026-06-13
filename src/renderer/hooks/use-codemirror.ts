@@ -13,6 +13,13 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createTermulTheme } from '@/components/editor/codemirror-theme'
 import { requestSaveEditorFile } from '@/lib/editor-save'
+import {
+  COLOR_THEME_CHANGED_EVENT,
+  type ColorThemeChangedDetail,
+  getColorThemeDefinition,
+  getLastAppliedColorThemeId,
+  resolveSyntaxColors
+} from '@/lib/themes'
 
 // Cache loaded language extensions
 const languageCache = new Map<string, Extension>()
@@ -133,6 +140,9 @@ export function useCodeMirror(
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visibleRangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeCompartment = useRef(new Compartment())
+  const syntaxColorsRef = useRef<ColorThemeChangedDetail['syntax'] | null>(
+    resolveSyntaxColors(getColorThemeDefinition(getLastAppliedColorThemeId()))
+  )
   const pendingRestoreTokenRef = useRef<symbol | null>(null)
   const filePathRef = useRef(options.filePath)
 
@@ -209,7 +219,7 @@ export function useCodeMirror(
         ])
       ),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-      themeCompartment.current.of(createTermulTheme(isDark)),
+      themeCompartment.current.of(createTermulTheme(isDark, syntaxColorsRef.current)),
       updateListener,
       scrollListener,
       EditorView.lineWrapping
@@ -282,15 +292,26 @@ export function useCodeMirror(
     }
   }, [containerRef, options.language, options.readOnly])
 
-  // Watch for dark/light theme changes via MutationObserver
+  // Watch for dark/light class changes and color theme updates
   useEffect(() => {
-    const observer = new MutationObserver(() => {
+    const reconfigureTheme = (syntax?: ColorThemeChangedDetail['syntax'] | null): void => {
+      if (syntax !== undefined) {
+        syntaxColorsRef.current = syntax
+      }
+
       const view = viewRef.current
       if (!view) return
+
       const isDarkNow = document.documentElement.classList.contains('dark')
       view.dispatch({
-        effects: themeCompartment.current.reconfigure(createTermulTheme(isDarkNow))
+        effects: themeCompartment.current.reconfigure(
+          createTermulTheme(isDarkNow, syntaxColorsRef.current)
+        )
       })
+    }
+
+    const observer = new MutationObserver(() => {
+      reconfigureTheme()
     })
 
     observer.observe(document.documentElement, {
@@ -298,7 +319,17 @@ export function useCodeMirror(
       attributeFilter: ['class']
     })
 
-    return () => observer.disconnect()
+    const handleColorThemeChanged = (event: Event): void => {
+      const detail = (event as CustomEvent<ColorThemeChangedDetail>).detail
+      reconfigureTheme(detail.syntax)
+    }
+
+    window.addEventListener(COLOR_THEME_CHANGED_EVENT, handleColorThemeChanged)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener(COLOR_THEME_CHANGED_EVENT, handleColorThemeChanged)
+    }
   }, [])
 
   const flushPendingContent = useCallback((): void => {

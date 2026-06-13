@@ -95,3 +95,35 @@ export function installGlobalErrorForwarding(): void {
     })
   })
 }
+
+export async function revealLogDir(): Promise<void> {
+  try {
+    await invoke('reveal_log_dir_command')
+  } catch (error) {
+    console.error('Failed to reveal log directory:', error)
+  }
+}
+
+export async function exportLogFile(): Promise<void> {
+  try {
+    await invoke('export_log_file_command')
+  } catch (error) {
+    console.error('Failed to export log file:', error)
+  }
+}
+
+export async function copyLogContents(): Promise<void> {
+  try {
+    await invoke('copy_log_contents_command')
+  } catch (error) {
+    console.error('Failed to copy log contents:', error)
+  }
+}
+
+export async function exportLogToDefault(): Promise<void> {
+  try {
+    await invoke('export_log_to_default_command')
+  } catch (error) {
+    console.error('Failed to export log to default:', error)
+  }
+}

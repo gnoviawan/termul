@@ -145,6 +145,30 @@ pub fn resolve_git_binary() -> &'static str {
     })
 }
 
+/// Resolve an arbitrary executable name to a concrete path.
+///
+/// On Windows, GUI-spawned processes do not get a shell's command resolution,
+/// so a bare name like `gemini` (installed as `gemini.cmd`) fails to spawn.
+/// This resolves the name against PATH/PATHEXT (reusing the same logic as the
+/// git resolver) and returns the first match. An absolute/relative path, or a
+/// name that cannot be resolved, is returned unchanged so the caller still gets
+/// a meaningful spawn error. On Unix, the name is returned as-is because the OS
+/// resolves bare names on PATH natively.
+pub fn resolve_executable(command: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(path) = resolve_command_candidates_from_path(command).into_iter().next() {
+            return path;
+        }
+        command.to_string()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        command.to_string()
+    }
+}
+
 const POLL_INTERVAL_MS: u64 = 6000;
 const GIT_COMMAND_TIMEOUT_MS: u64 = 2000;
 
@@ -1625,6 +1649,27 @@ impl GitTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_executable_returns_unresolved_name_unchanged() {
+        // A bare name that does not exist on PATH should come back unchanged so
+        // the spawn still produces a meaningful "not found" error rather than
+        // silently rewriting to something else.
+        let unlikely = "termul-nonexistent-agent-xyz";
+        assert_eq!(resolve_executable(unlikely), unlikely);
+    }
+
+    #[test]
+    fn resolve_executable_preserves_explicit_path() {
+        // An explicit (non-existent) path is returned unchanged on all
+        // platforms; the caller surfaces the spawn error.
+        let p = if cfg!(windows) {
+            "C:\\nope\\agent.exe"
+        } else {
+            "/nope/agent"
+        };
+        assert_eq!(resolve_executable(p), p);
+    }
 
     #[test]
     fn test_build_diff_args_untracked_uses_no_index() {

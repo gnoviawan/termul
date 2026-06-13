@@ -8,11 +8,13 @@
  *   import { terminalApi, clipboardApi, systemApi } from '@/lib/api'
  */
 
+export { acpApi } from './acp-api'
 export { clipboardApi } from './clipboard-api'
 export { dialogApi } from './dialog-api'
 export { filesystemApi } from './filesystem-api'
 export { gitApi } from './git-api'
 export { keyboardApi } from './keyboard-api'
+export * as logApi from './log-api'
 export { persistenceApi } from './persistence-api'
 export { shellApi } from './shell-api'
 export { createAskpassScript, sshApi } from './ssh-api'

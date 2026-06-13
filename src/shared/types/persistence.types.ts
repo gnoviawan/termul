@@ -64,8 +64,17 @@ export const PersistenceKeys = {
   // ADR-004.3 / ADR-004.6: user-defined terminal-native agent definitions.
   customAgents: 'agents/custom',
   // Last-selected agent in the launcher (persisted across sessions).
+  // GH-289: value shape is `LastSelectedAgent` ({ agentId, mode }); legacy
+  // records carrying only `{ agentId }` are read as `mode: 'cli'`.
   lastSelectedAgent: 'agents/last-selected'
 } as const
+
+// GH-289: persisted launcher selection — the chosen agent plus its call mode.
+// Legacy persisted values may be `{ agentId }` only (migrated to mode 'cli').
+export interface LastSelectedAgent {
+  agentId: string
+  mode: 'cli' | 'acp'
+}
 
 // Persisted project data (stored at projects.json)
 export interface PersistedProjectData {
@@ -80,6 +89,7 @@ export interface PersistedProjectGroup {
   name: string
   projectIds: string[]
   isCollapsed?: boolean
+  color?: string
 }
 
 export interface PersistedEnvVariable {
