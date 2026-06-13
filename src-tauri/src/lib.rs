@@ -910,18 +910,23 @@ pub fn run() {
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
 
-            // macOS: Enable overlay title bar for native traffic lights.
-            // Window starts hidden (visible: false), so we set this before show().
-            // On Windows/Linux: set_decorations(false) removes native frame
-            // so the custom HTML titlebar is used instead.
+            // Window chrome is configured before show(). macOS overlay settings
+            // live in tauri.conf.json — avoid set_decorations(true) there because
+            // it resets hiddenTitle/full-size content view. Win/Linux drop native
+            // frame so the HTML titlebar owns window controls.
             #[cfg(target_os = "macos")]
             {
                 if let Some(window) = app.get_webview_window("main") {
-                    if let Err(e) = window.set_decorations(true) {
-                        log::warn!("[macOS] Failed to enable window decorations: {}", e);
-                    }
                     if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
                         log::warn!("[macOS] Failed to set overlay title bar style: {}", e);
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = window.set_decorations(false) {
+                        log::warn!("Failed to disable native window decorations: {}", e);
                     }
                 }
             }

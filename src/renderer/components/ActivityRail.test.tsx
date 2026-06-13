@@ -146,6 +146,16 @@ describe('ActivityRail', () => {
     expect(screen.getByRole('img', { name: 'Termul' })).toBeInTheDocument()
   })
 
+  it('keeps the brand row draggable on macOS for top-left window moves', () => {
+    platformState.isMac = true
+
+    renderRail()
+
+    const rail = screen.getByRole('navigation', { name: 'Global actions' })
+    expect(rail.className).not.toContain('pt-[32px]')
+    expect(rail.querySelector('[data-tauri-drag-region="true"]')).not.toBeNull()
+  })
+
   it('opens the command palette via the projects action', () => {
     const onOpenCommandPalette = vi.fn()
     render(
