@@ -1,5 +1,6 @@
 import type React from 'react'
 import { useMemo } from 'react'
+import { highlightLine } from '@/lib/diff-syntax-highlight'
 import {
   type GitDiffViewMode,
   type ParsedDiffLine,
@@ -23,6 +24,19 @@ function lineClass(kind: ParsedDiffLine['kind']): string {
   )
 }
 
+function renderHighlighted(text: string): React.ReactNode[] {
+  return highlightLine(text).map((token, i) => {
+    if (token.type === 'plain') {
+      return token.text
+    }
+    return (
+      <span key={i} className={`hl-${token.type}`}>
+        {token.text}
+      </span>
+    )
+  })
+}
+
 function InlineDiff({ diff }: { diff: string }): React.JSX.Element {
   const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
 
@@ -33,7 +47,9 @@ function InlineDiff({ diff }: { diff: string }): React.JSX.Element {
     >
       {lines.map((line, i) => (
         <div key={i} className={lineClass(line.kind)}>
-          {line.raw || ' '}
+          {line.kind === 'context' || line.kind === 'addition' || line.kind === 'deletion'
+            ? renderHighlighted(line.text || ' ')
+            : line.raw || ' '}
         </div>
       ))}
     </div>
@@ -47,6 +63,12 @@ function SplitCell({
   cell: ParsedDiffLine | null
   side: 'left' | 'right'
 }): React.JSX.Element {
+  const content = cell
+    ? cell.kind === 'context' || cell.kind === 'addition' || cell.kind === 'deletion'
+      ? renderHighlighted(cell.text || ' ')
+      : cell.text || '\u00a0'
+    : '\u00a0'
+
   return (
     <div
       className={cn(
@@ -55,7 +77,7 @@ function SplitCell({
         cell ? lineClass(cell.kind) : 'bg-muted/5'
       )}
     >
-      {cell ? cell.text || ' ' : '\u00a0'}
+      {content}
     </div>
   )
 }
