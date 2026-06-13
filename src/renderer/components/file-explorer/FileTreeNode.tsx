@@ -1,9 +1,11 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { ChevronRight, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
-import { getFileIcon } from './file-icon-map'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
+import { MaterialFileIcon } from './MaterialFileIcon'
 
 interface FileTreeNodeProps {
   entry: DirectoryEntry
@@ -32,7 +34,8 @@ export function FileTreeNode({
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const isIgnored = entry.ignored === true
-  const Icon = getFileIcon(entry.extension, isDir, isExpanded)
+  const suppressTreeAnimations = useFileExplorerStore((state) => state.suppressTreeAnimations)
+  const finalizeDirectoryCollapse = useFileExplorerStore((state) => state.finalizeDirectoryCollapse)
   const { startFileDrag } = usePaneDnd()
   const [showTooltip, setShowTooltip] = useState(false)
   const tooltipTimerRef = useRef<number | null>(null)
@@ -106,21 +109,22 @@ export function FileTreeNode({
           <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
             {isLoading ? (
               <Loader2 size={12} className="animate-spin text-muted-foreground" />
+            ) : isExpanded ? (
+              <ChevronDown size={12} className="text-muted-foreground" />
             ) : (
-              <ChevronRight
-                size={12}
-                className={cn(
-                  'text-muted-foreground transition-transform',
-                  isExpanded && 'rotate-90'
-                )}
-              />
+              <ChevronRight size={12} className="text-muted-foreground" />
             )}
           </span>
         )}
         {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
-        <Icon
+        <MaterialFileIcon
+          name={entry.name}
+          extension={entry.extension}
+          isDirectory={isDir}
+          isExpanded={isExpanded}
+          depth={depth}
           size={14}
-          className={cn('flex-shrink-0 mr-1.5', isDir ? 'text-blue-400' : 'text-muted-foreground')}
+          className="mr-1.5"
         />
         <span className="truncate">{entry.name}</span>
 
@@ -132,23 +136,38 @@ export function FileTreeNode({
       </div>
 
       {isDir &&
-        isExpanded &&
-        children?.map((child) => (
-          <FileTreeNodeWrapper
-            key={child.path}
-            entry={child}
-            depth={depth + 1}
-            onToggle={onToggle}
-            onSelect={onSelect}
-            onContextMenu={onContextMenu}
-          />
+        (suppressTreeAnimations ? (
+          isExpanded &&
+          children?.map((child) => (
+            <FileTreeNodeWrapper
+              key={child.path}
+              entry={child}
+              depth={depth + 1}
+              onToggle={onToggle}
+              onSelect={onSelect}
+              onContextMenu={onContextMenu}
+            />
+          ))
+        ) : (
+          <CollapseExpandMotion
+            open={isExpanded}
+            onExitComplete={() => finalizeDirectoryCollapse(entry.path)}
+          >
+            {children?.map((child) => (
+              <FileTreeNodeWrapper
+                key={child.path}
+                entry={child}
+                depth={depth + 1}
+                onToggle={onToggle}
+                onSelect={onSelect}
+                onContextMenu={onContextMenu}
+              />
+            ))}
+          </CollapseExpandMotion>
         ))}
     </>
   )
 }
-
-// Wrapper that connects to the store for child state
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
 
 interface FileTreeNodeWrapperProps {
   entry: DirectoryEntry

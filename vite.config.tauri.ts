@@ -1,7 +1,17 @@
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import react from '@vitejs/plugin-react-swc'
 import { defineConfig } from 'vite'
 import pkg from './package.json' with { type: 'json' }
+
+// Resolve the material-icon-theme icons directory via Node module resolution
+// instead of a hardcoded node_modules path, so it works under hoisted,
+// monorepo, or custom-resolve setups.
+const require = createRequire(import.meta.url)
+const materialIconsDir = path.join(
+  path.dirname(require.resolve('material-icon-theme/package.json')),
+  'icons'
+)
 
 const host = process.env.TAURI_DEV_HOST
 // Dev server port. Override with TAURI_DEV_PORT (must match devUrl in
@@ -33,7 +43,8 @@ export default defineConfig({
     alias: {
       '@/': `${path.resolve(__dirname, 'src/renderer')}/`,
       '@renderer/': `${path.resolve(__dirname, 'src/renderer')}/`,
-      '@shared/': `${path.resolve(__dirname, 'src/shared')}/`
+      '@shared/': `${path.resolve(__dirname, 'src/shared')}/`,
+      '@material-icons/': `${materialIconsDir}/`
     }
   },
 
