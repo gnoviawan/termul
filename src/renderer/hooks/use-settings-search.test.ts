@@ -12,7 +12,7 @@ describe('useSettingsSearch', () => {
   })
 
   function setQueryAndDebounce(
-    result: ReturnType<typeof renderHook<typeof useSettingsSearch>>['result'],
+    result: { current: ReturnType<typeof useSettingsSearch> },
     query: string
   ) {
     act(() => {
