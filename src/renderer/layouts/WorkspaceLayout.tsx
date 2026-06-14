@@ -125,6 +125,12 @@ function getShortcutTargetContext(target: EventTarget | null): {
   return { isInEditor, isInTerminal, isInInput }
 }
 
+function MacOsTitlebarStrip(): React.JSX.Element | null {
+  if (!isMac) return null
+
+  return <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+}
+
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
@@ -1379,9 +1385,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         <ResizeEdges />
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-          {isMac && (
-            <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
-          )}
+          <MacOsTitlebarStrip />
           <div className="flex-1 flex overflow-hidden min-h-0">
             <ActivityRail
               isShortcutsOpen={isShortcutMenuOpen}
@@ -1405,9 +1409,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <ResizeEdges />
       <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-        {isMac && (
-          <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
-        )}
+        <MacOsTitlebarStrip />
         <div className="flex-1 flex overflow-hidden min-h-0">
           <ActivityRail
             isShortcutsOpen={isShortcutMenuOpen}

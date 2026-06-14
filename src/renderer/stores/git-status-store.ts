@@ -1,4 +1,4 @@
-import type { GitCommitContext, GitStatusDetail } from '@shared/types/ipc.types'
+import type { GitCommitContext, GitStashInfo, GitStatusDetail } from '@shared/types/ipc.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { gitApi } from '@/lib/git-api'
@@ -14,6 +14,10 @@ export interface GitStatusState {
   diffs: Record<string, string>
   // commitContexts[cwd] = GitCommitContext
   commitContexts: Record<string, GitCommitContext>
+  // stashes[cwd] = GitStashInfo[]
+  stashes: Record<string, GitStashInfo[]>
+  // branches[cwd] = string[]
+  branches: Record<string, string[]>
   selectedFile: string | null
   isFetchingStatus: boolean
   statusFetchCount: number
@@ -22,6 +26,8 @@ export interface GitStatusState {
   refreshStatus: (cwd: string) => Promise<void>
   fetchDiff: (cwd: string, path: string, staged: boolean) => Promise<void>
   fetchCommitContext: (cwd: string) => Promise<void>
+  fetchStashes: (cwd: string) => Promise<void>
+  fetchBranches: (cwd: string) => Promise<void>
   stageFile: (cwd: string, path: string) => Promise<void>
   unstageFile: (cwd: string, path: string) => Promise<void>
   discardFile: (cwd: string, path: string) => Promise<void>
@@ -30,12 +36,20 @@ export interface GitStatusState {
   discardFiles: (cwd: string, paths: string[]) => Promise<void>
   commit: (cwd: string, summary: string, description: string, amend: boolean) => Promise<void>
   push: (cwd: string) => Promise<void>
+  stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>
+  stashApply: (cwd: string, index: number) => Promise<void>
+  stashPop: (cwd: string, index: number) => Promise<void>
+  stashDrop: (cwd: string, index: number) => Promise<void>
+  branchSwitch: (cwd: string, name: string) => Promise<void>
+  branchCreate: (cwd: string, name: string) => Promise<void>
 }
 
 export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   statuses: {},
   diffs: {},
   commitContexts: {},
+  stashes: {},
+  branches: {},
   selectedFile: null,
   isFetchingStatus: false,
   statusFetchCount: 0,
@@ -177,8 +191,100 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   push: async (cwd) => {
     await gitApi.push(cwd)
     await refreshAfterMutation(get, cwd)
+  },
+
+  fetchStashes: async (cwd) => {
+    try {
+      const stashes = await gitApi.stashList(cwd)
+      set((state) => ({
+        stashes: { ...state.stashes, [cwd]: stashes }
+      }))
+    } catch (error) {
+      console.error('Failed to fetch stashes:', error)
+    }
+  },
+
+  fetchBranches: async (cwd) => {
+    try {
+      const branches = await gitApi.branchList(cwd)
+      set((state) => ({
+        branches: { ...state.branches, [cwd]: branches }
+      }))
+    } catch (error) {
+      console.error('Failed to fetch branches:', error)
+    }
+  },
+
+  stashSave: async (cwd, message, includeUntracked) => {
+    await gitApi.stashSave(cwd, message, includeUntracked)
+    await refreshAfterMutation(get, cwd)
+  },
+
+  stashApply: async (cwd, index) => {
+    await gitApi.stashApply(cwd, index)
+    await refreshAfterMutation(get, cwd)
+  },
+
+  stashPop: async (cwd, index) => {
+    await gitApi.stashPop(cwd, index)
+    await refreshAfterMutation(get, cwd)
+  },
+
+  stashDrop: async (cwd, index) => {
+    await gitApi.stashDrop(cwd, index)
+    await get().fetchStashes(cwd)
+  },
+
+  branchSwitch: async (cwd, name) => {
+    await gitApi.branchSwitch(cwd, name)
+    set({ selectedFile: null })
+    await refreshAfterMutation(get, cwd)
+    await updateStoresWithBranch(cwd, name)
+  },
+
+  branchCreate: async (cwd, name) => {
+    await gitApi.branchCreate(cwd, name)
+    set({ selectedFile: null })
+    await refreshAfterMutation(get, cwd)
+    await updateStoresWithBranch(cwd, name)
   }
 }))
+
+async function updateStoresWithBranch(cwd: string, branchName: string) {
+  try {
+    const { useProjectStore } = await import('./project-store')
+    const { useTerminalStore } = await import('./terminal-store')
+
+    const normalizePath = (p?: string) => (p ? p.replace(/\\/g, '/') : '')
+    const normalizedCwd = normalizePath(cwd)
+
+    const isWindows =
+      typeof process !== 'undefined'
+        ? process.platform === 'win32'
+        : navigator.platform.toLowerCase().includes('win')
+    const matchPath = (otherPath?: string) => {
+      const normalizedOther = normalizePath(otherPath)
+      return isWindows
+        ? normalizedOther.toLowerCase() === normalizedCwd.toLowerCase()
+        : normalizedOther === normalizedCwd
+    }
+
+    const projectStore = useProjectStore.getState()
+    const project = projectStore.projects.find((p) => matchPath(p.path))
+    if (project) {
+      projectStore.updateProject(project.id, { gitBranch: branchName })
+    }
+
+    const terminalStore = useTerminalStore.getState()
+    for (const t of terminalStore.terminals) {
+      if (matchPath(t.cwd)) {
+        terminalStore.updateTerminalGitBranch(t.id, branchName)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to sync branch name across stores:', err)
+  }
+}
 
 /** Refresh status + commit context after a successful mutation. Errors here are
  * logged but never rethrown, so a transient read failure does not get reported
@@ -190,6 +296,12 @@ async function refreshAfterMutation(get: () => GitStatusState, cwd: string): Pro
     console.error('Post-mutation status refresh failed:', error)
   }
   await get().fetchCommitContext(cwd)
+  await get()
+    .fetchStashes(cwd)
+    .catch(() => {})
+  await get()
+    .fetchBranches(cwd)
+    .catch(() => {})
 }
 
 /** Monotonic request token per diff key. Bumped whenever a key is invalidated

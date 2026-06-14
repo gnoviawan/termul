@@ -2,7 +2,7 @@ import { Check, Loader2, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import type { ContextMenuItem } from '@/components/ContextMenu'
 import { ContextMenu } from '@/components/ContextMenu'
-import { getFileIcon } from '@/components/file-explorer/file-icon-map'
+import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { cn } from '@/lib/utils'
 
 function getBasename(filePath: string): string {
@@ -47,7 +47,6 @@ export function EditorTab({
 
   const fileName = getBasename(filePath)
   const ext = getExtname(filePath).slice(1) || null
-  const Icon = getFileIcon(ext, false, false)
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -92,7 +91,15 @@ export function EditorTab({
         )}
       >
         {isDirty && <span className="w-2 h-2 rounded-full bg-primary mr-1.5 flex-shrink-0" />}
-        <Icon size={12} className={cn('mr-2 flex-shrink-0', isActive ? 'text-primary' : '')} />
+        <MaterialFileIcon
+          name={fileName}
+          extension={ext}
+          isDirectory={false}
+          isExpanded={false}
+          depth={0}
+          size={12}
+          className="mr-2"
+        />
         <span className={cn('text-[11px] font-medium truncate', isActive && 'text-foreground')}>
           {fileName}
         </span>

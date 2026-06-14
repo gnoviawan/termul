@@ -6,6 +6,32 @@ fn path_has_parent_dir(path: &str) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
+/// Strip the Windows verbatim (extended-length) path prefixes that
+/// `std::fs::canonicalize` prepends on Windows: `\\?\C:\…` and `\\?\UNC\…`.
+///
+/// Those prefixes defeat external tools such as `git.exe`, which aborts with
+/// `fatal: could not create leading directories of …: Invalid argument` when it
+/// receives one. Canonicalization is still performed by the caller for security
+/// (symlink resolution + existence checks); this only rewrites the *string*
+/// representation back to a normal, tool-friendly path.
+///
+/// This is pure string rewriting, so the verbatim prefixes (which never occur on
+/// Unix) are simply left untouched there.
+pub fn strip_verbatim_prefix(path: &str) -> String {
+    const VERBATIM: &str = r"\\?\";
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+
+    let trimmed = path.trim_start();
+    // Order matters: the longer UNC prefix must be checked first.
+    if let Some(rest) = trimmed.strip_prefix(VERBATIM_UNC) {
+        return format!(r"\\{}", rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix(VERBATIM) {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
 /// Validates that a search path is within the allowed project boundary.
 /// Returns the canonicalized path if valid, or an error if the path
 /// attempts to escape the project root or contains path traversal.
@@ -245,5 +271,37 @@ mod tests {
         assert!(result.unwrap_err().contains("does not exist"));
 
         cleanup_test_dir(&project_root);
+    }
+
+    #[test]
+    fn test_strip_verbatim_disk_prefix() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\foo"), r"C:\Users\foo");
+    }
+
+    #[test]
+    fn test_strip_verbatim_unc_prefix() {
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share\foo"),
+            r"\\server\share\foo"
+        );
+    }
+
+    #[test]
+    fn test_strip_verbatim_leaves_normal_path_unchanged() {
+        assert_eq!(
+            strip_verbatim_prefix(r"C:\Users\foo\bar"),
+            r"C:\Users\foo\bar"
+        );
+        // No verbatim prefix -> returned verbatim (string).
+        assert_eq!(strip_verbatim_prefix("/home/user/project"), "/home/user/project");
+    }
+
+    #[test]
+    fn test_strip_verbatim_disk_prefix_chosen_over_unc_match() {
+        // A path like \\?\UNC... must collapse to \\server, never to just "UNC...".
+        assert!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share").starts_with(r"\\server"),
+            "UNC verbatim prefix must map to a UNC share path"
+        );
     }
 }

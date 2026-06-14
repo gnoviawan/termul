@@ -36,6 +36,7 @@ import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
+import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
@@ -103,6 +104,7 @@ function AppEffects(): null {
   useUpdateCheck()
   useUpdateToast()
   useVisibilityState()
+  usePreventFileDropNavigation()
   return null
 }
 

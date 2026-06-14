@@ -1,10 +1,14 @@
 ## Summary
 
+<!-- Describe what this PR does and WHY. Not just what changed — explain the real problem this solves. -->
+
 -
 
 ## Related Issue
 
 Closes #
+
+<!-- Search existing PRs (open AND closed) for the same problem. If a duplicate exists, STOP — do not open another one. Reference prior attempts here. -->
 
 ## Type of Change
 
@@ -26,15 +30,25 @@ Closes #
 
 ## How It Was Tested
 
-- [ ] `bun run lint`
+- [ ] `bun run ci` (Biome lint + format + imports, strict mode)
 - [ ] `bun run typecheck`
 - [ ] `bun run test`
+- [ ] `cargo clippy --all-targets -- -D warnings` (in src-tauri)
+- [ ] `cargo test` (in src-tauri)
 - [ ] Manual verification completed
 - [ ] Not applicable
 
 ## Screenshots or Recordings
 
 <!-- Required for UI changes when applicable -->
+
+## CI & Review Gate
+
+<!-- You MUST wait for all CI checks AND code review (CodeRabbit / Claude) to complete before this PR is ready for merge. -->
+
+- [ ] All CI checks pass (PR Validation, Rust Checks, Build Verification, Security Scans)
+- [ ] Code review comments from CodeRabbit / Claude have been addressed or resolved
+- [ ] No unresolved review findings remain
 
 ## Checklist
 
@@ -43,3 +57,5 @@ Closes #
 - [ ] I updated docs when needed
 - [ ] I added or updated tests when needed
 - [ ] I verified the change does not introduce unrelated modifications
+- [ ] I read AGENTS.md and followed the contributor guidelines
+- [ ] A human reviewed the complete diff before submission

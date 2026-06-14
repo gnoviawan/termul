@@ -7,6 +7,20 @@ import { useSidebarStore } from '@/stores/sidebar-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
+const { platformState } = vi.hoisted(() => ({
+  platformState: { isMac: false }
+}))
+
+vi.mock('@/lib/platform', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
+  return {
+    ...actual,
+    get isMac() {
+      return platformState.isMac
+    }
+  }
+})
+
 function createProject(id: string, path: string, color: ProjectColor): Project {
   return {
     id,
@@ -337,6 +351,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 beforeEach(() => {
+  platformState.isMac = false
   vi.stubGlobal('api', mockApi)
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -382,6 +397,16 @@ const renderWithRouter = (initialEntries = ['/']) => {
 }
 
 describe('WorkspaceLayout - Empty States', () => {
+  it('renders a full-width macOS titlebar zone above workspace chrome', () => {
+    platformState.isMac = true
+
+    renderWithRouter()
+
+    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    expect(strip).not.toBeNull()
+    expect(strip?.className).toContain('h-8')
+  })
+
   it('persists terminal layout before unload when a project is active', async () => {
     mockUseActiveProjectId.mockReturnValue('project-1')
     mockUseActiveProject.mockReturnValue(createProject('project-1', '/workspace/project-1', 'blue'))

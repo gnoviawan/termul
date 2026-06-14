@@ -41,6 +41,11 @@ export interface FileClipboard {
   paths: string[]
 }
 
+interface PendingDirectoryCollapse {
+  contentPathsToRemove: string[]
+  dirsToUnwatch: string[]
+}
+
 /** Worktree root override - when set, explorer roots at worktree path instead of project root */
 export type WorktreeRootOverride = string | null
 
@@ -68,10 +73,15 @@ export interface FileExplorerState {
   searchFailedFiles: number
   searchRequestId: number
   searchLastCompletedQuery: string
+  /** Deferred directory cleanup while collapse exit animation runs */
+  pendingCollapses: Map<string, PendingDirectoryCollapse>
+  /** Skip tree motion (e.g. collapse all) */
+  suppressTreeAnimations: boolean
 
   setRootPath: (path: string | null) => void
   setWorktreeRoot: (path: string | null) => void
   toggleDirectory: (path: string) => Promise<void>
+  finalizeDirectoryCollapse: (path: string) => void
   refreshDirectory: (path: string) => Promise<void>
   selectPath: (path: string | null) => void
   togglePathSelection: (path: string) => void
@@ -156,6 +166,8 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   searchFailedFiles: 0,
   searchRequestId: 0,
   searchLastCompletedQuery: '',
+  pendingCollapses: new Map<string, PendingDirectoryCollapse>(),
+  suppressTreeAnimations: false,
 
   setRootPath: (path: string | null): void => {
     // Unwatch all previously expanded directories
@@ -186,7 +198,9 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       searchScannedFiles: 0,
       searchFailedFiles: 0,
       searchRequestId: 0,
-      searchLastCompletedQuery: ''
+      searchLastCompletedQuery: '',
+      pendingCollapses: new Map<string, PendingDirectoryCollapse>(),
+      suppressTreeAnimations: false
     })
   },
 
@@ -214,39 +228,40 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
   toggleDirectory: async (path: string): Promise<void> => {
     const normalized = normalizePath(path)
-    const { expandedDirs, directoryContents, loadingDirs, rootPath } = get()
+    const { expandedDirs, loadingDirs, rootPath } = get()
     const isRootLoad = rootPath === normalized
 
     if (expandedDirs.has(normalized)) {
-      // Collapse
+      // Collapse: update expanded state immediately; defer content cleanup for exit animation
       const newExpanded = new Set(expandedDirs)
       newExpanded.delete(normalized)
 
-      // Remove contents of this dir and any nested expanded dirs
-      const newContents = new Map(directoryContents)
-      newContents.delete(normalized)
-
-      // Collect dirs to unwatch (this dir + any nested expanded children)
+      const contentPathsToRemove: string[] = [normalized]
       const dirsToUnwatch: string[] = [normalized]
 
-      // Also collapse any child directories
       const newExpandedFiltered = new Set<string>()
       newExpanded.forEach((dir) => {
         if (!dir.startsWith(`${normalized}/`)) {
           newExpandedFiltered.add(dir)
         } else {
-          newContents.delete(dir)
+          contentPathsToRemove.push(dir)
           dirsToUnwatch.push(dir)
         }
       })
 
-      set({ expandedDirs: newExpandedFiltered, directoryContents: newContents })
+      const newPending = new Map(get().pendingCollapses)
+      newPending.set(normalized, { contentPathsToRemove, dirsToUnwatch })
 
-      // Unwatch collapsed directories (fire-and-forget)
-      for (const dir of dirsToUnwatch) {
-        filesystemApi.unwatchDirectory(dir)
-      }
+      set({ expandedDirs: newExpandedFiltered, pendingCollapses: newPending })
     } else {
+      // Cancel deferred collapse cleanup when re-expanding before animation finishes
+      const pending = get().pendingCollapses
+      if (pending.has(normalized)) {
+        const newPending = new Map(pending)
+        newPending.delete(normalized)
+        set({ pendingCollapses: newPending })
+      }
+
       // Prevent duplicate expand work if already loading
       if (loadingDirs.has(normalized)) return
 
@@ -491,6 +506,29 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     set((state) => ({ isVisible: !state.isVisible }))
   },
 
+  finalizeDirectoryCollapse: (path: string): void => {
+    const normalized = normalizePath(path)
+    const pending = get().pendingCollapses.get(normalized)
+    if (!pending) return
+
+    const newContents = new Map(get().directoryContents)
+    for (const contentPath of pending.contentPathsToRemove) {
+      newContents.delete(contentPath)
+    }
+
+    const newPending = new Map(get().pendingCollapses)
+    newPending.delete(normalized)
+
+    set({
+      directoryContents: newContents,
+      pendingCollapses: newPending
+    })
+
+    for (const dir of pending.dirsToUnwatch) {
+      filesystemApi.unwatchDirectory(dir)
+    }
+  },
+
   collapseAll: (): void => {
     const { rootPath, expandedDirs } = get()
     // Unwatch all expanded dirs except root
@@ -506,8 +544,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       if (existing) newContents.set(rootPath, existing)
     }
     set({
+      suppressTreeAnimations: true,
       expandedDirs: rootPath ? new Set([rootPath]) : new Set<string>(),
-      directoryContents: newContents
+      directoryContents: newContents,
+      pendingCollapses: new Map<string, PendingDirectoryCollapse>()
+    })
+    queueMicrotask(() => {
+      set({ suppressTreeAnimations: false })
     })
   },
 
@@ -747,6 +790,7 @@ export function useFileExplorerActions(): Pick<
   | 'setRootPath'
   | 'setWorktreeRoot'
   | 'toggleDirectory'
+  | 'finalizeDirectoryCollapse'
   | 'refreshDirectory'
   | 'selectPath'
   | 'togglePathSelection'
@@ -772,6 +816,7 @@ export function useFileExplorerActions(): Pick<
       setRootPath: state.setRootPath,
       setWorktreeRoot: state.setWorktreeRoot,
       toggleDirectory: state.toggleDirectory,
+      finalizeDirectoryCollapse: state.finalizeDirectoryCollapse,
       refreshDirectory: state.refreshDirectory,
       selectPath: state.selectPath,
       togglePathSelection: state.togglePathSelection,

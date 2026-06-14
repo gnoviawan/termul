@@ -949,10 +949,11 @@ impl PtyManager {
             self.get_home_directory()
         };
 
-        // Verify CWD exists
-        if !Path::new(&cwd).exists() {
-            return Err(format!("Directory does not exist: {}", cwd));
-        }
+        // Verify CWD exists and canonicalize to resolve symlinks and path traversal
+        let cwd = std::fs::canonicalize(&cwd)
+            .map_err(|e| format!("Invalid working directory '{}': {}", cwd, e))?
+            .to_string_lossy()
+            .to_string();
 
         // Get terminal size
         let cols = options.cols.unwrap_or(80);

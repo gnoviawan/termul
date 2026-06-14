@@ -101,6 +101,12 @@ export interface GitCommitContext {
   lastBody: string
 }
 
+export interface GitStashInfo {
+  index: number
+  name: string
+  message: string
+}
+
 export interface GitApi {
   getStatus: (cwd: string) => Promise<GitStatusDetail[]>
   getDiff: (cwd: string, path: string, staged?: boolean) => Promise<string>
@@ -111,6 +117,14 @@ export interface GitApi {
   commit: (cwd: string, summary: string, description?: string, amend?: boolean) => Promise<void>
   push: (cwd: string) => Promise<void>
   getCommitContext: (cwd: string) => Promise<GitCommitContext>
+  stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>
+  stashList: (cwd: string) => Promise<GitStashInfo[]>
+  stashApply: (cwd: string, index: number) => Promise<void>
+  stashPop: (cwd: string, index: number) => Promise<void>
+  stashDrop: (cwd: string, index: number) => Promise<void>
+  branchList: (cwd: string) => Promise<string[]>
+  branchSwitch: (cwd: string, name: string) => Promise<void>
+  branchCreate: (cwd: string, name: string) => Promise<void>
 }
 
 // Terminal API exposed via preload
