@@ -13,7 +13,7 @@ export function useSettingsScrollSpy({
 
   useEffect(() => {
     setActiveId(sectionIds[0])
-  }, [sectionIds.join(',')])
+  }, [sectionIds])
 
   useEffect(() => {
     if (!container || !sectionIds.length) {
@@ -74,7 +74,7 @@ export function useSettingsScrollSpy({
       observer.disconnect()
       visibleSections.clear()
     }
-  }, [container, sectionIds.join(',')])
+  }, [container, sectionIds])
 
   return activeId
 }

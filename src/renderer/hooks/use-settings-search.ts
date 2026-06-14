@@ -17,10 +17,7 @@ function substringMatch(query: string, entry: SettingsSearchEntry): boolean {
 }
 
 function fuzzyMatch(query: string, entry: SettingsSearchEntry): boolean {
-  const keywords = [
-    ...(entry.keywords ?? []),
-    ...(entry.description ? [entry.description] : [])
-  ]
+  const keywords = [...(entry.keywords ?? []), ...(entry.description ? [entry.description] : [])]
   return defaultFilter(entry.label, query, keywords) > 0
 }
 
