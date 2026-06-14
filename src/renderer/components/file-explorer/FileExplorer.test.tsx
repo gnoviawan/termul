@@ -42,7 +42,7 @@ const mockExplorerState = {
     filePath: string
     matches: Array<{ lineNumber: number; lineText: string }>
   }>,
-  searchFileNameMatches: [] as string[],
+  searchFileNameMatches: [] as string[] | null,
   searchLoading: false,
   searchError: null as string | null,
   searchTruncated: false,
@@ -127,7 +127,7 @@ beforeEach(() => {
   mockExplorerState.clipboard = null
   mockExplorerState.searchQuery = ''
   mockExplorerState.searchResults = []
-  mockExplorerState.searchFileNameMatches = []
+  mockExplorerState.searchFileNameMatches = null
   mockExplorerState.searchLoading = false
   mockExplorerState.searchError = null
   mockExplorerState.searchTruncated = false
@@ -232,6 +232,46 @@ describe('FileExplorer', () => {
 
     expect(screen.getByRole('tab', { name: /Files 1/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByText('term-search.ts')).toBeInTheDocument()
+  })
+
+  it('shows the Files tab with an ellipsis while filename matches are still pending', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
+    mockExplorerState.searchFileNameMatches = null
+
+    render(<FileExplorer />)
+
+    expect(screen.getByRole('tab', { name: /Files …/i })).toBeInTheDocument()
+  })
+
+  it('replaces the pending indicator with the streamed count once matches arrive', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
+    mockExplorerState.searchFileNameMatches = null
+
+    const { rerender } = render(<FileExplorer />)
+    expect(screen.getByRole('tab', { name: /Files …/i })).toBeInTheDocument()
+
+    mockExplorerState.searchFileNameMatches = ['/project/src/term-search.ts']
+    rerender(<FileExplorer />)
+
+    expect(screen.getByRole('tab', { name: /Files 1/i })).toBeInTheDocument()
   })
 
   it('opens file-name search results with existing editor behavior', async () => {

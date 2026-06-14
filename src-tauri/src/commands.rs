@@ -1154,17 +1154,29 @@ pub struct SearchContentDoneEvent {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesRequest {
+pub struct SearchFileNamesStreamRequest {
     pub scope_root: String,
     pub root_path: String,
     pub query: String,
+    pub search_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesResponse {
+pub struct SearchFileNamesBatchEvent {
+    pub search_id: String,
     pub files: Vec<String>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesDoneEvent {
+    pub search_id: String,
+    pub truncated: bool,
+    pub total_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1177,10 +1189,16 @@ pub struct RgInfoResponse {
 }
 
 static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
+static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> =
+    OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
 fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn filename_search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+    FILENAME_SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(target_os = "windows")]
@@ -1296,6 +1314,13 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+/// Maximum number of characters allowed in a search query.
+///
+/// Generous enough for any realistic file path, regex fragment, or multi-word
+/// query, but small enough to block trivially abusive inputs from being piped
+/// to ripgrep (file name and content) or the synchronous filename walker.
+const MAX_SEARCH_QUERY_LEN: usize = 500;
+
 fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
     path_validation::validate_search_path(search_root, scope_root)
         .map(|path| path.to_string_lossy().to_string())
@@ -1336,6 +1361,78 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
 
     args.push("--".to_string());
     args.push(query.to_string());
+    args.push(root_path.to_string());
+    args
+}
+
+/// Build the ripgrep argv for a streaming filename search.
+///
+/// We rely on `rg --files --iglob` so we get the same multi-threaded tree walk
+/// that powers content search. The glob form is `**/*{escaped_query}*` to
+/// match the previous "filename contains query" behavior at any directory
+/// depth. `-i` keeps the match case-insensitive on every platform (ripgrep's
+/// default is already case-insensitive on Windows, but Linux/macOS would
+/// otherwise be sensitive). Glob metacharacters in the query are escaped so
+/// they match literally, mirroring the old `contains` semantics.
+fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
+    // Escape glob metacharacters that ripgrep would otherwise interpret as
+    // wildcards (`*`, `?`, `[`, `]`, `\`) so the query is matched as a
+    // substring of the basename.
+    let mut escaped = String::with_capacity(query.len());
+    for ch in query.chars() {
+        match ch {
+            '*' | '?' | '[' | ']' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+
+    let mut args = vec![
+        "--files".to_string(),
+        "-i".to_string(),
+        "--iglob".to_string(),
+        format!("**/*{}*", escaped),
+    ];
+
+    // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
+    // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
+    // `!**/name/**` form that `build_search_args` uses for content search
+    // is silently dropped here, so we explicitly use the basename form.
+    for ignored in [
+        "node_modules",
+        ".git",
+        ".next",
+        ".cache",
+        ".turbo",
+        "dist",
+        "build",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        "venv",
+        "coverage",
+        ".nyc_output",
+    ] {
+        args.push("-g".to_string());
+        args.push(format!("!{}", ignored));
+    }
+    // Exclude platform cruft and common dotenv secrets. The exact `.env`
+    // exclusion matches the spec; `.env.local` / `.env.production` are
+    // deliberately left to `.gitignore` so a project's own ignore list is
+    // honored.
+    args.push("-g".to_string());
+    args.push("!.env".to_string());
+    args.push("-g".to_string());
+    args.push("!Thumbs.db".to_string());
+    args.push("-g".to_string());
+    args.push("!desktop.ini".to_string());
+    args.push("-g".to_string());
+    args.push("!.DS_Store".to_string());
+
     args.push(root_path.to_string());
     args
 }
@@ -1585,15 +1682,46 @@ pub async fn search_content_cancel(
 }
 
 #[tauri::command]
-pub async fn search_file_names(
-    request: SearchFileNamesRequest,
-) -> Result<IpcResult<SearchFileNamesResponse>, String> {
-    let trimmed_query = request.query.trim().to_lowercase();
+pub async fn search_file_names_stream(
+    request: SearchFileNamesStreamRequest,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    let trimmed_query = request.query.trim().to_string();
+    let search_id = request.search_id.clone();
+
     if trimmed_query.is_empty() {
-        return Ok(IpcResult::success(SearchFileNamesResponse {
-            files: vec![],
-            truncated: false,
-        }));
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated: false,
+                total_files: 0,
+                error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    if trimmed_query.chars().count() > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] File name search query rejected: length {} exceeds limit of {}",
+            trimmed_query.chars().count(),
+            MAX_SEARCH_QUERY_LEN
+        );
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated: false,
+                total_files: 0,
+                error: Some(format!(
+                    "Search query too long: {} characters (max {})",
+                    trimmed_query.chars().count(),
+                    MAX_SEARCH_QUERY_LEN
+                )),
+            },
+        );
+        return Ok(IpcResult::success(()));
     }
 
     let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
@@ -1605,76 +1733,182 @@ pub async fn search_file_names(
                 request.root_path,
                 e
             );
-            return Ok(IpcResult::error(
-                format!("Invalid search path: {}", e),
-                "PATH_VALIDATION_FAILED",
-            ));
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    error: Some(format!("Invalid search path: {}", e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
     };
 
-    let mut stack = vec![validated_root];
-    let mut matches: Vec<String> = Vec::new();
-    let mut truncated = false;
-    let max_files = 100;
+    let args = build_file_name_search_args(&trimmed_query, &validated_root);
 
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
+    let rg_path = detect_rg_path();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure_background_command(&mut rg_command);
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name,
-                None => continue,
-            };
-
-            if [
-                "node_modules",
-                ".git",
-                ".next",
-                ".cache",
-                ".turbo",
-                "dist",
-                "build",
-                ".output",
-                ".nuxt",
-                ".svelte-kit",
-                "__pycache__",
-                ".pytest_cache",
-                "venv",
-                "coverage",
-                ".nyc_output",
-            ]
-            .contains(&file_name)
-            {
-                continue;
-            }
-
-            if path.is_dir() {
-                stack.push(path.to_string_lossy().to_string());
-                continue;
-            }
-
-            if file_name.to_lowercase().contains(&trimmed_query) {
-                matches.push(path.to_string_lossy().replace('\\', "/"));
-                if matches.len() >= max_files {
-                    truncated = true;
-                    break;
-                }
-            }
+    let mut child = match rg_command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
+    };
 
-        if truncated {
-            break;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().ok();
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    error: Some("failed to capture rg stdout".to_string()),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
+    };
+
+    let child_handle = Arc::new(Mutex::new(child));
+    {
+        let mut guard = filename_search_processes()
+            .lock()
+            .map_err(|e| e.to_string())?;
+        guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
 
-    Ok(IpcResult::success(SearchFileNamesResponse {
-        files: matches,
-        truncated,
-    }))
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = BufReader::new(stdout);
+        let mut files: Vec<String> = Vec::new();
+        let max_files: usize = 100;
+        let batch_size: usize = 25;
+        let mut truncated = false;
+        let mut stream_error: Option<String> = None;
+        let mut last_batch_count: usize = 0;
+
+        // Collect output until we hit the cap, EOF, or a pipe error. The
+        // iterator-based form `map_while(Result::ok)` would swallow I/O
+        // errors, so we use a manual loop that records the first error.
+        let mut iter = reader.lines();
+        loop {
+            match iter.next() {
+                Some(Ok(line)) => {
+                    if files.len() >= max_files {
+                        truncated = true;
+                        break;
+                    }
+                    files.push(line.replace('\\', "/"));
+
+                    // Emit a mid-stream batch when we cross a batch
+                    // boundary, but skip the trailing batch below if we
+                    // already published this exact count.
+                    if files.len() % batch_size == 0 {
+                        let _ = app_handle.emit(
+                            "search-file-names-batch",
+                            SearchFileNamesBatchEvent {
+                                search_id: search_id.clone(),
+                                files: files.clone(),
+                                truncated: false,
+                            },
+                        );
+                        last_batch_count = files.len();
+                    }
+                }
+                Some(Err(e)) => {
+                    stream_error = Some(format!("stdout read error: {}", e));
+                    break;
+                }
+                None => break,
+            }
+        }
+
+        // Always publish a final batch with the authoritative list so the
+        // renderer converges to the same total. Skip if the count is exactly
+        // what the last mid-stream batch carried.
+        if files.len() != last_batch_count {
+            let _ = app_handle.emit(
+                "search-file-names-batch",
+                SearchFileNamesBatchEvent {
+                    search_id: search_id.clone(),
+                    files: files.clone(),
+                    truncated,
+                },
+            );
+        }
+
+        // Reap the child and propagate a non-zero exit status (other than 1,
+        // which rg uses for "no matches") as a surfaced error. The previous
+        // `try_wait().or_else(wait)` pattern was a no-op for the common
+        // `Ok(None)` case, so we always wait.
+        let exit_status = {
+            let mut child = match child_handle.lock() {
+                Ok(c) => c,
+                Err(_) => {
+                    stream_error.get_or_insert("child handle poisoned".to_string());
+                    return;
+                }
+            };
+            child.wait().ok()
+        };
+        if let Ok(mut guard) = filename_search_processes().lock() {
+            guard.remove(&search_id);
+        }
+
+        let final_error = stream_error.or_else(|| {
+            exit_status
+                .as_ref()
+                .filter(|s| !s.success() && s.code() != Some(1))
+                .map(|s| format!("rg exited with status: {:?}", s))
+        });
+
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated,
+                total_files: files.len(),
+                error: final_error,
+            },
+        );
+    });
+
+    Ok(IpcResult::success(()))
+}
+
+#[tauri::command]
+pub async fn search_file_names_cancel(
+    request: SearchContentCancelRequest,
+) -> Result<IpcResult<()>, String> {
+    let mut guard = filename_search_processes()
+        .lock()
+        .map_err(|e| e.to_string())?;
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+        }
+    }
+    Ok(IpcResult::success(()))
 }
 
 #[tauri::command]
