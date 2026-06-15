@@ -27,7 +27,10 @@ function InlineDiff({ diff }: { diff: string }): React.JSX.Element {
   const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
 
   return (
-    <div className="flex p-4 font-mono text-xs inline-block min-w-full" style={{ tabSize: 4, MozTabSize: 4 }}>
+    <div
+      className="flex p-4 font-mono text-xs inline-block min-w-full"
+      style={{ tabSize: 4, MozTabSize: 4 }}
+    >
       {/* Line number gutters */}
       <div className="flex-shrink-0 select-none border-r border-border/40">
         {lines.map((line, i) => (
