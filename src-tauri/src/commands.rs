@@ -1348,10 +1348,11 @@ pub async fn search_content_stream(
         return Ok(IpcResult::success(()));
     }
 
-    if trimmed_query.len() > MAX_SEARCH_QUERY_LEN {
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
         log::warn!(
-            "[Security] Search query rejected: length {} exceeds limit of {}",
-            trimmed_query.len(),
+            "[Security] Search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
             MAX_SEARCH_QUERY_LEN
         );
         let _ = app_handle.emit(
@@ -1363,7 +1364,7 @@ pub async fn search_content_stream(
                 failed_files: 0,
                 error: Some(format!(
                     "Search query too long: {} characters (max {})",
-                    trimmed_query.len(),
+                    query_char_count,
                     MAX_SEARCH_QUERY_LEN
                 )),
             },
@@ -1594,16 +1595,17 @@ pub async fn search_file_names(
         }));
     }
 
-    if trimmed_query.len() > MAX_SEARCH_QUERY_LEN {
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
         log::warn!(
-            "[Security] File name search query rejected: length {} exceeds limit of {}",
-            trimmed_query.len(),
+            "[Security] File name search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
             MAX_SEARCH_QUERY_LEN
         );
         return Ok(IpcResult::error(
             format!(
                 "Search query too long: {} characters (max {})",
-                trimmed_query.len(),
+                query_char_count,
                 MAX_SEARCH_QUERY_LEN
             ),
             "QUERY_TOO_LONG",
