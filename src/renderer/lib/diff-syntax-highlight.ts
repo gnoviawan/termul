@@ -44,7 +44,6 @@ const KEYWORDS = new Set([
   'of',
   'pub',
   'fn',
-  'let',
   'mut',
   'match',
   'use',
@@ -83,7 +82,6 @@ function isKeyword(word: string): boolean {
 }
 
 const NUMBER_RE = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/
-const PUNCTUATION_RE = /^[{}()[\];:,.<>+\-*/%=!&|^~@#?]$/
 
 function tokenizeLine(line: string): HighlightToken[] {
   const tokens: HighlightToken[] = []
