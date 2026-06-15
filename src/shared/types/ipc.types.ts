@@ -403,6 +403,14 @@ export interface FilesystemApi {
       truncated: boolean
       scannedFiles: number
       failedFiles: number
+      /** Mirror of `SearchFileNamesDoneEvent.code` — see that field for values. */
+      code?:
+        | 'QUERY_TOO_LONG'
+        | 'PATH_VALIDATION_FAILED'
+        | 'RG_SPAWN_FAILED'
+        | 'RG_STDOUT_CAPTURE_FAILED'
+        | 'RG_STREAM_FAILED'
+        | (string & {})
       error?: string
     }) => void
   ) => () => void
@@ -414,13 +422,28 @@ export interface FilesystemApi {
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: { searchId: string; files: string[]; truncated: boolean }) => void
+    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
       searchId: string
       truncated: boolean
       totalFiles: number
+      /**
+       * Programmatic error code. One of:
+       * - `QUERY_TOO_LONG`        — query exceeded `MAX_SEARCH_QUERY_LEN`.
+       * - `PATH_VALIDATION_FAILED` — scope/root failed `validate_search_path`.
+       * - `RG_SPAWN_FAILED`       — ripgrep binary missing, stdout could not
+       *   be captured, or rg exited with a non-zero status other than
+       *   `1` (no matches).
+       */
+      code?:
+        | 'QUERY_TOO_LONG'
+        | 'PATH_VALIDATION_FAILED'
+        | 'RG_SPAWN_FAILED'
+        | 'RG_STDOUT_CAPTURE_FAILED'
+        | 'RG_STREAM_FAILED'
+        | (string & {})
       error?: string
     }) => void
   ) => () => void

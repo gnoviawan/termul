@@ -68,6 +68,13 @@ export interface FileExplorerState {
   searchFileNameMatches: string[] | null
   searchLoading: boolean
   searchError: string | null
+  /**
+   * Programmatic error code paired with `searchError`. Set when the
+   * streaming done event carries a `code`; otherwise `null`. Values come
+   * from `FilesystemApi`'s `onSearchContentDone` / `onSearchFileNamesDone`
+   * event types (e.g. `QUERY_TOO_LONG`, `RG_STREAM_FAILED`).
+   */
+  searchErrorCode: string | null
   searchTruncated: boolean
   searchScannedFiles: number
   searchFailedFiles: number
@@ -137,6 +144,10 @@ function ensureSearchStreamSubscription(
     set({
       searchLoading: false,
       searchError: event.error ?? null,
+      // Surface the programmatic code so consumers (telemetry, future UI
+      // affordances) can distinguish QUERY_TOO_LONG from RG_STREAM_FAILED
+      // without parsing the human-readable error string.
+      searchErrorCode: event.code ?? null,
       searchTruncated: event.truncated,
       searchScannedFiles: event.scannedFiles,
       searchFailedFiles: event.failedFiles,
@@ -180,6 +191,17 @@ function ensureFileNameStreamSubscription(
     if (event.error) {
       next.searchError = event.error
     }
+    // Surface the programmatic code in the same slot as content search so
+    // downstream consumers can branch on QUERY_TOO_LONG vs RG_STREAM_FAILED
+    // without parsing the message. If the content stream fires afterwards,
+    // its own `code` will overwrite this value (which is correct — that
+    // event is the source of truth for the overall search result).
+    if (event.code) {
+      next.searchErrorCode = event.code
+    } else if (!event.error) {
+      // No error, no code: clear any stale code from a prior search.
+      next.searchErrorCode = null
+    }
     if (state.searchFileNameMatches === null) {
       // No batch ever landed (zero matches, no trailing flush). Drop the
       // pending placeholder so the tab shows `0` rather than `…` forever.
@@ -206,6 +228,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   searchFileNameMatches: null,
   searchLoading: false,
   searchError: null,
+  searchErrorCode: null,
   searchTruncated: false,
   searchScannedFiles: 0,
   searchFailedFiles: 0,
@@ -218,8 +241,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     // Unwatch all previously expanded directories
     const { expandedDirs, searchRequestId } = get()
     if (searchRequestId > 0) {
-      void filesystemApi.searchContentStreamCancel(`search-${searchRequestId}`)
-      void filesystemApi.searchFileNamesStreamCancel(`search-${searchRequestId}`)
+      const sid = `search-${searchRequestId}`
+      filesystemApi.searchContentStreamCancel(sid).catch((e) => {
+        console.warn(`[file-explorer] searchContentStreamCancel(${sid}) failed:`, e)
+      })
+      filesystemApi.searchFileNamesStreamCancel(sid).catch((e) => {
+        console.warn(`[file-explorer] searchFileNamesStreamCancel(${sid}) failed:`, e)
+      })
     }
     expandedDirs.forEach((dir) => {
       filesystemApi.unwatchDirectory(dir)
@@ -240,6 +268,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       searchFileNameMatches: null,
       searchLoading: false,
       searchError: null,
+      searchErrorCode: null,
       searchTruncated: false,
       searchScannedFiles: 0,
       searchFailedFiles: 0,
@@ -253,8 +282,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   setWorktreeRoot: (path: string | null): void => {
     const { scopeRoot, searchRequestId } = get()
     if (searchRequestId > 0) {
-      void filesystemApi.searchContentStreamCancel(`search-${searchRequestId}`)
-      void filesystemApi.searchFileNamesStreamCancel(`search-${searchRequestId}`)
+      const sid = `search-${searchRequestId}`
+      filesystemApi.searchContentStreamCancel(sid).catch((e) => {
+        console.warn(`[file-explorer] searchContentStreamCancel(${sid}) failed:`, e)
+      })
+      filesystemApi.searchFileNamesStreamCancel(sid).catch((e) => {
+        console.warn(`[file-explorer] searchFileNamesStreamCancel(${sid}) failed:`, e)
+      })
     }
     const worktreeRoot = path ? normalizePath(path) : null
     set({
@@ -265,6 +299,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       searchFileNameMatches: null,
       searchLoading: false,
       searchError: null,
+      searchErrorCode: null,
       searchTruncated: false,
       searchScannedFiles: 0,
       searchFailedFiles: 0,
@@ -663,6 +698,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       set({
         searchLoading: false,
         searchError: 'No project selected',
+        searchErrorCode: null,
         searchResults: [],
         searchFileNameMatches: null,
         searchTruncated: false,
@@ -677,12 +713,23 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     if (!trimmed || trimmed.length < 2) {
       const activeRequestId = get().searchRequestId
       if (activeRequestId > 0) {
-        void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
-        void filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`)
+        filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`).catch((e) => {
+          console.warn(
+            `[file-explorer] searchContentStreamCancel(search-${activeRequestId}) failed:`,
+            e
+          )
+        })
+        filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`).catch((e) => {
+          console.warn(
+            `[file-explorer] searchFileNamesStreamCancel(search-${activeRequestId}) failed:`,
+            e
+          )
+        })
       }
       set({
         searchLoading: false,
         searchError: null,
+        searchErrorCode: null,
         searchResults: [],
         searchFileNameMatches: null,
         searchTruncated: false,
@@ -698,8 +745,18 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
     const activeRequestId = get().searchRequestId
     if (activeRequestId > 0) {
-      void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
-      void filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`)
+      filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`).catch((e) => {
+        console.warn(
+          `[file-explorer] searchContentStreamCancel(search-${activeRequestId}) failed:`,
+          e
+        )
+      })
+      filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`).catch((e) => {
+        console.warn(
+          `[file-explorer] searchFileNamesStreamCancel(search-${activeRequestId}) failed:`,
+          e
+        )
+      })
     }
 
     const { searchLastCompletedQuery, searchResults } = get()
@@ -759,20 +816,34 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
 
     if (get().searchRequestId !== requestId) {
       if (streamStart.success) {
-        void filesystemApi.searchContentStreamCancel(`search-${requestId}`)
+        filesystemApi.searchContentStreamCancel(`search-${requestId}`).catch((e) => {
+          console.warn(`[file-explorer] searchContentStreamCancel(search-${requestId}) failed:`, e)
+        })
       }
       if (fileNameStreamStart.success) {
-        void filesystemApi.searchFileNamesStreamCancel(`search-${requestId}`)
+        filesystemApi.searchFileNamesStreamCancel(`search-${requestId}`).catch((e) => {
+          console.warn(
+            `[file-explorer] searchFileNamesStreamCancel(search-${requestId}) failed:`,
+            e
+          )
+        })
       }
       return
     }
 
     if (!streamStart.success || !fileNameStreamStart.success) {
       if (streamStart.success) {
-        void filesystemApi.searchContentStreamCancel(`search-${requestId}`)
+        filesystemApi.searchContentStreamCancel(`search-${requestId}`).catch((e) => {
+          console.warn(`[file-explorer] searchContentStreamCancel(search-${requestId}) failed:`, e)
+        })
       }
       if (fileNameStreamStart.success) {
-        void filesystemApi.searchFileNamesStreamCancel(`search-${requestId}`)
+        filesystemApi.searchFileNamesStreamCancel(`search-${requestId}`).catch((e) => {
+          console.warn(
+            `[file-explorer] searchFileNamesStreamCancel(search-${requestId}) failed:`,
+            e
+          )
+        })
       }
       const error = !streamStart.success
         ? streamStart.error
@@ -794,15 +865,30 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   resetSearch: (): void => {
     const activeRequestId = get().searchRequestId
     if (activeRequestId > 0) {
-      void filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`)
-      void filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`)
+      filesystemApi.searchContentStreamCancel(`search-${activeRequestId}`).catch((e) => {
+        console.warn(
+          `[file-explorer] searchContentStreamCancel(search-${activeRequestId}) failed:`,
+          e
+        )
+      })
+      filesystemApi.searchFileNamesStreamCancel(`search-${activeRequestId}`).catch((e) => {
+        console.warn(
+          `[file-explorer] searchFileNamesStreamCancel(search-${activeRequestId}) failed:`,
+          e
+        )
+      })
     }
+    // Set filename matches to an empty list synchronously: the tab is hidden
+    // while no search is active, but leaving a stale `null` here means a
+    // consumer reading the state sees a lie. The next searchInRoot call will
+    // re-seed `null` if it actually starts a new stream.
     set({
       searchQuery: '',
       searchResults: [],
-      searchFileNameMatches: null,
+      searchFileNameMatches: [],
       searchLoading: false,
       searchError: null,
+      searchErrorCode: null,
       searchTruncated: false,
       searchScannedFiles: 0,
       searchFailedFiles: 0,

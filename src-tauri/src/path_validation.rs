@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
 fn path_has_parent_dir(path: &str) -> bool {
@@ -17,19 +18,25 @@ fn path_has_parent_dir(path: &str) -> bool {
 ///
 /// This is pure string rewriting, so the verbatim prefixes (which never occur on
 /// Unix) are simply left untouched there.
-pub fn strip_verbatim_prefix(path: &str) -> String {
+///
+/// Returns `Cow::Borrowed` when the path has no verbatim prefix — the common
+/// case on every platform — so callers in a per-line hot loop (e.g. ripgrep
+/// output streaming) do not allocate. The function does NOT trim leading
+/// whitespace before the prefix check, so a relative path with intentional
+/// leading whitespace is preserved (the previous implementation trimmed
+/// unconditionally, which was a subtle correctness bug for such paths).
+pub fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
     const VERBATIM: &str = r"\\?\";
     const VERBATIM_UNC: &str = r"\\?\UNC\";
 
-    let trimmed = path.trim_start();
     // Order matters: the longer UNC prefix must be checked first.
-    if let Some(rest) = trimmed.strip_prefix(VERBATIM_UNC) {
-        return format!(r"\\{}", rest);
+    if let Some(rest) = path.strip_prefix(VERBATIM_UNC) {
+        return Cow::Owned(format!(r"\\{}", rest));
     }
-    if let Some(rest) = trimmed.strip_prefix(VERBATIM) {
-        return rest.to_string();
+    if let Some(rest) = path.strip_prefix(VERBATIM) {
+        return Cow::Owned(rest.to_string());
     }
-    path.to_string()
+    Cow::Borrowed(path)
 }
 
 /// Validates that a search path is within the allowed project boundary.
@@ -275,13 +282,13 @@ mod tests {
 
     #[test]
     fn test_strip_verbatim_disk_prefix() {
-        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\foo"), r"C:\Users\foo");
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\foo").as_ref(), r"C:\Users\foo");
     }
 
     #[test]
     fn test_strip_verbatim_unc_prefix() {
         assert_eq!(
-            strip_verbatim_prefix(r"\\?\UNC\server\share\foo"),
+            strip_verbatim_prefix(r"\\?\UNC\server\share\foo").as_ref(),
             r"\\server\share\foo"
         );
     }
@@ -293,7 +300,7 @@ mod tests {
             r"C:\Users\foo\bar"
         );
         // No verbatim prefix -> returned verbatim (string).
-        assert_eq!(strip_verbatim_prefix("/home/user/project"), "/home/user/project");
+        assert_eq!(strip_verbatim_prefix("/home/user/project").as_ref(), "/home/user/project");
     }
 
     #[test]
