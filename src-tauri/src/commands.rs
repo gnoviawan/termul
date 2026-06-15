@@ -1395,12 +1395,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
 /// they match literally, mirroring the old `contains` semantics.
 fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
     // Escape glob metacharacters that ripgrep would otherwise interpret as
-    // wildcards (`*`, `?`, `[`, `]`, `\`) so the query is matched as a
-    // substring of the basename.
+    // wildcards (`*`, `?`, `[`, `]`, `{`, `}`, `\`) so the query is matched
+    // as a substring of the basename. `{`/`}` are alternation in globset.
     let mut escaped = String::with_capacity(query.len());
     for ch in query.chars() {
         match ch {
-            '*' | '?' | '[' | ']' | '\\' => {
+            '*' | '?' | '[' | ']' | '{' | '}' | '\\' => {
                 escaped.push('\\');
                 escaped.push(ch);
             }
@@ -3259,16 +3259,17 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_escapes_glob_metacharacters() {
-        // A query containing `*`, `?`, `[`, `]`, `\` must not be interpreted
-        // as a glob wildcard. Each metacharacter should be prefixed with a
-        // backslash so rg treats it as a literal substring match.
-        let args = build_file_name_search_args("foo*bar?baz[qux]\\z", "/tmp");
+        // A query containing `*`, `?`, `[`, `]`, `{`, `}`, `\` must not be
+        // interpreted as a glob wildcard or alternation. Each metacharacter
+        // should be prefixed with a backslash so rg treats it as a literal
+        // substring match.
+        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp");
         let iglob_idx = args
             .iter()
             .position(|a| a == "--iglob")
             .expect("--iglob present");
         let pattern = &args[iglob_idx + 1];
-        assert_eq!(pattern, r"**/*foo\*bar\?baz\[qux\]\\z*");
+        assert_eq!(pattern, r"**/*foo\*bar\?baz\[qux\]\{a,b\}\\z*");
         // The query should still be matched at any directory depth.
         assert!(pattern.starts_with("**/*"));
     }

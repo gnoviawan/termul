@@ -374,6 +374,14 @@ import type {
 export type FileChangeCallback = (event: FileChangeEvent) => void
 
 // Filesystem API for renderer
+export type SearchStreamErrorCode =
+  | 'QUERY_TOO_LONG'
+  | 'PATH_VALIDATION_FAILED'
+  | 'RG_SPAWN_FAILED'
+  | 'RG_STDOUT_CAPTURE_FAILED'
+  | 'RG_STREAM_FAILED'
+  | (string & {})
+
 export interface FilesystemApi {
   readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
@@ -404,13 +412,7 @@ export interface FilesystemApi {
       scannedFiles: number
       failedFiles: number
       /** Mirror of `SearchFileNamesDoneEvent.code` — see that field for values. */
-      code?:
-        | 'QUERY_TOO_LONG'
-        | 'PATH_VALIDATION_FAILED'
-        | 'RG_SPAWN_FAILED'
-        | 'RG_STDOUT_CAPTURE_FAILED'
-        | 'RG_STREAM_FAILED'
-        | (string & {})
+      code?: SearchStreamErrorCode
       error?: string
     }) => void
   ) => () => void
@@ -431,19 +433,14 @@ export interface FilesystemApi {
       totalFiles: number
       /**
        * Programmatic error code. One of:
-       * - `QUERY_TOO_LONG`        — query exceeded `MAX_SEARCH_QUERY_LEN`.
+       * - `QUERY_TOO_LONG`         — query exceeded `MAX_SEARCH_QUERY_LEN`.
        * - `PATH_VALIDATION_FAILED` — scope/root failed `validate_search_path`.
-       * - `RG_SPAWN_FAILED`       — ripgrep binary missing, stdout could not
-       *   be captured, or rg exited with a non-zero status other than
-       *   `1` (no matches).
+       * - `RG_SPAWN_FAILED`        — ripgrep binary failed to start.
+       * - `RG_STDOUT_CAPTURE_FAILED` — stdout pipe could not be captured.
+       * - `RG_STREAM_FAILED`       — stdout read failed, or rg exited with a
+       *   non-zero status other than `1` (no matches).
        */
-      code?:
-        | 'QUERY_TOO_LONG'
-        | 'PATH_VALIDATION_FAILED'
-        | 'RG_SPAWN_FAILED'
-        | 'RG_STDOUT_CAPTURE_FAILED'
-        | 'RG_STREAM_FAILED'
-        | (string & {})
+      code?: SearchStreamErrorCode
       error?: string
     }) => void
   ) => () => void

@@ -519,12 +519,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onSearchFileNamesBatch(
-      callback: (event: { searchId: string; files: string[]; truncated: boolean }) => void
+      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
     ) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<{ searchId: string; files: string[]; truncated: boolean }>(
+        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
           'search-file-names-batch',
           ({ payload }) => callback(payload)
         )
@@ -539,6 +539,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
         searchId: string
         truncated: boolean
         totalFiles: number
+        code?: string
         error?: string
       }) => void
     ) {
@@ -549,6 +550,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
           searchId: string
           truncated: boolean
           totalFiles: number
+          code?: string
           error?: string
         }>('search-file-names-done', ({ payload }) => callback(payload))
       } catch {
