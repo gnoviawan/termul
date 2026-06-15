@@ -21,86 +21,31 @@ const overlaySource = readFileSync(OVERLAY_SCRIPT_PATH, 'utf8')
 interface OverlayWindow {
   __termul_annotation_mode?: string
   __termul_annotation_tab_id?: string
+  __termul_test_mode?: boolean
   __termul_remove_annotation_overlay?: () => void
   __termul_test_isSensitiveElement?: (el: Element) => boolean
 }
 
 /**
- * Inject the overlay script with a test hook that exposes isSensitiveElement
+ * Inject the overlay script with test mode enabled to expose isSensitiveElement
  */
 function injectOverlayWithTestHook(mode: string, tabId: string): void {
   const w = window as unknown as OverlayWindow
+
+  // Enable test mode BEFORE injecting the overlay
+  w.__termul_test_mode = true
   w.__termul_annotation_mode = mode
   w.__termul_annotation_tab_id = tabId
 
-  // Modify the script to expose isSensitiveElement for testing
-  // We wrap the original script and capture the function reference
   const modifiedScript = `
     (function() {
       ${overlaySource}
     })();
   `
 
-  // Run the modified script
+  // Run the script - the overlay will now expose isSensitiveElement because __termul_test_mode is true
   // biome-ignore lint/complexity/noCommaOperator: indirect eval idiom requires the comma sequence
   ;(0, eval)(modifiedScript)
-
-  // Now inject a test-only version that exposes isSensitiveElement
-  const testExposureScript = `
-    (function() {
-      // Re-declare the sensitive element detection logic for testing
-      var SENSITIVE_ARIA_ROLES = {
-        'textbox': true,
-        'combobox': true,
-        'listbox': true,
-        'spinbutton': true,
-        'slider': true,
-        'searchbox': true
-      };
-
-      window.__termul_test_isSensitiveElement = function(element) {
-        if (!element || !(element instanceof Element)) return true;
-
-        var tagName = element.tagName.toLowerCase();
-
-        // Password check first
-        if (tagName === 'input' && element.type === 'password') return true;
-
-        // All other input elements + textarea
-        if (tagName === 'input' || tagName === 'textarea') return true;
-
-        // Form-associated elements
-        if (tagName === 'select' || tagName === 'datalist' || tagName === 'output') return true;
-
-        // ARIA widget role heuristics
-        var roleAttr = element.getAttribute('role');
-        if (roleAttr) {
-          var roleTokens = roleAttr.toLowerCase().split(/\\s+/);
-          for (var ri = 0; ri < roleTokens.length; ri += 1) {
-            if (SENSITIVE_ARIA_ROLES[roleTokens[ri]]) return true;
-          }
-        }
-        if (element.hasAttribute('aria-valuetext') || element.hasAttribute('aria-valuenow')) return true;
-
-        // contenteditable check: must filter for true/empty (which means true)
-        // contenteditable="false" explicitly disables editing, so don't block those
-        var editableAncestor = element.closest('[contenteditable]');
-        if (editableAncestor) {
-          var editableValue = editableAncestor.getAttribute('contenteditable');
-          // contenteditable="" or "true" or "plaintext-only" are all editable
-          if (editableValue === '' || editableValue === 'true' || editableValue === 'plaintext-only') {
-            return true;
-          }
-        }
-        
-        // Also check if the element itself has isContentEditable (live property)
-        if (element.isContentEditable) return true;
-
-        return false;
-      };
-    })();
-  `
-  ;(0, eval)(testExposureScript)
 }
 
 /**

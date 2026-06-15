@@ -773,7 +773,13 @@
     delete window.__termul_remove_annotation_overlay;
     delete window.__termul_annotation_tab_id;
     delete window.__termul_annotation_mode;
+    delete window.__termul_test_isSensitiveElement;
   };
+
+  // Expose isSensitiveElement for testing when in test mode
+  if (window.__termul_test_mode) {
+    window.__termul_test_isSensitiveElement = isSensitiveElement;
+  }
 
   document.addEventListener('mousedown', onMouseDown, true);
   document.addEventListener('mousemove', onMouseMove, true);
