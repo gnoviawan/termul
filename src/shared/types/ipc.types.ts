@@ -411,7 +411,7 @@ export interface FilesystemApi {
       truncated: boolean
       scannedFiles: number
       failedFiles: number
-      /** Mirror of `SearchFileNamesDoneEvent.code` — see that field for values. */
+      /** See `SearchStreamErrorCode` for possible values. */
       code?: SearchStreamErrorCode
       error?: string
     }) => void
