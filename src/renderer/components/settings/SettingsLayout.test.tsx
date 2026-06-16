@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { type SettingsCategory, SettingsLayout, SettingsSection } from './SettingsLayout'
@@ -6,18 +6,43 @@ import { type SettingsCategory, SettingsLayout, SettingsSection } from './Settin
 // jsdom does not implement these; the layout uses them for navigation/scroll-spy.
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
+// Capture the most recent observer so tests can drive intersection callbacks.
+let lastObserver: IntersectionObserverMock | null = null
+
 class IntersectionObserverMock {
-  observe = vi.fn()
+  callback: IntersectionObserverCallback
+  observed: Element[] = []
   unobserve = vi.fn()
   disconnect = vi.fn()
   takeRecords = vi.fn(() => [])
   root = null
   rootMargin = ''
   thresholds = []
-  constructor(_cb: IntersectionObserverCallback) {}
+  constructor(cb: IntersectionObserverCallback) {
+    this.callback = cb
+    lastObserver = this
+  }
+  observe = (el: Element): void => {
+    this.observed.push(el)
+  }
+  /** Test helper: fire the callback with the given section intersections. */
+  emit(items: Array<{ id: string; isIntersecting: boolean; top: number }>): void {
+    const entries = items.map((item) => {
+      const target = this.observed.find(
+        (el) => (el as HTMLElement).dataset.settingsSection === item.id
+      )
+      return {
+        target,
+        isIntersecting: item.isIntersecting,
+        boundingClientRect: { top: item.top } as DOMRectReadOnly
+      } as IntersectionObserverEntry
+    })
+    this.callback(entries, this as unknown as IntersectionObserver)
+  }
 }
 
 beforeEach(() => {
+  lastObserver = null
   vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
   ;(window.HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear()
 })
@@ -121,5 +146,24 @@ describe('SettingsLayout', () => {
     expect(search.value).toBe('')
     // Category buttons return after clearing.
     expect(screen.getByRole('button', { name: 'Updates' })).toBeInTheDocument()
+  })
+
+  it('activates the section nearest the viewport top via scroll-spy', () => {
+    renderLayout()
+    expect(lastObserver).not.toBeNull()
+
+    // "shell" is scrolled partway past the top (large negative top) while
+    // "updates" sits just below the viewport edge. The section closest to 0
+    // should win, not the one with the smallest raw top.
+    act(() => {
+      lastObserver?.emit([
+        { id: 'appearance', isIntersecting: false, top: -600 },
+        { id: 'shell', isIntersecting: true, top: -200 },
+        { id: 'updates', isIntersecting: true, top: 20 }
+      ])
+    })
+
+    expect(screen.getByRole('button', { name: 'Updates' })).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('button', { name: 'Shell' })).not.toHaveAttribute('aria-current')
   })
 })

@@ -1,7 +1,6 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import {
   ChevronDown,
-  FolderCog,
   Info,
   KeySquare,
   Link2,
@@ -14,7 +13,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { NewProjectModal } from '@/components/NewProjectModal'
@@ -523,8 +522,8 @@ export default function ProjectSettings() {
                     <div className="bg-secondary/80 w-10"></div>
 
                     {envVars.map((envVar, index) => (
-                      <>
-                        <div key={`key-${index}`} className="bg-card p-2">
+                      <Fragment key={index}>
+                        <div className="bg-card p-2">
                           <input
                             type="text"
                             value={envVar.key}
@@ -538,7 +537,7 @@ export default function ProjectSettings() {
                             className="w-full bg-transparent border-none text-sm font-mono text-primary focus:ring-0 px-2 py-1"
                           />
                         </div>
-                        <div key={`val-${index}`} className="bg-card p-2 relative group">
+                        <div className="bg-card p-2 relative group">
                           <input
                             type={envVar.isSecret ? 'password' : 'text'}
                             value={envVar.value}
@@ -555,10 +554,7 @@ export default function ProjectSettings() {
                             )}
                           />
                         </div>
-                        <div
-                          key={`action-${index}`}
-                          className="bg-card flex items-center justify-center"
-                        >
+                        <div className="bg-card flex items-center justify-center">
                           <button
                             onClick={() => removeEnvVar(index)}
                             className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
@@ -566,7 +562,7 @@ export default function ProjectSettings() {
                             <X size={18} />
                           </button>
                         </div>
-                      </>
+                      </Fragment>
                     ))}
                   </div>
                 </div>
@@ -576,7 +572,7 @@ export default function ProjectSettings() {
 
           {/* Shell Settings Section */}
           <SettingsSection id="shell">
-            <div className="flex items-start gap-6">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
                 <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
                 <p className="text-sm text-muted-foreground mt-1">
@@ -641,7 +637,7 @@ export default function ProjectSettings() {
 
           {/* Worktree Symlink Directories Section */}
           <SettingsSection id="symlinks">
-            <div className="flex items-start gap-6">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
                 <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
                 <p className="text-sm text-muted-foreground mt-1">

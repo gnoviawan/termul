@@ -112,10 +112,14 @@ export function SettingsLayout({
     const recompute = (): void => {
       if (programmaticScrollRef.current) return
       let topId: string | undefined
-      let topValue = Number.POSITIVE_INFINITY
+      let bestDistance = Number.POSITIVE_INFINITY
+      // Pick the section whose top edge is closest to the viewport top (0),
+      // not the smallest raw value — sections scrolled past have large negative
+      // tops while still intersecting, and must not stay active.
       for (const [id, top] of visible) {
-        if (top < topValue) {
-          topValue = top
+        const distance = Math.abs(top)
+        if (distance < bestDistance) {
+          bestDistance = distance
           topId = id
         }
       }
