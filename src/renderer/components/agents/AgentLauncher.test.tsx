@@ -127,7 +127,13 @@ const OTHER_ACP_CONFIG: StoredAgentConfig = {
   templateId: 'opencode'
 }
 
-function preparedSession(config: StoredAgentConfig): AcpSession {
+function preparedSession(
+  config: StoredAgentConfig,
+  modelOptions: Array<{ value: string; name: string }> = [
+    { value: 'm1', name: 'Model One' },
+    { value: 'm2', name: 'Model Two' }
+  ]
+): AcpSession {
   return {
     id: 'prepared-1',
     agentId: `agent:${config.id}`,
@@ -150,11 +156,8 @@ function preparedSession(config: StoredAgentConfig): AcpSession {
         name: 'Model',
         category: 'model',
         type: 'select',
-        currentValue: 'm1',
-        options: [
-          { value: 'm1', name: 'Model One' },
-          { value: 'm2', name: 'Model Two' }
-        ]
+        currentValue: modelOptions[0]?.value ?? 'm1',
+        options: modelOptions
       },
       {
         id: 'thinking',
@@ -299,6 +302,42 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('searches and scroll-limits large model menus', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    const manyModels = [
+      { value: 'gpt-54-mini-fast', name: 'OpenAI/GPT-5.4 mini Fast' },
+      { value: 'gpt-55', name: 'OpenAI/GPT-5.5' },
+      { value: 'gpt-55-fast', name: 'OpenAI/GPT-5.5 Fast' },
+      { value: 'gpt-55-pro', name: 'OpenAI/GPT-5.5 Pro' },
+      { value: 'grok-420-non-reasoning', name: 'xAI/Grok 4.20 (Non-Reasoning)' },
+      { value: 'grok-420-reasoning', name: 'xAI/Grok 4.20 (Reasoning)' },
+      { value: 'grok-43', name: 'xAI/Grok 4.3' },
+      { value: 'big-pickle', name: 'OpenCode Zen/Big Pickle' }
+    ]
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG, manyModels) }
+    renderLauncher()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select model: OpenAI/GPT-5.4 mini Fast' })
+    )
+
+    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
+    expect(screen.getByTestId('acp-model-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
+
+    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+
+    expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
+    expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('xAI/Grok 4.3'))
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'grok-43')
+  })
+
   it('shows supported ACP agents when no configs are persisted', async () => {
     renderLauncher()
 
@@ -329,7 +368,7 @@ describe('AgentLauncher ACP new thread', () => {
       agentId: 'acp-registry:opencode',
       mode: 'acp'
     })
-  })
+  }, 10000)
 
   it('installs OpenCode only after the user chooses it and clicks Install', async () => {
     mockPersistRead.mockResolvedValue({

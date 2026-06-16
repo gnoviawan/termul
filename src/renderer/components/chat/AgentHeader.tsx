@@ -1,4 +1,5 @@
 import { Brain, ChevronDown, Circle } from 'lucide-react'
+import { useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -39,15 +40,29 @@ export function ConfigChip({
   option,
   disabled,
   onSelect,
-  promoted = false
+  promoted = false,
+  searchable = false,
+  maxVisibleOptions
 }: {
   option: SessionConfigOption
   disabled: boolean
   onSelect: (valueId: string) => void
   promoted?: boolean
+  searchable?: boolean
+  maxVisibleOptions?: number
 }): React.JSX.Element {
+  const [query, setQuery] = useState('')
   const current = option.options.find((o) => o.value === option.currentValue)
   const fallbackLabel = getLabelForConfigChip(option, promoted)
+  const showSearch = searchable && option.options.length > (maxVisibleOptions ?? 0)
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredOptions = option.options.filter((value) => {
+    if (!normalizedQuery) return true
+    return [value.name, value.value, value.description ?? '']
+      .join(' ')
+      .toLowerCase()
+      .includes(normalizedQuery)
+  })
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -65,22 +80,43 @@ export function ConfigChip({
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           {promoted ? fallbackLabel : option.name}
         </div>
-        {option.options.map((v) => (
-          <button
-            key={v.value}
-            type="button"
-            onClick={() => onSelect(v.value)}
-            className={cn(
-              'flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent',
-              v.value === option.currentValue && 'bg-accent/50'
-            )}
-          >
-            <span className="font-medium">{v.name}</span>
-            {v.description && (
-              <span className="text-xs text-muted-foreground">{v.description}</span>
-            )}
-          </button>
-        ))}
+        {showSearch && (
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search models..."
+            aria-label="Search models"
+            className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+          />
+        )}
+        <div
+          data-testid={searchable ? 'config-chip-model-options' : undefined}
+          className={cn(maxVisibleOptions && 'max-h-[180px] overflow-y-auto pr-1')}
+        >
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((v) => (
+              <button
+                key={v.value}
+                type="button"
+                onClick={() => {
+                  setQuery('')
+                  onSelect(v.value)
+                }}
+                className={cn(
+                  'flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent',
+                  v.value === option.currentValue && 'bg-accent/50'
+                )}
+              >
+                <span className="font-medium">{v.name}</span>
+                {v.description && (
+                  <span className="text-xs text-muted-foreground">{v.description}</span>
+                )}
+              </button>
+            ))
+          ) : (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   )

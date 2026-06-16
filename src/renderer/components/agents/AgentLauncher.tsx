@@ -626,8 +626,19 @@ function AcpModelPicker({
   disabled: boolean
   onSelectModel: (valueId: string) => void
 }): React.JSX.Element {
+  const [query, setQuery] = useState('')
   const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
   const label = loading ? 'Loading model…' : (currentModel?.name ?? 'Model')
+  const showSearch = Boolean(modelOption && modelOption.options.length > 5)
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredModels =
+    modelOption?.options.filter((value) => {
+      if (!normalizedQuery) return true
+      return [value.name, value.value, value.description ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery)
+    }) ?? []
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -652,27 +663,49 @@ function AcpModelPicker({
               : 'This ACP agent is not available on this platform.'}
           </div>
         ) : modelOption ? (
-          modelOption.options.map((value) => (
-            <button
-              key={value.value}
-              type="button"
-              onClick={() => onSelectModel(value.value)}
-              className={cn(
-                'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                value.value === modelOption.currentValue && 'bg-accent/50'
+          <>
+            {showSearch && (
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search models..."
+                aria-label="Search models"
+                className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+              />
+            )}
+            <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
+              {filteredModels.length > 0 ? (
+                filteredModels.map((value) => (
+                  <button
+                    key={value.value}
+                    type="button"
+                    onClick={() => {
+                      setQuery('')
+                      onSelectModel(value.value)
+                    }}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
+                      value.value === modelOption.currentValue && 'bg-accent/50'
+                    )}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{value.name}</span>
+                      {value.description && (
+                        <span className="block text-xs text-muted-foreground">
+                          {value.description}
+                        </span>
+                      )}
+                    </span>
+                    {value.value === modelOption.currentValue && (
+                      <Check size={14} className="mt-0.5 text-muted-foreground" />
+                    )}
+                  </button>
+                ))
+              ) : (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
               )}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{value.name}</span>
-                {value.description && (
-                  <span className="block text-xs text-muted-foreground">{value.description}</span>
-                )}
-              </span>
-              {value.value === modelOption.currentValue && (
-                <Check size={14} className="mt-0.5 text-muted-foreground" />
-              )}
-            </button>
-          ))
+            </div>
+          </>
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {loading

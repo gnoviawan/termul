@@ -212,6 +212,8 @@ export function ChatInputBar({
                   key={model.id}
                   option={model}
                   disabled={disabled}
+                  searchable
+                  maxVisibleOptions={5}
                   onSelect={(valueId) => onSetConfig(model.id, valueId)}
                 />
               )}

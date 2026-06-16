@@ -103,4 +103,50 @@ describe('ChatInputBar config controls', () => {
     expect(mockSetMode).toHaveBeenCalledWith('plan')
     expect(mockSetConfig).not.toHaveBeenCalled()
   })
+
+  it('searches and scroll-limits large active-chat model menus', async () => {
+    const s = session()
+    const configOptions = [
+      option('model', 'Model', 'model', 'gpt-54-mini-fast', [
+        { value: 'gpt-54-mini-fast', name: 'OpenAI/GPT-5.4 mini Fast' },
+        { value: 'gpt-55', name: 'OpenAI/GPT-5.5' },
+        { value: 'gpt-55-fast', name: 'OpenAI/GPT-5.5 Fast' },
+        { value: 'gpt-55-pro', name: 'OpenAI/GPT-5.5 Pro' },
+        { value: 'grok-420-non-reasoning', name: 'xAI/Grok 4.20 (Non-Reasoning)' },
+        { value: 'grok-420-reasoning', name: 'xAI/Grok 4.20 (Reasoning)' },
+        { value: 'grok-43', name: 'xAI/Grok 4.3' },
+        { value: 'big-pickle', name: 'OpenCode Zen/Big Pickle' }
+      ])
+    ]
+
+    render(
+      <ChatInputBar
+        session={s}
+        busy={false}
+        disabled={false}
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        commands={[]}
+        configOptions={configOptions}
+        modes={s.modes}
+        onSetConfig={mockSetConfig}
+        onSetMode={mockSetMode}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI/GPT-5.4 mini Fast' }))
+
+    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
+    expect(screen.getByTestId('config-chip-model-options')).toHaveClass(
+      'max-h-[180px]',
+      'overflow-y-auto'
+    )
+
+    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+
+    expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
+    expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('xAI/Grok 4.3'))
+    expect(mockSetConfig).toHaveBeenCalledWith('model', 'grok-43')
+  })
 })
