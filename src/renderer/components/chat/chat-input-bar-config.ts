@@ -1,16 +1,20 @@
 /**
  * Pure helpers for the input-bar config-option chip row. Kept free of
  * React/store so they can be unit-tested directly. Partitions agent-advertised
- * config options so the `thought_level` reasoning-level control can be promoted
- * to a dedicated, distinctly-styled chip rendered ahead of generic options
+ * config options so the `model` and `thought_level` controls can be promoted
+ * to dedicated chips rendered ahead of generic options
  * (issue #286).
  */
 import type { SessionConfigOption } from '@/lib/acp-api'
 
 /** ACP semantic category for reasoning/thinking-depth config options. */
 export const THOUGHT_LEVEL_CATEGORY = 'thought_level'
+/** ACP semantic category for model selection config options. */
+export const MODEL_CATEGORY = 'model'
 
 export interface PartitionedConfigOptions {
+  /** The first `model` option, if the agent advertises one. */
+  model: SessionConfigOption | null
   /** The first `thought_level` option, if the agent advertises one. */
   thoughtLevel: SessionConfigOption | null
   /** All remaining options, in their original relative order. */
@@ -18,19 +22,23 @@ export interface PartitionedConfigOptions {
 }
 
 /**
- * Split usable config options into the promoted `thought_level` option (first
- * match wins) and the rest, preserving the rest's original order. Options with
- * an unknown/other category fall through to `rest` and render as plain chips.
+ * Split usable config options into promoted `model` / `thought_level` options
+ * (first match wins for each) and the rest, preserving the rest's original
+ * order. Options with an unknown/other category fall through to `rest` and
+ * render as plain chips.
  */
 export function partitionConfigOptions(options: SessionConfigOption[]): PartitionedConfigOptions {
+  let model: SessionConfigOption | null = null
   let thoughtLevel: SessionConfigOption | null = null
   const rest: SessionConfigOption[] = []
   for (const option of options) {
-    if (thoughtLevel === null && option.category === THOUGHT_LEVEL_CATEGORY) {
+    if (model === null && option.category === MODEL_CATEGORY) {
+      model = option
+    } else if (thoughtLevel === null && option.category === THOUGHT_LEVEL_CATEGORY) {
       thoughtLevel = option
     } else {
       rest.push(option)
     }
   }
-  return { thoughtLevel, rest }
+  return { model, thoughtLevel, rest }
 }

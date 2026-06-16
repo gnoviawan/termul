@@ -90,11 +90,13 @@ export function ConfigChip({
 export function ModeChip({
   session,
   disabled,
-  onSelect
+  onSelect,
+  label = 'Mode'
 }: {
   session: AcpSession
   disabled: boolean
   onSelect: (modeId: string) => void
+  label?: string
 }): React.JSX.Element | null {
   const modes = session.modes
   if (!modes || modes.availableModes.length === 0) return null
@@ -107,13 +109,13 @@ export function ModeChip({
           disabled={disabled}
           className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {current?.name ?? 'Mode'}
+          {current?.name ?? label}
           <ChevronDown size={11} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-          Mode
+          {label}
         </div>
         {modes.availableModes.map((m) => (
           <button

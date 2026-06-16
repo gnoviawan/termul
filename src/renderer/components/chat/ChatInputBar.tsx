@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, Square } from 'lucide-react'
+import { ArrowUp, Square } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -59,7 +59,11 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  const { thoughtLevel, rest: genericConfigOptions } = partitionConfigOptions(usableConfigOptions)
+  const {
+    model,
+    thoughtLevel,
+    rest: genericConfigOptions
+  } = partitionConfigOptions(usableConfigOptions)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
@@ -201,8 +205,15 @@ export function ChatInputBar({
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
                 <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
-                <ChevronDown size={11} className="text-muted-foreground" />
               </span>
+              {model && (
+                <ConfigChip
+                  key={model.id}
+                  option={model}
+                  disabled={disabled}
+                  onSelect={(valueId) => onSetConfig(model.id, valueId)}
+                />
+              )}
               {hasConfigOptions ? (
                 <>
                   {thoughtLevel && (
@@ -223,9 +234,8 @@ export function ChatInputBar({
                     />
                   ))}
                 </>
-              ) : (
-                <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
-              )}
+              ) : null}
+              <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
             </div>
             <div className="flex flex-shrink-0 items-center gap-2">
               {busy ? (
