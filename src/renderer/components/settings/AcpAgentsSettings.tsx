@@ -136,7 +136,7 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
           {agent.version && (
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            <span className="shrink-0 font-mono text-3xs text-muted-foreground">
               v{agent.version}
             </span>
           )}
@@ -144,7 +144,7 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
             <Badge
               variant="secondary"
               className={cn(
-                'h-4 px-1.5 text-[10px]',
+                'h-4 px-1.5 text-3xs',
                 warmBadge.tone === 'ready' && 'text-green-500',
                 warmBadge.tone === 'auth' && 'text-amber-500'
               )}
@@ -157,7 +157,7 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{agent.description}</p>
         )}
         {!runnable && (
-          <p className="mt-1 text-[11px] text-amber-500">
+          <p className="mt-1 text-2xs text-amber-500">
             {derived.kind === 'needs-install'
               ? derived.archiveUrl
                 ? installing

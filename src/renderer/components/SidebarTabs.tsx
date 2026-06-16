@@ -70,7 +70,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex-1 flex items-center justify-center gap-1.5 rounded-md py-1 text-[11px] font-medium transition-colors',
+        'flex-1 flex items-center justify-center gap-1.5 rounded-md py-1 text-2xs font-medium transition-colors',
         active ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
       )}
     >

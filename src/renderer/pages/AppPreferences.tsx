@@ -893,7 +893,7 @@ export default function AppPreferences(): React.JSX.Element {
                     <FolderOpen size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Reveal Log Folder</div>
-                      <div className="text-[10px] text-muted-foreground font-normal">
+                      <div className="text-3xs text-muted-foreground font-normal">
                         Open in file explorer
                       </div>
                     </div>
@@ -907,7 +907,7 @@ export default function AppPreferences(): React.JSX.Element {
                     <FileText size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export Log File...</div>
-                      <div className="text-[10px] text-muted-foreground font-normal">
+                      <div className="text-3xs text-muted-foreground font-normal">
                         Save to a custom location
                       </div>
                     </div>
@@ -921,7 +921,7 @@ export default function AppPreferences(): React.JSX.Element {
                     <Clipboard size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Copy Log Contents</div>
-                      <div className="text-[10px] text-muted-foreground font-normal">
+                      <div className="text-3xs text-muted-foreground font-normal">
                         Copy logs to clipboard
                       </div>
                     </div>
@@ -935,7 +935,7 @@ export default function AppPreferences(): React.JSX.Element {
                     <Download size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export to Default Directory</div>
-                      <div className="text-[10px] text-muted-foreground font-normal">
+                      <div className="text-3xs text-muted-foreground font-normal">
                         Save directly to Downloads
                       </div>
                     </div>

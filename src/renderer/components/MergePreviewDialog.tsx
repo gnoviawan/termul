@@ -97,7 +97,7 @@ export function MergePreviewDialog({
                 </div>
                 <span
                   className={cn(
-                    'text-[10px] px-1.5 py-0.5 rounded font-medium',
+                    'text-3xs px-1.5 py-0.5 rounded font-medium',
                     preview.detectionMode === 'accurate'
                       ? 'bg-green-500/10 text-green-500'
                       : 'bg-yellow-500/10 text-yellow-500'
@@ -139,7 +139,7 @@ export function MergePreviewDialog({
                       <span className="flex-1 truncate text-foreground">{file.path}</span>
                       <span
                         className={cn(
-                          'text-[9px] px-1 rounded font-medium',
+                          'text-4xs px-1 rounded font-medium',
                           file.severity === 'high'
                             ? 'bg-destructive/10 text-destructive'
                             : file.severity === 'medium'

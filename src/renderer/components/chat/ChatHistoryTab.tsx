@@ -89,7 +89,7 @@ export function ChatHistoryTab(): React.JSX.Element {
                   >
                     <MessageSquare size={12} className="shrink-0 text-muted-foreground" />
                     <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-                    <span className="text-[10px] text-muted-foreground">{entry.messageCount}</span>
+                    <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
                   </button>
                   <button
                     type="button"

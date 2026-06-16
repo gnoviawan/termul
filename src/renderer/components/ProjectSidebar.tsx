@@ -1245,7 +1245,7 @@ export function ProjectSidebar({
                               {group.name}
                             </span>
                           )}
-                          <span className="text-[10px] text-muted-foreground/40 px-2 font-normal">
+                          <span className="text-3xs text-muted-foreground/40 px-2 font-normal">
                             {gpProjects.length}
                           </span>
                         </div>
@@ -2050,7 +2050,7 @@ const ProjectItem = memo(function ProjectItem({
                   >
                     <span>{isCollapsed ? '▶' : '▼'}</span>
                     <span className="ml-1">{group.name}</span>
-                    <span className="ml-auto text-[9px] font-normal text-muted-foreground/40">
+                    <span className="ml-auto text-4xs font-normal text-muted-foreground/40">
                       {group.items.length}
                     </span>
                   </button>
@@ -2186,7 +2186,7 @@ const WorktreeItem = memo(function WorktreeItem({
       {!isRoot && <HealthBadge status={healthStatus} />}
       {!isRoot && isTermulManaged === false && (
         <span
-          className="text-[10px] text-amber-500/70 ml-1"
+          className="text-3xs text-amber-500/70 ml-1"
           title="External worktree (not created by Termul)"
         >
           ext

@@ -128,7 +128,7 @@ export function ShortcutRecorder({
             <div className="truncate text-xs font-medium text-secondary-foreground">
               {shortcut.label}
             </div>
-            <div className="truncate text-[11px] text-muted-foreground">{shortcut.description}</div>
+            <div className="truncate text-2xs text-muted-foreground">{shortcut.description}</div>
           </div>
 
           {isCustomized && (
@@ -153,7 +153,7 @@ export function ShortcutRecorder({
             onBlur={handleBlur}
             onKeyDown={handleKeyboardActivate}
             className={`
-              min-w-[88px] shrink-0 rounded-md border px-2 py-1 text-center font-mono text-[11px] transition-all cursor-pointer
+              min-w-[88px] shrink-0 rounded-md border px-2 py-1 text-center font-mono text-2xs transition-all cursor-pointer
               ${
                 isRecording
                   ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
@@ -172,7 +172,7 @@ export function ShortcutRecorder({
         </div>
 
         {conflict && (
-          <div className="mt-1 text-[11px] text-red-500">
+          <div className="mt-1 text-2xs text-red-500">
             Conflicts with "{conflict.label}".{' '}
             <button
               type="button"

@@ -144,7 +144,7 @@ export function SSHFileExplorer({
           />
           <span className="flex-1 truncate">{entry.name}</span>
           {!isDir && (
-            <span className="text-[10px] text-muted-foreground hidden group-hover:inline">
+            <span className="text-3xs text-muted-foreground hidden group-hover:inline">
               {formatSize(entry.size)}
             </span>
           )}
@@ -234,7 +234,7 @@ export function SSHFileExplorer({
 
       {isConnected && (
         <div className="px-3 py-1 border-b border-border">
-          <span className="text-[10px] text-muted-foreground font-mono truncate block">
+          <span className="text-3xs text-muted-foreground font-mono truncate block">
             {currentPath}
           </span>
         </div>

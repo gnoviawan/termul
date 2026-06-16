@@ -158,7 +158,7 @@ export function SSHPanel({
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium truncate">{profile.name}</div>
                     {showCredentials && (
-                      <div className="text-[10px] text-muted-foreground truncate">
+                      <div className="text-3xs text-muted-foreground truncate">
                         {profile.username}@{profile.host}:{profile.port}
                       </div>
                     )}

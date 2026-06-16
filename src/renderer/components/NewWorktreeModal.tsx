@@ -405,7 +405,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                   placeholder="e.g. try-new-hero"
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                 />
-                <p className="text-[10px] text-muted-foreground mt-0.5">
+                <p className="text-3xs text-muted-foreground mt-0.5">
                   A separate place to work. Your main project stays untouched.
                 </p>
               </div>
@@ -419,7 +419,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               >
                 <GitBranch size={12} aria-hidden="true" />
                 <span>Advanced (branch options)</span>
-                <span className="text-[10px]" aria-hidden="true">
+                <span className="text-3xs" aria-hidden="true">
                   {showAdvanced ? '▼' : '▶'}
                 </span>
               </button>
@@ -515,10 +515,10 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                                   <GitBranch size={10} className="mr-1.5 flex-shrink-0" />
                                   <span className="truncate flex-1">{branch.name}</span>
                                   {branch.isCurrent && (
-                                    <span className="text-[10px] text-primary ml-1">current</span>
+                                    <span className="text-3xs text-primary ml-1">current</span>
                                   )}
                                   {branch.isRemote && (
-                                    <span className="text-[10px] text-muted-foreground ml-1">
+                                    <span className="text-3xs text-muted-foreground ml-1">
                                       remote
                                     </span>
                                   )}
@@ -547,7 +547,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                           }
                           className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                         />
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                        <p className="text-3xs text-muted-foreground mt-0.5">
                           {newBranchName && sanitizeBranchName(newBranchName) !== newBranchName
                             ? `Will be sanitized to: ${sanitizeBranchName(newBranchName)}`
                             : 'Defaults to the name above.'}
@@ -565,7 +565,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                           placeholder="HEAD, main, or a commit hash"
                           className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                         />
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                        <p className="text-3xs text-muted-foreground mt-0.5">
                           Defaults to HEAD if not specified
                         </p>
                       </div>
@@ -579,7 +579,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
                   Path Preview
                 </label>
-                <code className="block text-[10px] text-muted-foreground bg-secondary/50 border border-border rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
+                <code className="block text-3xs text-muted-foreground bg-secondary/50 border border-border rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
                   {pathPreview}
                 </code>
               </div>
@@ -593,7 +593,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                   >
                     <Link2 size={12} />
                     <span>Symlink Directories ({project.symlinkDirs.length})</span>
-                    <span className="text-[10px]">{showSymlinkSection ? '▼' : '▶'}</span>
+                    <span className="text-3xs">{showSymlinkSection ? '▼' : '▶'}</span>
                   </button>
                   {showSymlinkSection && (
                     <div className="mt-1.5 border border-border rounded bg-secondary/30 p-2 space-y-1">
@@ -619,7 +619,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                           <span>{dir}</span>
                         </label>
                       ))}
-                      <p className="text-[10px] text-muted-foreground mt-1">
+                      <p className="text-3xs text-muted-foreground mt-1">
                         Checked directories will be symlinked from the project root into the
                         worktree.
                       </p>

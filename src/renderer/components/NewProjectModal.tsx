@@ -278,21 +278,21 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                     <ChevronDown size={14} />
                   </div>
                 </div>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                <p className="text-3xs text-muted-foreground mt-1 leading-snug">
                   {selectedTemplate.description}
                 </p>
               </div>
 
               {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
                 <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
-                  <span className="text-[10px] font-semibold text-muted-foreground block mb-1.5">
+                  <span className="text-3xs font-semibold text-muted-foreground block mb-1.5">
                     Included Environment Variables:
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {selectedTemplate.envVars.map((ev) => (
                       <span
                         key={ev.key}
-                        className="text-[10px] font-mono bg-background border border-border/80 px-2 py-0.5 rounded text-secondary-foreground"
+                        className="text-3xs font-mono bg-background border border-border/80 px-2 py-0.5 rounded text-secondary-foreground"
                       >
                         {ev.key}={ev.value}
                       </span>

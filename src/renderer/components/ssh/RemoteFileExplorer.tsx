@@ -204,7 +204,7 @@ export function RemoteFileExplorer({
 
           {/* Size */}
           {!isDir && (
-            <span className="text-[10px] text-muted-foreground">{formatSize(entry.size)}</span>
+            <span className="text-3xs text-muted-foreground">{formatSize(entry.size)}</span>
           )}
 
           {/* Actions */}

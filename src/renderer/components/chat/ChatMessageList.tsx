@@ -68,7 +68,7 @@ export function ChatMessageList({
 function TypingIndicator({ agentId }: { agentId: AgentId }): React.JSX.Element {
   return (
     <div className="px-4 py-3">
-      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+      <div className="mb-2 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
         <AgentBadge agentId={agentId} iconSize={12} />
       </div>
       <output className="flex items-center gap-1" aria-label="Agent is typing">

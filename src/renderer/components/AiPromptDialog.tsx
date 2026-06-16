@@ -142,7 +142,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-3xs text-muted-foreground">
             Variables: {selectedTemplate.variables.join(', ')}
           </span>
           <button

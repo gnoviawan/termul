@@ -348,21 +348,21 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             onClick={(e) => e.stopPropagation()}
-            className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
+            className="text-2xs font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
           <>
             <span
               onDoubleClick={handleDoubleClick}
               className={cn(
-                'text-[11px] font-medium truncate max-w-[80px]',
+                'text-2xs font-medium truncate max-w-[80px]',
                 isActive && 'text-foreground'
               )}
             >
               {terminal.name}
             </span>
             {terminalWorktree && (
-              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent-foreground/80 leading-none">
+              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm bg-accent/10 px-1 py-0.5 text-4xs font-medium text-accent-foreground/80 leading-none">
                 <GitBranch size={8} />
                 <span className="max-w-[50px] truncate">{terminalWorktree.name}</span>
               </span>

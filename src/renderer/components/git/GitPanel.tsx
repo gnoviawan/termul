@@ -720,9 +720,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
                     >
                       <div className="flex flex-col min-w-0 flex-1 pr-1.5">
-                        <span className="font-semibold text-muted-foreground text-[10px]">{`stash@{${s.index}}`}</span>
+                        <span className="font-semibold text-muted-foreground text-3xs">{`stash@{${s.index}}`}</span>
                         <span
-                          className="truncate text-muted-foreground text-[11px] leading-tight"
+                          className="truncate text-muted-foreground text-2xs leading-tight"
                           title={s.message}
                         >
                           {s.message || 'No message'}
@@ -784,7 +784,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           />
           <label
             className={cn(
-              'flex items-center gap-2 text-[11px] select-none',
+              'flex items-center gap-2 text-2xs select-none',
               commitContext?.hasHead
                 ? 'text-muted-foreground cursor-pointer'
                 : 'text-muted-foreground/40 cursor-not-allowed'
@@ -845,7 +845,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           >
             <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
             {isPushing ? 'Pushing...' : pushLabel}
-            {behind > 0 && <span className="text-[10px] text-amber-500">↓{behind}</span>}
+            {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
           </Button>
         </div>
       </div>
@@ -1016,7 +1016,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onChange={(e) => setStashMessage(e.target.value)}
               />
             </div>
-            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px]">
+            <label className="flex items-center gap-2 cursor-pointer select-none text-2xs">
               <input
                 type="checkbox"
                 className="h-3.5 w-3.5 accent-primary"
@@ -1272,8 +1272,8 @@ function FileItem({
     >
       <GitStatusBadge status={file.status} />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <span className="text-[11px] font-medium truncate leading-tight">{fileName}</span>
-        {dirName && <span className="text-[9px] truncate opacity-50 leading-tight">{dirName}</span>}
+        <span className="text-2xs font-medium truncate leading-tight">{fileName}</span>
+        {dirName && <span className="text-4xs truncate opacity-50 leading-tight">{dirName}</span>}
       </div>
       <div
         className={cn(

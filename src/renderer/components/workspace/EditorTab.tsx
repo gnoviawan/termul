@@ -100,7 +100,7 @@ export function EditorTab({
           size={12}
           className="mr-2"
         />
-        <span className={cn('text-[11px] font-medium truncate', isActive && 'text-foreground')}>
+        <span className={cn('text-2xs font-medium truncate', isActive && 'text-foreground')}>
           {fileName}
         </span>
         <button

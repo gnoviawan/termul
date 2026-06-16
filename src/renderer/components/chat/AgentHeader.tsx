@@ -165,7 +165,7 @@ export function AgentHeader({ session, agentStatus }: AgentHeaderProps): React.J
           STATUS_COLOR[effectiveStatus ?? 'idle'] ?? 'text-muted-foreground'
         )}
       />
-      <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+      <span className="text-2xs text-muted-foreground">{statusLabel}</span>
     </div>
   )
 }

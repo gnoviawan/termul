@@ -942,8 +942,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               isSearchTooShort ||
               showSearchEmptyState ||
               !resultsAreCurrent) && (
-              <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
-                <p className="text-[10px] font-medium text-foreground">
+              <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-3xs leading-relaxed text-muted-foreground">
+                <p className="text-3xs font-medium text-foreground">
                   {searchLoading
                     ? `Searching for “${trimmedSearchQuery}”…`
                     : hasPartialSearchError
@@ -971,7 +971,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             )}
 
             {(searchTruncated || searchFailedFiles > 0) && (
-              <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+              <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-3xs leading-relaxed text-muted-foreground">
                 {searchTruncated
                   ? 'Results were truncated for performance.'
                   : 'Some files could not be fully searched.'}
@@ -997,7 +997,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                       setSearchResultTab('content')
                     }}
                     className={cn(
-                      'flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
+                      'flex items-center justify-center gap-1 rounded-md px-2 py-1 text-3xs font-medium transition-colors',
                       searchResultTab === 'content'
                         ? 'bg-secondary text-foreground shadow-sm'
                         : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
@@ -1016,7 +1016,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                       setSearchResultTab('files')
                     }}
                     className={cn(
-                      'flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
+                      'flex items-center justify-center gap-1 rounded-md px-2 py-1 text-3xs font-medium transition-colors',
                       searchResultTab === 'files'
                         ? 'bg-secondary text-foreground shadow-sm'
                         : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
@@ -1048,10 +1048,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     >
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <span className="truncate text-[11px] font-medium text-foreground">
+                          <span className="truncate text-2xs font-medium text-foreground">
                             {fileName}
                           </span>
-                          <span className="ml-1.5 truncate text-[10px] text-muted-foreground">
+                          <span className="ml-1.5 truncate text-3xs text-muted-foreground">
                             {relativePath}
                           </span>
                         </div>
@@ -1085,14 +1085,14 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                       >
                         <div className="flex min-w-0 items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <span className="truncate text-[11px] font-medium text-foreground">
+                            <span className="truncate text-2xs font-medium text-foreground">
                               {fileName}
                             </span>
-                            <span className="ml-1.5 truncate text-[10px] text-muted-foreground">
+                            <span className="ml-1.5 truncate text-3xs text-muted-foreground">
                               {relativePath}
                             </span>
                           </div>
-                          <span className="shrink-0 text-[9px] text-muted-foreground">
+                          <span className="shrink-0 text-4xs text-muted-foreground">
                             {fileResult.matches.length} hit
                             {fileResult.matches.length === 1 ? '' : 's'}
                           </span>
@@ -1105,9 +1105,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                             onClick={() =>
                               void handleSearchMatchClick(fileResult.filePath, match.lineNumber)
                             }
-                            className="group flex w-full items-center gap-2 overflow-hidden px-2 py-0.5 text-left text-[10px] text-foreground transition-colors hover:bg-secondary/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                            className="group flex w-full items-center gap-2 overflow-hidden px-2 py-0.5 text-left text-3xs text-foreground transition-colors hover:bg-secondary/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                           >
-                            <span className="shrink-0 min-w-[22px] text-right text-[9px] text-muted-foreground">
+                            <span className="shrink-0 min-w-[22px] text-right text-4xs text-muted-foreground">
                               {match.lineNumber}
                             </span>
                             <span className="block min-w-0 flex-1 truncate text-foreground/90">
@@ -1119,7 +1119,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                           <button
                             type="button"
                             onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
-                            className="px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+                            className="px-2 py-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
                           >
                             Show {hiddenCount} more
                           </button>
@@ -1128,7 +1128,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                           <button
                             type="button"
                             onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
-                            className="px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+                            className="px-2 py-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
                           >
                             Show less
                           </button>
