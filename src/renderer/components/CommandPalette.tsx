@@ -499,7 +499,7 @@ export function CommandPalette({
                 ))}
               </CommandList>
 
-              <div className="flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="label-group flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-muted-foreground">
                 <span className="flex items-center gap-3">
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>

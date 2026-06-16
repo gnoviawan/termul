@@ -1064,7 +1064,7 @@ export function ProjectSidebar({
     <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
       {/* Header with inline + button */}
       <div className="h-9 flex items-center justify-between px-3 border-b border-sidebar-border rounded-t-xl">
-        <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Projects</span>
+        <span className="label-section text-sidebar-foreground">Projects</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleCreateGroup}
@@ -1489,7 +1489,7 @@ export function ProjectSidebar({
                 <button
                   onClick={() => setShowArchived(!showArchived)}
                   disabled={isSearching}
-                  className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
+                  className="label-section w-full flex items-center px-3 py-1.5 text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
                   aria-expanded={showArchived || isSearching}
                   aria-label={`Archived projects (${filteredArchivedProjects.length})`}
                 >
@@ -2046,7 +2046,7 @@ const ProjectItem = memo(function ProjectItem({
                         return next
                       })
                     }}
-                    className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
+                    className="label-group flex items-center w-full px-2 py-0.5 text-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
                   >
                     <span>{isCollapsed ? '▶' : '▼'}</span>
                     <span className="ml-1">{group.name}</span>

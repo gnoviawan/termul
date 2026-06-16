@@ -258,9 +258,7 @@ export function ThemePicker(): React.JSX.Element | null {
               const rows = filteredRows.filter((row) => row.familyId === family.familyId)
               return (
                 <div key={family.familyId} className="mb-3 last:mb-0">
-                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {family.name}
-                  </p>
+                  <p className="label-group px-2 pb-1 text-muted-foreground">{family.name}</p>
                   {rows.map((row) => {
                     const index = rowCounter
                     rowCounter += 1

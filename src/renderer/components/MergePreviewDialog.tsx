@@ -129,9 +129,7 @@ export function MergePreviewDialog({
               {/* Conflict files list */}
               {preview.conflictFiles.length > 0 && (
                 <div className="space-y-1 max-h-[180px] overflow-auto">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                    Conflicted Files
-                  </p>
+                  <p className="label-group text-muted-foreground">Conflicted Files</p>
                   {preview.conflictFiles.map((file) => (
                     <div
                       key={file.path}
@@ -159,9 +157,7 @@ export function MergePreviewDialog({
               {/* Changed files list (no conflict) */}
               {preview.changedFiles.length > 0 && (
                 <div className="space-y-1 max-h-[100px] overflow-auto">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                    Files that will change
-                  </p>
+                  <p className="label-group text-muted-foreground">Files that will change</p>
                   {preview.changedFiles.map((file) => (
                     <div
                       key={file}

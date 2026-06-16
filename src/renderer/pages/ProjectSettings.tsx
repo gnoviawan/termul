@@ -512,10 +512,10 @@ export default function ProjectSettings() {
               <div className="w-2/3">
                 <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">
                   <div className="grid grid-cols-[1fr_1.5fr_auto] gap-px bg-border">
-                    <div className="bg-secondary/80 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
                       Key
                     </div>
-                    <div className="bg-secondary/80 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
                       Value
                     </div>
                     <div className="bg-secondary/80 w-10"></div>

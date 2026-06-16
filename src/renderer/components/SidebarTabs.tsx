@@ -42,9 +42,7 @@ export function SidebarTabs(props: SidebarTabsProps): React.JSX.Element {
         ) : (
           <aside className="w-full bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full overflow-hidden">
             <div className="h-9 flex items-center px-3 border-b border-sidebar-border rounded-t-xl">
-              <span className="text-xs tracking-wider text-sidebar-foreground uppercase">
-                Chats
-              </span>
+              <span className="label-section text-sidebar-foreground">Chats</span>
             </div>
             <div className="flex-1 min-h-0">
               <ChatHistoryTab />

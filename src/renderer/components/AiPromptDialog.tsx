@@ -104,9 +104,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
         {/* Template selector */}
         <div className="px-4 py-2 border-b border-border">
-          <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-            Tool
-          </label>
+          <label className="label-group text-muted-foreground">Tool</label>
           <div className="flex gap-2 mt-1">
             {BUILT_IN_TEMPLATES.map((tpl) => {
               const TplIcon = TOOL_ICONS[tpl.toolName] ?? MessageSquare
@@ -133,7 +131,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
         {/* Prompt preview */}
         <div className="flex-1 overflow-auto px-4 py-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            <span className="label-group text-muted-foreground">
               {selectedTemplate.name} — Paste this into {selectedTemplate.toolName}
             </span>
           </div>

@@ -90,9 +90,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
       >
         {sections.map((section) => (
           <div key={section.id}>
-            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-              {section.heading}
-            </div>
+            <div className="label-group px-3 py-1 text-muted-foreground/70">{section.heading}</div>
             {section.items.map((item) => {
               flatIndex += 1
               const isHighlighted = flatIndex === highlight

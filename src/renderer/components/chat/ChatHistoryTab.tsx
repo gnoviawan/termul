@@ -73,9 +73,7 @@ export function ChatHistoryTab(): React.JSX.Element {
         ) : (
           groups.map(({ group, entries }) => (
             <div key={group}>
-              <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                {group}
-              </div>
+              <div className="label-group px-3 py-1 text-muted-foreground/70">{group}</div>
               {entries.map((entry) => (
                 <div
                   key={entry.id}

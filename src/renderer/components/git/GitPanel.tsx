@@ -894,7 +894,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                     <Columns2 size={14} />
                   </Button>
                 </div>
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="label-group text-muted-foreground">
                   {selectedStaged ? 'Staged' : 'Working tree'}
                 </span>
               </div>
@@ -1098,7 +1098,7 @@ function SectionHeader({
 }) {
   return (
     <div className="group/section flex items-center justify-between px-2 py-1">
-      <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+      <div className="label-group text-muted-foreground flex items-center gap-2">
         <ChevronDown size={12} />
         {label} ({count})
         {selectionCount > 1 && (
