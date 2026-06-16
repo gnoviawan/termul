@@ -1046,8 +1046,6 @@ impl PtyManager {
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
 
-            slot_reservation.commit();
-
             Ok(TerminalInfo {
                 id,
                 shell: shell_path,
