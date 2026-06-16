@@ -918,9 +918,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Close Tab (Ctrl+W / ⌘+W)
       // On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
       // On Windows/Linux: Ctrl+W closes tab
+      // Skip when Agent Launcher is open to avoid accidental tab closure
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
-        e.preventDefault()
-        closeActiveTab()
+        if (!isAgentLauncherOpen) {
+          e.preventDefault()
+          closeActiveTab()
+        }
         return
       }
 
