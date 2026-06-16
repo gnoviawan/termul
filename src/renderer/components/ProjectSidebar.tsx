@@ -1195,7 +1195,7 @@ export function ProjectSidebar({
                             }
                           }}
                           className={cn(
-                            'w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
+                            'w-full flex items-center h-7 px-1.5 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
                             activeDragOverGroupId === group.id &&
                               'bg-primary/20 border border-primary/50'
                           )}
@@ -1237,15 +1237,15 @@ export function ProjectSidebar({
                                 }
                                 setEditingGroupId(null)
                               }}
-                              className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+                              className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span className="text-xs font-semibold text-muted-foreground truncate flex-1">
+                            <span className="text-sm font-medium text-sidebar-foreground truncate flex-1">
                               {group.name}
                             </span>
                           )}
-                          <span className="text-3xs text-muted-foreground/40 px-2 font-normal">
+                          <span className="text-xs text-muted-foreground/60 px-2 font-normal">
                             {gpProjects.length}
                           </span>
                         </div>
