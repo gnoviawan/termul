@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { SessionConfigOption } from '@/lib/acp-api'
-import { partitionConfigOptions } from './chat-input-bar-config'
+import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import { filterDuplicateModeConfigOptions, partitionConfigOptions } from './chat-input-bar-config'
 
 function opt(id: string, category: string | null): SessionConfigOption {
   return {
@@ -73,5 +73,26 @@ describe('partitionConfigOptions', () => {
     expect(result.model).toBe(model1)
     expect(result.thoughtLevel).toBeNull()
     expect(result.rest).toEqual([model2])
+  })
+})
+
+describe('filterDuplicateModeConfigOptions', () => {
+  const modes: SessionModeState = {
+    currentModeId: 'agent',
+    availableModes: [
+      { id: 'agent', name: 'Agent' },
+      { id: 'plan', name: 'Plan' }
+    ]
+  }
+
+  it('keeps mode config options when native modes are absent', () => {
+    const mode = opt('mode', 'mode')
+    expect(filterDuplicateModeConfigOptions([mode], null)).toEqual([mode])
+  })
+
+  it('removes mode config options when native modes are present', () => {
+    const mode = opt('mode', 'mode')
+    const custom = opt('custom', 'custom')
+    expect(filterDuplicateModeConfigOptions([mode, custom], modes)).toEqual([custom])
   })
 })

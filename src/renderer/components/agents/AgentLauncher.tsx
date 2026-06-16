@@ -4,7 +4,10 @@ import { ArrowUp, Check, ChevronDown, Download, Loader2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
-import { partitionConfigOptions } from '@/components/chat/chat-input-bar-config'
+import {
+  filterDuplicateModeConfigOptions,
+  partitionConfigOptions
+} from '@/components/chat/chat-input-bar-config'
 import { LoadedSkillChip } from '@/components/chat/LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
@@ -109,6 +112,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     thoughtLevel,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
+  const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(
+    genericConfigOptions,
+    draftSession?.modes ?? null
+  )
   const menuOpen = isSlashTrigger(prompt)
   const slashSections = useMemo(
     () =>
@@ -440,7 +447,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     onSelect={(valueId) => handleSetConfig(thoughtLevel.id, valueId)}
                   />
                 )}
-                {genericConfigOptions.map((option) => (
+                {visibleGenericConfigOptions.map((option) => (
                   <ConfigChip
                     key={option.id}
                     option={option}

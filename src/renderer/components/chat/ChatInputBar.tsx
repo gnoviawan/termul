@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
-import { partitionConfigOptions } from './chat-input-bar-config'
+import { filterDuplicateModeConfigOptions, partitionConfigOptions } from './chat-input-bar-config'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -64,6 +64,7 @@ export function ChatInputBar({
     thoughtLevel,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
+  const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
@@ -225,7 +226,7 @@ export function ChatInputBar({
                       onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
                     />
                   )}
-                  {genericConfigOptions.map((option) => (
+                  {visibleGenericConfigOptions.map((option) => (
                     <ConfigChip
                       key={option.id}
                       option={option}

@@ -5,12 +5,14 @@
  * to dedicated chips rendered ahead of generic options
  * (issue #286).
  */
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 
 /** ACP semantic category for reasoning/thinking-depth config options. */
 export const THOUGHT_LEVEL_CATEGORY = 'thought_level'
 /** ACP semantic category for model selection config options. */
 export const MODEL_CATEGORY = 'model'
+/** ACP semantic category for session mode config options. */
+export const MODE_CATEGORY = 'mode'
 
 export interface PartitionedConfigOptions {
   /** The first `model` option, if the agent advertises one. */
@@ -41,4 +43,17 @@ export function partitionConfigOptions(options: SessionConfigOption[]): Partitio
     }
   }
   return { model, thoughtLevel, rest }
+}
+
+/**
+ * Some agents advertise modes both through `session.modes` and a `mode` config
+ * option. When the native modes API is available, keep one Agent picker that
+ * calls `session/set_mode` instead of rendering a duplicate config chip.
+ */
+export function filterDuplicateModeConfigOptions(
+  options: SessionConfigOption[],
+  modes: SessionModeState | null
+): SessionConfigOption[] {
+  if (!modes || modes.availableModes.length === 0) return options
+  return options.filter((option) => option.category !== MODE_CATEGORY)
 }

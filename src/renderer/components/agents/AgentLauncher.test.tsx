@@ -137,10 +137,11 @@ function preparedSession(config: StoredAgentConfig): AcpSession {
     activeTurn: false,
     openTurnId: null,
     modes: {
-      currentModeId: 'build',
+      currentModeId: 'agent',
       availableModes: [
-        { id: 'build', name: 'Build' },
-        { id: 'plan', name: 'Plan' }
+        { id: 'agent', name: 'Agent' },
+        { id: 'plan', name: 'Plan' },
+        { id: 'ask', name: 'Ask' }
       ]
     },
     configOptions: [
@@ -164,6 +165,18 @@ function preparedSession(config: StoredAgentConfig): AcpSession {
         options: [
           { value: 'low', name: 'Low' },
           { value: 'medium', name: 'Medium' }
+        ]
+      },
+      {
+        id: 'mode',
+        name: 'Agent',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'agent',
+        options: [
+          { value: 'agent', name: 'Agent' },
+          { value: 'plan', name: 'Plan' },
+          { value: 'ask', name: 'Ask' }
         ]
       }
     ],
@@ -260,7 +273,7 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
-  it('uses the prepared session for model and Agent/mode picker actions', async () => {
+  it('uses model config and native Agent/mode picker actions without duplicate Agent chips', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     mockPersistRead.mockResolvedValue({
@@ -275,9 +288,12 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(await screen.findByText('Model Two'))
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
-    fireEvent.click(screen.getByText('Build'))
+    mockSetConfigOption.mockClear()
+    expect(screen.getAllByRole('button', { name: /^Agent$/ })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
     fireEvent.click(await screen.findByText('Plan'))
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
   })
 
   it('shows supported ACP agents when no configs are persisted', async () => {
