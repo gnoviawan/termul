@@ -216,7 +216,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
         {visible.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
         ) : (
