@@ -1333,11 +1333,8 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
-/// Maximum number of characters allowed in a search query.
-///
-/// Generous enough for any realistic file path, regex fragment, or multi-word
-/// query, but small enough to block trivially abusive inputs from being piped
-/// to ripgrep (file name and content) or the synchronous filename walker.
+/// Maximum allowed search query length to prevent resource exhaustion via
+/// oversized input passed to ripgrep or the file-name walker.
 const MAX_SEARCH_QUERY_LEN: usize = 500;
 
 fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
@@ -1490,15 +1487,11 @@ pub async fn search_content_stream(
         return Ok(IpcResult::success(()));
     }
 
-    // Mirror the filename-search guard: queries longer than the cap are
-    // rejected before spawning rg so an unbounded string cannot be piped to
-    // a child process. The spec says the cap should be "consistent with the
-    // existing content search cap"; since no such cap existed, the filename
-    // constant is now applied here too.
-    if trimmed_query.chars().count() > MAX_SEARCH_QUERY_LEN {
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
         log::warn!(
-            "[Security] Content search query rejected: length {} exceeds limit of {}",
-            trimmed_query.chars().count(),
+            "[Security] Search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
             MAX_SEARCH_QUERY_LEN
         );
         let _ = app_handle.emit(
@@ -1511,7 +1504,7 @@ pub async fn search_content_stream(
                 code: Some("QUERY_TOO_LONG".to_string()),
                 error: Some(format!(
                     "Search query too long: {} characters (max {})",
-                    trimmed_query.chars().count(),
+                    query_char_count,
                     MAX_SEARCH_QUERY_LEN
                 )),
             },
@@ -1817,6 +1810,23 @@ pub async fn search_file_names_stream(
             },
         );
         return Ok(IpcResult::success(()));
+    }
+
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] File name search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
+            MAX_SEARCH_QUERY_LEN
+        );
+        return Ok(IpcResult::error(
+            format!(
+                "Search query too long: {} characters (max {})",
+                query_char_count,
+                MAX_SEARCH_QUERY_LEN
+            ),
+            "QUERY_TOO_LONG",
+        ));
     }
 
     let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
