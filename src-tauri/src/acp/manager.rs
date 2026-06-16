@@ -30,10 +30,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
-    ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer,
-    NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigOption,
+    AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest, ContentBlock,
+    InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, NewSessionRequest,
+    PromptRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigOption,
     SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
@@ -44,8 +44,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, AuthMethodInfo,
-    AuthRequiredEvent, ConfigOptionsUpdateEvent,
+    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, ConfigOptionsUpdateEvent,
     PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
 };
 use crate::acp::session::DriverState;
@@ -134,40 +133,9 @@ enum AcpCommand {
 }
 
 /// Result of a successful `initialize` handshake, carried back to the spawning
-/// task. Auth methods are handled on the driver thread (auto-authenticate or
-/// emit `acp:auth_required`), so only the negotiated capabilities travel back.
+/// task. Provider CLIs own authentication, so only negotiated capabilities travel back.
 struct InitOutcome {
     capabilities: AgentCapabilities,
-}
-
-/// Flatten a protocol `AuthMethod` into the renderer-facing `AuthMethodInfo`.
-fn auth_method_info(method: &AuthMethod) -> AuthMethodInfo {
-    AuthMethodInfo {
-        id: method.id().to_string(),
-        name: method.name().to_string(),
-        description: method.description().map(str::to_string),
-    }
-}
-
-/// What to do with the auth methods an agent advertised in `initialize`.
-#[derive(Debug, PartialEq, Eq)]
-enum AuthDecision {
-    /// No auth methods advertised — proceed unchanged.
-    None,
-    /// Exactly one method — attempt `authenticate` automatically with this id.
-    Auto(String),
-    /// Multiple methods — surface to the user, don't guess.
-    Prompt,
-}
-
-/// Decide how to handle the agent's advertised auth methods. Pure so it can be
-/// unit-tested without a live connection.
-fn decide_auth(auth_methods: &[AuthMethod]) -> AuthDecision {
-    match auth_methods.len() {
-        0 => AuthDecision::None,
-        1 => AuthDecision::Auto(auth_methods[0].id().to_string()),
-        _ => AuthDecision::Prompt,
-    }
 }
 
 /// Registry entry for a live agent.
@@ -1074,64 +1042,10 @@ async fn run_command_loop(
                 response.agent_capabilities.load_session,
             );
 
-            // ACP authentication: an agent may require `authenticate` before any
-            // session can be used. When exactly one method is advertised, run it
-            // automatically; otherwise surface the requirement to the renderer.
-            let auth_methods = response.auth_methods.clone();
-            let mut auth_required: Option<AuthRequiredEvent> = None;
-            match decide_auth(&auth_methods) {
-                AuthDecision::None => {}
-                AuthDecision::Auto(method_id) => {
-                    log::info!("[acp] agent {agent_id} authenticating via '{method_id}'");
-                    // Bound by INIT_TIMEOUT, like `initialize`: this runs on the
-                    // spawn-critical path before the agent is registered and
-                    // before the command loop starts, so an agent that stalls on
-                    // `authenticate` must not wedge `spawn()` forever (it cannot
-                    // be killed yet).
-                    let auth_outcome = tokio::time::timeout(
-                        INIT_TIMEOUT,
-                        cx.send_request(AuthenticateRequest::new(method_id)).block_task(),
-                    )
-                    .await;
-                    match auth_outcome {
-                        Ok(Ok(_)) => log::info!("[acp] agent {agent_id} authenticated"),
-                        Ok(Err(e)) => {
-                            log::warn!("[acp] agent {agent_id} authenticate failed: {e}");
-                            auth_required = Some(AuthRequiredEvent {
-                                agent_id: agent_id.clone(),
-                                methods: auth_methods.iter().map(auth_method_info).collect(),
-                                message: Some(e.to_string()),
-                            });
-                        }
-                        Err(_) => {
-                            let message =
-                                format!("authenticate timed out after {INIT_TIMEOUT:?}");
-                            log::warn!("[acp] agent {agent_id} {message}");
-                            auth_required = Some(AuthRequiredEvent {
-                                agent_id: agent_id.clone(),
-                                methods: auth_methods.iter().map(auth_method_info).collect(),
-                                message: Some(message),
-                            });
-                        }
-                    }
-                }
-                AuthDecision::Prompt => {
-                    // Multiple methods: don't guess — let the user choose.
-                    auth_required = Some(AuthRequiredEvent {
-                        agent_id: agent_id.clone(),
-                        methods: auth_methods.iter().map(auth_method_info).collect(),
-                        message: None,
-                    });
-                }
-            }
-
             spawned.store(true, Ordering::Release);
             let _ = init_tx.send(Ok(InitOutcome {
                 capabilities: response.agent_capabilities,
             }));
-            if let Some(event) = auth_required {
-                events::emit(&app, events::EVENT_AUTH_REQUIRED, event);
-            }
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -1677,52 +1591,5 @@ mod tests {
         // A second send is a no-op and must not panic.
         send_reply(&slot, Err("late".to_string()));
         assert_eq!(rx.await.unwrap(), Ok(()));
-    }
-
-    fn agent_method(id: &str, name: &str) -> AuthMethod {
-        AuthMethod::Agent(agent_client_protocol::schema::AuthMethodAgent::new(
-            id.to_string(),
-            name.to_string(),
-        ))
-    }
-
-    /// No advertised auth methods → proceed unchanged (working agents keep
-    /// working; no `authenticate` call).
-    #[test]
-    fn decide_auth_none_when_no_methods() {
-        assert_eq!(decide_auth(&[]), AuthDecision::None);
-    }
-
-    /// Exactly one method → auto-authenticate with that method's id.
-    #[test]
-    fn decide_auth_auto_for_single_method() {
-        let methods = vec![agent_method("oauth", "Sign in")];
-        assert_eq!(decide_auth(&methods), AuthDecision::Auto("oauth".to_string()));
-    }
-
-    /// Multiple methods → surface to the user rather than guessing.
-    #[test]
-    fn decide_auth_prompts_for_multiple_methods() {
-        let methods = vec![
-            agent_method("oauth", "Sign in"),
-            agent_method("api-key", "API key"),
-        ];
-        assert_eq!(decide_auth(&methods), AuthDecision::Prompt);
-    }
-
-    /// The renderer-facing flattening preserves id/name/description.
-    #[test]
-    fn auth_method_info_flattens_fields() {
-        let method = AuthMethod::Agent(
-            agent_client_protocol::schema::AuthMethodAgent::new(
-                "oauth".to_string(),
-                "Sign in".to_string(),
-            )
-            .description("Browser OAuth".to_string()),
-        );
-        let info = auth_method_info(&method);
-        assert_eq!(info.id, "oauth");
-        assert_eq!(info.name, "Sign in");
-        assert_eq!(info.description.as_deref(), Some("Browser OAuth"));
     }
 }

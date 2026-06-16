@@ -94,9 +94,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     preparedKey ? Boolean(s.preparingChatKeys[preparedKey]) : false
   )
   const draftSession = useAcpSession(preparedSessionId)
-  const pendingAuth = useAcpStore((s) =>
-    draftSession ? (s.pendingAuth[draftSession.agentId] ?? null) : null
-  )
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
   )
@@ -285,10 +282,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       return
     }
     if (!selectedConfig || selectedEntry?.status !== 'ready' || isLaunching) return
-    if (pendingAuth) {
-      toast.error('This agent requires authentication before a chat can start.')
-      return
-    }
 
     setIsLaunching(true)
     try {
@@ -315,7 +308,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     selectedConfig,
     selectedEntry?.status,
     isLaunching,
-    pendingAuth,
     acpConfigs,
     saveAgentConfig,
     persistSelection,
@@ -355,7 +347,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
     !isLaunching &&
-    !pendingAuth &&
     (prompt.trim().length > 0 || loadedSkill !== null)
 
   return (
@@ -446,7 +437,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 {thoughtLevel && (
                   <ConfigChip
                     option={thoughtLevel}
-                    disabled={!draftSession || Boolean(pendingAuth)}
+                    disabled={!draftSession}
                     promoted
                     onSelect={(valueId) => handleSetConfig(thoughtLevel.id, valueId)}
                   />
@@ -455,14 +446,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   <ConfigChip
                     key={option.id}
                     option={option}
-                    disabled={!draftSession || Boolean(pendingAuth)}
+                    disabled={!draftSession}
                     onSelect={(valueId) => handleSetConfig(option.id, valueId)}
                   />
                 ))}
                 {draftSession && (
                   <ModeChip
                     session={draftSession}
-                    disabled={Boolean(pendingAuth)}
+                    disabled={false}
                     onSelect={handleSetMode}
                     label="Agent"
                   />
@@ -558,7 +549,8 @@ function AcpAgentPicker({
   installingConfigId: string | null
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
 }): React.JSX.Element {
-  const label = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
+  const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
+  const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -573,7 +565,7 @@ function AcpAgentPicker({
             templateId={selectedEntry?.agent.id}
             name={selectedEntry?.agent.name}
           />
-          <span className="truncate">ACP: {label}</span>
+          <span className="truncate">{label}</span>
           <ChevronDown size={12} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>

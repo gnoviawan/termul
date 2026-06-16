@@ -287,9 +287,12 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    expect(
-      await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' })
-    ).toBeInTheDocument()
+    const agentPicker = await screen.findByRole('button', {
+      name: 'Select ACP agent: Claude Agent'
+    })
+    expect(agentPicker).toBeInTheDocument()
+    expect(agentPicker).toHaveTextContent('Claude Agent')
+    expect(agentPicker).not.toHaveTextContent('ACP:')
     fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
     fireEvent.click(await screen.findByText('Model Two'))
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
@@ -342,7 +345,10 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', { name: 'Select ACP agent: Codex CLI' }))
+    const agentPicker = await screen.findByRole('button', { name: 'Select ACP agent: Codex' })
+    expect(agentPicker).toHaveTextContent('Codex')
+    expect(agentPicker).not.toHaveTextContent('Codex CLI')
+    fireEvent.click(agentPicker)
     expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
     expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
     expect(screen.getByText('Cursor')).toBeInTheDocument()

@@ -433,12 +433,11 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
 /**
  * A live agent can be reused (instead of spawning a second process) when it is
- * connected or merely awaiting authentication. Re-spawning a `needs-auth` agent
- * would orphan the original; the caller's `pendingAuth` guard then blocks the
- * actual session until the user authenticates.
+ * connected. Provider CLIs own authentication, so an auth-blocked process is not
+ * treated as reusable for new chat preparation.
  */
 function isReusableStatus(status: AgentStatus | undefined): boolean {
-  return status === 'connected' || status === 'needs-auth'
+  return status === 'connected'
 }
 
 /**
@@ -821,7 +820,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
           set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         }
-        if (get().pendingAuth[agentId]) return null
         const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
         if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
           return null
@@ -921,8 +919,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const reuseKey = agentReuseKey(configId, trimmedCwd)
     const warming = inFlightWarms.get(reuseKey)
     if (warming) await warming
-    // Reuse a live agent for this config+cwd when it is connected or awaiting
-    // auth (re-spawning a needs-auth agent would orphan the original); else spawn.
+    // Reuse a live connected agent for this config+cwd; else spawn.
     // Keyed per-cwd so the same agent in another project gets its own process.
     const existing = get().configToLiveAgent[reuseKey]
     const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
@@ -938,13 +935,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         allowTerminal: config.allowTerminal
       })
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-    }
-    // If the agent requires authentication, `newSession` will be rejected by the
-    // agent. Fail fast with an actionable message instead of throwing an opaque
-    // backend error; the agent stays connected so the user can authenticate and
-    // retry starting the chat.
-    if (get().pendingAuth[agentId]) {
-      throw new Error('This agent requires authentication before a chat can start.')
     }
     return get().createSession(agentId, trimmedCwd, mcpServers)
   },
