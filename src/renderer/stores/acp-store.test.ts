@@ -124,6 +124,40 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
   })
 
+  it('sendPrompt updates the persisted history title from the first user message', async () => {
+    seedSession('s1', 'agent-09d39730', false)
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-09d39730',
+          title: 'Agent 09d39730',
+          cwd: '/work',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+
+    void useAcpStore.getState().sendPrompt('s1', 'siapa itu faiz intifada?')
+    await Promise.resolve()
+
+    const [entry] = useAcpStore.getState().sessionIndex
+    expect(entry.title).toBe('siapa itu faiz intifada?')
+    expect(entry.messageCount).toBe(1)
+    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    expect(saveSessionPayload).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        metadata: expect.objectContaining({ title: 'siapa itu faiz intifada?' }),
+        messages: [expect.objectContaining({ role: 'user' })]
+      })
+    )
+  })
+
   it('rejects a second prompt while a turn is active', async () => {
     seedSession('s1', 'agent-1') // active by default
     await expect(useAcpStore.getState().sendPrompt('s1', 'again')).rejects.toThrow(

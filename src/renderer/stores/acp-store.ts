@@ -1092,6 +1092,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     }))
+    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
     try {
       const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
       // Command reply vs streamed chunks have no ordering guarantee; defer turn
