@@ -66,6 +66,18 @@ describe('validatePrBody', () => {
     expect(result.errors.some((e) => /Summary/i.test(e))).toBe(true)
   })
 
+  it('strips multiple comments and is idempotent (repeated sanitization)', () => {
+    // A comment-only section with several comments must read as empty, and
+    // re-running the strip must not change a comment-free result.
+    const body = validBody.replace(
+      '## Summary\n\nThis fixes a crash when opening the settings page with no saved layout.',
+      '## Summary\n\n<!-- a --><!-- b --><!-- c -->'
+    )
+    const result = validatePrBody(body)
+    expect(result.ok).toBe(false)
+    expect(result.errors.some((e) => /Summary.*empty/i.test(e))).toBe(true)
+  })
+
   it('requires a linked issue or an explicit no-issue note', () => {
     const body = validBody.replace('Closes #123', 'Closes #')
     const result = validatePrBody(body)

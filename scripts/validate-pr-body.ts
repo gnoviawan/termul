@@ -17,8 +17,19 @@ export interface ValidationResult {
 
 // HTML comments in the template are guidance, not content. Strip them so an
 // untouched template's placeholder text doesn't read as "filled in".
+//
+// Strip repeatedly until the string stops changing: a single pass over
+// `<!--[\s\S]*?-->` can leave a fresh `<!--` behind on crafted/overlapping
+// input (e.g. `<!--<!---->-->`), which is the incomplete-sanitization class
+// CodeQL flags (js/incomplete-multi-character-sanitization).
 function stripComments(body: string): string {
-  return body.replace(/<!--[\s\S]*?-->/g, '')
+  let previous: string
+  let current = body
+  do {
+    previous = current
+    current = current.replace(/<!--[\s\S]*?-->/g, '')
+  } while (current !== previous)
+  return current
 }
 
 function sectionBody(body: string, heading: string): string | null {
@@ -116,9 +127,35 @@ export function validatePrBody(rawBody: string | undefined | null): ValidationRe
   return { ok: errors.length === 0, errors }
 }
 
+// Build the markdown comment body posted on the PR when validation fails.
+export function buildFailureComment(errors: string[]): string {
+  const items = errors.map((e) => `- ${e}`).join('\n')
+  return [
+    '<!-- pr-body-validation -->',
+    '## ❌ PR description does not satisfy the template',
+    '',
+    'This PR is missing required information from the PR template. Please edit the',
+    'PR **description** (not a comment) and fill in every required section:',
+    '',
+    items,
+    '',
+    'Template: [`.github/PULL_REQUEST_TEMPLATE.md`](../blob/HEAD/.github/PULL_REQUEST_TEMPLATE.md)',
+    '',
+    'This check re-runs automatically when you edit the description.'
+  ].join('\n')
+}
+
 // CLI entry — only runs when invoked directly, not when imported by tests.
 if (import.meta.main) {
   const result = validatePrBody(process.env.PR_BODY)
+
+  // Emit a markdown comment body for the workflow to post on failure.
+  const commentPath = process.env.PR_BODY_COMMENT_FILE
+  if (commentPath && !result.ok) {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(commentPath, buildFailureComment(result.errors), 'utf8')
+  }
+
   if (result.ok) {
     console.log('✅ PR description satisfies the template.')
     process.exit(0)
