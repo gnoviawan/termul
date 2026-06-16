@@ -395,7 +395,7 @@
     line-height: 1.4;
   }
   .label-group {
-    @apply text-[10px] font-semibold uppercase tracking-wider;
+    @apply text-3xs font-semibold uppercase tracking-wider;
     line-height: 1.4;
   }
 }
