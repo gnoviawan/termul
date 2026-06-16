@@ -71,7 +71,9 @@ jobs:
         run: bun run scripts/validate-pr-body.ts
 
       - name: Post or update failure comment
-        if: failure() && steps.validate.outcome == 'failure'
+        # Skip on forked PRs: GITHUB_TOKEN is read-only there, so the comment
+        # API calls would 403. Validation itself still gates forked PRs.
+        if: failure() && steps.validate.outcome == 'failure' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
@@ -95,7 +97,9 @@ jobs:
             }
 
       - name: Resolve failure comment on success
-        if: success()
+        # Skip on forked PRs (read-only GITHUB_TOKEN) to avoid a 403 turning a
+        # passing validation into a failed job.
+        if: success() && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
