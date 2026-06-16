@@ -16,6 +16,7 @@ pub struct SlotManagerConfig {
     /// Maximum concurrent PTY slots allowed (hard limit)
     pub max_slots: usize,
     /// Timeout duration before considering a terminal orphaned
+    #[allow(dead_code)]
     pub orphan_timeout: Duration,
     /// Metrics collection enabled
     pub metrics_enabled: bool,
@@ -103,6 +104,7 @@ impl PtySlotManager {
     }
 
     /// Release a PTY slot when terminal is cleaned up
+    #[allow(dead_code)]
     pub fn release_slot(&self) {
         let current = self.active_slots.load(Ordering::SeqCst);
         if current > 0 {
@@ -115,6 +117,7 @@ impl PtySlotManager {
     }
 
     /// Mark a slot as orphaned and eligible for reaping
+    #[allow(dead_code)]
     pub fn mark_orphaned(&self, _terminal_id: &str) {
         if self.config.metrics_enabled {
             self.metrics.write().orphaned_reaped += 1;
@@ -122,11 +125,13 @@ impl PtySlotManager {
     }
 
     /// Get current number of active slots
+    #[allow(dead_code)]
     pub fn active_slot_count(&self) -> usize {
         self.active_slots.load(Ordering::SeqCst)
     }
 
     /// Check if slot limit is reached
+    #[allow(dead_code)]
     pub fn is_limit_reached(&self) -> bool {
         self.active_slots.load(Ordering::SeqCst) >= self.config.max_slots
     }
@@ -137,6 +142,7 @@ impl PtySlotManager {
     }
 
     /// Reset metrics (for testing)
+    #[allow(dead_code)]
     pub fn reset_metrics(&self) {
         *self.metrics.write() = SlotMetrics::default();
     }

@@ -12,4 +12,4 @@ pub mod windows;
 
 pub use da_filter::DaFilter;
 pub use manager::{PtyManager, SpawnOptions, TerminalInfo};
-pub use slot_manager::{PtySlotManager, PtySlotManagerHandle, SlotToken, SlotManagerConfig, SlotMetrics};
+pub use slot_manager::{PtySlotManager, SlotToken, SlotManagerConfig, SlotMetrics};
