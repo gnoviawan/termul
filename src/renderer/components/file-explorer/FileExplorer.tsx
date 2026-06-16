@@ -856,7 +856,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       style={{ width: explorerWidth }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
+      <div className="flex items-center justify-between px-3 h-9 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="label-section text-sidebar-foreground">Explorer</span>
         <button
           onClick={collapseAll}
