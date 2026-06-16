@@ -428,15 +428,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 +
               </button>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                <AcpModelPicker
+                <AcpAgentPicker
                   agents={supportedAgents}
                   selectedEntry={selectedEntry}
                   selectedConfig={selectedConfig}
-                  modelOption={model}
-                  loading={isPreparing && !draftSession}
                   disabled={isLaunching || Boolean(installingConfigId)}
                   installingConfigId={installingConfigId}
                   onSelectAgent={handleSelectAgent}
+                />
+                <AcpModelPicker
+                  selectedEntry={selectedEntry}
+                  modelOption={model}
+                  loading={isPreparing && !draftSession}
+                  disabled={isLaunching || Boolean(installingConfigId)}
                   onSelectModel={(valueId) => model && handleSetConfig(model.id, valueId)}
                 />
                 {thoughtLevel && (
@@ -539,36 +543,29 @@ function InstallRequiredBanner({
   )
 }
 
-function AcpModelPicker({
+function AcpAgentPicker({
   agents,
   selectedEntry,
   selectedConfig,
-  modelOption,
-  loading,
   disabled,
   installingConfigId,
-  onSelectAgent,
-  onSelectModel
+  onSelectAgent
 }: {
   agents: readonly SupportedAcpAgentEntry[]
   selectedEntry: SupportedAcpAgentEntry | null
   selectedConfig: StoredAgentConfig | null
-  modelOption: ReturnType<typeof partitionConfigOptions>['model']
-  loading: boolean
   disabled: boolean
   installingConfigId: string | null
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
-  onSelectModel: (valueId: string) => void
 }): React.JSX.Element {
-  const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
-  const label =
-    currentModel?.name ?? selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
+  const label = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
         <button
           type="button"
           disabled={disabled}
+          aria-label={`Select ACP agent: ${label}`}
           className="flex h-[34px] max-w-[260px] items-center gap-2 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/85 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <EntryGlyph
@@ -576,7 +573,7 @@ function AcpModelPicker({
             templateId={selectedEntry?.agent.id}
             name={selectedEntry?.agent.name}
           />
-          <span className="truncate">{loading ? 'Preparing agent…' : label}</span>
+          <span className="truncate">ACP: {label}</span>
           <ChevronDown size={12} className="text-muted-foreground" />
         </button>
       </PopoverTrigger>
@@ -611,7 +608,40 @@ function AcpModelPicker({
             )}
           </button>
         ))}
-        <div className="my-1 h-px bg-border" />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function AcpModelPicker({
+  selectedEntry,
+  modelOption,
+  loading,
+  disabled,
+  onSelectModel
+}: {
+  selectedEntry: SupportedAcpAgentEntry | null
+  modelOption: ReturnType<typeof partitionConfigOptions>['model']
+  loading: boolean
+  disabled: boolean
+  onSelectModel: (valueId: string) => void
+}): React.JSX.Element {
+  const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
+  const label = loading ? 'Loading model…' : (currentModel?.name ?? 'Model')
+  return (
+    <Popover>
+      <PopoverTrigger asChild disabled={disabled}>
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={`Select model: ${label}`}
+          className="flex h-[34px] max-w-[220px] items-center gap-2 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/85 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown size={12} className="text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           Model
         </div>

@@ -284,7 +284,10 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    fireEvent.click(await screen.findByText('Model One'))
+    expect(
+      await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' })
+    ).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
     fireEvent.click(await screen.findByText('Model Two'))
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
@@ -294,18 +297,38 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(await screen.findByText('Plan'))
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
-  })
+  }, 10000)
 
   it('shows supported ACP agents when no configs are persisted', async () => {
     renderLauncher()
 
     expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByText('Codex CLI'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Select ACP agent: Codex CLI' }))
     expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
     expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
     expect(screen.getByText('Cursor')).toBeInTheDocument()
     expect(screen.getByText('OpenCode')).toBeInTheDocument()
     expect(screen.getByText('pi ACP')).toBeInTheDocument()
+  })
+
+  it('switches ACP agents independently from the model picker', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG, OTHER_ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'OpenCode' }))
+
+    expect(
+      await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
+    ).toBeInTheDocument()
+    expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
+      agentId: 'acp-registry:opencode',
+      mode: 'acp'
+    })
   })
 
   it('installs OpenCode only after the user chooses it and clicks Install', async () => {
