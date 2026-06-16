@@ -1,8 +1,7 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Check, ChevronDown, Loader2, Settings2 } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, Download, Loader2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { partitionConfigOptions } from '@/components/chat/chat-input-bar-config'
@@ -23,8 +22,15 @@ import {
   useAgentSkills
 } from '@/hooks/use-agent-skills'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import { acpApi } from '@/lib/acp-api'
+import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
+import {
+  buildSupportedAcpAgents,
+  installedBinaryConfig,
+  type SupportedAcpAgentEntry
+} from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -48,22 +54,33 @@ export function __resetLauncherSelectionCache(): void {
 }
 
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
-  const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [isLaunching, setIsLaunching] = useState(false)
+  const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
+  const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
-
-  const selectedConfig = useMemo(
-    () => acpConfigs.find((c) => c.id === selectedConfigId) ?? acpConfigs[0] ?? null,
-    [acpConfigs, selectedConfigId]
+  const platformArch = useMemo(() => currentPlatformArch(), [])
+  const supportedAgents = useMemo(
+    () => buildSupportedAcpAgents(acpConfigs, platformArch),
+    [acpConfigs, platformArch]
   )
+
+  const selectedEntry = useMemo(
+    () =>
+      supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
+      supportedAgents.find((entry) => entry.status === 'ready') ??
+      supportedAgents[0] ??
+      null,
+    [supportedAgents, selectedConfigId]
+  )
+  const selectedConfig = selectedEntry?.config ?? null
   const activeConfigId = selectedConfig?.id ?? ''
   const preparedKey =
     activeConfigId && projectRoot ? prepareChatKey(activeConfigId, projectRoot, undefined) : null
@@ -80,7 +97,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
   )
-  const { skills } = useAgentSkills(acpConfigs.length > 0 ? projectRoot : undefined)
+  const { skills } = useAgentSkills(
+    supportedAgents.some((entry) => entry.status === 'ready') ? projectRoot : undefined
+  )
 
   const usableConfigOptions = (draftSession?.configOptions ?? []).filter(
     (o) => o.options.length > 0
@@ -105,16 +124,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [menuOpen, commands, draftSession?.configOptions, draftSession?.modes, skills, prompt]
   )
 
-  const persistSelection = useCallback((config: StoredAgentConfig) => {
-    cachedConfigId = config.id
+  const persistSelection = useCallback((configId: string) => {
+    cachedConfigId = configId
     void persistenceApi.write<LastSelectedAgent>(PersistenceKeys.lastSelectedAgent, {
-      agentId: config.id,
+      agentId: configId,
       mode: 'acp'
     })
   }, [])
 
   useEffect(() => {
-    if (selectedConfigId || acpConfigs.length === 0) return
+    if (selectedConfigId || supportedAgents.length === 0) return
     let cancelled = false
     void (async () => {
       try {
@@ -124,44 +143,89 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         const saved = raw as Partial<LastSelectedAgent> | null
         const restored =
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
-            ? acpConfigs.find((c) => c.id === saved.agentId)
+            ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        const next = restored ?? acpConfigs[0]
+        const next =
+          restored ??
+          supportedAgents.find((entry) => entry.status === 'ready') ??
+          supportedAgents[0]
         if (next) {
-          setSelectedConfigId(next.id)
-          persistSelection(next)
+          setSelectedConfigId(next.configId)
+          persistSelection(next.configId)
         }
       } catch {
-        const next = acpConfigs[0]
-        if (next) setSelectedConfigId(next.id)
+        const next = supportedAgents.find((entry) => entry.status === 'ready') ?? supportedAgents[0]
+        if (next) setSelectedConfigId(next.configId)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [acpConfigs, persistSelection, selectedConfigId])
+  }, [persistSelection, selectedConfigId, supportedAgents])
 
   useEffect(() => {
-    if (!activeConfigId || !projectRoot) return
-    useAcpStore.getState().prepareChat(activeConfigId, projectRoot)
+    if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
+      return
+    let cancelled = false
+    void (async () => {
+      try {
+        if (!acpConfigs.some((config) => config.id === selectedConfig.id)) {
+          await saveAgentConfig(selectedConfig)
+          if (cancelled) return
+        }
+        useAcpStore.getState().prepareChat(activeConfigId, projectRoot)
+      } catch (err) {
+        console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
+      }
+    })()
     const key = prepareChatKey(activeConfigId, projectRoot, undefined)
     return () => {
+      cancelled = true
       useAcpStore.getState().cancelPreparedChat(key)
     }
-  }, [activeConfigId, projectRoot])
+  }, [
+    activeConfigId,
+    acpConfigs,
+    projectRoot,
+    saveAgentConfig,
+    selectedConfig,
+    selectedEntry?.status
+  ])
 
-  const openAgentSettings = useCallback(() => {
-    useWorkspaceStore.getState().hideAgentLauncher()
-    navigate('/preferences')
-  }, [navigate])
-
-  const handleSelectConfig = useCallback(
-    (config: StoredAgentConfig) => {
-      setSelectedConfigId(config.id)
-      persistSelection(config)
+  const handleSelectAgent = useCallback(
+    (entry: SupportedAcpAgentEntry) => {
+      setSelectedConfigId(entry.configId)
+      persistSelection(entry.configId)
       textareaRef.current?.focus()
     },
     [persistSelection]
+  )
+
+  const handleInstallAgent = useCallback(
+    async (entry: SupportedAcpAgentEntry) => {
+      if (!entry.install || installingConfigId) return
+      setSelectedConfigId(entry.configId)
+      persistSelection(entry.configId)
+      setInstallingConfigId(entry.configId)
+      try {
+        const installed = await acpApi.installRegistryBinary({
+          agentId: entry.agent.id,
+          archiveUrl: entry.install.archiveUrl,
+          cmd: entry.install.cmd,
+          args: entry.install.args
+        })
+        const config = installedBinaryConfig(entry.agent, installed, { env: entry.install.env })
+        await saveAgentConfig(config)
+        setSelectedConfigId(config.id)
+        persistSelection(config.id)
+        toast.success(`${entry.agent.name} installed`)
+      } catch (err) {
+        toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
+      } finally {
+        setInstallingConfigId(null)
+      }
+    },
+    [installingConfigId, persistSelection, saveAgentConfig]
   )
 
   const handleSetConfig = useCallback(
@@ -213,7 +277,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       toast.error('No active project')
       return
     }
-    if (!selectedConfig || isLaunching) return
+    if (!selectedConfig || selectedEntry?.status !== 'ready' || isLaunching) return
     if (pendingAuth) {
       toast.error('This agent requires authentication before a chat can start.')
       return
@@ -221,7 +285,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     setIsLaunching(true)
     try {
-      persistSelection(selectedConfig)
+      if (!acpConfigs.some((config) => config.id === selectedConfig.id)) {
+        await saveAgentConfig(selectedConfig)
+      }
+      persistSelection(selectedConfig.id)
       const sessionId = await useAcpStore.getState().startChat(selectedConfig.id, projectRoot)
       useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
       const text = await buildPromptWithLoadedSkill(loadedSkill, prompt, projectRoot)
@@ -239,8 +306,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     activeProjectId,
     projectRoot,
     selectedConfig,
+    selectedEntry?.status,
     isLaunching,
     pendingAuth,
+    acpConfigs,
+    saveAgentConfig,
     persistSelection,
     paneId,
     loadedSkill,
@@ -276,37 +346,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const canLaunch =
     Boolean(selectedConfig) &&
+    selectedEntry?.status === 'ready' &&
     !isLaunching &&
     !pendingAuth &&
     (prompt.trim().length > 0 || loadedSkill !== null)
-
-  if (acpConfigs.length === 0) {
-    return (
-      <div className={cn('absolute inset-0 flex items-center justify-center p-8', className)}>
-        <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-            <Settings2 size={20} />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">No ACP agents enabled</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Enable an ACP coding agent in Application Preferences to start a new agent chat.
-            </p>
-          </div>
-          <Button type="button" size="sm" onClick={openAgentSettings}>
-            Open Preferences
-          </Button>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div
       className={cn('absolute inset-0 flex flex-col items-center justify-center p-8', className)}
     >
       <div className="mb-8 flex flex-col items-center gap-4 text-center">
-        <EntryGlyph config={selectedConfig} size="lg" />
+        <EntryGlyph
+          config={selectedConfig}
+          templateId={selectedEntry?.agent.id}
+          name={selectedEntry?.agent.name}
+          size="lg"
+        />
         <h1 className="text-3xl font-medium tracking-tight text-foreground md:text-4xl">
           What should we do <span className="text-muted-foreground/55">in this folder?</span>
         </h1>
@@ -318,6 +373,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
           )}
           <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm transition-colors focus-within:border-border/80 focus-within:ring-1 focus-within:ring-border/50">
+            {selectedEntry?.status === 'install-required' && (
+              <InstallRequiredBanner
+                entry={selectedEntry}
+                installing={installingConfigId === selectedEntry.configId}
+                onInstall={() => void handleInstallAgent(selectedEntry)}
+              />
+            )}
+            {selectedEntry?.status === 'unavailable' && (
+              <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                {selectedEntry.unavailableReason ??
+                  'This ACP agent is not available on this platform.'}
+              </div>
+            )}
             {loadedSkill && (
               <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
             )}
@@ -354,12 +422,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               </button>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                 <AcpModelPicker
-                  configs={acpConfigs}
+                  agents={supportedAgents}
+                  selectedEntry={selectedEntry}
                   selectedConfig={selectedConfig}
                   modelOption={model}
                   loading={isPreparing && !draftSession}
-                  disabled={isLaunching}
-                  onSelectConfig={handleSelectConfig}
+                  disabled={isLaunching || Boolean(installingConfigId)}
+                  installingConfigId={installingConfigId}
+                  onSelectAgent={handleSelectAgent}
                   onSelectModel={(valueId) => model && handleSetConfig(model.id, valueId)}
                 />
                 {thoughtLevel && (
@@ -433,25 +503,59 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
 }
 
+function InstallRequiredBanner({
+  entry,
+  installing,
+  onInstall
+}: {
+  entry: SupportedAcpAgentEntry
+  installing: boolean
+  onInstall: () => void
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-foreground">Install required</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {entry.agent.name} needs a local ACP binary before it can start chats.
+        </p>
+      </div>
+      <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
+        {installing ? (
+          <Loader2 size={14} className="mr-1.5 animate-spin" />
+        ) : (
+          <Download size={14} className="mr-1.5" />
+        )}
+        {installing ? 'Installing…' : 'Install'}
+      </Button>
+    </div>
+  )
+}
+
 function AcpModelPicker({
-  configs,
+  agents,
+  selectedEntry,
   selectedConfig,
   modelOption,
   loading,
   disabled,
-  onSelectConfig,
+  installingConfigId,
+  onSelectAgent,
   onSelectModel
 }: {
-  configs: readonly StoredAgentConfig[]
+  agents: readonly SupportedAcpAgentEntry[]
+  selectedEntry: SupportedAcpAgentEntry | null
   selectedConfig: StoredAgentConfig | null
   modelOption: ReturnType<typeof partitionConfigOptions>['model']
   loading: boolean
   disabled: boolean
-  onSelectConfig: (config: StoredAgentConfig) => void
+  installingConfigId: string | null
+  onSelectAgent: (entry: SupportedAcpAgentEntry) => void
   onSelectModel: (valueId: string) => void
 }): React.JSX.Element {
   const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
-  const label = currentModel?.name ?? selectedConfig?.name ?? 'ACP Agent'
+  const label =
+    currentModel?.name ?? selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
@@ -460,7 +564,11 @@ function AcpModelPicker({
           disabled={disabled}
           className="flex h-[34px] max-w-[260px] items-center gap-2 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/85 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <EntryGlyph config={selectedConfig} />
+          <EntryGlyph
+            config={selectedConfig}
+            templateId={selectedEntry?.agent.id}
+            name={selectedEntry?.agent.name}
+          />
           <span className="truncate">{loading ? 'Preparing agent…' : label}</span>
           <ChevronDown size={12} className="text-muted-foreground" />
         </button>
@@ -469,19 +577,29 @@ function AcpModelPicker({
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           ACP Agent
         </div>
-        {configs.map((config) => (
+        {agents.map((entry) => (
           <button
-            key={config.id}
+            key={entry.configId}
             type="button"
-            onClick={() => onSelectConfig(config)}
+            onClick={() => onSelectAgent(entry)}
             className={cn(
               'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-              config.id === selectedConfig?.id && 'bg-accent/50'
+              entry.configId === selectedEntry?.configId && 'bg-accent/50'
             )}
           >
-            <EntryGlyph config={config} />
-            <span className="min-w-0 flex-1 truncate">{config.name}</span>
-            {config.id === selectedConfig?.id && (
+            <EntryGlyph config={entry.config} templateId={entry.agent.id} name={entry.agent.name} />
+            <span className="min-w-0 flex-1 truncate">
+              {entry.config?.name ?? entry.agent.name}
+            </span>
+            {entry.status === 'install-required' && (
+              <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+              </span>
+            )}
+            {entry.status === 'unavailable' && (
+              <span className="text-[10px] text-muted-foreground">Unavailable</span>
+            )}
+            {entry.configId === selectedEntry?.configId && (
               <Check size={14} className="text-muted-foreground" />
             )}
           </button>
@@ -490,7 +608,13 @@ function AcpModelPicker({
         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
           Model
         </div>
-        {modelOption ? (
+        {selectedEntry?.status !== 'ready' ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {selectedEntry?.status === 'install-required'
+              ? 'Install this ACP agent to load model options.'
+              : 'This ACP agent is not available on this platform.'}
+          </div>
+        ) : modelOption ? (
           modelOption.options.map((value) => (
             <button
               key={value.value}
@@ -526,16 +650,21 @@ function AcpModelPicker({
 
 const EntryGlyph = memo(function EntryGlyph({
   config,
+  templateId,
+  name,
   size = 'sm'
 }: {
   config: StoredAgentConfig | null
+  templateId?: string
+  name?: string
   size?: 'sm' | 'lg'
 }): React.JSX.Element {
   const normalized = useMemo(() => {
-    if (!config?.templateId) return null
-    const icon = findBundledIconByKey(`acp:${config.templateId}`)?.svg
+    const key = config?.templateId ?? templateId
+    if (!key) return null
+    const icon = findBundledIconByKey(`acp:${key}`)?.svg
     return icon ? sanitizeInlineAgentSvg(icon) : null
-  }, [config?.templateId])
+  }, [config?.templateId, templateId])
   const className =
     size === 'lg' ? 'h-12 w-12 rounded-2xl text-base' : 'h-4 w-4 rounded-sm text-[9px]'
 
@@ -560,7 +689,7 @@ const EntryGlyph = memo(function EntryGlyph({
         className
       )}
     >
-      {config?.name.charAt(0) ?? 'A'}
+      {(config?.name ?? name)?.charAt(0) ?? 'A'}
     </span>
   )
 })

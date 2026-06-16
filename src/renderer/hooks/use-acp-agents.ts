@@ -1,26 +1,22 @@
+import type { LastSelectedAgent } from '@shared/types/persistence.types'
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect } from 'react'
+import { currentPlatformArch } from '@/lib/agents/acp-registry'
+import { buildSupportedAcpAgents } from '@/lib/agents/supported-acp-agents'
+import { persistenceApi } from '@/lib/api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /**
- * Load persisted ACP agent configs once at app mount, then warm them up in the
- * background. Mirrors the other mount-time loader hooks (e.g. use-app-settings).
- *
- * Every entry in `agentConfigs` is an enabled agent: enabling an agent persists
- * its config and disabling it deletes the config (there is no separate `enabled`
- * flag). So warming the whole list warms exactly the agents the Settings toggle
- * would warm — here we do it on launch too, not only on first toggle.
- *
- * Pre-warming means an enabled agent has its process spawned and `initialize`
- * handshake done before the user opens a chat, so `startChat` reuses a warm
- * agent instead of paying the cold spawn cost on the send critical path.
- * `prewarmAgent` is best-effort, deduped, and silent on failure — chat still
- * lazy-spawns if warm-up didn't run. The fan-out is bounded by the number of
- * enabled agents (typically 1–3).
+ * Load persisted ACP agent configs once at app mount, then warm only the
+ * last-selected ready supported ACP agent, falling back to the default ready
+ * entry. Agent Chat derives supported configs automatically, so prewarm must not
+ * fan out across every supported agent or depend on Preferences toggles.
  */
 export function useAcpAgents(): void {
   const loadAgentConfigs = useAcpStore((s) => s.loadAgentConfigs)
+  const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   useEffect(() => {
     void (async () => {
       await loadAgentConfigs()
@@ -28,9 +24,21 @@ export function useAcpAgents(): void {
       const activeProjectId = useProjectStore.getState().activeProjectId
       const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
       if (cwd.trim().length === 0) return
-      for (const config of agentConfigs) {
-        void prewarmAgent(config.id, cwd)
+      const supportedAgents = buildSupportedAcpAgents(agentConfigs, currentPlatformArch())
+      const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
+      const saved = persisted.success ? (persisted.data as Partial<LastSelectedAgent> | null) : null
+      const selected =
+        saved?.mode === 'acp' && typeof saved.agentId === 'string'
+          ? supportedAgents.find(
+              (entry) => entry.configId === saved.agentId && entry.status === 'ready'
+            )
+          : null
+      const entry = selected ?? supportedAgents.find((candidate) => candidate.status === 'ready')
+      if (!entry?.config) return
+      if (!agentConfigs.some((config) => config.id === entry.config?.id)) {
+        await saveAgentConfig(entry.config)
       }
+      void prewarmAgent(entry.config.id, cwd)
     })()
-  }, [loadAgentConfigs])
+  }, [loadAgentConfigs, saveAgentConfig])
 }

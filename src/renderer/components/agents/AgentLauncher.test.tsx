@@ -10,8 +10,10 @@ const {
   mockPrepareChat,
   mockCancelPreparedChat,
   mockSendPrompt,
+  mockSaveAgentConfig,
   mockSetConfigOption,
   mockSetMode,
+  mockInstallRegistryBinary,
   mockAddAgentChatTab,
   mockHideAgentLauncher,
   mockPersistRead,
@@ -23,8 +25,10 @@ const {
   mockPrepareChat: vi.fn(),
   mockCancelPreparedChat: vi.fn(),
   mockSendPrompt: vi.fn(),
+  mockSaveAgentConfig: vi.fn(),
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
+  mockInstallRegistryBinary: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
   mockPersistRead: vi.fn(),
@@ -42,6 +46,11 @@ const {
   }
 }))
 
+vi.mock('@tauri-apps/plugin-os', () => ({
+  platform: vi.fn(() => 'windows'),
+  arch: vi.fn(() => 'x86_64')
+}))
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return { ...actual, useNavigate: () => mockNavigate }
@@ -49,6 +58,10 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: { read: mockPersistRead, write: mockPersistWrite }
+}))
+
+vi.mock('@/lib/acp-api', () => ({
+  acpApi: { installRegistryBinary: mockInstallRegistryBinary }
 }))
 
 vi.mock('@/lib/worktree-context', () => ({
@@ -82,11 +95,13 @@ vi.mock('@/stores/acp-store', () => {
     prepareChat: mockPrepareChat,
     cancelPreparedChat: mockCancelPreparedChat,
     sendPrompt: mockSendPrompt,
+    saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode
   })
-  const useAcpStore = (sel?: (s: typeof acpStateRef.current) => unknown) =>
-    sel ? sel(acpStateRef.current) : getState()
+  type MockAcpState = typeof acpStateRef.current & { saveAgentConfig: typeof mockSaveAgentConfig }
+  const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
+    sel ? sel({ ...acpStateRef.current, saveAgentConfig: mockSaveAgentConfig }) : getState()
   useAcpStore.getState = getState
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
@@ -179,40 +194,45 @@ beforeEach(() => {
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
+  mockSaveAgentConfig.mockImplementation(async (config: StoredAgentConfig) => {
+    const existing = acpStateRef.current.agentConfigs.findIndex((entry) => entry.id === config.id)
+    acpStateRef.current.agentConfigs =
+      existing === -1
+        ? [...acpStateRef.current.agentConfigs, config]
+        : acpStateRef.current.agentConfigs.map((entry) => (entry.id === config.id ? config : entry))
+  })
   mockSetConfigOption.mockResolvedValue(undefined)
   mockSetMode.mockResolvedValue(undefined)
+  mockInstallRegistryBinary.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
 })
 
 describe('AgentLauncher ACP new thread', () => {
   it('routes submit to ACP startChat + addAgentChatTab and forwards the prompt', async () => {
-    acpStateRef.current.agentConfigs = [ACP_CONFIG]
     renderLauncher()
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
-    expect(mockStartChat).toHaveBeenCalledWith('acp-registry:claude-acp', '/work')
+    expect(mockStartChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
     await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
     expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
-      agentId: 'acp-registry:claude-acp',
+      agentId: 'acp-registry:codex-acp',
       mode: 'acp'
     })
   })
 
   it('prepares the selected ACP session in the background', async () => {
-    acpStateRef.current.agentConfigs = [ACP_CONFIG]
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:claude-acp', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
     )
     expect(mockStartChat).not.toHaveBeenCalled()
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
-    acpStateRef.current.agentConfigs = [ACP_CONFIG]
     const { unmount } = render(
       <MemoryRouter>
         <AgentLauncher paneId="pane1" />
@@ -220,11 +240,11 @@ describe('AgentLauncher ACP new thread', () => {
     )
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:claude-acp', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
     )
     unmount()
 
-    expect(mockCancelPreparedChat).toHaveBeenCalledWith('acp-registry:claude-acp\0/work\0')
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith('acp-registry:codex-acp\0/work\0')
   })
 
   it('restores a persisted ACP selection', async () => {
@@ -243,11 +263,15 @@ describe('AgentLauncher ACP new thread', () => {
   it('uses the prepared session for model and Agent/mode picker actions', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
     acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    fireEvent.click(screen.getByText('Model One'))
+    fireEvent.click(await screen.findByText('Model One'))
     fireEvent.click(await screen.findByText('Model Two'))
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
@@ -256,11 +280,43 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
   })
 
-  it('shows preferences empty state when no ACP agents are enabled', () => {
+  it('shows supported ACP agents when no configs are persisted', async () => {
     renderLauncher()
 
-    expect(screen.getByText('No ACP agents enabled')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('Open Preferences'))
-    expect(mockNavigate).toHaveBeenCalledWith('/preferences')
+    expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByText('Codex CLI'))
+    expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
+    expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
+    expect(screen.getByText('Cursor')).toBeInTheDocument()
+    expect(screen.getByText('OpenCode')).toBeInTheDocument()
+    expect(screen.getByText('pi ACP')).toBeInTheDocument()
+  })
+
+  it('installs OpenCode only after the user chooses it and clicks Install', async () => {
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:opencode', mode: 'acp' }
+    })
+    renderLauncher()
+
+    expect(await screen.findByText('Install required')).toBeInTheDocument()
+    expect(mockInstallRegistryBinary).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('Install'))
+
+    await waitFor(() => expect(mockInstallRegistryBinary).toHaveBeenCalledTimes(1))
+    expect(mockInstallRegistryBinary).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'opencode', cmd: './opencode.exe', args: ['acp'] })
+    )
+    await waitFor(() =>
+      expect(mockSaveAgentConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'acp-registry:opencode',
+          templateId: 'opencode',
+          command: 'opencode.exe',
+          args: ['acp']
+        })
+      )
+    )
   })
 })

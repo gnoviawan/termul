@@ -552,8 +552,8 @@ export default function AppPreferences(): React.JSX.Element {
                     <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Enable ACP coding agents from the registry. Enabling one warms it in the
-                    background so chats start instantly.
+                    View ACP agent availability and warm/auth status. Agent Chat supports these
+                    agents automatically.
                   </p>
                 </div>
                 <div className="w-2/3">
