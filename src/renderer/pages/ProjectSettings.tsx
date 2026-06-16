@@ -115,7 +115,6 @@ export default function ProjectSettings() {
   const [rootPath, setRootPath] = useState(activeProject?.path || '')
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
-  const [startupCommand, setStartupCommand] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
   const [symlinkDirs, setSymlinkDirs] = useState<string[]>(activeProject?.symlinkDirs ?? [])
   const [symlinkLoading, setSymlinkLoading] = useState(false)
@@ -612,25 +611,6 @@ export default function ProjectSettings() {
                     </div>
                   )}
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Startup Command
-                  </label>
-                  <input
-                    type="text"
-                    value={startupCommand}
-                    onChange={(e) => {
-                      setStartupCommand(e.target.value)
-                      setHasChanges(true)
-                    }}
-                    placeholder="e.g. nvm use 16"
-                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none shadow-sm"
-                  />
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Command to execute immediately when a new terminal session starts.
-                  </p>
-                </div>
               </div>
             </div>
           </SettingsSection>
@@ -725,7 +705,6 @@ export default function ProjectSettings() {
                         checked={skipConfirmations}
                         onChange={(e) => {
                           setSkipConfirmations(e.target.checked)
-                          setHasChanges(true)
                         }}
                       />
                       <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
@@ -747,7 +726,6 @@ export default function ProjectSettings() {
                         checked={skipGitignoreSelection}
                         onChange={(e) => {
                           setSkipGitignoreSelection(e.target.checked)
-                          setHasChanges(true)
                         }}
                       />
                       <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
@@ -762,7 +740,6 @@ export default function ProjectSettings() {
                       value={defaultBranchPrefix}
                       onChange={(e) => {
                         setDefaultBranchPrefix(e.target.value)
-                        setHasChanges(true)
                       }}
                       placeholder="feature/"
                       className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
