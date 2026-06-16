@@ -145,6 +145,13 @@ export function AgentHeader({ session, agentStatus }: AgentHeaderProps): React.J
   const isClosed = session.status === 'closed'
   const effectiveStatus: AgentStatus | undefined = isClosed ? 'error' : agentStatus
 
+  let statusLabel: string
+  if (isClosed) {
+    statusLabel = session.lastError ?? 'closed'
+  } else {
+    statusLabel = effectiveStatus ?? 'idle'
+  }
+
   return (
     <div className="flex items-center gap-2 bg-transparent px-3 py-1.5">
       <AgentBadge
@@ -160,9 +167,7 @@ export function AgentHeader({ session, agentStatus }: AgentHeaderProps): React.J
           STATUS_COLOR[effectiveStatus ?? 'idle'] ?? 'text-muted-foreground'
         )}
       />
-      <span className="text-[11px] text-muted-foreground">
-        {isClosed ? 'closed' : (effectiveStatus ?? 'idle')}
-      </span>
+      <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
     </div>
   )
 }
