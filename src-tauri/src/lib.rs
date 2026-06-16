@@ -505,15 +505,9 @@ fn build_app_menu<R: tauri::Runtime>(
     let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size")
-        .accelerator("CmdOrCtrl+0")
-        .build(app)?;
-    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In")
-        .accelerator("CmdOrCtrl+=")
-        .build(app)?;
-    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out")
-        .accelerator("CmdOrCtrl+-")
-        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out").build(app)?;
     let toggle_fullscreen =
         MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen").build(app)?;
 

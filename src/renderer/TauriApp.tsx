@@ -25,6 +25,7 @@ import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
@@ -51,6 +52,7 @@ function AppEffects(): null {
   useContextBarSettings()
   useAppSettingsLoader()
   useAppliedColorThemeSync()
+  useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()

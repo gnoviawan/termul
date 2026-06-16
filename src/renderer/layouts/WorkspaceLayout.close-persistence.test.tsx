@@ -183,6 +183,7 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => ({
 
 vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
+  useUiZoomLevel: () => 1,
   useDefaultShell: () => 'bash',
   useMaxTerminalsPerProject: () => 10,
   useConfirmTerminalClose: () => true,

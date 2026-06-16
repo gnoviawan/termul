@@ -38,6 +38,7 @@ import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
+import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
 
@@ -93,6 +94,7 @@ function AppEffects(): null {
   useContextBarSettings()
   useAppSettingsLoader()
   useAppliedColorThemeSync()
+  useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()

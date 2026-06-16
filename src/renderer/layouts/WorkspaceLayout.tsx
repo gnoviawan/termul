@@ -64,7 +64,7 @@ import {
   useConfirmTerminalClose,
   useDefaultShell,
   useMaxTerminalsPerProject,
-  useTerminalFontSize
+  useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
@@ -105,7 +105,7 @@ import {
   usePaneRoot,
   useWorkspaceStore
 } from '@/stores/workspace-store'
-import { DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
 
 function getShortcutTargetContext(target: EventTarget | null): {
   isInEditor: boolean
@@ -707,7 +707,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [shortcuts]
   )
 
-  const fontSize = useTerminalFontSize()
+  const uiZoomLevel = useUiZoomLevel()
   const colorTheme = useColorTheme()
   const appearanceMode = useAppearanceMode()
 
@@ -1051,26 +1051,26 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Zoom in/out/reset
+      // Zoom in/out/reset — whole-UI zoom (VS Code style)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
         e.stopPropagation()
-        const newSize = Math.min(fontSize + 1, 24)
-        if (newSize !== fontSize) updateAppSetting('terminalFontSize', newSize)
+        const next = Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
+        if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomOut'))) {
         e.preventDefault()
         e.stopPropagation()
-        const newSize = Math.max(fontSize - 1, 10)
-        if (newSize !== fontSize) updateAppSetting('terminalFontSize', newSize)
+        const next = Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
+        if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomReset'))) {
         e.preventDefault()
         e.stopPropagation()
-        if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
-          updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
+        if (uiZoomLevel !== UI_ZOOM_DEFAULT) {
+          updateAppSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
         }
         return
       }
@@ -1106,7 +1106,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     activeTerminalId,
     activeTerminal,
     getActiveKey,
-    fontSize,
+    uiZoomLevel,
     updateAppSetting,
     appDefaultShell,
     maxTerminals,
@@ -1154,22 +1154,22 @@ export default function WorkspaceLayout(): React.JSX.Element {
           cycleTab('prev')
           break
         case 'zoomIn': {
-          const newSize = Math.min(fontSize + 1, 24)
-          if (newSize !== fontSize) {
-            updateAppSetting('terminalFontSize', newSize)
+          const next = Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
+          if (next !== uiZoomLevel) {
+            updateAppSetting('uiZoomLevel', next)
           }
           break
         }
         case 'zoomOut': {
-          const newSize = Math.max(fontSize - 1, 10)
-          if (newSize !== fontSize) {
-            updateAppSetting('terminalFontSize', newSize)
+          const next = Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
+          if (next !== uiZoomLevel) {
+            updateAppSetting('uiZoomLevel', next)
           }
           break
         }
         case 'zoomReset':
-          if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
-            updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
+          if (uiZoomLevel !== UI_ZOOM_DEFAULT) {
+            updateAppSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
           }
           break
         case 'sidebarToggle':
@@ -1186,7 +1186,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [
     cycleTab,
-    fontSize,
+    uiZoomLevel,
     handleOpenThemePicker,
     updateAppSetting,
     updatePanelVisibility,

@@ -48,7 +48,8 @@ import {
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalRenderer,
-  useTerminalUrlOpenMode
+  useTerminalUrlOpenMode,
+  useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
@@ -60,7 +61,11 @@ import {
   ORPHAN_TIMEOUT_OPTIONS,
   TERMINAL_RENDERER_OPTIONS,
   TERMINAL_URL_OPEN_MODE_OPTIONS,
-  type TerminalUrlOpenMode
+  type TerminalUrlOpenMode,
+  UI_ZOOM_DEFAULT,
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  UI_ZOOM_STEP
 } from '@/types/settings'
 
 const APP_PREF_CATEGORIES: SettingsCategory[] = [
@@ -179,6 +184,7 @@ export default function AppPreferences(): React.JSX.Element {
   const isAurUpdater = isAurUpdateMode()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
+  const uiZoomLevel = useUiZoomLevel()
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
   const defaultShell = useDefaultShell()
@@ -235,6 +241,14 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleFontSizeChange = (value: number) => {
     updateSetting('terminalFontSize', value)
+  }
+
+  const handleUiZoomChange = (value: number) => {
+    updateSetting('uiZoomLevel', value)
+  }
+
+  const handleUiZoomReset = () => {
+    updateSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
   }
 
   const handleBufferSizeChange = (value: number) => {
@@ -352,6 +366,41 @@ export default function AppPreferences(): React.JSX.Element {
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
+                {/* UI Zoom Level (whole interface) */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-secondary-foreground">
+                      UI Zoom Level
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleUiZoomReset}
+                      className="text-xs text-primary hover:underline disabled:opacity-50"
+                      disabled={uiZoomLevel === UI_ZOOM_DEFAULT}
+                    >
+                      Reset to 100%
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min={UI_ZOOM_MIN}
+                      max={UI_ZOOM_MAX}
+                      step={UI_ZOOM_STEP}
+                      value={uiZoomLevel}
+                      onChange={(e) => handleUiZoomChange(parseFloat(e.target.value))}
+                      className="flex-1 h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                    <span className="text-sm text-muted-foreground w-14 text-right">
+                      {Math.round(uiZoomLevel * 100)}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Zoom the entire interface (50–300%). Also adjustable with Ctrl + / Ctrl - / Ctrl
+                    0.
+                  </p>
+                </div>
+
                 {/* Font Family */}
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
