@@ -5,9 +5,11 @@
 pub mod da_filter;
 pub mod env_refresh;
 pub mod manager;
+pub mod slot_manager;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
 
 pub use da_filter::DaFilter;
 pub use manager::{PtyManager, SpawnOptions, TerminalInfo};
+pub use slot_manager::{PtySlotManager, PtySlotManagerHandle, SlotToken, SlotManagerConfig, SlotMetrics};

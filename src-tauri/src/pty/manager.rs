@@ -555,6 +555,9 @@ pub struct TerminalInstance {
     /// (persistence + parity with the desktop terminal). Capped at
     /// `SCROLLBACK_CAP` bytes; oldest bytes are dropped first.
     pub scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
+    /// PTY slot token that holds the slot reservation. When dropped, the slot is automatically released.
+    /// This ensures deterministic cleanup even if other cleanup paths fail.
+    pub slot_token: Option<crate::pty::SlotToken>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -688,44 +691,6 @@ struct TerminalExitEvent {
     signal: Option<i32>,
 }
 
-struct TerminalSlotReservation {
-    active_slots: Arc<AtomicUsize>,
-    committed: bool,
-}
-
-impl TerminalSlotReservation {
-    fn try_acquire(active_slots: Arc<AtomicUsize>) -> Option<Self> {
-        loop {
-            let current = active_slots.load(Ordering::SeqCst);
-            if current >= GLOBAL_TERMINAL_LIMIT {
-                return None;
-            }
-
-            if active_slots
-                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                return Some(Self {
-                    active_slots,
-                    committed: false,
-                });
-            }
-        }
-    }
-
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for TerminalSlotReservation {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.active_slots.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-}
-
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
@@ -742,6 +707,8 @@ pub struct PtyManager {
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
     is_hidden: Arc<AtomicBool>,
+    /// PTY slot manager for enforcing concurrent terminal limit
+    slot_manager: Arc<crate::pty::PtySlotManager>,
 }
 
 impl PtyManager {
@@ -752,6 +719,12 @@ impl PtyManager {
         git_tracker: Arc<GitTracker>,
         exit_code_tracker: Arc<ExitCodeTracker>,
     ) -> Self {
+        let slot_config = crate::pty::SlotManagerConfig {
+            max_slots: 20,
+            orphan_timeout: Duration::from_secs(300),
+            metrics_enabled: true,
+        };
+        
         Self {
             terminals: Arc::new(RwLock::new(HashMap::new())),
             active_terminal_slots: Arc::new(AtomicUsize::new(0)),
@@ -764,6 +737,7 @@ impl PtyManager {
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
+            slot_manager: Arc::new(crate::pty::PtySlotManager::with_config(slot_config)),
         }
     }
 
@@ -805,10 +779,6 @@ impl PtyManager {
             let mut guard = conpty_handles.lock();
             let _ = guard.take();
         }
-    }
-
-    fn try_reserve_terminal_slot(&self) -> Option<TerminalSlotReservation> {
-        TerminalSlotReservation::try_acquire(self.active_terminal_slots.clone())
     }
 
     fn release_terminal_slot(&self) {
@@ -911,9 +881,11 @@ impl PtyManager {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
-        let mut slot_reservation = self
-            .try_reserve_terminal_slot()
-            .ok_or_else(|| "Global terminal limit reached".to_string())?;
+        // Reserve a PTY slot via the slot manager
+        let slot_token = self
+            .slot_manager
+            .try_reserve_slot()
+            .ok_or_else(|| "Terminal slot limit reached (max 20). Close some terminals or wait for orphans to be reaped.".to_string())?;
 
         let id = self.generate_id();
 
@@ -1020,6 +992,7 @@ impl PtyManager {
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                slot_token: Some(slot_token),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -1158,6 +1131,7 @@ impl PtyManager {
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
                 scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                slot_token: Some(slot_token),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -1205,8 +1179,6 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
-
-            slot_reservation.commit();
 
             Ok(TerminalInfo {
                 id,
@@ -1580,6 +1552,11 @@ impl PtyManager {
     /// Check if terminal limit is reached
     pub fn is_limit_reached(&self) -> bool {
         self.active_terminal_slots.load(Ordering::SeqCst) >= GLOBAL_TERMINAL_LIMIT
+    }
+
+    /// Get current PTY slot manager metrics
+    pub fn get_slot_metrics(&self) -> crate::pty::SlotMetrics {
+        self.slot_manager.get_metrics()
     }
 
     /// Kill all terminals (best-effort), used as app-exit safety net.
