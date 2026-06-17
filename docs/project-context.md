@@ -162,3 +162,191 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Remove rules that become obvious over time.
 
 Last Updated: 2026-05-27
+
+---
+
+## Frontend Store Migration System
+
+### Overview
+
+Frontend Zustand stores use `tauri-persistence-api.ts` for persistence, which includes a migration system to safely evolve store schemas without data loss. This is **separate** from the backend Rust data migration system (`tauri-data-migration-api.ts`).
+
+### When to Create a Migration
+
+Create a frontend store migration whenever you change a persisted store's data structure in a way that would break existing user data:
+
+- ✅ Renaming fields in persisted store state
+- ✅ Changing field types (e.g., `string` → `number`, `array` → `object`)
+- ✅ Adding new required fields to existing stores
+- ✅ Restructuring nested objects or arrays
+- ✅ Removing fields that users may have stored
+
+### Migration Workflow
+
+**1. Define Migration Function**
+
+Create a migration file in `src/renderer/lib/migrations/`:
+
+```typescript
+// src/renderer/lib/migrations/your-store-v1-to-v2.ts
+
+import type { IpcResult } from '@shared/types/ipc.types'
+import { Store } from '@tauri-apps/plugin-store'
+
+export async function migrateYourStoreV1toV2(): Promise<IpcResult<void>> {
+  try {
+    const store = await Store.load('termul-data.json', { autoSave: false })
+    
+    // Read current data
+    const rawData = await store.get<{ _version: number; data: OldFormat }>('your-store-key')
+    
+    if (!rawData || !rawData.data) {
+      return { success: true, data: undefined } // No data to migrate
+    }
+    
+    // Transform data from OldFormat to NewFormat
+    const transformedData = transformYourData(rawData.data)
+    
+    // Write back with new version
+    await store.set('your-store-key', {
+      _version: 2,
+      data: transformedData
+    })
+    
+    await store.save()
+    
+    return { success: true, data: undefined }
+  } catch (err) {
+    return {
+      success: false,
+      error: `Migration failed: ${String(err)}`,
+      code: 'MIGRATION_ERROR'
+    }
+  }
+}
+```
+
+**2. Register Migrations on App Startup**
+
+Register all migrations before calling `runMigrations()`:
+
+```typescript
+// In App.tsx or store initialization
+
+import { registerMigration, runMigrations } from '@/lib/tauri-persistence-api'
+import { migrateYourStoreV1toV2 } from '@/lib/migrations/your-store-v1-to-v2'
+
+async function initializeApp() {
+  // Register migrations
+  registerMigration({
+    fromVersion: 1,
+    toVersion: 2,
+    migrate: migrateYourStoreV1toV2
+  })
+  
+  // Run all pending migrations
+  const result = await runMigrations()
+  
+  if (!result.success) {
+    console.error('Migration failed:', result.error)
+    // Handle failure (show error dialog, etc.)
+  }
+  
+  // Continue with app initialization...
+}
+```
+
+**3. Test Thoroughly**
+
+Write comprehensive tests for your migration:
+
+```typescript
+// src/renderer/lib/migrations/__tests__/your-store-v1-to-v2.test.ts
+
+import { describe, it, expect, beforeEach } from 'vitest'
+import { migrateYourStoreV1toV2 } from '../your-store-v1-to-v2'
+
+describe('Store v1→v2 Migration', () => {
+  beforeEach(() => {
+    // Setup mock store with v1 data
+  })
+  
+  it('transforms v1 data to v2 format', async () => {
+    const result = await migrateYourStoreV1toV2()
+    
+    expect(result.success).toBe(true)
+    // Verify transformed data structure
+  })
+  
+  it('handles missing data gracefully', async () => {
+    // Test with empty store
+    const result = await migrateYourStoreV1toV2()
+    expect(result.success).toBe(true)
+  })
+})
+```
+
+### Critical Migration Rules
+
+**Execution Behavior:**
+- Migrations run **sequentially** (v1→v2, then v2→v3) on app startup
+- If any migration fails, the chain stops and version stays at last successful state
+- Fresh installs start at version 1 (no stored `_schema_version` key)
+
+**Implementation Requirements:**
+- Migration functions must be **idempotent** (safe to run multiple times on same data)
+- Always return proper `IpcResult<void>` with error handling
+- Don't modify the store's `_version` field manually - system handles it via `_schema_version` key
+- Test both success and failure paths
+
+**Scope:**
+- Frontend store migrations are **separate** from Rust backend data migrations
+- Frontend: `tauri-persistence-api.ts` → stores Zustand state
+- Backend: `tauri-data-migration-api.ts` → stores Rust app data
+
+### Example Reference
+
+See `src/renderer/lib/migrations/acp-store-v1-to-v2.example.ts` for a complete annotated example showing:
+- Type definitions for old and new formats
+- Data transformation logic
+- Error handling patterns
+- Registration workflow
+- Testing approaches
+
+### API Reference
+
+**Migration Registration:**
+
+```typescript
+import { registerMigration, type Migration } from '@/lib/tauri-persistence-api'
+
+const migration: Migration = {
+  fromVersion: 1,
+  toVersion: 2,
+  migrate: async () => Promise<IpcResult<void>>
+}
+
+registerMigration(migration) // Returns IpcResult<void>
+```
+
+**Migration Execution:**
+
+```typescript
+import { runMigrations } from '@/lib/tauri-persistence-api'
+
+const result = await runMigrations()
+// Returns: IpcResult<Array<{ fromVersion: number; toVersion: number; success: boolean }>>
+```
+
+**Version Checking:**
+
+```typescript
+import { getCurrentSchemaVersion } from '@/lib/tauri-persistence-api'
+
+const versionResult = await getCurrentSchemaVersion()
+// Returns: IpcResult<number> (defaults to 1 for fresh installs)
+```
+
+---
+
+**Last Updated:** 2026-06-18 (Added frontend store migration system documentation)
