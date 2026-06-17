@@ -266,7 +266,11 @@ export function CodeEditor({
             <div className="relative h-full w-full">
               <div ref={containerRef} className="w-full h-full overflow-hidden" />
               {!isReady && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                >
                   <span className="text-sm text-muted-foreground animate-pulse motion-reduce:animate-none">
                     Loading...
                   </span>

@@ -97,6 +97,12 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
 const PRELOAD_LANGUAGES = ['javascript', 'typescript', 'json'] as const
 
 let preloaded = false
+
+/**
+ * Eagerly load the most common CodeMirror language extensions into the shared
+ * `languageCache` so the first open of a js/ts/json file doesn't pay the
+ * dynamic-import cost. Idempotent; safe to call multiple times.
+ */
 export function preloadCommonLanguages(): void {
   if (preloaded) return
   preloaded = true
@@ -123,6 +129,7 @@ interface UseCodeMirrorOptions {
 
 interface UseCodeMirrorResult {
   view: EditorView | null
+  /** True once the EditorView has been created and is safe to dispatch to. */
   isReady: boolean
   setContent: (content: string) => void
   flushPendingContent: () => void

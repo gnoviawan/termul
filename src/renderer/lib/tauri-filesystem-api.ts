@@ -634,6 +634,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
       }
     },
 
+    /**
+     * Copy a file to a new path using a binary-safe native copy.
+     * Returns `COPY_ERROR` on failure (e.g. when the source is a directory).
+     */
     async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
       try {
         await copyFile(srcPath, destPath)
