@@ -397,6 +397,93 @@ Line 3`
     })
   })
 
+  describe('pasteFromClipboard with pasteText callback', () => {
+    it('should call pasteText with bracket-wrapped text and not call terminal.paste', async () => {
+      const clipboardText = 'Hello World'
+      const mockTerminal = createMockTerminal(false, '')
+      const mockPasteText = vi.fn()
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
+
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          pasteText: mockPasteText
+        })
+      )
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockPasteText).toHaveBeenCalledWith('\x1b[200~Hello World\x1b[201~')
+      expect(mockTerminal.paste).not.toHaveBeenCalled()
+    })
+
+    it('should sanitize ESC characters before wrapping in brackets', async () => {
+      const clipboardText = '\x1b[?2004hmalicious\x1b[?2004l'
+      const mockTerminal = createMockTerminal(false, '')
+      const mockPasteText = vi.fn()
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
+
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          pasteText: mockPasteText
+        })
+      )
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockPasteText).toHaveBeenCalledWith(
+        '\x1b[200~\u241b[?2004hmalicious\u241b[?2004l\x1b[201~'
+      )
+    })
+
+    it('should normalize multiline text and wrap in brackets via pasteText', async () => {
+      const clipboardText = `Line 1
+Line 2
+Line 3`
+      const mockTerminal = createMockTerminal(false, '')
+      const mockPasteText = vi.fn()
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: clipboardText })
+
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          pasteText: mockPasteText
+        })
+      )
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockPasteText).toHaveBeenCalledWith('\x1b[200~Line 1\rLine 2\rLine 3\x1b[201~')
+      expect(mockTerminal.paste).not.toHaveBeenCalled()
+    })
+
+    it('should handle pasteText when clipboard is empty', async () => {
+      const mockTerminal = createMockTerminal(false, '')
+      const mockPasteText = vi.fn()
+      mockClipboardApi.readText.mockResolvedValue({ success: true, data: '' })
+
+      const { result } = renderHook(() =>
+        useTerminalClipboard({
+          terminal: mockTerminal as unknown as Terminal,
+          pasteText: mockPasteText
+        })
+      )
+
+      await act(async () => {
+        await result.current.pasteFromClipboard()
+      })
+
+      expect(mockPasteText).not.toHaveBeenCalled()
+    })
+  })
+
   describe('terminal reference stability', () => {
     it('should maintain stable callback references', async () => {
       const mockTerminal = createMockTerminal(true, 'text')

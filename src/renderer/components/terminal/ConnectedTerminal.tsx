@@ -339,6 +339,11 @@ function ConnectedTerminalComponent({
 
   const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({
     terminal: terminalInstance,
+    pasteText: async (text: string) => {
+      const ptyId = ptyIdRef.current
+      if (!ptyId) return
+      await terminalApi.write(ptyId, text)
+    },
     onImagePaste: async () => {
       const ptyId = ptyIdRef.current
       if (!ptyId) return

@@ -1144,6 +1144,37 @@ describe('ConnectedTerminal', () => {
       })
     })
 
+    it('should write bracket-wrapped paste data to PTY via terminalApi.write', async () => {
+      const clipboardText = 'Line 1\nLine 2\nLine 3'
+      vi.mocked(clipboardApi).readText.mockResolvedValue({ success: true, data: clipboardText })
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'v',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      handler(event)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith(
+          'terminal-123',
+          '\x1b[200~Line 1\rLine 2\rLine 3\x1b[201~'
+        )
+      })
+
+      // terminal.paste should NOT be called when pasteText is wired
+      expect(mockTerminalInstance.paste).not.toHaveBeenCalled()
+    })
+
     it('should select all on Ctrl+A', async () => {
       render(<ConnectedTerminal />)
 

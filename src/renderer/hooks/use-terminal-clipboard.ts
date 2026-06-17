@@ -23,6 +23,13 @@ function normalizePasteText(text: string): string {
   return text.replace(/\r?\n/g, '\r')
 }
 
+// Sanitize ESC characters to prevent injected escape sequences from exiting
+// the bracketed paste region. Matches xterm.js's bracketTextForPaste() behavior
+// (replaces \x1b with its visible representation U+241B = ␛).
+function sanitizeEscapeSequences(text: string): string {
+  return text.split(String.fromCharCode(0x1b)).join('\u241b')
+}
+
 export function useTerminalClipboard(
   options: UseTerminalClipboardOptions
 ): UseTerminalClipboardReturn {
@@ -113,7 +120,8 @@ export function useTerminalClipboard(
         }
         const normalizedText = normalizePasteText(result.data)
         if (pasteText) {
-          await pasteText(`${BRACKETED_PASTE_START}${normalizedText}${BRACKETED_PASTE_END}`)
+          const sanitizedText = sanitizeEscapeSequences(normalizedText)
+          await pasteText(`${BRACKETED_PASTE_START}${sanitizedText}${BRACKETED_PASTE_END}`)
         } else {
           currentTerminal.paste(normalizedText)
         }
