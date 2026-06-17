@@ -24,7 +24,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element | null
   if (entries.length === 0) return null
   return (
     <div className="mx-4 my-2 rounded-md border border-border/50 bg-card/30">
-      <div className="flex items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground">
+      <div className="flex items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-2xs font-semibold text-muted-foreground">
         <ListChecks size={12} />
         Plan
       </div>

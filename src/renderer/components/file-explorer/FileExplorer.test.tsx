@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
 const mockToggleDirectory = vi.fn()
@@ -19,6 +20,11 @@ const mockSetRootLoadError = vi.fn()
 const mockSetSearchQuery = vi.fn()
 const mockSearchInRoot = vi.fn()
 const mockResetSearch = vi.fn()
+
+const mockSearchFileNamesStreamCancel = vi
+  .fn()
+  .mockResolvedValue({ success: true, data: undefined })
+const mockSearchContentStreamCancel = vi.fn().mockResolvedValue({ success: true, data: undefined })
 
 const mockOpenFile = vi.fn()
 const mockCloseFile = vi.fn()
@@ -42,7 +48,7 @@ const mockExplorerState = {
     filePath: string
     matches: Array<{ lineNumber: number; lineText: string }>
   }>,
-  searchFileNameMatches: [] as string[],
+  searchFileNameMatches: [] as string[] | null,
   searchLoading: false,
   searchError: null as string | null,
   searchTruncated: false,
@@ -74,12 +80,19 @@ vi.mock('@/stores/file-explorer-store', () => ({
   useFileExplorerStore: {
     getState: vi.fn(() => ({
       expandedDirs: new Set<string>(),
-      selectedPath: null,
+      selectedPaths: new Set<string>(),
       loadingDirs: new Set<string>(),
       lastClickedPath: null,
       clearSelection: mockClearSelection
     })),
     setState: vi.fn()
+  }
+}))
+
+vi.mock('@/lib/api', () => ({
+  filesystemApi: {
+    searchFileNamesStreamCancel: (...args: unknown[]) => mockSearchFileNamesStreamCancel(...args),
+    searchContentStreamCancel: (...args: unknown[]) => mockSearchContentStreamCancel(...args)
   }
 }))
 
@@ -127,7 +140,7 @@ beforeEach(() => {
   mockExplorerState.clipboard = null
   mockExplorerState.searchQuery = ''
   mockExplorerState.searchResults = []
-  mockExplorerState.searchFileNameMatches = []
+  mockExplorerState.searchFileNameMatches = null
   mockExplorerState.searchLoading = false
   mockExplorerState.searchError = null
   mockExplorerState.searchTruncated = false
@@ -232,6 +245,46 @@ describe('FileExplorer', () => {
 
     expect(screen.getByRole('tab', { name: /Files 1/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByText('term-search.ts')).toBeInTheDocument()
+  })
+
+  it('shows the Files tab with an ellipsis while filename matches are still pending', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
+    mockExplorerState.searchFileNameMatches = null
+
+    render(<FileExplorer />)
+
+    expect(screen.getByRole('tab', { name: /Files …/i })).toBeInTheDocument()
+  })
+
+  it('replaces the pending indicator with the streamed count once matches arrive', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+    mockExplorerState.searchLastCompletedQuery = 'term'
+    mockExplorerState.searchResults = [
+      {
+        filePath: '/project/src/FileExplorer.tsx',
+        matches: [{ lineNumber: 12, lineText: 'const term = createExplorerSearch();' }]
+      }
+    ]
+    mockExplorerState.searchFileNameMatches = null
+
+    const { rerender } = render(<FileExplorer />)
+    expect(screen.getByRole('tab', { name: /Files …/i })).toBeInTheDocument()
+
+    mockExplorerState.searchFileNameMatches = ['/project/src/term-search.ts']
+    rerender(<FileExplorer />)
+
+    expect(screen.getByRole('tab', { name: /Files 1/i })).toBeInTheDocument()
   })
 
   it('opens file-name search results with existing editor behavior', async () => {
@@ -436,5 +489,73 @@ describe('FileExplorer', () => {
       screen.getByText((_, element) => element?.textContent === 'term fourth')
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument()
+  })
+
+  it('cancels in-flight filename and content streams on unmount with the active searchId', () => {
+    // The unmount cleanup must fire the cancel IPC for both the filename
+    // and the content stream, scoped to the searchId that was active at
+    // effect setup time (not at cleanup time, in case the store id
+    // changed via a different code path between setup and unmount).
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = 'term'
+
+    // Mock getState to return searchRequestId = 5
+    vi.mocked(useFileExplorerStore.getState).mockReturnValue({
+      searchRequestId: 5,
+      expandedDirs: new Set<string>(),
+      selectedPaths: new Set<string>(),
+      loadingDirs: new Set<string>(),
+      lastClickedPath: null,
+      clearSelection: vi.fn()
+    } as unknown as FileExplorerState)
+
+    const { unmount } = render(<FileExplorer />)
+    mockSearchFileNamesStreamCancel.mockClear()
+    mockSearchContentStreamCancel.mockClear()
+
+    // The id was captured at setup; even if the store value changes before
+    // unmount, the cleanup must still use the captured id.
+    vi.mocked(useFileExplorerStore.getState).mockReturnValue({
+      searchRequestId: 99, // would-be new id, but cleanup should ignore
+      expandedDirs: new Set<string>(),
+      selectedPaths: new Set<string>(),
+      loadingDirs: new Set<string>(),
+      lastClickedPath: null,
+      clearSelection: vi.fn()
+    } as unknown as FileExplorerState)
+
+    unmount()
+
+    expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledTimes(1)
+    expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledWith('search-5')
+    expect(mockSearchContentStreamCancel).toHaveBeenCalledTimes(1)
+    expect(mockSearchContentStreamCancel).toHaveBeenCalledWith('search-5')
+  })
+
+  it('does not call cancel on unmount when no search is in flight', () => {
+    // When searchRequestId is 0 (no search), the unmount effect's id > 0
+    // guard must short-circuit so we do not issue a cancel for `search-0`.
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([['/project', []]])
+    mockExplorerState.searchQuery = ''
+
+    vi.mocked(useFileExplorerStore.getState).mockReturnValue({
+      searchRequestId: 0,
+      expandedDirs: new Set<string>(),
+      selectedPaths: new Set<string>(),
+      loadingDirs: new Set<string>(),
+      lastClickedPath: null,
+      clearSelection: vi.fn()
+    } as unknown as FileExplorerState)
+
+    const { unmount } = render(<FileExplorer />)
+    mockSearchFileNamesStreamCancel.mockClear()
+    mockSearchContentStreamCancel.mockClear()
+
+    unmount()
+
+    expect(mockSearchFileNamesStreamCancel).not.toHaveBeenCalled()
+    expect(mockSearchContentStreamCancel).not.toHaveBeenCalled()
   })
 })

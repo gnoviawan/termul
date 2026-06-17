@@ -25,7 +25,13 @@ const { mockApi } = vi.hoisted(() => ({
     filesystem: {
       readDirectory: vi.fn(),
       watchDirectory: vi.fn(),
-      unwatchDirectory: vi.fn()
+      unwatchDirectory: vi.fn(),
+      searchContentStreamCancel: vi.fn(),
+      searchFileNamesStreamCancel: vi.fn(),
+      onSearchContentBatch: vi.fn(() => () => {}),
+      onSearchContentDone: vi.fn(() => () => {}),
+      onSearchFileNamesBatch: vi.fn(() => () => {}),
+      onSearchFileNamesDone: vi.fn(() => () => {})
     }
   }
 }))
@@ -220,12 +226,19 @@ describe('file-explorer-store', () => {
       })
     })
 
-    it('should collapse a directory and remove its contents', async () => {
+    it('should collapse a directory and defer content removal until finalize', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
 
-      const state = useFileExplorerStore.getState()
+      let state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project')).toBe(false)
+      expect(state.directoryContents.has('/project')).toBe(true)
+      expect(state.pendingCollapses.has('/project')).toBe(true)
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
+
+      state = useFileExplorerStore.getState()
       expect(state.directoryContents.has('/project')).toBe(false)
+      expect(state.pendingCollapses.has('/project')).toBe(false)
     })
 
     it('should also collapse child directories', async () => {
@@ -233,11 +246,16 @@ describe('file-explorer-store', () => {
 
       const state = useFileExplorerStore.getState()
       expect(state.expandedDirs.has('/project/src')).toBe(false)
-      expect(state.directoryContents.has('/project/src')).toBe(false)
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
+      expect(useFileExplorerStore.getState().directoryContents.has('/project/src')).toBe(false)
     })
 
-    it('should unwatch collapsed directory and its children', async () => {
+    it('should unwatch collapsed directory and its children after finalize', async () => {
       await useFileExplorerStore.getState().toggleDirectory('/project')
+      vi.clearAllMocks()
+
+      useFileExplorerStore.getState().finalizeDirectoryCollapse('/project')
 
       expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project')
       expect(mockApi.filesystem.unwatchDirectory).toHaveBeenCalledWith('/project/src')
@@ -393,6 +411,50 @@ describe('file-explorer-store', () => {
 
       useFileExplorerStore.getState().removeDirectoryContents('/dir')
       expect(useFileExplorerStore.getState().directoryContents.has('/dir')).toBe(false)
+    })
+  })
+  describe('searchInRoot - error code reset', () => {
+    it('clears stale searchErrorCode when called with an empty query (trimmed.length < 2)', async () => {
+      useFileExplorerStore.setState({
+        rootPath: '/project',
+        searchError: 'prior error',
+        searchErrorCode: 'QUERY_TOO_LONG'
+      })
+
+      await useFileExplorerStore.getState().searchInRoot('', 0)
+
+      const state = useFileExplorerStore.getState()
+      expect(state.searchError).toBeNull()
+      expect(state.searchErrorCode).toBeNull()
+    })
+
+    it('clears stale searchErrorCode when called with a single-char query', async () => {
+      useFileExplorerStore.setState({
+        rootPath: '/project',
+        searchError: 'prior error',
+        searchErrorCode: 'QUERY_TOO_LONG'
+      })
+
+      await useFileExplorerStore.getState().searchInRoot('a', 0)
+
+      const state = useFileExplorerStore.getState()
+      expect(state.searchError).toBeNull()
+      expect(state.searchErrorCode).toBeNull()
+    })
+
+    it('clears stale searchErrorCode when no project is selected', async () => {
+      useFileExplorerStore.setState({
+        rootPath: null,
+        scopeRoot: null,
+        searchError: 'prior error',
+        searchErrorCode: 'RG_STREAM_FAILED'
+      })
+
+      await useFileExplorerStore.getState().searchInRoot('term', 0)
+
+      const state = useFileExplorerStore.getState()
+      expect(state.searchError).toBe('No project selected')
+      expect(state.searchErrorCode).toBeNull()
     })
   })
 })

@@ -150,7 +150,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
                     <>
                       The server listens on <strong>localhost only</strong>. To reach it from
                       another device, use a tunnel (e.g.{' '}
-                      <code className="text-[11px]">cloudflared</code>) or switch to &quot;All
+                      <code className="text-2xs">cloudflared</code>) or switch to &quot;All
                       interfaces&quot; and restart.
                     </>
                   )}

@@ -61,7 +61,7 @@ export const AgentIcon = memo(function AgentIcon({
   return (
     <span
       aria-hidden="true"
-      className={`flex shrink-0 items-center justify-center rounded-sm bg-foreground/10 text-[8px] font-semibold uppercase ${className}`}
+      className={`flex shrink-0 items-center justify-center rounded-sm bg-foreground/10 text-4xs font-semibold uppercase ${className}`}
     >
       {resolved.displayName?.charAt(0) ?? '?'}
     </span>

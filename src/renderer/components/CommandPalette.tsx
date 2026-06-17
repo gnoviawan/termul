@@ -416,7 +416,7 @@ export function CommandPalette({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {cmd.shortcut && (
-            <CommandShortcut className="rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-[10px] tracking-normal text-muted-foreground">
+            <CommandShortcut className="rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-3xs tracking-normal text-muted-foreground">
               {cmd.shortcut}
             </CommandShortcut>
           )}
@@ -467,7 +467,7 @@ export function CommandPalette({
             onClick={(e) => e.stopPropagation()}
           >
             <Command
-              className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
+              className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-3xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
               shouldFilter={true}
             >
               <CommandInput
@@ -499,7 +499,7 @@ export function CommandPalette({
                 ))}
               </CommandList>
 
-              <div className="flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="label-group flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-muted-foreground">
                 <span className="flex items-center gap-3">
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>

@@ -134,7 +134,8 @@ describe('app-settings-store', () => {
         sshPanelVisible: true,
         remoteBindMode: 'localhost' as const,
         colorTheme: 'dracula',
-        appearanceMode: 'dark' as const
+        appearanceMode: 'dark' as const,
+        uiZoomLevel: 1
       }
 
       const { setSettings } = useAppSettingsStore.getState()
@@ -167,7 +168,8 @@ describe('app-settings-store', () => {
           sshPanelVisible: false,
           remoteBindMode: 'all' as const,
           colorTheme: 'nord',
-          appearanceMode: 'light' as const
+          appearanceMode: 'light' as const,
+          uiZoomLevel: 1.2
         },
         isLoaded: true
       })

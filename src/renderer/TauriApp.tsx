@@ -19,11 +19,13 @@ import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
+import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
@@ -50,6 +52,7 @@ function AppEffects(): null {
   useContextBarSettings()
   useAppSettingsLoader()
   useAppliedColorThemeSync()
+  useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
@@ -60,6 +63,7 @@ function AppEffects(): null {
   useTerminalExitNotification()
   useRemoteProjects()
   useAcpListeners()
+  usePreventFileDropNavigation()
 
   // Initialize desktop notification permissions once at app startup
   // so the OS permission prompt appears early, not on first terminal exit

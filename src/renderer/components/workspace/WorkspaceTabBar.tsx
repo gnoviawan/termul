@@ -171,12 +171,12 @@ function TerminalTabInline({
             }}
             onBlur={handleSave}
             onClick={(e) => e.stopPropagation()}
-            className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
+            className="text-2xs font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
           <span
             onDoubleClick={handleDoubleClick}
-            className={cn('text-[11px] font-medium', isActive && 'text-foreground')}
+            className={cn('text-2xs font-medium', isActive && 'text-foreground')}
           >
             {terminal.name}
           </span>
@@ -394,7 +394,7 @@ function BrowserTabInline({
         )}
 
         <Globe size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
-        <span className={cn('text-[11px] font-medium truncate', isActive && 'text-foreground')}>
+        <span className={cn('text-2xs font-medium truncate', isActive && 'text-foreground')}>
           {label}
         </span>
         <button
@@ -484,11 +484,11 @@ function GitTabInline({
         )}
       >
         <GitBranch size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-[11px] font-medium flex-1">Git Changes</span>
+        <span className="truncate text-2xs font-medium flex-1">Git Changes</span>
         {totalChanges > 0 && (
           <span
             className={cn(
-              'px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-[9px] font-bold',
+              'px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-4xs font-bold',
               isActive
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-muted-foreground/20 text-muted-foreground'
@@ -580,7 +580,7 @@ function GitHistoryTabInline({
         )}
       >
         <History size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-[11px] font-medium flex-1">Git History</span>
+        <span className="truncate text-2xs font-medium flex-1">Git History</span>
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -670,7 +670,7 @@ function AgentChatTabInline({
         <Bot size={12} className={isActive ? 'text-primary' : ''} />
         <span
           className={cn(
-            'truncate text-[11px] font-medium flex-1',
+            'truncate text-2xs font-medium flex-1',
             isClosed && 'line-through opacity-60'
           )}
         >
@@ -1157,7 +1157,7 @@ export function WorkspaceTabBar({
 
             {isTerminalMenuOpen && (
               <div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
-                <div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30">
+                <div className="px-2.5 py-1 text-2xs font-medium text-muted-foreground bg-secondary/30">
                   Terminal
                 </div>
                 {loading ? (
@@ -1172,22 +1172,20 @@ export function WorkspaceTabBar({
                         key={shell.name}
                         onClick={() => handleSelectShell(shell)}
                         className={cn(
-                          'w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-secondary flex items-center gap-2 leading-none',
+                          'w-full px-2.5 py-1.5 text-left text-2xs hover:bg-secondary flex items-center gap-2 leading-none',
                           shell.name === defaultShell && 'text-primary'
                         )}
                       >
                         <TerminalIcon size={11} />
                         <span className="truncate">{shell.displayName}</span>
                         {shell.name === defaultShell && (
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            (default)
-                          </span>
+                          <span className="ml-auto text-3xs text-muted-foreground">(default)</span>
                         )}
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  <div className="px-2.5 py-1.5 text-2xs text-muted-foreground">
                     No shells detected
                   </div>
                 )}

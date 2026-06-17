@@ -949,10 +949,15 @@ impl PtyManager {
             self.get_home_directory()
         };
 
-        // Verify CWD exists
-        if !Path::new(&cwd).exists() {
-            return Err(format!("Directory does not exist: {}", cwd));
-        }
+        // Verify CWD exists and canonicalize to resolve symlinks and path traversal.
+        // On Windows, canonicalize returns a verbatim device-namespace path (the
+        // extended-length prefix) that cmd.exe/ConPTY and other external tools reject
+        // as "UNC paths are not supported", making the shell fall back to the Windows
+        // directory. Normalize it to a tool-friendly form (no-op off Windows),
+        // mirroring the #347 fix for git worktree paths. See `strip_verbatim_prefix`.
+        let cwd = std::fs::canonicalize(&cwd)
+            .map_err(|e| format!("Invalid working directory '{}': {}", cwd, e))?;
+        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy()).into_owned();
 
         // Get terminal size
         let cols = options.cols.unwrap_or(80);
