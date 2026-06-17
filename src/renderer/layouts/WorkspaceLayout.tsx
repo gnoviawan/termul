@@ -758,6 +758,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [shortcuts]
   )
 
+  // Shared whole-UI zoom action used by both the DOM keydown path and the
+  // keyboardApi.onShortcut callback so behavior stays identical.
+  const applyZoomAction = useCallback(
+    (action: 'zoomIn' | 'zoomOut' | 'zoomReset'): void => {
+      const next =
+        action === 'zoomIn'
+          ? Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
+          : action === 'zoomOut'
+            ? Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
+            : UI_ZOOM_DEFAULT
+      if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
+    },
+    [uiZoomLevel, updateAppSetting]
+  )
+
   // Determine if we should show the terminal area (only on workspace dashboard)
   const isWorkspaceRoute = location.pathname === '/'
 
@@ -1055,23 +1070,19 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
         e.stopPropagation()
-        const next = Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
-        if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
+        applyZoomAction('zoomIn')
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomOut'))) {
         e.preventDefault()
         e.stopPropagation()
-        const next = Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
-        if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
+        applyZoomAction('zoomOut')
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomReset'))) {
         e.preventDefault()
         e.stopPropagation()
-        if (uiZoomLevel !== UI_ZOOM_DEFAULT) {
-          updateAppSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
-        }
+        applyZoomAction('zoomReset')
         return
       }
 
@@ -1106,8 +1117,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     activeTerminalId,
     activeTerminal,
     getActiveKey,
-    uiZoomLevel,
-    updateAppSetting,
+    applyZoomAction,
     appDefaultShell,
     maxTerminals,
     isWorkspaceRoute,
@@ -1153,24 +1163,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
         case 'prevTerminal':
           cycleTab('prev')
           break
-        case 'zoomIn': {
-          const next = Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
-          if (next !== uiZoomLevel) {
-            updateAppSetting('uiZoomLevel', next)
-          }
+        case 'zoomIn':
+          applyZoomAction('zoomIn')
           break
-        }
-        case 'zoomOut': {
-          const next = Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
-          if (next !== uiZoomLevel) {
-            updateAppSetting('uiZoomLevel', next)
-          }
+        case 'zoomOut':
+          applyZoomAction('zoomOut')
           break
-        }
         case 'zoomReset':
-          if (uiZoomLevel !== UI_ZOOM_DEFAULT) {
-            updateAppSetting('uiZoomLevel', UI_ZOOM_DEFAULT)
-          }
+          applyZoomAction('zoomReset')
           break
         case 'sidebarToggle':
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
@@ -1184,14 +1184,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
       }
     })
-  }, [
-    cycleTab,
-    uiZoomLevel,
-    handleOpenThemePicker,
-    updateAppSetting,
-    updatePanelVisibility,
-    isSidebarVisible
-  ])
+  }, [cycleTab, applyZoomAction, handleOpenThemePicker, updatePanelVisibility, isSidebarVisible])
 
   const closeTerminalByRecordId = useCallback(
     async (terminalRecordId: string): Promise<boolean> => {

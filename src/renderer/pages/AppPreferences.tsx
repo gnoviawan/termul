@@ -95,6 +95,12 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'appearance',
+    label: 'UI Zoom Level',
+    description: 'Zoom the entire interface (50–300%).',
+    keywords: ['ui zoom', 'zoom', 'interface scale', 'window zoom', 'magnify']
+  },
+  {
+    categoryId: 'appearance',
     label: 'Scrollback Buffer Size',
     description: 'Number of lines to keep in terminal history.',
     keywords: ['history', 'lines', 'memory']
@@ -396,8 +402,8 @@ export default function AppPreferences(): React.JSX.Element {
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Zoom the entire interface (50–300%). Also adjustable with Ctrl + / Ctrl - / Ctrl
-                    0.
+                    Zoom the entire interface (50–300%). Also adjustable with Ctrl+=, Ctrl+-,
+                    Ctrl+0.
                   </p>
                 </div>
 
