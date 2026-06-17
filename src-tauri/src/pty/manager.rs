@@ -2206,8 +2206,8 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
             // KILL_ON_JOB_CLOSE only fires when the LAST handle closes, so an
             // extra duplicate is safe and does not terminate the tree early.
             let mut dup_job: *mut winapi::ctypes::c_void = std::ptr::null_mut();
-            if !self.job_handle.is_null() {
-                if winapi::um::handleapi::DuplicateHandle(
+            if !self.job_handle.is_null()
+                && winapi::um::handleapi::DuplicateHandle(
                     winapi::um::processthreadsapi::GetCurrentProcess(),
                     self.job_handle,
                     winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -2216,14 +2216,13 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
                     0,
                     winapi::um::winnt::DUPLICATE_SAME_ACCESS,
                 ) == 0
-                {
-                    log::warn!(
-                        "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
-                        self.pid,
-                        std::io::Error::last_os_error()
-                    );
-                    dup_job = std::ptr::null_mut();
-                }
+            {
+                log::warn!(
+                    "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
+                    self.pid,
+                    std::io::Error::last_os_error()
+                );
+                dup_job = std::ptr::null_mut();
             }
 
             Box::new(WindowsConPtyChild {
@@ -2791,8 +2790,8 @@ mod tests {
         // the candidates in lib.rs get_available_shells()
         // This test ensures the git_bash_paths constants stay in sync
 
-        // Verify primary paths are non-empty and well-formed
-        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty());
+        // Verify primary paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::PRIMARY_PATHS.is_empty()) };
         for path in git_bash_paths::PRIMARY_PATHS {
             assert!(
                 path.contains("bash.exe"),
@@ -2801,8 +2800,8 @@ mod tests {
             );
         }
 
-        // Verify fallback paths are non-empty and well-formed
-        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty());
+        // Verify fallback paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::FALLBACK_PATHS.is_empty()) };
         for path in git_bash_paths::FALLBACK_PATHS {
             assert!(
                 path.contains("bash.exe"),
