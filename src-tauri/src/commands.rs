@@ -41,7 +41,7 @@ fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Resu
 /// Returns the canonicalized path or an error if the path is invalid or inaccessible.
 fn validate_project_path(path: &str) -> Result<PathBuf, String> {
     let path_buf = PathBuf::from(path);
-    
+
     // Canonicalize to resolve symlinks and relative paths
     let canonical = path_buf.canonicalize().map_err(|e| {
         log::warn!(
@@ -51,9 +51,16 @@ fn validate_project_path(path: &str) -> Result<PathBuf, String> {
         );
         format!("Invalid or inaccessible path: {}", e)
     })?;
-    
-    log::debug!("[Security] Path validated: {} -> {:?}", path, canonical);
-    Ok(canonical)
+
+    // On Windows, `canonicalize()` returns a verbatim (`\\?\…`) path. That prefix
+    // defeats external tools such as `git.exe` (e.g. `git worktree add` fails with
+    // "could not create leading directories …: Invalid argument"). Strip it so the
+    // validated path stays tool-friendly while keeping the canonicalization benefits.
+    let canonical_str = canonical.to_string_lossy();
+    let simplified = path_validation::strip_verbatim_prefix(&canonical_str).into_owned();
+
+    log::debug!("[Security] Path validated: {} -> {}", path, simplified);
+    Ok(PathBuf::from(simplified))
 }
 
 /// Macro to validate a path and convert it to a String, returning early with an IpcResult error if validation fails.
@@ -1129,6 +1136,12 @@ pub struct SearchContentCancelRequest {
     pub search_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesCancelRequest {
+    pub search_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentBatchEvent {
@@ -1144,23 +1157,48 @@ pub struct SearchContentDoneEvent {
     pub truncated: bool,
     pub scanned_files: usize,
     pub failed_files: usize,
+    /// Programmatic error code (e.g. `QUERY_TOO_LONG`). Mirrors the field on
+    /// `SearchFileNamesDoneEvent` so the renderer can branch on it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesRequest {
+pub struct SearchFileNamesStreamRequest {
     pub scope_root: String,
     pub root_path: String,
     pub query: String,
+    pub search_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchFileNamesResponse {
+pub struct SearchFileNamesBatchEvent {
+    pub search_id: String,
     pub files: Vec<String>,
+    /// `None` on mid-stream batches (final truncation state is not yet known).
+    /// `Some(true)` is set on the trailing batch if the result was capped, and
+    /// `Some(false)` otherwise. `serde` skips `None` so the field is omitted
+    /// on the wire when not set.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub truncated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesDoneEvent {
+    pub search_id: String,
     pub truncated: bool,
+    pub total_files: usize,
+    /// Programmatic error code (e.g. `QUERY_TOO_LONG`, `PATH_VALIDATION_FAILED`,
+    /// `RG_SPAWN_FAILED`). Set when `error` is set; otherwise `None`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1173,10 +1211,16 @@ pub struct RgInfoResponse {
 }
 
 static SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = OnceLock::new();
+static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> =
+    OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
 fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn filename_search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+    FILENAME_SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(target_os = "windows")]
@@ -1292,6 +1336,10 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+/// Maximum allowed search query length to prevent resource exhaustion via
+/// oversized input passed to ripgrep or the file-name walker.
+const MAX_SEARCH_QUERY_LEN: usize = 500;
+
 fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
     path_validation::validate_search_path(search_root, scope_root)
         .map(|path| path.to_string_lossy().to_string())
@@ -1336,6 +1384,78 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
     args
 }
 
+/// Build the ripgrep argv for a streaming filename search.
+///
+/// We rely on `rg --files --iglob` so we get the same multi-threaded tree walk
+/// that powers content search. The glob form is `**/*{escaped_query}*` to
+/// match the previous "filename contains query" behavior at any directory
+/// depth. `-i` keeps the match case-insensitive on every platform (ripgrep's
+/// default is already case-insensitive on Windows, but Linux/macOS would
+/// otherwise be sensitive). Glob metacharacters in the query are escaped so
+/// they match literally, mirroring the old `contains` semantics.
+fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
+    // Escape glob metacharacters that ripgrep would otherwise interpret as
+    // wildcards (`*`, `?`, `[`, `]`, `{`, `}`, `\`) so the query is matched
+    // as a substring of the basename. `{`/`}` are alternation in globset.
+    let mut escaped = String::with_capacity(query.len());
+    for ch in query.chars() {
+        match ch {
+            '*' | '?' | '[' | ']' | '{' | '}' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+
+    let mut args = vec![
+        "--files".to_string(),
+        "-i".to_string(),
+        "--iglob".to_string(),
+        format!("**/*{}*", escaped),
+    ];
+
+    // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
+    // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
+    // `!**/name/**` form that `build_search_args` uses for content search
+    // is silently dropped here, so we explicitly use the basename form.
+    for ignored in [
+        "node_modules",
+        ".git",
+        ".next",
+        ".cache",
+        ".turbo",
+        "dist",
+        "build",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        "venv",
+        "coverage",
+        ".nyc_output",
+    ] {
+        args.push("-g".to_string());
+        args.push(format!("!{}", ignored));
+    }
+    // Exclude platform cruft and common dotenv secrets. The exact `.env`
+    // exclusion matches the spec; `.env.local` / `.env.production` are
+    // deliberately left to `.gitignore` so a project's own ignore list is
+    // honored.
+    args.push("-g".to_string());
+    args.push("!.env".to_string());
+    args.push("-g".to_string());
+    args.push("!Thumbs.db".to_string());
+    args.push("-g".to_string());
+    args.push("!desktop.ini".to_string());
+    args.push("-g".to_string());
+    args.push("!.DS_Store".to_string());
+
+    args.push(root_path.to_string());
+    args
+}
+
 #[tauri::command]
 pub async fn search_get_rg_info() -> Result<IpcResult<RgInfoResponse>, String> {
     let (resolved_path, source) = resolve_rg_path();
@@ -1363,7 +1483,33 @@ pub async fn search_content_stream(
                 truncated: false,
                 scanned_files: 0,
                 failed_files: 0,
+                code: None,
                 error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] Search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
+            MAX_SEARCH_QUERY_LEN
+        );
+        let _ = app_handle.emit(
+            "search-content-done",
+            SearchContentDoneEvent {
+                search_id: request.search_id,
+                truncated: false,
+                scanned_files: 0,
+                failed_files: 0,
+                code: Some("QUERY_TOO_LONG".to_string()),
+                error: Some(format!(
+                    "Search query too long: {} characters (max {})",
+                    query_char_count,
+                    MAX_SEARCH_QUERY_LEN
+                )),
             },
         );
         return Ok(IpcResult::success(()));
@@ -1385,6 +1531,7 @@ pub async fn search_content_stream(
                     truncated: false,
                     scanned_files: 0,
                     failed_files: 0,
+                    code: Some("PATH_VALIDATION_FAILED".to_string()),
                     error: Some(format!("Invalid search path: {}", e)),
                 },
             );
@@ -1410,6 +1557,7 @@ pub async fn search_content_stream(
                     truncated: false,
                     scanned_files: 0,
                     failed_files: 0,
+                    code: Some("RG_SPAWN_FAILED".to_string()),
                     error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
                 },
             );
@@ -1427,6 +1575,10 @@ pub async fn search_content_stream(
                     truncated: false,
                     scanned_files: 0,
                     failed_files: 1,
+                    // Distinct from `RG_SPAWN_FAILED` (rg binary never
+                    // started). Here rg did start, but its pipe was
+                    // already closed when we tried to take it.
+                    code: Some("RG_STDOUT_CAPTURE_FAILED".to_string()),
                     error: Some("failed to capture rg stdout".to_string()),
                 },
             );
@@ -1446,6 +1598,7 @@ pub async fn search_content_stream(
         let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
+        let mut stream_error: Option<String> = None;
 
         let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
                            truncated: bool| {
@@ -1470,10 +1623,18 @@ pub async fn search_content_stream(
             pending.clear();
         };
 
-        for line in reader.lines() {
-            let line = match line {
-                Ok(v) => v,
-                Err(_) => continue,
+        // Manual loop so we can record the first I/O error instead of
+        // silently dropping it (which `for line in reader.lines()` would
+        // do via its `Err(_) => continue` swallow).
+        let mut iter = reader.lines();
+        loop {
+            let line = match iter.next() {
+                Some(Ok(v)) => v,
+                Some(Err(e)) => {
+                    stream_error = Some(format!("stdout read error: {}", e));
+                    break;
+                }
+                None => break,
             };
 
             let parsed: serde_json::Value = match serde_json::from_str(&line) {
@@ -1544,12 +1705,40 @@ pub async fn search_content_stream(
 
         flush_batch(&mut pending_matches, truncated);
 
-        if let Ok(mut child) = child_handle.lock() {
-            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
-        }
+        // Reap the child and propagate non-zero exit status (other than 1,
+        // which rg uses for "no matches") as a surfaced error. Mirrors the
+        // pattern from `search_file_names_stream` so the renderer can
+        // distinguish a clean run from a runtime rg failure.
+        let exit_status = {
+            let mut child = match child_handle.lock() {
+                Ok(c) => c,
+                Err(_) => {
+                    stream_error.get_or_insert("child handle poisoned".to_string());
+                    return;
+                }
+            };
+            child.wait().ok()
+        };
         if let Ok(mut guard) = search_processes().lock() {
             guard.remove(&search_id);
         }
+
+        let final_error = stream_error.or_else(|| {
+            exit_status
+                .as_ref()
+                .filter(|s| !s.success() && s.code() != Some(1))
+                .map(|s| format!("rg exited with status: {:?}", s))
+        });
+
+        // `RG_STREAM_FAILED` is the catch-all code for any error that
+        // surfaces mid-walk (stdout I/O error or non-zero exit other than
+        // rg's "no matches" code 1). Mirrors the filename stream's
+        // semantic.
+        let final_code = if final_error.is_some() {
+            Some("RG_STREAM_FAILED".to_string())
+        } else {
+            None
+        };
 
         let _ = app_handle.emit(
             "search-content-done",
@@ -1558,7 +1747,8 @@ pub async fn search_content_stream(
                 truncated,
                 scanned_files: 0,
                 failed_files: 0,
-                error: None,
+                code: final_code,
+                error: final_error,
             },
         );
     });
@@ -1574,22 +1764,72 @@ pub async fn search_content_cancel(
     if let Some(child_handle) = guard.remove(&request.search_id) {
         if let Ok(mut child) = child_handle.lock() {
             let _ = child.kill();
-            let _ = child.try_wait().or_else(|_| child.wait().map(Some));
+            let _ = child.wait();
         }
     }
     Ok(IpcResult::success(()))
 }
 
 #[tauri::command]
-pub async fn search_file_names(
-    request: SearchFileNamesRequest,
-) -> Result<IpcResult<SearchFileNamesResponse>, String> {
-    let trimmed_query = request.query.trim().to_lowercase();
+pub async fn search_file_names_stream(
+    request: SearchFileNamesStreamRequest,
+    app_handle: AppHandle,
+) -> Result<IpcResult<()>, String> {
+    let trimmed_query = request.query.trim().to_string();
+    let search_id = request.search_id.clone();
+
     if trimmed_query.is_empty() {
-        return Ok(IpcResult::success(SearchFileNamesResponse {
-            files: vec![],
-            truncated: false,
-        }));
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated: false,
+                total_files: 0,
+                code: None,
+                error: None,
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    if trimmed_query.chars().count() > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] File name search query rejected: length {} exceeds limit of {}",
+            trimmed_query.chars().count(),
+            MAX_SEARCH_QUERY_LEN
+        );
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated: false,
+                total_files: 0,
+                code: Some("QUERY_TOO_LONG".to_string()),
+                error: Some(format!(
+                    "Search query too long: {} characters (max {})",
+                    trimmed_query.chars().count(),
+                    MAX_SEARCH_QUERY_LEN
+                )),
+            },
+        );
+        return Ok(IpcResult::success(()));
+    }
+
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
+        log::warn!(
+            "[Security] File name search query rejected: length {} characters exceeds limit of {}",
+            query_char_count,
+            MAX_SEARCH_QUERY_LEN
+        );
+        return Ok(IpcResult::error(
+            format!(
+                "Search query too long: {} characters (max {})",
+                query_char_count,
+                MAX_SEARCH_QUERY_LEN
+            ),
+            "QUERY_TOO_LONG",
+        ));
     }
 
     let validated_root = match validated_search_root(&request.scope_root, &request.root_path) {
@@ -1601,76 +1841,212 @@ pub async fn search_file_names(
                 request.root_path,
                 e
             );
-            return Ok(IpcResult::error(
-                format!("Invalid search path: {}", e),
-                "PATH_VALIDATION_FAILED",
-            ));
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    code: Some("PATH_VALIDATION_FAILED".to_string()),
+                    error: Some(format!("Invalid search path: {}", e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
     };
 
-    let mut stack = vec![validated_root];
-    let mut matches: Vec<String> = Vec::new();
-    let mut truncated = false;
-    let max_files = 100;
+    let args = build_file_name_search_args(&trimmed_query, &validated_root);
 
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
+    let rg_path = detect_rg_path();
+    let mut rg_command = Command::new(&rg_path);
+    rg_command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure_background_command(&mut rg_command);
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name,
-                None => continue,
-            };
-
-            if [
-                "node_modules",
-                ".git",
-                ".next",
-                ".cache",
-                ".turbo",
-                "dist",
-                "build",
-                ".output",
-                ".nuxt",
-                ".svelte-kit",
-                "__pycache__",
-                ".pytest_cache",
-                "venv",
-                "coverage",
-                ".nyc_output",
-            ]
-            .contains(&file_name)
-            {
-                continue;
-            }
-
-            if path.is_dir() {
-                stack.push(path.to_string_lossy().to_string());
-                continue;
-            }
-
-            if file_name.to_lowercase().contains(&trimmed_query) {
-                matches.push(path.to_string_lossy().replace('\\', "/"));
-                if matches.len() >= max_files {
-                    truncated = true;
-                    break;
-                }
-            }
+    let mut child = match rg_command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    code: Some("RG_SPAWN_FAILED".to_string()),
+                    error: Some(format!("rg spawn failed (path: {}): {}", rg_path, e)),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
+    };
 
-        if truncated {
-            break;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().ok();
+            let _ = app_handle.emit(
+                "search-file-names-done",
+                SearchFileNamesDoneEvent {
+                    search_id,
+                    truncated: false,
+                    total_files: 0,
+                    // Distinct from `RG_SPAWN_FAILED` (which means the rg
+                    // binary never started). Here rg DID start, but the
+                    // pipe was already closed when we tried to take it.
+                    code: Some("RG_STDOUT_CAPTURE_FAILED".to_string()),
+                    error: Some("failed to capture rg stdout".to_string()),
+                },
+            );
+            return Ok(IpcResult::success(()));
         }
+    };
+
+    let child_handle = Arc::new(Mutex::new(child));
+    {
+        let mut guard = filename_search_processes()
+            .lock()
+            .map_err(|e| e.to_string())?;
+        guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
 
-    Ok(IpcResult::success(SearchFileNamesResponse {
-        files: matches,
-        truncated,
-    }))
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = BufReader::new(stdout);
+        let mut files: Vec<String> = Vec::new();
+        let max_files: usize = 100;
+        let batch_size: usize = 25;
+        let mut truncated = false;
+        let mut stream_error: Option<String> = None;
+        let mut last_batch_count: usize = 0;
+
+        // Collect output until we hit the cap, EOF, or a pipe error. The
+        // iterator-based form `map_while(Result::ok)` would swallow I/O
+        // errors, so we use a manual loop that records the first error.
+        let mut iter = reader.lines();
+        loop {
+            match iter.next() {
+                Some(Ok(line)) => {
+                    if files.len() >= max_files {
+                        truncated = true;
+                        break;
+                    }
+                    // ripgrep on Windows may emit verbatim paths
+                    // (e.g. `\\?\C:\...`) when the root is canonicalized.
+                    // Strip the prefix before the slash-normalization so the
+                    // renderer never sees a `\\?\` blob in click paths.
+                    let normalized =
+                        path_validation::strip_verbatim_prefix(&line).replace('\\', "/");
+                    files.push(normalized);
+
+                    // Emit a mid-stream batch when we cross a batch
+                    // boundary, but skip the trailing batch below if we
+                    // already published this exact count.
+                    if files.len() % batch_size == 0 {
+                        // Mid-stream batch — final truncation state is not
+                        // known yet, so the field is `None` (serde omits it
+                        // from the wire). The trailing batch below carries
+                        // the authoritative value.
+                        let _ = app_handle.emit(
+                            "search-file-names-batch",
+                            SearchFileNamesBatchEvent {
+                                search_id: search_id.clone(),
+                                files: files.clone(),
+                                truncated: None,
+                            },
+                        );
+                        last_batch_count = files.len();
+                    }
+                }
+                Some(Err(e)) => {
+                    stream_error = Some(format!("stdout read error: {}", e));
+                    break;
+                }
+                None => break,
+            }
+        }
+
+        // Always publish a final batch with the authoritative list so the
+        // renderer converges to the same total. Skip if the count is exactly
+        // what the last mid-stream batch carried.
+        if files.len() != last_batch_count {
+            let _ = app_handle.emit(
+                "search-file-names-batch",
+                SearchFileNamesBatchEvent {
+                    search_id: search_id.clone(),
+                    files: files.clone(),
+                    truncated: Some(truncated),
+                },
+            );
+        }
+
+        // Reap the child and propagate a non-zero exit status (other than 1,
+        // which rg uses for "no matches") as a surfaced error. The previous
+        // `try_wait().or_else(wait)` pattern was a no-op for the common
+        // `Ok(None)` case, so we always wait.
+        let exit_status = {
+            let mut child = match child_handle.lock() {
+                Ok(c) => c,
+                Err(_) => {
+                    stream_error.get_or_insert("child handle poisoned".to_string());
+                    return;
+                }
+            };
+            child.wait().ok()
+        };
+        if let Ok(mut guard) = filename_search_processes().lock() {
+            guard.remove(&search_id);
+        }
+
+        let final_error = stream_error.or_else(|| {
+            exit_status
+                .as_ref()
+                .filter(|s| !s.success() && s.code() != Some(1))
+                .map(|s| format!("rg exited with status: {:?}", s))
+        });
+
+        // `RG_STREAM_FAILED` is the catch-all code for any error that
+        // surfaces mid-walk (stdout I/O error or non-zero exit other than
+        // rg's "no matches" code 1). Distinct from `RG_SPAWN_FAILED`,
+        // which is reserved for the rg binary failing to start in the
+        // first place. The renderer can branch on it alongside the inline
+        // `QUERY_TOO_LONG` / `PATH_VALIDATION_FAILED` / `RG_STDOUT_CAPTURE_FAILED`
+        // codes emitted earlier in the command.
+        let final_code = if final_error.is_some() {
+            Some("RG_STREAM_FAILED".to_string())
+        } else {
+            None
+        };
+
+        let _ = app_handle.emit(
+            "search-file-names-done",
+            SearchFileNamesDoneEvent {
+                search_id,
+                truncated,
+                total_files: files.len(),
+                code: final_code,
+                error: final_error,
+            },
+        );
+    });
+
+    Ok(IpcResult::success(()))
+}
+
+#[tauri::command]
+pub async fn search_file_names_cancel(
+    request: SearchFileNamesCancelRequest,
+) -> Result<IpcResult<()>, String> {
+    let mut guard = filename_search_processes()
+        .lock()
+        .map_err(|e| e.to_string())?;
+    if let Some(child_handle) = guard.remove(&request.search_id) {
+        if let Ok(mut child) = child_handle.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    Ok(IpcResult::success(()))
 }
 
 #[tauri::command]
@@ -2581,6 +2957,235 @@ pub async fn git_create_branch(
     .map_err(|e| format!("git create branch task failed: {e}"))?
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashInfo {
+    pub index: usize,
+    pub name: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn git_stash_save(
+    cwd: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut args = vec!["stash", "push"];
+        if let Some(true) = include_untracked {
+            args.push("-u");
+        }
+        let msg;
+        if let Some(ref m) = message {
+            args.push("-m");
+            msg = m.clone();
+            args.push(&msg);
+        }
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
+            .ok_or_else(|| "Failed to run git stash push".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash push task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["stash", "list"])
+            .ok_or_else(|| "Failed to run git stash list".to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut stashes = Vec::new();
+        for line in stdout.lines() {
+            if let Some((stash_part, rest)) = line.split_once(':') {
+                let name = stash_part.trim().to_string();
+                if let Some(start) = name.find('{') {
+                    if let Some(end) = name.find('}') {
+                        if let Ok(index) = name[start + 1..end].parse::<usize>() {
+                            let message = rest.trim().to_string();
+                            stashes.push(GitStashInfo { index, name, message });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(stashes)
+    })
+    .await
+    .map_err(|e| format!("git stash list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "apply", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash apply".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash apply task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "pop", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash pop".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash pop task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(cwd: String, index: usize) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "drop", &stash_ref],
+        )
+        .ok_or_else(|| "Failed to run git stash drop".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git stash drop task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_list(cwd: String) -> Result<Vec<String>, String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["branch", "-a", "--format=%(refname:short)"],
+        )
+        .ok_or_else(|| "Failed to run git branch".to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut branches = Vec::new();
+        for line in stdout.lines() {
+            let name = line.trim();
+            if !name.is_empty() {
+                branches.push(name.to_string());
+            }
+        }
+        Ok(branches)
+    })
+    .await
+    .map_err(|e| format!("git branch list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_switch(cwd: String, name: String) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["checkout", &name])
+            .ok_or_else(|| "Failed to run git checkout".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git branch switch task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_branch_create(cwd: String, name: String) -> Result<(), String> {
+    let validated = validate_project_path(&cwd)?;
+    let validated_str = validated
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["checkout", "-b", &name],
+        )
+        .ok_or_else(|| "Failed to run git checkout -b".to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("git branch create task failed: {e}"))?
+}
+
 /// Cap on any single renderer-supplied field to keep one forwarded error from
 /// ballooning the log file.
 const MAX_FRONTEND_FIELD_LEN: usize = 4096;
@@ -2689,5 +3294,124 @@ mod tests {
         let cleaned = sanitize_log_field(&huge);
         assert!(cleaned.ends_with("…[truncated]"));
         assert!(cleaned.chars().count() <= MAX_FRONTEND_FIELD_LEN + "…[truncated]".chars().count());
+    }
+
+    // ===== filename search streaming (gh-195) =====
+    //
+    // Coverage for `build_file_name_search_args` and the per-stream event
+    // contracts. The end-to-end rg spawn path is exercised in a real
+    // workspace by manual smoke; these tests pin the argv and serde shapes
+    // so a future refactor cannot silently regress them.
+
+    #[test]
+    fn build_file_name_search_args_escapes_glob_metacharacters() {
+        // A query containing `*`, `?`, `[`, `]`, `{`, `}`, `\` must not be
+        // interpreted as a glob wildcard or alternation. Each metacharacter
+        // should be prefixed with a backslash so rg treats it as a literal
+        // substring match.
+        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp");
+        let iglob_idx = args
+            .iter()
+            .position(|a| a == "--iglob")
+            .expect("--iglob present");
+        let pattern = &args[iglob_idx + 1];
+        assert_eq!(pattern, r"**/*foo\*bar\?baz\[qux\]\{a,b\}\\z*");
+        // The query should still be matched at any directory depth.
+        assert!(pattern.starts_with("**/*"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_includes_ignore_list_and_excludes() {
+        let args = build_file_name_search_args("foo", "/tmp");
+        // The hardcoded ignore list must show up as bare-basename `-g !<name>`
+        // entries so rg actually skips those directories in `--files` mode.
+        for ignored in [
+            "node_modules",
+            ".git",
+            ".env",
+            "Thumbs.db",
+            "desktop.ini",
+            ".DS_Store",
+        ] {
+            let needle = format!("!{}", ignored);
+            let has = args.windows(2).any(|w| w[0] == "-g" && w[1] == needle);
+            assert!(has, "missing `-g {}` in {:?}", ignored, args);
+        }
+        // The root path is the trailing argv entry.
+        assert_eq!(args.last().map(String::as_str), Some("/tmp"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_appends_root_path() {
+        let args = build_file_name_search_args("term", "/some/root path");
+        // Root paths with spaces should appear verbatim, not split.
+        assert_eq!(args.last().map(String::as_str), Some("/some/root path"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_starts_with_files_and_case_insensitive() {
+        let args = build_file_name_search_args("foo", "/tmp");
+        assert_eq!(args[0], "--files");
+        assert_eq!(args[1], "-i");
+    }
+
+    #[test]
+    fn search_file_names_done_event_serializes_code_field() {
+        // The `code` field is optional and skipped on the wire when `None`.
+        let with_code = SearchFileNamesDoneEvent {
+            search_id: "search-1".to_string(),
+            truncated: false,
+            total_files: 0,
+            code: Some("QUERY_TOO_LONG".to_string()),
+            error: Some("too long".to_string()),
+        };
+        let json = serde_json::to_string(&with_code).unwrap();
+        assert!(json.contains("\"code\":\"QUERY_TOO_LONG\""));
+        assert!(json.contains("\"error\":\"too long\""));
+
+        let without_code = SearchFileNamesDoneEvent {
+            search_id: "search-1".to_string(),
+            truncated: false,
+            total_files: 0,
+            code: None,
+            error: None,
+        };
+        let json = serde_json::to_string(&without_code).unwrap();
+        assert!(!json.contains("code"));
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn search_file_names_batch_event_omits_truncated_when_none() {
+        // Mid-stream batches carry `None` so the renderer knows the value is
+        // unknown; serde should drop the field from the wire.
+        let mid_stream = SearchFileNamesBatchEvent {
+            search_id: "search-1".to_string(),
+            files: vec!["a".to_string()],
+            truncated: None,
+        };
+        let json = serde_json::to_string(&mid_stream).unwrap();
+        assert!(!json.contains("truncated"));
+
+        let final_batch = SearchFileNamesBatchEvent {
+            search_id: "search-1".to_string(),
+            files: vec!["a".to_string()],
+            truncated: Some(true),
+        };
+        let json = serde_json::to_string(&final_batch).unwrap();
+        assert!(json.contains("\"truncated\":true"));
+    }
+
+    #[test]
+    fn search_file_names_cancel_request_is_a_dto_not_aliased_to_content() {
+        // The two cancel commands must accept distinct types so a future
+        // shape change to `SearchContentCancelRequest` cannot silently
+        // affect the filename path. This pins the type identity at compile
+        // time (the two structs are distinct) and verifies the field shape
+        // by exercising the constructor.
+        let req = SearchFileNamesCancelRequest {
+            search_id: "search-1".to_string(),
+        };
+        assert_eq!(req.search_id, "search-1");
     }
 }

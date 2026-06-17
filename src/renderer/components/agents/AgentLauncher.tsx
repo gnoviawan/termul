@@ -514,7 +514,7 @@ export function AgentLauncher({
                       type="button"
                       onClick={() => handleModeChange(mode)}
                       className={cn(
-                        'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase transition-colors',
+                        'rounded px-1.5 py-0.5 text-3xs font-medium uppercase transition-colors',
                         effectiveMode === mode
                           ? 'bg-background text-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -528,7 +528,7 @@ export function AgentLauncher({
                 </div>
               ) : (
                 <span
-                  className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+                  className="rounded bg-muted/40 px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground"
                   title={`This agent runs as ${effectiveMode.toUpperCase()}`}
                 >
                   {effectiveMode}
@@ -586,14 +586,14 @@ export function AgentLauncher({
         </div>
 
         {/* Hint */}
-        <span className="text-center text-[11px] text-muted-foreground/50">
+        <span className="text-center text-2xs text-muted-foreground/50">
           Tab to complete · Enter to launch · Shift+Enter for newline · Esc to dismiss
         </span>
 
         {/* Plain terminal */}
         <div className="flex items-center gap-3 pt-1">
           <div className="h-px flex-1 bg-border/50" aria-hidden />
-          <span className="shrink-0 text-[11px] text-muted-foreground/50">or run terminal</span>
+          <span className="shrink-0 text-2xs text-muted-foreground/50">or run terminal</span>
           <div className="h-px flex-1 bg-border/50" aria-hidden />
         </div>
 
@@ -606,7 +606,7 @@ export function AgentLauncher({
                 variant="outline"
                 size="sm"
                 disabled={isSpawningTerminal}
-                className="h-8 gap-2 text-[11px]"
+                className="h-8 gap-2 text-2xs"
                 onClick={() => void spawnShellTerminal(shell)}
               >
                 <TerminalIcon size={12} className="opacity-70" />
@@ -619,7 +619,7 @@ export function AgentLauncher({
               variant="outline"
               size="sm"
               disabled={isSpawningTerminal}
-              className="h-8 gap-2 text-[11px]"
+              className="h-8 gap-2 text-2xs"
               onClick={() => void spawnShellTerminal()}
             >
               <TerminalIcon size={12} className="opacity-70" />
@@ -648,7 +648,7 @@ function EntryRow({ entry }: { entry: UnifiedAgentEntry }): React.JSX.Element {
         {entry.modes.map((mode) => (
           <span
             key={mode}
-            className="rounded bg-foreground/10 px-1 text-[9px] font-semibold uppercase text-muted-foreground"
+            className="rounded bg-foreground/10 px-1 text-4xs font-semibold uppercase text-muted-foreground"
           >
             {mode}
           </span>
@@ -681,7 +681,7 @@ const EntryGlyph = memo(function EntryGlyph({
   return (
     <span
       aria-hidden="true"
-      className="flex h-4 w-4 items-center justify-center rounded-sm bg-foreground/10 text-[9px] font-semibold uppercase"
+      className="flex h-4 w-4 items-center justify-center rounded-sm bg-foreground/10 text-4xs font-semibold uppercase"
     >
       {entry?.name.charAt(0) ?? 'A'}
     </span>

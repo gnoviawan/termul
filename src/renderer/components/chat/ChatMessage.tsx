@@ -37,7 +37,7 @@ function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX
     const lines = text.split('\n').filter((l) => l.trim().length > 0).length
     return (
       <details className="mx-4 my-1 border-l-2 border-border/70 pl-3">
-        <summary className="cursor-pointer list-none text-[11px] italic text-muted-foreground marker:hidden">
+        <summary className="cursor-pointer list-none text-2xs italic text-muted-foreground marker:hidden">
           Thinking{lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
           {message.streaming && '…'}
         </summary>
@@ -52,7 +52,7 @@ function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX
 
   return (
     <div className="px-4 py-3">
-      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+      <div className="mb-2 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
         {isUser ? (
           <>
             <User size={12} />

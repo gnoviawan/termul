@@ -66,11 +66,11 @@ function AnnotationElementDetails({ geometry }: { geometry: ElementGeometry }): 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0">
+        <Badge variant="outline" className="font-mono text-3xs px-1.5 py-0">
           {`<${geometry.tagName}>`}
         </Badge>
         <Badge
-          className={cn('text-[10px] border', selectorConfidenceClass[geometry.selectorConfidence])}
+          className={cn('text-3xs border', selectorConfidenceClass[geometry.selectorConfidence])}
         >
           {geometry.selectorConfidence}
         </Badge>
@@ -78,7 +78,7 @@ function AnnotationElementDetails({ geometry }: { geometry: ElementGeometry }): 
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="text-[11px] text-muted-foreground font-mono break-all cursor-default">
+          <div className="text-2xs text-muted-foreground font-mono break-all cursor-default">
             {selectorPreview}
           </div>
         </TooltipTrigger>
@@ -89,7 +89,7 @@ function AnnotationElementDetails({ geometry }: { geometry: ElementGeometry }): 
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="text-[11px] text-muted-foreground cursor-default whitespace-pre-wrap break-words">
+          <div className="text-2xs text-muted-foreground cursor-default whitespace-pre-wrap break-words">
             {textPreview}
           </div>
         </TooltipTrigger>
@@ -146,7 +146,7 @@ function AnnotationItem({
       <div className="flex items-center gap-2">
         <span
           className={cn(
-            'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold',
+            'inline-flex items-center rounded-full border px-2 py-0.5 text-3xs font-semibold',
             intentBadgeClass[annotation.intent]
           )}
         >
@@ -156,7 +156,7 @@ function AnnotationItem({
           className={cn('h-2 w-2 rounded-full', severityColorClass[annotation.severity])}
           title={annotation.severity}
         />
-        <span className="text-[10px] text-muted-foreground capitalize">{annotation.severity}</span>
+        <span className="text-3xs text-muted-foreground capitalize">{annotation.severity}</span>
         <div className="flex-1" />
         <button
           onClick={(e) => {
@@ -171,7 +171,7 @@ function AnnotationItem({
       </div>
 
       {annotation.type === 'region' && annotation.geometry.type === 'rect' && (
-        <div className="text-[11px] text-muted-foreground font-mono">
+        <div className="text-2xs text-muted-foreground font-mono">
           rect(
           {Math.round(annotation.geometry.x)}, {Math.round(annotation.geometry.y)},{' '}
           {Math.round(annotation.geometry.width)}, {Math.round(annotation.geometry.height)})
@@ -415,7 +415,7 @@ export function AnnotationPanel({
           </Tooltip>
         </div>
 
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           Session-scoped: annotations last until app close
         </p>
       </div>

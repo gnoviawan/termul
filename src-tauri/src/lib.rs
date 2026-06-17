@@ -505,15 +505,9 @@ fn build_app_menu<R: tauri::Runtime>(
     let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size")
-        .accelerator("CmdOrCtrl+0")
-        .build(app)?;
-    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In")
-        .accelerator("CmdOrCtrl+=")
-        .build(app)?;
-    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out")
-        .accelerator("CmdOrCtrl+-")
-        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out").build(app)?;
     let toggle_fullscreen =
         MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen").build(app)?;
 
@@ -910,18 +904,23 @@ pub fn run() {
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
 
-            // macOS: Enable overlay title bar for native traffic lights.
-            // Window starts hidden (visible: false), so we set this before show().
-            // On Windows/Linux: set_decorations(false) removes native frame
-            // so the custom HTML titlebar is used instead.
+            // Window chrome is configured before show(). macOS overlay settings
+            // live in tauri.conf.json — avoid set_decorations(true) there because
+            // it resets hiddenTitle/full-size content view. Win/Linux drop native
+            // frame so the HTML titlebar owns window controls.
             #[cfg(target_os = "macos")]
             {
                 if let Some(window) = app.get_webview_window("main") {
-                    if let Err(e) = window.set_decorations(true) {
-                        log::warn!("[macOS] Failed to enable window decorations: {}", e);
-                    }
                     if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
                         log::warn!("[macOS] Failed to set overlay title bar style: {}", e);
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = window.set_decorations(false) {
+                        log::warn!("Failed to disable native window decorations: {}", e);
                     }
                 }
             }
@@ -1093,7 +1092,8 @@ pub fn run() {
             commands::search_content,
             commands::search_content_stream,
             commands::search_content_cancel,
-            commands::search_file_names,
+            commands::search_file_names_stream,
+            commands::search_file_names_cancel,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
@@ -1136,6 +1136,14 @@ pub fn run() {
             commands::git_init,
             commands::git_checkout_branch,
             commands::git_create_branch,
+            commands::git_stash_save,
+            commands::git_stash_list,
+            commands::git_stash_apply,
+            commands::git_stash_pop,
+            commands::git_stash_drop,
+            commands::git_branch_list,
+            commands::git_branch_switch,
+            commands::git_branch_create,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,

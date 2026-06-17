@@ -20,7 +20,7 @@ export function SSHStatusBadge({ status, className }: SSHStatusBadgeProps): Reac
   return (
     <span
       className={cn(
-        'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium',
+        'inline-flex items-center px-1.5 py-0.5 rounded text-3xs font-medium',
         config.color,
         className
       )}

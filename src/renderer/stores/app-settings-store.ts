@@ -60,3 +60,4 @@ export const useFileExplorerVisibilitySetting = () =>
   useAppSettingsStore((state) => state.settings.fileExplorerVisible)
 export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
 export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)
+export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)

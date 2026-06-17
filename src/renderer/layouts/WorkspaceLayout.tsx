@@ -64,7 +64,7 @@ import {
   useConfirmTerminalClose,
   useDefaultShell,
   useMaxTerminalsPerProject,
-  useTerminalFontSize
+  useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
@@ -105,7 +105,7 @@ import {
   usePaneRoot,
   useWorkspaceStore
 } from '@/stores/workspace-store'
-import { DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
 
 function getShortcutTargetContext(target: EventTarget | null): {
   isInEditor: boolean
@@ -123,6 +123,12 @@ function getShortcutTargetContext(target: EventTarget | null): {
       !!element.closest('[contenteditable="true"]'))
 
   return { isInEditor, isInTerminal, isInInput }
+}
+
+function MacOsTitlebarStrip(): React.JSX.Element | null {
+  if (!isMac) return null
+
+  return <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
 }
 
 export default function WorkspaceLayout(): React.JSX.Element {
@@ -590,7 +596,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
     listen<void>('menu:close-tab', () => {
-      closeActiveTab()
+      // Skip when Agent Launcher is open to avoid accidental tab closure
+      if (!isAgentLauncherOpen) {
+        closeActiveTab()
+      }
     })
       .then((fn) => {
         unlisten = fn
@@ -601,7 +610,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return () => {
       unlisten?.()
     }
-  }, [closeActiveTab])
+  }, [closeActiveTab, isAgentLauncherOpen])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -698,7 +707,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [shortcuts]
   )
 
-  const fontSize = useTerminalFontSize()
+  const uiZoomLevel = useUiZoomLevel()
   const colorTheme = useColorTheme()
   const appearanceMode = useAppearanceMode()
 
@@ -747,6 +756,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
       return shortcut?.customKey ?? shortcut?.defaultKey ?? ''
     },
     [shortcuts]
+  )
+
+  // Shared whole-UI zoom action used by both the DOM keydown path and the
+  // keyboardApi.onShortcut callback so behavior stays identical.
+  const applyZoomAction = useCallback(
+    (action: 'zoomIn' | 'zoomOut' | 'zoomReset'): void => {
+      const next =
+        action === 'zoomIn'
+          ? Math.min(uiZoomLevel + UI_ZOOM_STEP, UI_ZOOM_MAX)
+          : action === 'zoomOut'
+            ? Math.max(uiZoomLevel - UI_ZOOM_STEP, UI_ZOOM_MIN)
+            : UI_ZOOM_DEFAULT
+      if (next !== uiZoomLevel) updateAppSetting('uiZoomLevel', next)
+    },
+    [uiZoomLevel, updateAppSetting]
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
@@ -912,9 +936,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Close Tab (Ctrl+W / ⌘+W)
       // On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
       // On Windows/Linux: Ctrl+W closes tab
+      // Always preventDefault to suppress OS/webview close behavior; only
+      // close the tab when the Agent Launcher is not open.
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
-        closeActiveTab()
+        if (!isAgentLauncherOpen) {
+          closeActiveTab()
+        }
         return
       }
 
@@ -1038,27 +1066,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // Zoom in/out/reset
+      // Zoom in/out/reset — whole-UI zoom (VS Code style)
       if (matchesShortcut(e, getActiveKey('zoomIn'))) {
         e.preventDefault()
         e.stopPropagation()
-        const newSize = Math.min(fontSize + 1, 24)
-        if (newSize !== fontSize) updateAppSetting('terminalFontSize', newSize)
+        applyZoomAction('zoomIn')
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomOut'))) {
         e.preventDefault()
         e.stopPropagation()
-        const newSize = Math.max(fontSize - 1, 10)
-        if (newSize !== fontSize) updateAppSetting('terminalFontSize', newSize)
+        applyZoomAction('zoomOut')
         return
       }
       if (matchesShortcut(e, getActiveKey('zoomReset'))) {
         e.preventDefault()
         e.stopPropagation()
-        if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
-          updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
-        }
+        applyZoomAction('zoomReset')
         return
       }
 
@@ -1093,8 +1117,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     activeTerminalId,
     activeTerminal,
     getActiveKey,
-    fontSize,
-    updateAppSetting,
+    applyZoomAction,
     appDefaultShell,
     maxTerminals,
     isWorkspaceRoute,
@@ -1106,7 +1129,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isExplorerVisible,
     isSidebarVisible,
     handleOpenThemePicker,
-    closeActiveTab
+    closeActiveTab,
+    isAgentLauncherOpen
   ])
 
   useEffect(() => {
@@ -1139,24 +1163,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
         case 'prevTerminal':
           cycleTab('prev')
           break
-        case 'zoomIn': {
-          const newSize = Math.min(fontSize + 1, 24)
-          if (newSize !== fontSize) {
-            updateAppSetting('terminalFontSize', newSize)
-          }
+        case 'zoomIn':
+          applyZoomAction('zoomIn')
           break
-        }
-        case 'zoomOut': {
-          const newSize = Math.max(fontSize - 1, 10)
-          if (newSize !== fontSize) {
-            updateAppSetting('terminalFontSize', newSize)
-          }
+        case 'zoomOut':
+          applyZoomAction('zoomOut')
           break
-        }
         case 'zoomReset':
-          if (fontSize !== DEFAULT_APP_SETTINGS.terminalFontSize) {
-            updateAppSetting('terminalFontSize', DEFAULT_APP_SETTINGS.terminalFontSize)
-          }
+          applyZoomAction('zoomReset')
           break
         case 'sidebarToggle':
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
@@ -1170,14 +1184,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           break
       }
     })
-  }, [
-    cycleTab,
-    fontSize,
-    handleOpenThemePicker,
-    updateAppSetting,
-    updatePanelVisibility,
-    isSidebarVisible
-  ])
+  }, [cycleTab, applyZoomAction, handleOpenThemePicker, updatePanelVisibility, isSidebarVisible])
 
   const closeTerminalByRecordId = useCallback(
     async (terminalRecordId: string): Promise<boolean> => {
@@ -1379,9 +1386,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         <ResizeEdges />
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-          {isMac && (
-            <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
-          )}
+          <MacOsTitlebarStrip />
           <div className="flex-1 flex overflow-hidden min-h-0">
             <ActivityRail
               isShortcutsOpen={isShortcutMenuOpen}
@@ -1405,9 +1410,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <ResizeEdges />
       <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-        {isMac && (
-          <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
-        )}
+        <MacOsTitlebarStrip />
         <div className="flex-1 flex overflow-hidden min-h-0">
           <ActivityRail
             isShortcutsOpen={isShortcutMenuOpen}

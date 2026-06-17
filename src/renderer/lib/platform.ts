@@ -12,10 +12,11 @@ const _platform: string = typeof navigator !== 'undefined' ? navigator.platform.
 export const isMac: boolean = _platform.includes('mac')
 
 /**
- * Slim top inset for macOS overlay title bar / traffic-light clearance.
- * Used as a single full-width drag strip above the workspace chrome.
+ * Full-width macOS titlebar clearance strip above workspace chrome.
+ * Height matches Windows `TitleBar` (`h-8`) so content starts at the same
+ * vertical offset on both platforms.
  */
-export const macOsTitlebarStripClass = 'h-6 shrink-0'
+export const macOsTitlebarStripClass = 'h-8 shrink-0 bg-background'
 
 /** True when running on Windows. */
 export const isWindows: boolean = _platform.includes('win')

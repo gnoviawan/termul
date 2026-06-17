@@ -222,13 +222,13 @@ function CommitRow({ commit }: { commit: GitCommit }): React.JSX.Element {
         ))}
       </div>
       <span className="text-xs text-foreground truncate flex-1 min-w-0">{commit.subject}</span>
-      <span className="text-[10px] text-muted-foreground truncate max-w-[120px] shrink-0">
+      <span className="text-3xs text-muted-foreground truncate max-w-[120px] shrink-0">
         {commit.author}
       </span>
-      <span className="text-[10px] text-muted-foreground/70 shrink-0 w-10 text-right">
+      <span className="text-3xs text-muted-foreground/70 shrink-0 w-10 text-right">
         {formatRelativeTime(commit.date)}
       </span>
-      <span className="font-mono text-[10px] text-muted-foreground/60 shrink-0 w-14">
+      <span className="font-mono text-3xs text-muted-foreground/60 shrink-0 w-14">
         {commit.shortHash}
       </span>
     </div>
@@ -240,7 +240,7 @@ function RefChip({ raw }: { raw: string }): React.JSX.Element {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 px-1.5 h-4 rounded text-[9px] font-medium leading-none',
+        'inline-flex items-center gap-1 px-1.5 h-4 rounded text-4xs font-medium leading-none',
         kind === 'head' && 'bg-primary/15 text-primary',
         kind === 'tag' && 'bg-amber-500/15 text-amber-500',
         kind === 'remote' && 'bg-muted-foreground/15 text-muted-foreground',

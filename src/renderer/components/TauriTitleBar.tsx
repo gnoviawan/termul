@@ -44,10 +44,7 @@ export function TauriTitleBar(): React.JSX.Element {
       className="h-8 flex items-center justify-between bg-card border-b border-border select-none shrink-0"
       data-tauri-drag-region
     >
-      <span
-        className="text-xs font-semibold text-muted-foreground tracking-wider uppercase px-3"
-        data-tauri-drag-region
-      >
+      <span className="label-section text-muted-foreground px-3" data-tauri-drag-region>
         termul
       </span>
 

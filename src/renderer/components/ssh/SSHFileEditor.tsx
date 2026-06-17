@@ -55,7 +55,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
         <div className="h-8 flex items-center justify-between px-3 border-b border-border bg-muted/30">
           <div className="flex items-center gap-2">
             <FileEdit className="h-3 w-3 text-muted-foreground" />
-            <span className="text-[11px] font-mono text-muted-foreground">{editingFile.name}</span>
+            <span className="text-2xs font-mono text-muted-foreground">{editingFile.name}</span>
           </div>
           <div className="flex items-center gap-1">
             <button
