@@ -15,15 +15,21 @@ function isPathWithinRoot(path: string, rootPath: string): boolean {
  * Copy a file or directory to a new location.
  *
  * Uses binary-safe `copyFile` to avoid UTF-8 round-trip corruption on binary
- * files (images, fonts, compiled artifacts). Falls back to `createDirectory`
- * when the source is a directory — note this creates an empty directory;
- * recursive directory copy is not yet supported.
+ * files (images, fonts, compiled artifacts). When `copyFile` fails, verifies
+ * the source is actually a directory before creating one at the destination —
+ * this avoids masking real failures (permissions, missing source, disk full)
+ * behind an empty directory. Note: recursive directory copy is not yet
+ * supported; only an empty directory is created.
  */
 async function copyPath(srcPath: string, destPath: string): Promise<void> {
   const result = await filesystemApi.copyFile(srcPath, destPath)
   if (!result.success) {
-    // copyFile fails on directories — create one instead.
-    await filesystemApi.createDirectory(destPath)
+    // copyFile fails on directories — confirm the source is actually a
+    // directory before creating one, so we don't mask real copy failures.
+    const info = await filesystemApi.getFileInfo(srcPath)
+    if (info.success && info.data.type === 'directory') {
+      await filesystemApi.createDirectory(destPath)
+    }
   }
 }
 
