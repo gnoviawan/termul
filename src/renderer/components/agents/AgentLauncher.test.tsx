@@ -43,7 +43,6 @@ const {
       preparingChatKeys: {} as Record<string, true>,
       prepareChatErrors: {} as Record<string, string>,
       sessions: {} as Record<string, AcpSession>,
-      pendingAuth: {},
       commands: {}
     }
   }
@@ -209,7 +208,6 @@ beforeEach(() => {
     preparingChatKeys: {},
     prepareChatErrors: {},
     sessions: {},
-    pendingAuth: {},
     commands: {}
   }
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })

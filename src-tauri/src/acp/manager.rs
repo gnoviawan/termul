@@ -483,8 +483,7 @@ impl AcpManager {
     }
 
     /// Run the ACP `authenticate` method for an agent with the given method id
-    /// (one of the ids advertised in the `initialize` response / the
-    /// `acp:auth_required` event).
+    /// (one of the ids advertised in the `initialize` response).
     pub async fn authenticate(
         &self,
         agent_id: &AgentId,

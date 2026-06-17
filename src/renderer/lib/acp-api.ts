@@ -300,16 +300,6 @@ export interface AgentErrorEvent {
 export interface AgentDisconnectedEvent {
   agentId: AgentId
 }
-export interface AuthMethodInfo {
-  id: string
-  name: string
-  description?: string
-}
-export interface AuthRequiredEvent {
-  agentId: AgentId
-  methods: AuthMethodInfo[]
-  message?: string
-}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -329,7 +319,6 @@ export const ACP_EVENTS = {
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
   agentDisconnected: 'acp:agent_disconnected',
-  authRequired: 'acp:auth_required',
   sessionClosed: 'acp:session_closed'
 } as const
 

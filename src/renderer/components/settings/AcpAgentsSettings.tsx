@@ -35,20 +35,17 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
 
   // Warm state for the badge: an enabled agent is warming while a background
-  // spawn is in flight (any project), ready once any process is connected,
-  // needs auth, or idle.
-  const statusBadge: { label: string; tone: 'ready' | 'auth' | 'muted' | 'warn' } =
-    warmState.connected
-      ? { label: 'Ready', tone: 'ready' }
-      : warmState.needsAuth
-        ? { label: 'Auth required', tone: 'auth' }
-        : warmState.warming
-          ? { label: 'Warming…', tone: 'muted' }
-          : entry.status === 'ready'
-            ? { label: 'Available', tone: 'ready' }
-            : entry.status === 'install-required'
-              ? { label: 'Install from Agent Chat', tone: 'warn' }
-              : { label: 'Unavailable', tone: 'muted' }
+  // spawn is in flight (any project), ready once any process is connected, or
+  // idle.
+  const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.connected
+    ? { label: 'Ready', tone: 'ready' }
+    : warmState.warming
+      ? { label: 'Warming…', tone: 'muted' }
+      : entry.status === 'ready'
+        ? { label: 'Available', tone: 'ready' }
+        : entry.status === 'install-required'
+          ? { label: 'Install from Agent Chat', tone: 'warn' }
+          : { label: 'Unavailable', tone: 'muted' }
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
@@ -75,7 +72,6 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
             className={cn(
               'h-4 px-1.5 text-3xs',
               statusBadge.tone === 'ready' && 'text-green-500',
-              statusBadge.tone === 'auth' && 'text-amber-500',
               statusBadge.tone === 'warn' && 'text-amber-500'
             )}
           >

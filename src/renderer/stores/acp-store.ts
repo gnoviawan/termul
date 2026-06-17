@@ -27,7 +27,6 @@ import {
   type AgentErrorEvent,
   type AgentId,
   type AgentSpawnedEvent,
-  type AuthRequiredEvent,
   type AvailableCommand,
   acpApi,
   type CommandsUpdateEvent,
@@ -70,7 +69,7 @@ import {
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 
-export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error' | 'needs-auth'
+export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 export type MessageRole = 'user' | 'agent' | 'thought'
 
@@ -116,8 +115,6 @@ interface AcpState {
   // Agent registry
   agents: Record<AgentId, { id: AgentId; capabilities: AgentCapabilities | null }>
   agentStatus: Record<AgentId, AgentStatus>
-  /** Pending ACP authentication requirements, keyed by live agent id. */
-  pendingAuth: Record<AgentId, AuthRequiredEvent>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -206,9 +203,6 @@ interface AcpState {
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
 
-  // Actions — authentication
-  authenticate: (agentId: AgentId, methodId: string) => Promise<void>
-
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
   _onSessionCreated: (e: SessionCreatedEvent) => void
@@ -222,7 +216,6 @@ interface AcpState {
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
-  _onAuthRequired: (e: AuthRequiredEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
 }
@@ -523,7 +516,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   plans: {},
   commands: {},
   pendingPermissions: {},
-  pendingAuth: {},
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -535,9 +527,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // real agent id; leaving it would strand a stale status forever.
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
-        // Don't clobber a `needs-auth` status the auth_required event may have
-        // already set (the events race with this resolve).
-        agentStatus[agentId] = s.pendingAuth[agentId] ? 'needs-auth' : 'connected'
+        agentStatus[agentId] = 'connected'
         return {
           agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
           agentStatus
@@ -555,10 +545,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const agents = { ...s.agents }
       const agentStatus = { ...s.agentStatus }
-      const pendingAuth = { ...s.pendingAuth }
       delete agents[agentId]
       delete agentStatus[agentId]
-      delete pendingAuth[agentId]
       // Drop any config->live mapping pointing at this agent so it can't be
       // reused after the process is gone.
       const configToLiveAgent = { ...s.configToLiveAgent }
@@ -575,7 +563,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         agents,
         agentStatus,
-        pendingAuth,
         configToLiveAgent,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
@@ -1211,43 +1198,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  authenticate: async (agentId, methodId) => {
-    const pending = get().pendingAuth[agentId]
-    // Optimistically clear so a rapid double-click (or a second method click)
-    // can't fire a concurrent `authenticate` for the same agent.
-    set((s) => {
-      const pendingAuth = { ...s.pendingAuth }
-      delete pendingAuth[agentId]
-      return {
-        pendingAuth,
-        agentStatus: { ...s.agentStatus, [agentId]: 'spawning' as AgentStatus }
-      }
-    })
-    try {
-      await acpApi.authenticate(agentId, methodId)
-      set((s) => ({
-        agentStatus: { ...s.agentStatus, [agentId]: 'connected' as AgentStatus }
-      }))
-    } catch (err) {
-      // Restore the requirement so the user can retry.
-      set((s) => ({
-        pendingAuth: pending ? { ...s.pendingAuth, [agentId]: pending } : s.pendingAuth,
-        agentStatus: { ...s.agentStatus, [agentId]: 'needs-auth' as AgentStatus }
-      }))
-      throw err
-    }
-  },
-
   // --- Event reducers ------------------------------------------------------
 
   _onAgentSpawned: (e) =>
     set((s) => ({
       agents: { ...s.agents, [e.agentId]: { id: e.agentId, capabilities: e.capabilities } },
-      // Preserve `needs-auth` if an auth_required event already arrived for this
-      // agent (the two events race across threads).
       agentStatus: {
         ...s.agentStatus,
-        [e.agentId]: s.pendingAuth[e.agentId] ? 'needs-auth' : 'connected'
+        [e.agentId]: 'connected'
       }
     })),
 
@@ -1454,18 +1412,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return { agentStatus, sessions }
     }),
 
-  _onAuthRequired: (e) =>
-    set((s) => ({
-      pendingAuth: { ...s.pendingAuth, [e.agentId]: e },
-      agentStatus: { ...s.agentStatus, [e.agentId]: 'needs-auth' as AgentStatus }
-    })),
-
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
-      const pendingAuth = { ...s.pendingAuth }
-      delete pendingAuth[e.agentId]
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
@@ -1475,7 +1425,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         agentStatus,
-        pendingAuth,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
       }
@@ -1561,14 +1510,6 @@ export function initAcpEventListeners(): () => void {
       useAcpStore.getState()._onAgentError(e)
       toast.error(e.message || 'Agent error')
     }),
-    acpApi.onEvent<AuthRequiredEvent>(ACP_EVENTS.authRequired, (e) => {
-      useAcpStore.getState()._onAuthRequired(e)
-      toast.warning(
-        e.message
-          ? `Authentication required: ${e.message}`
-          : 'This agent requires authentication to continue.'
-      )
-    }),
     acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, (e) =>
       useAcpStore.getState()._onAgentDisconnected(e)
     ),
@@ -1624,8 +1565,6 @@ export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
 export interface ConfigWarmState {
   /** A live process for this config is connected (in any project/cwd). */
   connected: boolean
-  /** A live process for this config is awaiting authentication. */
-  needsAuth: boolean
   /** A background warm spawn for this config is in flight (any cwd). */
   warming: boolean
 }
@@ -1637,17 +1576,14 @@ export interface ConfigWarmState {
  */
 export function selectConfigWarmState(state: AcpState, configId: string): ConfigWarmState {
   let connected = false
-  let needsAuth = false
   for (const [key, agentId] of Object.entries(state.configToLiveAgent)) {
     if (configIdFromReuseKey(key) !== configId) continue
-    const status = state.agentStatus[agentId]
-    if (status === 'connected') connected = true
-    else if (status === 'needs-auth') needsAuth = true
+    if (state.agentStatus[agentId] === 'connected') connected = true
   }
   const warming = Object.keys(state.warmingConfigs).some(
     (key) => configIdFromReuseKey(key) === configId
   )
-  return { connected, needsAuth, warming }
+  return { connected, warming }
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

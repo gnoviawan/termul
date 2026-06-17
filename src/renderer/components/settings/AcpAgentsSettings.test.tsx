@@ -22,7 +22,7 @@ vi.mock('@tauri-apps/plugin-os', () => ({
 vi.mock('@/stores/acp-store', () => {
   const useAcpStore = (sel?: (s: typeof stateRef.current) => unknown) =>
     sel ? sel(stateRef.current) : stateRef.current
-  const useConfigWarmState = () => ({ connected: false, warming: false, needsAuth: false })
+  const useConfigWarmState = () => ({ connected: false, warming: false })
   return { useAcpStore, useConfigWarmState }
 })
 

@@ -53,7 +53,6 @@ const FRESH = {
   preparedSessions: {},
   preparingChatKeys: {},
   prepareChatErrors: {},
-  pendingAuth: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -1421,7 +1420,7 @@ describe('acp-store multi-project isolation', () => {
 
   it('selectConfigWarmState rolls up status across all per-cwd processes', () => {
     useAcpStore.setState((s) => ({
-      agentStatus: { ...s.agentStatus, 'agent-a': 'needs-auth', 'agent-b': 'connected' },
+      agentStatus: { ...s.agentStatus, 'agent-a': 'spawning', 'agent-b': 'connected' },
       configToLiveAgent: {
         ...s.configToLiveAgent,
         [agentReuseKey('cfg-1', '/a')]: 'agent-a',
@@ -1430,11 +1429,10 @@ describe('acp-store multi-project isolation', () => {
       warmingConfigs: { ...s.warmingConfigs, [agentReuseKey('cfg-1', '/c')]: true }
     }))
     const state = selectConfigWarmState(useAcpStore.getState(), 'cfg-1')
-    expect(state).toEqual({ connected: true, needsAuth: true, warming: true })
+    expect(state).toEqual({ connected: true, warming: true })
     // A different config sees nothing.
     expect(selectConfigWarmState(useAcpStore.getState(), 'cfg-other')).toEqual({
       connected: false,
-      needsAuth: false,
       warming: false
     })
   })

@@ -160,7 +160,7 @@ pub async fn acp_set_model(
 }
 
 /// Run the ACP `authenticate` method for an agent. `methodId` must be one of
-/// the ids surfaced in the `acp:auth_required` event.
+/// the ids advertised in the agent's `initialize` response.
 #[tauri::command]
 pub async fn acp_authenticate(
     manager: State<'_, Arc<AcpManager>>,
