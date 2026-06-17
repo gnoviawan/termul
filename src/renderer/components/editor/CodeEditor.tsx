@@ -64,9 +64,8 @@ export function CodeEditor({
     }))
   )
 
-  const { view, setContent, flushPendingContent, scrollToLine, restoreViewState } = useCodeMirror(
-    containerRef,
-    {
+  const { view, isReady, setContent, flushPendingContent, scrollToLine, restoreViewState } =
+    useCodeMirror(containerRef, {
       filePath,
       content,
       language,
@@ -75,8 +74,7 @@ export function CodeEditor({
       onCursorChange,
       onScrollChange,
       onVisibleRangeChange: setVisibleRange
-    }
-  )
+    })
 
   const getPanelWidth = useCallback((): number => {
     return layoutWidth || layoutRef.current?.clientWidth || 1000
@@ -265,7 +263,16 @@ export function CodeEditor({
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
           <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
-            <div ref={containerRef} className="w-full h-full overflow-hidden" />
+            <div className="relative h-full w-full">
+              <div ref={containerRef} className="w-full h-full overflow-hidden" />
+              {!isReady && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className="text-sm text-muted-foreground animate-pulse motion-reduce:animate-none">
+                    Loading...
+                  </span>
+                </div>
+              )}
+            </div>
           </ResizablePanel>
 
           {canRenderToc && (

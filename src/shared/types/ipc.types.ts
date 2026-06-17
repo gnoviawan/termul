@@ -453,6 +453,7 @@ export interface FilesystemApi {
   createDirectory: (dirPath: string) => Promise<IpcResult<void>>
   deletePath: (path: string, options?: { recursive?: boolean }) => Promise<IpcResult<void>>
   renameFile: (oldPath: string, newPath: string) => Promise<IpcResult<void>>
+  copyFile: (srcPath: string, destPath: string) => Promise<IpcResult<void>>
   watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   onFileChanged: (callback: FileChangeCallback) => () => void

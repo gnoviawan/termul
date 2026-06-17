@@ -12,7 +12,9 @@ vi.mock('@/hooks/use-codemirror', () => ({
     view: {
       focus: mockFocus
     },
+    isReady: true,
     setContent: mockSetContent,
+    flushPendingContent: vi.fn(),
     scrollToLine: mockScrollToLine,
     restoreViewState: mockRestoreViewState,
     getVisibleLineRange: vi.fn(() => null)

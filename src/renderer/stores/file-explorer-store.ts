@@ -15,18 +15,16 @@ function isPathWithinRoot(path: string, rootPath: string): boolean {
  * Copy a file or directory to a new location
  */
 async function copyPath(srcPath: string, destPath: string): Promise<void> {
-  // For now, we implement copy by reading and writing
-  // This is a simplified implementation - a production version would need
-  // to handle directories recursively and be more efficient
+  // Use binary-safe copyFile to avoid UTF-8 round-trip corruption on binary
+  // files (images, fonts, compiled artifacts). Falls back to createDirectory
+  // when the source is a directory.
   try {
-    // Try to read the source as a file first
-    const readResult = await filesystemApi.readFile(srcPath)
-    if (readResult.success) {
-      await filesystemApi.writeFile(destPath, readResult.data.content)
+    const result = await filesystemApi.copyFile(srcPath, destPath)
+    if (!result.success) {
+      // copyFile fails on directories — create one instead.
+      await filesystemApi.createDirectory(destPath)
     }
   } catch {
-    // If it's a directory, we'd need recursive copy
-    // For simplicity, we'll create the directory
     await filesystemApi.createDirectory(destPath)
   }
 }

@@ -10,6 +10,7 @@ import type {
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
+  copyFile,
   mkdir,
   open,
   readDir,
@@ -191,32 +192,35 @@ export function createTauriFilesystemApi(): FilesystemApi {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
 
-        const filtered: DirectoryEntry[] = []
-        for (const entry of entries) {
-          const name = entry.name
+        // Stat all entries in parallel instead of sequentially — a directory
+        // with N entries previously incurred N sequential IPC round-trips,
+        // which dominated tree-expansion latency for large directories (#378).
+        const filtered = await Promise.all(
+          entries.map(async (entry): Promise<DirectoryEntry> => {
+            const name = entry.name
+            const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
+            let size = 0
+            let modified = Date.now()
+            try {
+              const info = await stat(fullPath)
+              size = info.size
+              modified = info.mtime?.getTime() ?? Date.now()
+            } catch {
+              // Ignore stat errors, use defaults
+            }
 
-          const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
-          let size = 0
-          let modified = Date.now()
-          try {
-            const info = await stat(fullPath)
-            size = info.size
-            modified = info.mtime?.getTime() ?? Date.now()
-          } catch {
-            // Ignore stat errors, use defaults
-          }
-
-          const isDir = entry.isDirectory ?? false
-          filtered.push({
-            name,
-            path: fullPath,
-            type: isDir ? 'directory' : 'file',
-            extension: isDir ? null : getExtension(name),
-            size,
-            modifiedAt: modified,
-            ignored: shouldIgnore(name)
+            const isDir = entry.isDirectory ?? false
+            return {
+              name,
+              path: fullPath,
+              type: isDir ? 'directory' : 'file',
+              extension: isDir ? null : getExtension(name),
+              size,
+              modifiedAt: modified,
+              ignored: shouldIgnore(name)
+            }
           })
-        }
+        )
 
         // Sort: directories first, then files, both A-Z
         const sorted = sortDirectoryEntries(filtered)
@@ -238,7 +242,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
         }
 
         const content = await readTextFile(filePath)
-        const _isBinary = isBinaryFile(content)
+
+        // Binary detection on already-read content: avoids a separate
+        // open()/read()/close() round-trip that getFileInfo() used to perform.
+        if (isBinaryFile(content)) {
+          return {
+            success: false,
+            error: 'Binary file cannot be displayed',
+            code: 'BINARY_FILE'
+          }
+        }
 
         return {
           success: true,
@@ -618,6 +631,15 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return { success: true, data: undefined }
       } catch (err) {
         return { success: false, error: String(err), code: 'RENAME_ERROR' }
+      }
+    },
+
+    async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+      try {
+        await copyFile(srcPath, destPath)
+        return { success: true, data: undefined }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'COPY_ERROR' }
       }
     },
 

@@ -90,6 +90,21 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
   return extension
 }
 
+// Languages worth preloading at app boot to mask first-open dynamic-import
+// latency. JavaScript/TypeScript/JSON cover the overwhelming majority of
+// files in typical projects; the rest stay lazy. Fire-and-forget — failures
+// silently fall back to the lazy path on first use (issue #378).
+const PRELOAD_LANGUAGES = ['javascript', 'typescript', 'json'] as const
+
+let preloaded = false
+export function preloadCommonLanguages(): void {
+  if (preloaded) return
+  preloaded = true
+  for (const lang of PRELOAD_LANGUAGES) {
+    void loadLanguage(lang)
+  }
+}
+
 export interface VisibleLineRange {
   startLine: number
   endLine: number
@@ -108,6 +123,7 @@ interface UseCodeMirrorOptions {
 
 interface UseCodeMirrorResult {
   view: EditorView | null
+  isReady: boolean
   setContent: (content: string) => void
   flushPendingContent: () => void
   scrollToLine: (lineNumber: number, highlightTerm?: string) => void
@@ -443,6 +459,7 @@ export function useCodeMirror(
 
   return {
     view: viewReady ? viewRef.current : null,
+    isReady: viewReady,
     setContent,
     flushPendingContent,
     scrollToLine,

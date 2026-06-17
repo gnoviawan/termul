@@ -94,21 +94,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return
     }
 
-    // Check file info first
-    const infoResult = await filesystemApi.getFileInfo(path)
-    if (!infoResult.success) {
-      throw new Error(infoResult.error)
-    }
-
-    if (infoResult.data.isBinary) {
-      throw new Error('Binary file cannot be displayed')
-    }
-
-    if (infoResult.data.size > 1024 * 1024) {
-      throw new Error('File too large (>1MB)')
-    }
-
-    // Read file content
+    // Read file content. readFile() now performs size + binary checks in a
+    // single IPC round-trip pair (stat + readTextFile), avoiding the previous
+    // getFileInfo() pre-check that doubled the IPC cost (issue #378).
     const result = await filesystemApi.readFile(path)
     if (!result.success) {
       throw new Error(result.error)
