@@ -1731,7 +1731,7 @@ function ConnectedTerminalComponent({
                   <div className="w-20 h-20 rounded-2xl bg-destructive/10 flex items-center justify-center mb-3 shadow-inner group-hover:scale-110 transition-transform duration-500">
                     <AlertTriangle className="text-destructive" size={40} />
                   </div>
-                  <span className="text-[10px] uppercase tracking-[0.2em] font-black text-destructive/80 text-center">
+                  <span className="text-3xs uppercase tracking-[0.2em] font-black text-destructive/80 text-center">
                     CRITICAL ERROR
                   </span>
                 </div>
@@ -1757,7 +1757,7 @@ function ConnectedTerminalComponent({
                       <RefreshCcw size={20} /> Reconnect Session
                     </button>
                     <div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
-                    <div className="text-[10px] text-muted-foreground/60 font-mono">
+                    <div className="text-3xs text-muted-foreground/60 font-mono">
                       REF::{targetId?.slice(0, 8)}
                     </div>
                   </div>

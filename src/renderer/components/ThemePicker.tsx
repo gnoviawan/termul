@@ -209,7 +209,7 @@ export function ThemePicker(): React.JSX.Element | null {
           <Palette size={16} className="text-primary shrink-0" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-medium text-foreground leading-none">Color Themes</h2>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
+            <p className="text-2xs text-muted-foreground mt-0.5">
               Hover to preview · Enter to apply
             </p>
           </div>
@@ -258,9 +258,7 @@ export function ThemePicker(): React.JSX.Element | null {
               const rows = filteredRows.filter((row) => row.familyId === family.familyId)
               return (
                 <div key={family.familyId} className="mb-3 last:mb-0">
-                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {family.name}
-                  </p>
+                  <p className="label-group px-2 pb-1 text-muted-foreground">{family.name}</p>
                   {rows.map((row) => {
                     const index = rowCounter
                     rowCounter += 1
@@ -313,7 +311,7 @@ export function ThemePicker(): React.JSX.Element | null {
           )}
         </div>
 
-        <footer className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+        <footer className="border-t border-border px-3 py-2 text-2xs text-muted-foreground">
           Esc cancel · Enter apply
         </footer>
       </section>

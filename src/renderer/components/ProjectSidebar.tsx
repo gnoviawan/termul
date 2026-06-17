@@ -1064,7 +1064,7 @@ export function ProjectSidebar({
     <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
       {/* Header with inline + button */}
       <div className="h-9 flex items-center justify-between px-3 border-b border-sidebar-border rounded-t-xl">
-        <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Projects</span>
+        <span className="label-section text-sidebar-foreground">Projects</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleCreateGroup}
@@ -1195,7 +1195,7 @@ export function ProjectSidebar({
                             }
                           }}
                           className={cn(
-                            'w-full flex items-center px-1.5 py-1 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
+                            'w-full flex items-center h-7 px-1.5 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
                             activeDragOverGroupId === group.id &&
                               'bg-primary/20 border border-primary/50'
                           )}
@@ -1237,15 +1237,15 @@ export function ProjectSidebar({
                                 }
                                 setEditingGroupId(null)
                               }}
-                              className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+                              className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span className="text-xs font-semibold text-muted-foreground truncate flex-1">
+                            <span className="text-sm font-medium text-sidebar-foreground truncate flex-1">
                               {group.name}
                             </span>
                           )}
-                          <span className="text-[10px] text-muted-foreground/40 px-2 font-normal">
+                          <span className="text-xs text-muted-foreground/60 px-2 font-normal">
                             {gpProjects.length}
                           </span>
                         </div>
@@ -1489,7 +1489,7 @@ export function ProjectSidebar({
                 <button
                   onClick={() => setShowArchived(!showArchived)}
                   disabled={isSearching}
-                  className="w-full flex items-center px-3 py-1.5 text-xs tracking-wider text-sidebar-foreground uppercase hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
+                  className="label-section w-full flex items-center px-3 py-1.5 text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
                   aria-expanded={showArchived || isSearching}
                   aria-label={`Archived projects (${filteredArchivedProjects.length})`}
                 >
@@ -2046,11 +2046,11 @@ const ProjectItem = memo(function ProjectItem({
                         return next
                       })
                     }}
-                    className="flex items-center w-full px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider hover:text-muted-foreground/80 transition-colors"
+                    className="label-group flex items-center w-full px-2 py-0.5 text-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
                   >
                     <span>{isCollapsed ? '▶' : '▼'}</span>
                     <span className="ml-1">{group.name}</span>
-                    <span className="ml-auto text-[9px] font-normal text-muted-foreground/40">
+                    <span className="ml-auto text-4xs font-normal text-muted-foreground/40">
                       {group.items.length}
                     </span>
                   </button>
@@ -2186,7 +2186,7 @@ const WorktreeItem = memo(function WorktreeItem({
       {!isRoot && <HealthBadge status={healthStatus} />}
       {!isRoot && isTermulManaged === false && (
         <span
-          className="text-[10px] text-amber-500/70 ml-1"
+          className="text-3xs text-amber-500/70 ml-1"
           title="External worktree (not created by Termul)"
         >
           ext

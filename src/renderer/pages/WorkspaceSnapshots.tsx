@@ -251,7 +251,7 @@ function SnapshotCard({
             {snapshot.tag && (
               <span
                 className={cn(
-                  'px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider border',
+                  'px-2 py-0.5 rounded text-3xs uppercase font-bold tracking-wider border',
                   snapshot.tag === 'stable'
                     ? 'bg-green-900/30 text-green-400 border-green-800/50'
                     : 'bg-primary/10 text-primary border-primary/30'

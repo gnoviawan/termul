@@ -66,14 +66,14 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-foreground">{entry.agent.name}</span>
           {entry.agent.version && (
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            <span className="shrink-0 font-mono text-3xs text-muted-foreground">
               v{entry.agent.version}
             </span>
           )}
           <Badge
             variant="secondary"
             className={cn(
-              'h-4 px-1.5 text-[10px]',
+              'h-4 px-1.5 text-3xs',
               statusBadge.tone === 'ready' && 'text-green-500',
               statusBadge.tone === 'auth' && 'text-amber-500',
               statusBadge.tone === 'warn' && 'text-amber-500'
@@ -88,7 +88,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
           </p>
         )}
         {entry.status !== 'ready' && (
-          <p className="mt-1 text-[11px] text-amber-500">
+          <p className="mt-1 text-2xs text-amber-500">
             {entry.status === 'install-required'
               ? 'Open Agent Chat and choose Install before first use.'
               : entry.unavailableReason}
@@ -138,7 +138,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
         {visible.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
         ) : (

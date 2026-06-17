@@ -602,7 +602,7 @@ function AcpAgentPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           ACP Agent
         </div>
         {agents.map((entry) => (
@@ -620,12 +620,12 @@ function AcpAgentPicker({
               {entry.config?.name ?? entry.agent.name}
             </span>
             {entry.status === 'install-required' && (
-              <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
                 {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
               </span>
             )}
             {entry.status === 'unavailable' && (
-              <span className="text-[10px] text-muted-foreground">Unavailable</span>
+              <span className="text-3xs text-muted-foreground">Unavailable</span>
             )}
             {entry.configId === selectedEntry?.configId && (
               <Check size={14} className="text-muted-foreground" />
@@ -685,7 +685,7 @@ function AcpModelPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           Model
         </div>
         {selectedEntry?.status !== 'ready' ? (
@@ -784,7 +784,7 @@ const EntryGlyph = memo(function EntryGlyph({
     return icon ? sanitizeInlineAgentSvg(icon) : null
   }, [config?.templateId, templateId])
   const className =
-    size === 'lg' ? 'h-12 w-12 rounded-2xl text-base' : 'h-4 w-4 rounded-sm text-[9px]'
+    size === 'lg' ? 'h-12 w-12 rounded-2xl text-base' : 'h-4 w-4 rounded-sm text-4xs'
 
   if (normalized) {
     return (

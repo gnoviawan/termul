@@ -207,7 +207,7 @@ export function SSHProfileForm({
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
               {profile?.hasStoredPassphrase && (
-                <p className="mt-1 text-[10px] text-muted-foreground">
+                <p className="mt-1 text-3xs text-muted-foreground">
                   🔒 Passphrase stored securely in OS keychain. Leave blank to keep existing.
                 </p>
               )}
@@ -225,7 +225,7 @@ export function SSHProfileForm({
                 placeholder={profile?.hasStoredPassword ? '••••••••' : 'Enter password'}
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="mt-1 text-3xs text-muted-foreground">
                 {profile?.hasStoredPassword
                   ? '🔒 Password stored securely in OS keychain. Leave blank to keep existing.'
                   : '🔒 Password will be stored in your OS keychain (Windows Credential Manager / macOS Keychain)'}

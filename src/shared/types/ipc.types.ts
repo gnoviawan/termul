@@ -374,6 +374,14 @@ import type {
 export type FileChangeCallback = (event: FileChangeEvent) => void
 
 // Filesystem API for renderer
+export type SearchStreamErrorCode =
+  | 'QUERY_TOO_LONG'
+  | 'PATH_VALIDATION_FAILED'
+  | 'RG_SPAWN_FAILED'
+  | 'RG_STDOUT_CAPTURE_FAILED'
+  | 'RG_STREAM_FAILED'
+  | (string & {})
+
 export interface FilesystemApi {
   readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
@@ -403,14 +411,39 @@ export interface FilesystemApi {
       truncated: boolean
       scannedFiles: number
       failedFiles: number
+      /** See `SearchStreamErrorCode` for possible values. */
+      code?: SearchStreamErrorCode
       error?: string
     }) => void
   ) => () => void
-  searchFileNames: (
+  searchFileNamesStreamStart: (
+    searchId: string,
     scopeRoot: string,
     rootPath: string,
     query: string
-  ) => Promise<IpcResult<{ files: string[]; truncated: boolean }>>
+  ) => Promise<IpcResult<void>>
+  searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
+  onSearchFileNamesBatch: (
+    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+  ) => () => void
+  onSearchFileNamesDone: (
+    callback: (event: {
+      searchId: string
+      truncated: boolean
+      totalFiles: number
+      /**
+       * Programmatic error code. One of:
+       * - `QUERY_TOO_LONG`         — query exceeded `MAX_SEARCH_QUERY_LEN`.
+       * - `PATH_VALIDATION_FAILED` — scope/root failed `validate_search_path`.
+       * - `RG_SPAWN_FAILED`        — ripgrep binary failed to start.
+       * - `RG_STDOUT_CAPTURE_FAILED` — stdout pipe could not be captured.
+       * - `RG_STREAM_FAILED`       — stdout read failed, or rg exited with a
+       *   non-zero status other than `1` (no matches).
+       */
+      code?: SearchStreamErrorCode
+      error?: string
+    }) => void
+  ) => () => void
   writeFile: (filePath: string, content: string) => Promise<IpcResult<void>>
   createFile: (filePath: string, content?: string) => Promise<IpcResult<void>>
   createDirectory: (dirPath: string) => Promise<IpcResult<void>>

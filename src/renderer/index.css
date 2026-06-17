@@ -366,6 +366,40 @@
   }
 }
 
+/* ------------------------------------------------------------
+ * Uppercase label scale.
+ *
+ * Two canonical typography-only roles for the uppercase tracked
+ * label element that previously drifted across ~25 call sites
+ * (sizes 10/12px, weights normal/medium/semibold/bold, tracking
+ * wide/wider). The two classes intentionally NORMALIZE weight and
+ * tracking to a single value per role — this is a deliberate
+ * unification, so some migrated labels render slightly lighter or
+ * heavier than before by design.
+ *
+ *   .label-section -> 12px panel / section headers
+ *                     (Projects, Explorer, SSH, Terminal, settings)
+ *   .label-group   -> 10px menu / group / field micro-labels
+ *                     (command palette groups, dialog field labels)
+ *
+ * These set size / weight / tracking / transform / line-height
+ * ONLY. Color and opacity stay at the call site because sidebar
+ * chrome (text-sidebar-foreground) and content surfaces
+ * (text-muted-foreground) legitimately differ. Behavioral classes
+ * (padding, hover, focus, truncate, cmdk selectors) also stay at
+ * the call site.
+ * ------------------------------------------------------------ */
+@layer components {
+  .label-section {
+    @apply text-xs font-normal uppercase tracking-wider;
+    line-height: 1.4;
+  }
+  .label-group {
+    @apply text-3xs font-semibold uppercase tracking-wider;
+    line-height: 1.4;
+  }
+}
+
 /* Agent chat markdown prose (ref: key-agent-chat-pane mockup) */
 @layer components {
   .chat-prose {

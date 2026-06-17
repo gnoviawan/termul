@@ -957,7 +957,7 @@ impl PtyManager {
         // mirroring the #347 fix for git worktree paths. See `strip_verbatim_prefix`.
         let cwd = std::fs::canonicalize(&cwd)
             .map_err(|e| format!("Invalid working directory '{}': {}", cwd, e))?;
-        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy());
+        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy()).into_owned();
 
         // Get terminal size
         let cols = options.cols.unwrap_or(80);

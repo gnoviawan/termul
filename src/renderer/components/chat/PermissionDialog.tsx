@@ -93,7 +93,7 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
           )}
         </div>
         <DialogFooter className="sm:justify-start">
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             Closing this dialog declines the request.
           </span>
         </DialogFooter>

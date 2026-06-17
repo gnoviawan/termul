@@ -105,7 +105,7 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
         </span>
         <span
           className={cn(
-            'ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+            'ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-3xs font-medium',
             status.className
           )}
         >

@@ -42,9 +42,7 @@ export function SidebarTabs(props: SidebarTabsProps): React.JSX.Element {
         ) : (
           <aside className="w-full bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full overflow-hidden">
             <div className="h-9 flex items-center px-3 border-b border-sidebar-border rounded-t-xl">
-              <span className="text-xs tracking-wider text-sidebar-foreground uppercase">
-                Chats
-              </span>
+              <span className="label-section text-sidebar-foreground">Chats</span>
             </div>
             <div className="flex-1 min-h-0">
               <ChatHistoryTab />
@@ -72,7 +70,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex-1 flex items-center justify-center gap-1.5 rounded-md py-1 text-[11px] font-medium transition-colors',
+        'flex-1 flex items-center justify-center gap-1.5 rounded-md py-1 text-2xs font-medium transition-colors',
         active ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
       )}
     >

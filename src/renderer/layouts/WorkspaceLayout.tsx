@@ -596,7 +596,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
     listen<void>('menu:close-tab', () => {
-      closeActiveTab()
+      // Skip when Agent Launcher is open to avoid accidental tab closure
+      if (!isAgentLauncherOpen) {
+        closeActiveTab()
+      }
     })
       .then((fn) => {
         unlisten = fn
@@ -607,7 +610,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     return () => {
       unlisten?.()
     }
-  }, [closeActiveTab])
+  }, [closeActiveTab, isAgentLauncherOpen])
 
   // Load snapshots when project changes
   useSnapshotLoader()
@@ -918,9 +921,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // Close Tab (Ctrl+W / ⌘+W)
       // On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)
       // On Windows/Linux: Ctrl+W closes tab
+      // Always preventDefault to suppress OS/webview close behavior; only
+      // close the tab when the Agent Launcher is not open.
       if (matchesShortcut(e, getActiveKey('closeTab'))) {
         e.preventDefault()
-        closeActiveTab()
+        if (!isAgentLauncherOpen) {
+          closeActiveTab()
+        }
         return
       }
 
@@ -1112,7 +1119,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isExplorerVisible,
     isSidebarVisible,
     handleOpenThemePicker,
-    closeActiveTab
+    closeActiveTab,
+    isAgentLauncherOpen
   ])
 
   useEffect(() => {

@@ -228,6 +228,7 @@ mod tests {
             agent_id: AgentId("agent-1".to_string()),
             session_id: SessionId::new("sess-1"),
             modes: None,
+            models: None,
             config_options: None,
         };
         let value = serde_json::to_value(&event).unwrap();
