@@ -13,6 +13,7 @@ const {
   mockSaveAgentConfig,
   mockSetConfigOption,
   mockSetMode,
+  mockSetModel,
   mockInstallRegistryBinary,
   mockAddAgentChatTab,
   mockHideAgentLauncher,
@@ -28,6 +29,7 @@ const {
   mockSaveAgentConfig: vi.fn(),
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
+  mockSetModel: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
@@ -39,6 +41,7 @@ const {
       agentConfigs: [] as StoredAgentConfig[],
       preparedSessions: {} as Record<string, string>,
       preparingChatKeys: {} as Record<string, true>,
+      prepareChatErrors: {} as Record<string, string>,
       sessions: {} as Record<string, AcpSession>,
       pendingAuth: {},
       commands: {}
@@ -97,7 +100,8 @@ vi.mock('@/stores/acp-store', () => {
     sendPrompt: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
-    setMode: mockSetMode
+    setMode: mockSetMode,
+    setModel: mockSetModel
   })
   type MockAcpState = typeof acpStateRef.current & { saveAgentConfig: typeof mockSaveAgentConfig }
   const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
@@ -203,6 +207,7 @@ beforeEach(() => {
     agentConfigs: [],
     preparedSessions: {},
     preparingChatKeys: {},
+    prepareChatErrors: {},
     sessions: {},
     pendingAuth: {},
     commands: {}
@@ -219,6 +224,7 @@ beforeEach(() => {
   })
   mockSetConfigOption.mockResolvedValue(undefined)
   mockSetMode.mockResolvedValue(undefined)
+  mockSetModel.mockResolvedValue(undefined)
   mockInstallRegistryBinary.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
 })
 
@@ -246,6 +252,27 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
     )
     expect(mockStartChat).not.toHaveBeenCalled()
+  })
+
+  it('surfaces prepare errors in the model picker and retries preparation', async () => {
+    const key = 'acp-registry:codex-acp\0/work\0'
+    acpStateRef.current.prepareChatErrors = {
+      [key]: 'session/new timed out after 30s'
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+    )
+    mockPrepareChat.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Select model: Model unavailable' }))
+
+    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
+    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
@@ -304,6 +331,38 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
+
+  it('uses native ACP session models when configOptions has no model option', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = {
+      'prepared-1': {
+        ...preparedSession(ACP_CONFIG),
+        configOptions: [],
+        models: {
+          currentModelId: 'kiro/claude-opus-4-8',
+          availableModels: [
+            { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+            { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+          ]
+        }
+      }
+    }
+    renderLauncher()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select model: kiro/Claude Opus 4.8' })
+    )
+    fireEvent.click(await screen.findByText('OpenRouter/GPT-5.5'))
+
+    expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
+  })
 
   it('searches and scroll-limits large model menus', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'

@@ -46,6 +46,7 @@ import {
   type SessionCreatedEvent,
   type SessionId,
   type SessionMode,
+  type SessionModelState,
   type SessionModeState,
   type StopReason,
   type ToolCall,
@@ -97,6 +98,7 @@ export interface AcpSession {
    */
   openTurnId: string | null
   modes: SessionModeState | null
+  models?: SessionModelState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
   createdAt: number
@@ -132,6 +134,8 @@ interface AcpState {
   preparedSessions: Record<string, SessionId>
   /** Prepare keys with `session/new` currently in flight. */
   preparingChatKeys: Record<string, true>
+  /** Last background prepare error keyed by prepare key. */
+  prepareChatErrors: Record<string, string>
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -197,6 +201,7 @@ interface AcpState {
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
+  setModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
@@ -480,12 +485,20 @@ function cancelPreparedChatEntry(
 ): void {
   inFlightPrepared.delete(key)
   set((s) => {
-    if (!(key in s.preparedSessions) && !(key in s.preparingChatKeys)) return s
+    if (
+      !(key in s.preparedSessions) &&
+      !(key in s.preparingChatKeys) &&
+      !(key in s.prepareChatErrors)
+    ) {
+      return s
+    }
     const preparedSessions = { ...s.preparedSessions }
     const preparingChatKeys = { ...s.preparingChatKeys }
+    const prepareChatErrors = { ...s.prepareChatErrors }
     delete preparedSessions[key]
     delete preparingChatKeys[key]
-    return { preparedSessions, preparingChatKeys }
+    delete prepareChatErrors[key]
+    return { preparedSessions, preparingChatKeys, prepareChatErrors }
   })
 }
 
@@ -498,6 +511,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   /** Prepared `session/new` results keyed by {@link prepareChatKey}. */
   preparedSessions: {},
   preparingChatKeys: {},
+  prepareChatErrors: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -586,6 +600,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: existing?.activeTurn ?? false,
             openTurnId: existing?.openTurnId ?? null,
             modes: outcome.modes ?? existing?.modes ?? null,
+            models: outcome.models ?? existing?.models ?? null,
             configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
             createdAt: existing?.createdAt ?? Date.now()
@@ -700,6 +715,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const prepareKeys = new Set<string>([
       ...Object.keys(get().preparedSessions),
       ...Object.keys(get().preparingChatKeys),
+      ...Object.keys(get().prepareChatErrors),
       ...inFlightPrepared.keys()
     ])
     for (const key of prepareKeys) {
@@ -788,7 +804,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
     if (get().preparedSessions[key] || inFlightPrepared.has(key)) return
-    set((s) => ({ preparingChatKeys: { ...s.preparingChatKeys, [key]: true } }))
+    set((s) => {
+      const prepareChatErrors = { ...s.prepareChatErrors }
+      delete prepareChatErrors[key]
+      return {
+        preparingChatKeys: { ...s.preparingChatKeys, [key]: true },
+        prepareChatErrors
+      }
+    })
 
     const task = (async (): Promise<SessionId | null> => {
       try {
@@ -833,6 +856,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return sessionId
       } catch (err) {
         console.warn('[acp] prepareChat failed', configId, err)
+        if (inFlightPrepared.has(key)) {
+          const message = err instanceof Error ? err.message : String(err)
+          set((s) => ({
+            prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
+          }))
+        }
         return null
       } finally {
         inFlightPrepared.delete(key)
@@ -973,6 +1002,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: meta.createdAt
@@ -1126,6 +1156,38 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     await acpApi.setMode(session.agentId, sessionId, modeId)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.modes) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            modes: { ...current.modes, currentModeId: modeId }
+          }
+        }
+      }
+    })
+  },
+
+  setModel: async (sessionId, modelId) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    await acpApi.setModel(session.agentId, sessionId, modelId)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.models) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            models: { ...current.models, currentModelId: modelId }
+          }
+        }
+      }
+    })
   },
 
   respondPermission: async (requestId, optionId) => {
@@ -1197,6 +1259,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
               modes: e.modes ?? s.sessions[e.sessionId].modes,
+              models: e.models ?? s.sessions[e.sessionId].models ?? null,
               configOptions: e.configOptions ?? s.sessions[e.sessionId].configOptions
             }
           }
@@ -1214,6 +1277,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: false,
             openTurnId: null,
             modes: e.modes ?? null,
+            models: e.models ?? null,
             configOptions: e.configOptions ?? [],
             lastError: null,
             createdAt: Date.now()

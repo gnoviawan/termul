@@ -52,6 +52,7 @@ const FRESH = {
   warmingConfigs: {},
   preparedSessions: {},
   preparingChatKeys: {},
+  prepareChatErrors: {},
   pendingAuth: {},
   sessionIndex: [],
   mcpServers: [],
@@ -86,6 +87,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
         activeTurn,
         openTurnId: activeTurn ? 'seed-turn' : null,
         modes: null,
+        models: null,
         configOptions: [],
         lastError: null,
         createdAt: Date.now()
@@ -108,6 +110,58 @@ describe('acp-store', () => {
     const session = useAcpStore.getState().sessions['s1']
     expect(session.agentId).toBe('agent-1')
     expect(useAcpStore.getState().activeSessionId).toBe('s1')
+  })
+
+  it('createSession preserves native ACP session models', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: 's1',
+      models: {
+        currentModelId: 'kiro/claude-opus-4-8',
+        availableModels: [
+          { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+          { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().createSession('agent-1', '/work')
+
+    expect(useAcpStore.getState().sessions['s1'].models).toEqual({
+      currentModelId: 'kiro/claude-opus-4-8',
+      availableModels: [
+        { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+        { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+      ]
+    })
+  })
+
+  it('setModel calls session/set_model and updates the current native ACP model', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          models: {
+            currentModelId: 'kiro/claude-opus-4-8',
+            availableModels: [
+              { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+              { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+            ]
+          }
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await useAcpStore.getState().setModel('s1', 'openrouter/gpt-5.5')
+
+    expect(invoke).toHaveBeenCalledWith('acp_set_model', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modelId: 'openrouter/gpt-5.5'
+    })
+    expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
   })
 
   it('sendPrompt appends a user message and marks the turn active', async () => {
@@ -850,6 +904,29 @@ describe('acp-store', () => {
       cwd: '/work',
       mcpServers: undefined
     })
+  })
+
+  it('records and clears prepareChat failures', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('session/new timed out after 30s')
+
+    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]).toBe('session/new timed out after 30s')
+    })
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
   })
 
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {

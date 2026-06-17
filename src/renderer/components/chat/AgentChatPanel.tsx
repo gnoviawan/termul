@@ -41,6 +41,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
+  const setModel = useAcpStore((s) => s.setModel)
 
   const handleSend = useCallback(
     (text: string) => {
@@ -73,6 +74,15 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
       })
     },
     [setMode, sessionId]
+  )
+
+  const handleSetModel = useCallback(
+    (modelId: string) => {
+      void setModel(sessionId, modelId).catch((err) => {
+        toast.error(`Failed to set model: ${String(err)}`)
+      })
+    },
+    [setModel, sessionId]
   )
 
   const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
@@ -133,6 +143,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         modes={session.modes}
         onSetConfig={handleSetConfig}
         onSetMode={handleSetMode}
+        onSetModel={handleSetModel}
       />
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>

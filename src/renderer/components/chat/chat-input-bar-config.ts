@@ -5,7 +5,7 @@
  * to dedicated chips rendered ahead of generic options
  * (issue #286).
  */
-import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionModelState, SessionModeState } from '@/lib/acp-api'
 
 /** ACP semantic category for reasoning/thinking-depth config options. */
 export const THOUGHT_LEVEL_CATEGORY = 'thought_level'
@@ -21,6 +21,11 @@ export interface PartitionedConfigOptions {
   thoughtLevel: SessionConfigOption | null
   /** All remaining options, in their original relative order. */
   rest: SessionConfigOption[]
+}
+
+export interface ResolvedModelOption {
+  option: SessionConfigOption | null
+  source: 'config' | 'models' | null
 }
 
 /**
@@ -43,6 +48,34 @@ export function partitionConfigOptions(options: SessionConfigOption[]): Partitio
     }
   }
   return { model, thoughtLevel, rest }
+}
+
+/**
+ * ACP has two model-selection shapes in the wild: generic config options and
+ * the native session model state. Prefer config options when present, then
+ * synthesize a picker-compatible option from `session.models`.
+ */
+export function resolveModelOption(
+  configModel: SessionConfigOption | null,
+  models: SessionModelState | null | undefined
+): ResolvedModelOption {
+  if (configModel) return { option: configModel, source: 'config' }
+  if (!models || models.availableModels.length === 0) return { option: null, source: null }
+  return {
+    source: 'models',
+    option: {
+      id: MODEL_CATEGORY,
+      name: 'Model',
+      category: MODEL_CATEGORY,
+      type: 'select',
+      currentValue: models.currentModelId,
+      options: models.availableModels.map((model) => ({
+        value: model.modelId,
+        name: model.name,
+        description: model.description ?? undefined
+      }))
+    }
+  }
 }
 
 /**

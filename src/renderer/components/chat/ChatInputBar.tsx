@@ -11,7 +11,11 @@ import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
-import { filterDuplicateModeConfigOptions, partitionConfigOptions } from './chat-input-bar-config'
+import {
+  filterDuplicateModeConfigOptions,
+  partitionConfigOptions,
+  resolveModelOption
+} from './chat-input-bar-config'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -42,6 +46,8 @@ interface ChatInputBarProps {
   onSetConfig: (configId: string, valueId: string) => void
   /** Apply a legacy mode immediately. */
   onSetMode: (modeId: string) => void
+  /** Apply a native ACP model selection immediately. */
+  onSetModel: (modelId: string) => void
 }
 
 export function ChatInputBar({
@@ -55,7 +61,8 @@ export function ChatInputBar({
   configOptions,
   modes,
   onSetConfig,
-  onSetMode
+  onSetMode,
+  onSetModel
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
@@ -64,6 +71,7 @@ export function ChatInputBar({
     thoughtLevel,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
+  const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
@@ -207,14 +215,20 @@ export function ChatInputBar({
               <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
                 <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
               </span>
-              {model && (
+              {modelOption && (
                 <ConfigChip
-                  key={model.id}
-                  option={model}
+                  key={modelOption.id}
+                  option={modelOption}
                   disabled={disabled}
                   searchable
                   maxVisibleOptions={5}
-                  onSelect={(valueId) => onSetConfig(model.id, valueId)}
+                  onSelect={(valueId) => {
+                    if (modelSource === 'models') {
+                      onSetModel(valueId)
+                    } else {
+                      onSetConfig(modelOption.id, valueId)
+                    }
+                  }}
                 />
               )}
               {hasConfigOptions ? (

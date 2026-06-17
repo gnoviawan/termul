@@ -148,6 +148,17 @@ pub async fn acp_set_mode(
     manager.set_mode(&agent_id, session_id, mode_id).await
 }
 
+/// Set the active session model.
+#[tauri::command]
+pub async fn acp_set_model(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+    model_id: String,
+) -> Result<(), String> {
+    manager.set_model(&agent_id, session_id, model_id).await
+}
+
 /// Run the ACP `authenticate` method for an agent. `methodId` must be one of
 /// the ids surfaced in the `acp:auth_required` event.
 #[tauri::command]

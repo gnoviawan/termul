@@ -31,10 +31,11 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest, ContentBlock,
-    InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, NewSessionRequest,
-    PromptRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigOption,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
+    InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, ModelId,
+    NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
+    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome,
+    SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SetSessionModelRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
@@ -52,6 +53,8 @@ use crate::acp::session::DriverState;
 /// How long to wait for the agent to answer `initialize` before treating the
 /// spawn as failed (and tearing the child down).
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long to wait for `session/new` before returning an error to the caller.
+const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
@@ -66,6 +69,8 @@ pub struct NewSessionOutcome {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<SessionConfigOption>>,
 }
@@ -110,6 +115,11 @@ enum AcpCommand {
     SetMode {
         session_id: SessionId,
         mode_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    SetModel {
+        session_id: SessionId,
+        model_id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
     SetConfigOption {
@@ -408,6 +418,22 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::SetMode {
             session_id,
             mode_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Set the session's active model.
+    pub async fn set_model(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+        model_id: String,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::SetModel {
+            session_id,
+            model_id,
             reply,
         })
         .await
@@ -1086,8 +1112,13 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
-                    match req_cx.send_request(request).block_task().await {
-                        Ok(response) => {
+                    match tokio::time::timeout(
+                        SESSION_NEW_TIMEOUT,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(response)) => {
                             let session_id = SessionId::from(response.session_id);
                             // Record the session's workspace root so agent fs
                             // requests for this session can be sandboxed (H2).
@@ -1101,6 +1132,7 @@ async fn run_command_loop(
                                     agent_id: req_agent_id,
                                     session_id: session_id.clone(),
                                     modes: response.modes.clone(),
+                                    models: response.models.clone(),
                                     config_options: response.config_options.clone(),
                                 },
                             );
@@ -1109,11 +1141,18 @@ async fn run_command_loop(
                                 Ok(NewSessionOutcome {
                                     session_id,
                                     modes: response.modes,
+                                    models: response.models,
                                     config_options: response.config_options,
                                 }),
                             );
                         }
-                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(Err(e)) => send_reply(&task_slot, Err(e.to_string())),
+                        Err(_) => send_reply(
+                            &task_slot,
+                            Err(format!(
+                                "session/new timed out after {SESSION_NEW_TIMEOUT:?}"
+                            )),
+                        ),
                     }
                 });
             }
@@ -1331,6 +1370,21 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     let request = SetSessionModeRequest::new(&session_id, mode_id);
+                    let result = req_cx.send_request(request).block_task().await;
+                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                });
+            }
+
+            AcpCommand::SetModel {
+                session_id,
+                model_id,
+                reply,
+            } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_cx = cx.clone();
+                spawn_request(&cx, slot, async move {
+                    let request = SetSessionModelRequest::new(&session_id, ModelId::new(model_id));
                     let result = req_cx.send_request(request).block_task().await;
                     send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
                 });

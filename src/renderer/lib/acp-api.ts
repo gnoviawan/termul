@@ -52,6 +52,17 @@ export interface SessionModeState {
   availableModes: SessionMode[]
 }
 
+export interface SessionModel {
+  modelId: string
+  name: string
+  description?: string | null
+}
+
+export interface SessionModelState {
+  currentModelId: string
+  availableModels: SessionModel[]
+}
+
 export interface SessionConfigOptionValue {
   value: string
   name: string
@@ -209,6 +220,7 @@ export interface AgentConfig {
 export interface NewSessionOutcome {
   sessionId: SessionId
   modes?: SessionModeState | null
+  models?: SessionModelState | null
   configOptions?: SessionConfigOption[] | null
 }
 
@@ -228,6 +240,7 @@ export interface SessionCreatedEvent {
   agentId: AgentId
   sessionId: SessionId
   modes?: SessionModeState | null
+  models?: SessionModelState | null
   configOptions?: SessionConfigOption[] | null
 }
 export interface MessageChunkEvent {
@@ -426,6 +439,14 @@ export async function acpSetMode(
   await invoke('acp_set_mode', { agentId, sessionId, modeId })
 }
 
+export async function acpSetModel(
+  agentId: AgentId,
+  sessionId: SessionId,
+  modelId: string
+): Promise<void> {
+  await invoke('acp_set_model', { agentId, sessionId, modelId })
+}
+
 export async function acpRespondPermission(
   agentId: AgentId,
   requestId: string,
@@ -486,6 +507,7 @@ export const acpApi = {
   cancelPrompt: acpCancelPrompt,
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
+  setModel: acpSetModel,
   respondPermission: acpRespondPermission,
   authenticate: acpAuthenticate,
   installRegistryBinary: acpInstallRegistryBinary,

@@ -4,9 +4,10 @@ import type { SessionConfigOption } from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
 
-const { mockSetConfig, mockSetMode } = vi.hoisted(() => ({
+const { mockSetConfig, mockSetMode, mockSetModel } = vi.hoisted(() => ({
   mockSetConfig: vi.fn(),
-  mockSetMode: vi.fn()
+  mockSetMode: vi.fn(),
+  mockSetModel: vi.fn()
 }))
 
 vi.mock('@/hooks/use-agent-skills', () => ({
@@ -52,6 +53,7 @@ function session(): AcpSession {
         { id: 'ask', name: 'Ask' }
       ]
     },
+    models: null,
     configOptions: [],
     lastError: null,
     createdAt: 1
@@ -89,6 +91,7 @@ describe('ChatInputBar config controls', () => {
         modes={s.modes}
         onSetConfig={mockSetConfig}
         onSetMode={mockSetMode}
+        onSetModel={mockSetModel}
       />
     )
 
@@ -131,6 +134,7 @@ describe('ChatInputBar config controls', () => {
         modes={s.modes}
         onSetConfig={mockSetConfig}
         onSetMode={mockSetMode}
+        onSetModel={mockSetModel}
       />
     )
 
@@ -148,5 +152,38 @@ describe('ChatInputBar config controls', () => {
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
     fireEvent.click(screen.getByText('xAI/Grok 4.3'))
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'grok-43')
+  })
+
+  it('uses native ACP session models when configOptions has no model option', async () => {
+    const s = session()
+    s.models = {
+      currentModelId: 'kiro/claude-opus-4-8',
+      availableModels: [
+        { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+        { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+      ]
+    }
+
+    render(
+      <ChatInputBar
+        session={s}
+        busy={false}
+        disabled={false}
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        commands={[]}
+        configOptions={[]}
+        modes={s.modes}
+        onSetConfig={mockSetConfig}
+        onSetMode={mockSetMode}
+        onSetModel={mockSetModel}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'kiro/Claude Opus 4.8' }))
+    fireEvent.click(await screen.findByText('OpenRouter/GPT-5.5'))
+
+    expect(mockSetModel).toHaveBeenCalledWith('openrouter/gpt-5.5')
+    expect(mockSetConfig).not.toHaveBeenCalled()
   })
 })

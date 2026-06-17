@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import {
   filterDuplicateModeConfigOptions,
-  partitionConfigOptions
+  partitionConfigOptions,
+  resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { LoadedSkillChip } from '@/components/chat/LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
@@ -93,6 +94,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const isPreparing = useAcpStore((s) =>
     preparedKey ? Boolean(s.preparingChatKeys[preparedKey]) : false
   )
+  const prepareError = useAcpStore((s) =>
+    preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
+  )
   const draftSession = useAcpSession(preparedSessionId)
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
@@ -109,6 +113,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     thoughtLevel,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
+  const { option: modelOption, source: modelSource } = resolveModelOption(
+    model,
+    draftSession?.models
+  )
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(
     genericConfigOptions,
     draftSession?.modes ?? null
@@ -242,6 +250,28 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     },
     [preparedSessionId]
   )
+
+  const handleSetModel = useCallback(
+    (valueId: string) => {
+      if (!preparedSessionId) return
+      if (modelSource === 'models') {
+        void useAcpStore
+          .getState()
+          .setModel(preparedSessionId, valueId)
+          .catch((err) => toast.error(`Failed to set model: ${String(err)}`))
+        return
+      }
+      if (modelOption) handleSetConfig(modelOption.id, valueId)
+    },
+    [handleSetConfig, modelOption, modelSource, preparedSessionId]
+  )
+
+  const handleRetryPrepare = useCallback(() => {
+    if (!activeConfigId || !projectRoot || !preparedKey) return
+    const store = useAcpStore.getState()
+    store.cancelPreparedChat(preparedKey)
+    store.prepareChat(activeConfigId, projectRoot)
+  }, [activeConfigId, preparedKey, projectRoot])
 
   const handleSetMode = useCallback(
     (modeId: string) => {
@@ -429,10 +459,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 />
                 <AcpModelPicker
                   selectedEntry={selectedEntry}
-                  modelOption={model}
-                  loading={isPreparing && !draftSession}
+                  modelOption={modelOption}
+                  loading={!prepareError && isPreparing && !draftSession}
+                  errorMessage={prepareError}
                   disabled={isLaunching || Boolean(installingConfigId)}
-                  onSelectModel={(valueId) => model && handleSetConfig(model.id, valueId)}
+                  onRetry={handleRetryPrepare}
+                  onSelectModel={handleSetModel}
                 />
                 {thoughtLevel && (
                   <ConfigChip
@@ -609,18 +641,26 @@ function AcpModelPicker({
   selectedEntry,
   modelOption,
   loading,
+  errorMessage,
   disabled,
+  onRetry,
   onSelectModel
 }: {
   selectedEntry: SupportedAcpAgentEntry | null
   modelOption: ReturnType<typeof partitionConfigOptions>['model']
   loading: boolean
+  errorMessage: string | null
   disabled: boolean
+  onRetry: () => void
   onSelectModel: (valueId: string) => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
-  const label = loading ? 'Loading model…' : (currentModel?.name ?? 'Model')
+  const label = loading
+    ? 'Loading model…'
+    : errorMessage
+      ? 'Model unavailable'
+      : (currentModel?.name ?? 'Model')
   const showSearch = Boolean(modelOption && modelOption.options.length > 5)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredModels =
@@ -698,6 +738,22 @@ function AcpModelPicker({
               )}
             </div>
           </>
+        ) : errorMessage ? (
+          <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
+            <div>
+              <div className="font-medium text-foreground/85">Could not load model options.</div>
+              <div className="mt-1 line-clamp-3 break-words">{errorMessage}</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
+          </div>
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {loading
