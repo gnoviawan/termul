@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TitleBar } from './TitleBar'
 
-const { mockWindowApi, platformState, maximizeRef } = vi.hoisted(() => ({
+const { mockWindowApi, platformState, maximizeRef, projectState } = vi.hoisted(() => ({
   mockWindowApi: {
     onMaximizeChange: vi.fn(),
     minimize: vi.fn(),
@@ -10,7 +10,8 @@ const { mockWindowApi, platformState, maximizeRef } = vi.hoisted(() => ({
     close: vi.fn()
   },
   platformState: { isMac: false },
-  maximizeRef: { cb: null as null | ((maximized: boolean) => void) }
+  maximizeRef: { cb: null as null | ((maximized: boolean) => void) },
+  projectState: { activeProject: null as null | { name: string } }
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -23,10 +24,15 @@ vi.mock('@/lib/platform', () => ({
   }
 }))
 
+vi.mock('@/stores/project-store', () => ({
+  useActiveProject: () => projectState.activeProject
+}))
+
 describe('TitleBar (window control strip)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     platformState.isMac = false
+    projectState.activeProject = null
     maximizeRef.cb = null
     mockWindowApi.onMaximizeChange.mockImplementation((cb: (maximized: boolean) => void) => {
       maximizeRef.cb = cb
@@ -84,5 +90,21 @@ describe('TitleBar (window control strip)', () => {
     })
 
     expect(screen.getByRole('button', { name: 'Restore window' })).toBeInTheDocument()
+  })
+
+  it('renders active project name when a project is active', () => {
+    projectState.activeProject = { name: 'my-app' }
+
+    render(<TitleBar />)
+
+    expect(screen.getByText('my-app')).toBeInTheDocument()
+  })
+
+  it('does not render project name when no project is active', () => {
+    projectState.activeProject = null
+
+    render(<TitleBar />)
+
+    expect(screen.queryByText('my-app')).not.toBeInTheDocument()
   })
 })

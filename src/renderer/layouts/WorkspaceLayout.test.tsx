@@ -408,6 +408,25 @@ describe('WorkspaceLayout - Empty States', () => {
     expect(strip?.className).toContain('h-8')
   })
 
+  it('renders active project name in macOS titlebar strip when a project is active', () => {
+    platformState.isMac = true
+    mockUseActiveProject.mockReturnValue(createProject('my-app', '/workspace/my-app', 'blue'))
+
+    renderWithRouter()
+
+    expect(screen.getByText('MY-APP')).toBeInTheDocument()
+  })
+
+  it('does not render project name in macOS titlebar strip when no project is active', () => {
+    platformState.isMac = true
+
+    renderWithRouter()
+
+    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    expect(strip).not.toBeNull()
+    expect(strip?.querySelector('span')).not.toBeTruthy()
+  })
+
   it('persists terminal layout before unload when a project is active', async () => {
     mockUseActiveProjectId.mockReturnValue('project-1')
     mockUseActiveProject.mockReturnValue(createProject('project-1', '/workspace/project-1', 'blue'))
