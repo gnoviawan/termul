@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWindowState } from '@/hooks/use-window-state'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
@@ -28,6 +29,7 @@ import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
@@ -97,6 +99,7 @@ const router = createHashRouter(
 
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
+  const whatsNew = useWhatsNew()
 
   useEffect(() => {
     if (!isWindowStateReady) return
@@ -123,6 +126,13 @@ export default function TauriApp(): React.JSX.Element {
           <Toaster />
           <Sonner />
           <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          <WhatsNewModal
+            isOpen={whatsNew.isOpen}
+            version={whatsNew.version}
+            notes={whatsNew.notes}
+            htmlUrl={whatsNew.htmlUrl}
+            onClose={whatsNew.close}
+          />
         </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
