@@ -52,7 +52,7 @@ const FRESH = {
   warmingConfigs: {},
   preparedSessions: {},
   preparingChatKeys: {},
-  pendingAuth: {},
+  prepareChatErrors: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -86,6 +86,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
         activeTurn,
         openTurnId: activeTurn ? 'seed-turn' : null,
         modes: null,
+        models: null,
         configOptions: [],
         lastError: null,
         createdAt: Date.now()
@@ -110,6 +111,58 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().activeSessionId).toBe('s1')
   })
 
+  it('createSession preserves native ACP session models', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: 's1',
+      models: {
+        currentModelId: 'kiro/claude-opus-4-8',
+        availableModels: [
+          { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+          { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().createSession('agent-1', '/work')
+
+    expect(useAcpStore.getState().sessions['s1'].models).toEqual({
+      currentModelId: 'kiro/claude-opus-4-8',
+      availableModels: [
+        { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+        { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+      ]
+    })
+  })
+
+  it('setModel calls session/set_model and updates the current native ACP model', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          models: {
+            currentModelId: 'kiro/claude-opus-4-8',
+            availableModels: [
+              { modelId: 'kiro/claude-opus-4-8', name: 'kiro/Claude Opus 4.8' },
+              { modelId: 'openrouter/gpt-5.5', name: 'OpenRouter/GPT-5.5' }
+            ]
+          }
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await useAcpStore.getState().setModel('s1', 'openrouter/gpt-5.5')
+
+    expect(invoke).toHaveBeenCalledWith('acp_set_model', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modelId: 'openrouter/gpt-5.5'
+    })
+    expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
+  })
+
   it('sendPrompt appends a user message and marks the turn active', async () => {
     seedSession('s1', 'agent-1', false)
     // never resolve, so the turn stays active for the assertion
@@ -122,6 +175,40 @@ describe('acp-store', () => {
     expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
     // turn is marked active until the command resolves / prompt_complete fires
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+  })
+
+  it('sendPrompt updates the persisted history title from the first user message', async () => {
+    seedSession('s1', 'agent-09d39730', false)
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-09d39730',
+          title: 'Agent 09d39730',
+          cwd: '/work',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+
+    void useAcpStore.getState().sendPrompt('s1', 'siapa itu faiz intifada?')
+    await Promise.resolve()
+
+    const [entry] = useAcpStore.getState().sessionIndex
+    expect(entry.title).toBe('siapa itu faiz intifada?')
+    expect(entry.messageCount).toBe(1)
+    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    expect(saveSessionPayload).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        metadata: expect.objectContaining({ title: 'siapa itu faiz intifada?' }),
+        messages: [expect.objectContaining({ role: 'user' })]
+      })
+    )
   })
 
   it('rejects a second prompt while a turn is active', async () => {
@@ -818,6 +905,29 @@ describe('acp-store', () => {
     })
   })
 
+  it('records and clears prepareChat failures', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('session/new timed out after 30s')
+
+    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]).toBe('session/new timed out after 30s')
+    })
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
+  })
+
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
     await useAcpStore
       .getState()
@@ -1310,7 +1420,7 @@ describe('acp-store multi-project isolation', () => {
 
   it('selectConfigWarmState rolls up status across all per-cwd processes', () => {
     useAcpStore.setState((s) => ({
-      agentStatus: { ...s.agentStatus, 'agent-a': 'needs-auth', 'agent-b': 'connected' },
+      agentStatus: { ...s.agentStatus, 'agent-a': 'spawning', 'agent-b': 'connected' },
       configToLiveAgent: {
         ...s.configToLiveAgent,
         [agentReuseKey('cfg-1', '/a')]: 'agent-a',
@@ -1319,11 +1429,10 @@ describe('acp-store multi-project isolation', () => {
       warmingConfigs: { ...s.warmingConfigs, [agentReuseKey('cfg-1', '/c')]: true }
     }))
     const state = selectConfigWarmState(useAcpStore.getState(), 'cfg-1')
-    expect(state).toEqual({ connected: true, needsAuth: true, warming: true })
+    expect(state).toEqual({ connected: true, warming: true })
     // A different config sees nothing.
     expect(selectConfigWarmState(useAcpStore.getState(), 'cfg-other')).toEqual({
       connected: false,
-      needsAuth: false,
       warming: false
     })
   })

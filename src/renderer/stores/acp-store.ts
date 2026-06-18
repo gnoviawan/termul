@@ -27,7 +27,6 @@ import {
   type AgentErrorEvent,
   type AgentId,
   type AgentSpawnedEvent,
-  type AuthRequiredEvent,
   type AvailableCommand,
   acpApi,
   type CommandsUpdateEvent,
@@ -46,6 +45,7 @@ import {
   type SessionCreatedEvent,
   type SessionId,
   type SessionMode,
+  type SessionModelState,
   type SessionModeState,
   type StopReason,
   type ToolCall,
@@ -69,7 +69,7 @@ import {
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 
-export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error' | 'needs-auth'
+export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 export type MessageRole = 'user' | 'agent' | 'thought'
 
@@ -97,6 +97,7 @@ export interface AcpSession {
    */
   openTurnId: string | null
   modes: SessionModeState | null
+  models?: SessionModelState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
   createdAt: number
@@ -114,8 +115,6 @@ interface AcpState {
   // Agent registry
   agents: Record<AgentId, { id: AgentId; capabilities: AgentCapabilities | null }>
   agentStatus: Record<AgentId, AgentStatus>
-  /** Pending ACP authentication requirements, keyed by live agent id. */
-  pendingAuth: Record<AgentId, AuthRequiredEvent>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -132,6 +131,8 @@ interface AcpState {
   preparedSessions: Record<string, SessionId>
   /** Prepare keys with `session/new` currently in flight. */
   preparingChatKeys: Record<string, true>
+  /** Last background prepare error keyed by prepare key. */
+  prepareChatErrors: Record<string, string>
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -197,12 +198,10 @@ interface AcpState {
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
+  setModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
-
-  // Actions — authentication
-  authenticate: (agentId: AgentId, methodId: string) => Promise<void>
 
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
@@ -217,7 +216,6 @@ interface AcpState {
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
-  _onAuthRequired: (e: AuthRequiredEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
 }
@@ -435,12 +433,11 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
 /**
  * A live agent can be reused (instead of spawning a second process) when it is
- * connected or merely awaiting authentication. Re-spawning a `needs-auth` agent
- * would orphan the original; the caller's `pendingAuth` guard then blocks the
- * actual session until the user authenticates.
+ * connected. Provider CLIs own authentication, so an auth-blocked process is not
+ * treated as reusable for new chat preparation.
  */
 function isReusableStatus(status: AgentStatus | undefined): boolean {
-  return status === 'connected' || status === 'needs-auth'
+  return status === 'connected'
 }
 
 /**
@@ -483,12 +480,20 @@ function cancelPreparedChatEntry(
 ): void {
   inFlightPrepared.delete(key)
   set((s) => {
-    if (!(key in s.preparedSessions) && !(key in s.preparingChatKeys)) return s
+    if (
+      !(key in s.preparedSessions) &&
+      !(key in s.preparingChatKeys) &&
+      !(key in s.prepareChatErrors)
+    ) {
+      return s
+    }
     const preparedSessions = { ...s.preparedSessions }
     const preparingChatKeys = { ...s.preparingChatKeys }
+    const prepareChatErrors = { ...s.prepareChatErrors }
     delete preparedSessions[key]
     delete preparingChatKeys[key]
-    return { preparedSessions, preparingChatKeys }
+    delete prepareChatErrors[key]
+    return { preparedSessions, preparingChatKeys, prepareChatErrors }
   })
 }
 
@@ -501,6 +506,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   /** Prepared `session/new` results keyed by {@link prepareChatKey}. */
   preparedSessions: {},
   preparingChatKeys: {},
+  prepareChatErrors: {},
   sessionIndex: [],
   mcpServers: [],
   sessions: {},
@@ -510,7 +516,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   plans: {},
   commands: {},
   pendingPermissions: {},
-  pendingAuth: {},
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -522,9 +527,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // real agent id; leaving it would strand a stale status forever.
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
-        // Don't clobber a `needs-auth` status the auth_required event may have
-        // already set (the events race with this resolve).
-        agentStatus[agentId] = s.pendingAuth[agentId] ? 'needs-auth' : 'connected'
+        agentStatus[agentId] = 'connected'
         return {
           agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
           agentStatus
@@ -542,10 +545,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const agents = { ...s.agents }
       const agentStatus = { ...s.agentStatus }
-      const pendingAuth = { ...s.pendingAuth }
       delete agents[agentId]
       delete agentStatus[agentId]
-      delete pendingAuth[agentId]
       // Drop any config->live mapping pointing at this agent so it can't be
       // reused after the process is gone.
       const configToLiveAgent = { ...s.configToLiveAgent }
@@ -562,7 +563,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         agents,
         agentStatus,
-        pendingAuth,
         configToLiveAgent,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
@@ -589,6 +589,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: existing?.activeTurn ?? false,
             openTurnId: existing?.openTurnId ?? null,
             modes: outcome.modes ?? existing?.modes ?? null,
+            models: outcome.models ?? existing?.models ?? null,
             configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
             createdAt: existing?.createdAt ?? Date.now()
@@ -703,6 +704,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const prepareKeys = new Set<string>([
       ...Object.keys(get().preparedSessions),
       ...Object.keys(get().preparingChatKeys),
+      ...Object.keys(get().prepareChatErrors),
       ...inFlightPrepared.keys()
     ])
     for (const key of prepareKeys) {
@@ -791,7 +793,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
     if (get().preparedSessions[key] || inFlightPrepared.has(key)) return
-    set((s) => ({ preparingChatKeys: { ...s.preparingChatKeys, [key]: true } }))
+    set((s) => {
+      const prepareChatErrors = { ...s.prepareChatErrors }
+      delete prepareChatErrors[key]
+      return {
+        preparingChatKeys: { ...s.preparingChatKeys, [key]: true },
+        prepareChatErrors
+      }
+    })
 
     const task = (async (): Promise<SessionId | null> => {
       try {
@@ -823,7 +832,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
           set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         }
-        if (get().pendingAuth[agentId]) return null
         const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
         if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
           return null
@@ -837,6 +845,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return sessionId
       } catch (err) {
         console.warn('[acp] prepareChat failed', configId, err)
+        if (inFlightPrepared.has(key)) {
+          const message = err instanceof Error ? err.message : String(err)
+          set((s) => ({
+            prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
+          }))
+        }
         return null
       } finally {
         inFlightPrepared.delete(key)
@@ -923,8 +937,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const reuseKey = agentReuseKey(configId, trimmedCwd)
     const warming = inFlightWarms.get(reuseKey)
     if (warming) await warming
-    // Reuse a live agent for this config+cwd when it is connected or awaiting
-    // auth (re-spawning a needs-auth agent would orphan the original); else spawn.
+    // Reuse a live connected agent for this config+cwd; else spawn.
     // Keyed per-cwd so the same agent in another project gets its own process.
     const existing = get().configToLiveAgent[reuseKey]
     const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
@@ -940,13 +953,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         allowTerminal: config.allowTerminal
       })
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-    }
-    // If the agent requires authentication, `newSession` will be rejected by the
-    // agent. Fail fast with an actionable message instead of throwing an opaque
-    // backend error; the agent stays connected so the user can authenticate and
-    // retry starting the chat.
-    if (get().pendingAuth[agentId]) {
-      throw new Error('This agent requires authentication before a chat can start.')
     }
     return get().createSession(agentId, trimmedCwd, mcpServers)
   },
@@ -985,6 +991,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           activeTurn: false,
           openTurnId: null,
           modes: null,
+          models: null,
           configOptions: [],
           lastError: null,
           createdAt: meta.createdAt
@@ -1094,6 +1101,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     }))
+    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
     try {
       const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
       // Command reply vs streamed chunks have no ordering guarantee; defer turn
@@ -1137,6 +1145,38 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     await acpApi.setMode(session.agentId, sessionId, modeId)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.modes) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            modes: { ...current.modes, currentModeId: modeId }
+          }
+        }
+      }
+    })
+  },
+
+  setModel: async (sessionId, modelId) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    await acpApi.setModel(session.agentId, sessionId, modelId)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.models) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            models: { ...current.models, currentModelId: modelId }
+          }
+        }
+      }
+    })
   },
 
   respondPermission: async (requestId, optionId) => {
@@ -1158,43 +1198,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  authenticate: async (agentId, methodId) => {
-    const pending = get().pendingAuth[agentId]
-    // Optimistically clear so a rapid double-click (or a second method click)
-    // can't fire a concurrent `authenticate` for the same agent.
-    set((s) => {
-      const pendingAuth = { ...s.pendingAuth }
-      delete pendingAuth[agentId]
-      return {
-        pendingAuth,
-        agentStatus: { ...s.agentStatus, [agentId]: 'spawning' as AgentStatus }
-      }
-    })
-    try {
-      await acpApi.authenticate(agentId, methodId)
-      set((s) => ({
-        agentStatus: { ...s.agentStatus, [agentId]: 'connected' as AgentStatus }
-      }))
-    } catch (err) {
-      // Restore the requirement so the user can retry.
-      set((s) => ({
-        pendingAuth: pending ? { ...s.pendingAuth, [agentId]: pending } : s.pendingAuth,
-        agentStatus: { ...s.agentStatus, [agentId]: 'needs-auth' as AgentStatus }
-      }))
-      throw err
-    }
-  },
-
   // --- Event reducers ------------------------------------------------------
 
   _onAgentSpawned: (e) =>
     set((s) => ({
       agents: { ...s.agents, [e.agentId]: { id: e.agentId, capabilities: e.capabilities } },
-      // Preserve `needs-auth` if an auth_required event already arrived for this
-      // agent (the two events race across threads).
       agentStatus: {
         ...s.agentStatus,
-        [e.agentId]: s.pendingAuth[e.agentId] ? 'needs-auth' : 'connected'
+        [e.agentId]: 'connected'
       }
     })),
 
@@ -1208,6 +1219,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
               modes: e.modes ?? s.sessions[e.sessionId].modes,
+              models: e.models ?? s.sessions[e.sessionId].models ?? null,
               configOptions: e.configOptions ?? s.sessions[e.sessionId].configOptions
             }
           }
@@ -1225,6 +1237,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             activeTurn: false,
             openTurnId: null,
             modes: e.modes ?? null,
+            models: e.models ?? null,
             configOptions: e.configOptions ?? [],
             lastError: null,
             createdAt: Date.now()
@@ -1399,18 +1412,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return { agentStatus, sessions }
     }),
 
-  _onAuthRequired: (e) =>
-    set((s) => ({
-      pendingAuth: { ...s.pendingAuth, [e.agentId]: e },
-      agentStatus: { ...s.agentStatus, [e.agentId]: 'needs-auth' as AgentStatus }
-    })),
-
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
-      const pendingAuth = { ...s.pendingAuth }
-      delete pendingAuth[e.agentId]
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
@@ -1420,7 +1425,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         agentStatus,
-        pendingAuth,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
       }
@@ -1506,14 +1510,6 @@ export function initAcpEventListeners(): () => void {
       useAcpStore.getState()._onAgentError(e)
       toast.error(e.message || 'Agent error')
     }),
-    acpApi.onEvent<AuthRequiredEvent>(ACP_EVENTS.authRequired, (e) => {
-      useAcpStore.getState()._onAuthRequired(e)
-      toast.warning(
-        e.message
-          ? `Authentication required: ${e.message}`
-          : 'This agent requires authentication to continue.'
-      )
-    }),
     acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, (e) =>
       useAcpStore.getState()._onAgentDisconnected(e)
     ),
@@ -1569,8 +1565,6 @@ export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
 export interface ConfigWarmState {
   /** A live process for this config is connected (in any project/cwd). */
   connected: boolean
-  /** A live process for this config is awaiting authentication. */
-  needsAuth: boolean
   /** A background warm spawn for this config is in flight (any cwd). */
   warming: boolean
 }
@@ -1582,17 +1576,14 @@ export interface ConfigWarmState {
  */
 export function selectConfigWarmState(state: AcpState, configId: string): ConfigWarmState {
   let connected = false
-  let needsAuth = false
   for (const [key, agentId] of Object.entries(state.configToLiveAgent)) {
     if (configIdFromReuseKey(key) !== configId) continue
-    const status = state.agentStatus[agentId]
-    if (status === 'connected') connected = true
-    else if (status === 'needs-auth') needsAuth = true
+    if (state.agentStatus[agentId] === 'connected') connected = true
   }
   const warming = Object.keys(state.warmingConfigs).some(
     (key) => configIdFromReuseKey(key) === configId
   )
-  return { connected, needsAuth, warming }
+  return { connected, warming }
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

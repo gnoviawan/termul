@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, Square } from 'lucide-react'
+import { ArrowUp, Square } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -11,7 +11,11 @@ import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
-import { partitionConfigOptions } from './chat-input-bar-config'
+import {
+  filterDuplicateModeConfigOptions,
+  partitionConfigOptions,
+  resolveModelOption
+} from './chat-input-bar-config'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -42,6 +46,8 @@ interface ChatInputBarProps {
   onSetConfig: (configId: string, valueId: string) => void
   /** Apply a legacy mode immediately. */
   onSetMode: (modeId: string) => void
+  /** Apply a native ACP model selection immediately. */
+  onSetModel: (modelId: string) => void
 }
 
 export function ChatInputBar({
@@ -55,11 +61,18 @@ export function ChatInputBar({
   configOptions,
   modes,
   onSetConfig,
-  onSetMode
+  onSetMode,
+  onSetModel
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  const { thoughtLevel, rest: genericConfigOptions } = partitionConfigOptions(usableConfigOptions)
+  const {
+    model,
+    thoughtLevel,
+    rest: genericConfigOptions
+  } = partitionConfigOptions(usableConfigOptions)
+  const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
+  const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
@@ -201,8 +214,23 @@ export function ChatInputBar({
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
                 <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
-                <ChevronDown size={11} className="text-muted-foreground" />
               </span>
+              {modelOption && (
+                <ConfigChip
+                  key={modelOption.id}
+                  option={modelOption}
+                  disabled={disabled}
+                  searchable
+                  maxVisibleOptions={5}
+                  onSelect={(valueId) => {
+                    if (modelSource === 'models') {
+                      onSetModel(valueId)
+                    } else {
+                      onSetConfig(modelOption.id, valueId)
+                    }
+                  }}
+                />
+              )}
               {hasConfigOptions ? (
                 <>
                   {thoughtLevel && (
@@ -214,7 +242,7 @@ export function ChatInputBar({
                       onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
                     />
                   )}
-                  {genericConfigOptions.map((option) => (
+                  {visibleGenericConfigOptions.map((option) => (
                     <ConfigChip
                       key={option.id}
                       option={option}
@@ -223,9 +251,8 @@ export function ChatInputBar({
                     />
                   ))}
                 </>
-              ) : (
-                <ModeChip session={session} disabled={disabled} onSelect={onSetMode} />
-              )}
+              ) : null}
+              <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
             </div>
             <div className="flex flex-shrink-0 items-center gap-2">
               {busy ? (

@@ -126,7 +126,7 @@ pub fn path_for_resolution() -> std::ffi::OsString {
 pub fn fresh_path() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        return read_windows_registry_path();
+        read_windows_registry_path()
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -204,6 +204,9 @@ pub fn apply_fresh_path(env: &mut HashMap<String, String>) {
 }
 
 /// Whether an interactive shell spawn should pass a login-shell flag.
+// Only invoked from the non-Windows PTY spawn path; on Windows it is exercised
+// solely by unit tests, so a non-test Windows build sees it as unused.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn shell_wants_login_arg(shell_path: &str) -> Option<&'static str> {
     let name = Path::new(shell_path)
         .file_name()

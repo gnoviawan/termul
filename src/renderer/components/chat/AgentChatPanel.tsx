@@ -26,8 +26,6 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
-  const pendingAuth = useAcpStore((s) => (session ? s.pendingAuth[session.agentId] : undefined))
-  const authenticate = useAcpStore((s) => s.authenticate)
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
@@ -41,6 +39,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
+  const setModel = useAcpStore((s) => s.setModel)
 
   const handleSend = useCallback(
     (text: string) => {
@@ -75,6 +74,15 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     [setMode, sessionId]
   )
 
+  const handleSetModel = useCallback(
+    (modelId: string) => {
+      void setModel(sessionId, modelId).catch((err) => {
+        toast.error(`Failed to set model: ${String(err)}`)
+      })
+    },
+    [setModel, sessionId]
+  )
+
   const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
   // Show the typing indicator while a turn is active but no agent text has
   // streamed yet (a trailing agent message means text is already rendering).
@@ -100,32 +108,12 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
           {session.lastError}
         </div>
       )}
-      {pendingAuth && pendingAuth.methods.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-2xs text-amber-400">
-          <span>{pendingAuth.message ?? 'This agent requires authentication.'}</span>
-          {pendingAuth.methods.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => {
-                void authenticate(session.agentId, m.id).catch((err) => {
-                  toast.error(`Authentication failed: ${String(err)}`)
-                })
-              }}
-              className="rounded border border-amber-500/40 px-2 py-0.5 font-medium hover:bg-amber-500/20"
-              title={m.description ?? m.name}
-            >
-              {m.name}
-            </button>
-          ))}
-        </div>
-      )}
       <PlanPanel entries={plan} />
       <ChatMessageList items={timeline} agentId={session.agentId} showTyping={showTyping} />
       <ChatInputBar
         session={session}
         busy={session.activeTurn}
-        disabled={isClosed || Boolean(pendingAuth)}
+        disabled={isClosed}
         onSend={handleSend}
         onCancel={handleCancel}
         commands={commands}
@@ -133,6 +121,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         modes={session.modes}
         onSetConfig={handleSetConfig}
         onSetMode={handleSetMode}
+        onSetModel={handleSetModel}
       />
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>

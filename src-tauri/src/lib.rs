@@ -1161,6 +1161,7 @@ pub fn run() {
             acp::commands::acp_cancel_prompt,
             acp::commands::acp_set_config_option,
             acp::commands::acp_set_mode,
+            acp::commands::acp_set_model,
             acp::commands::acp_respond_permission,
             acp::commands::acp_authenticate,
             acp_binary_install::acp_install_registry_binary,
@@ -1331,11 +1332,8 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn test_git_bash_primary_candidates_defined() {
-        // Verify primary Git Bash candidates are defined
-        assert!(
-            !git_bash_paths::PRIMARY_PATHS.is_empty(),
-            "PRIMARY_PATHS should not be empty"
-        );
+        // Verify primary Git Bash candidates are defined (compile-time guard)
+        const { assert!(!git_bash_paths::PRIMARY_PATHS.is_empty()) };
 
         // Verify specific well-known paths exist
         assert!(git_bash_paths::PRIMARY_PATHS
@@ -1349,11 +1347,8 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn test_git_bash_fallback_candidates_defined() {
-        // Verify fallback Git Bash candidates are defined
-        assert!(
-            !git_bash_paths::FALLBACK_PATHS.is_empty(),
-            "FALLBACK_PATHS should not be empty"
-        );
+        // Verify fallback Git Bash candidates are defined (compile-time guard)
+        const { assert!(!git_bash_paths::FALLBACK_PATHS.is_empty()) };
 
         // All fallback paths should contain bash.exe
         for path in git_bash_paths::FALLBACK_PATHS {

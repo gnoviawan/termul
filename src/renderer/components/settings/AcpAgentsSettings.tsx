@@ -1,26 +1,15 @@
 import { Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import { type AgentConfig, acpApi } from '@/lib/acp-api'
-import {
-  currentPlatformArch,
-  deriveAgentConfig,
-  REGISTRY_AGENTS,
-  type RegistryAgent
-} from '@/lib/agents/acp-registry'
+import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
+import {
+  buildSupportedAcpAgents,
+  type SupportedAcpAgentEntry
+} from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
-import { useProjectStore } from '@/stores/project-store'
-
-/** Persisted-config id for a registry agent. */
-function registryConfigId(regId: string): string {
-  return `acp-registry:${regId}`
-}
 
 /** Render a bundled SVG icon string inline (theme-aware via currentColor). */
 function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
@@ -35,90 +24,28 @@ function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
 }
 
 interface AgentRowProps {
-  agent: RegistryAgent
-  platformArch: string
+  entry: SupportedAcpAgentEntry
 }
 
-function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
-  const configId = registryConfigId(agent.id)
-  const enabled = useAcpStore((s) => s.agentConfigs.some((c) => c.id === configId))
+function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   // Warm state is rolled up across every per-project process for this config
   // (the reuse/warming maps are keyed by config+cwd, so one config may own
   // several live processes).
-  const warmState = useConfigWarmState(configId)
-  const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
-  const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
-  const prewarmAgent = useAcpStore((s) => s.prewarmAgent)
-
-  const derived = useMemo(() => deriveAgentConfig(agent, platformArch), [agent, platformArch])
-  const iconEntry = useMemo(() => findBundledIconByKey(`acp:${agent.id}`), [agent.id])
-  const [installing, setInstalling] = useState(false)
-  const canEnable =
-    derived.kind === 'runnable' || (derived.kind === 'needs-install' && Boolean(derived.archiveUrl))
-  const runnable = derived.kind === 'runnable'
-
-  const enableWithConfig = async (config: AgentConfig): Promise<void> => {
-    await saveAgentConfig({
-      id: configId,
-      templateId: agent.id,
-      ...config
-    })
-    // Warm the process for the active project's cwd (skip if no project/cwd).
-    // Other projects warm lazily on first use — each gets its own process.
-    const activeProjectId = useProjectStore.getState().activeProjectId
-    const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
-    if (cwd.trim().length > 0) void prewarmAgent(configId, cwd)
-  }
-
-  const handleToggle = async (next: boolean): Promise<void> => {
-    try {
-      if (next) {
-        if (!canEnable) return
-        if (derived.kind === 'runnable') {
-          await enableWithConfig(derived.config)
-          return
-        }
-        if (derived.kind === 'needs-install' && derived.archiveUrl) {
-          setInstalling(true)
-          try {
-            const installed = await acpApi.installRegistryBinary({
-              agentId: agent.id,
-              archiveUrl: derived.archiveUrl,
-              cmd: derived.cmd,
-              args: derived.args
-            })
-            await enableWithConfig({
-              name: agent.name,
-              command: installed.command,
-              args: installed.args,
-              env: derived.env,
-              allowTerminal: false
-            })
-          } finally {
-            setInstalling(false)
-          }
-          return
-        }
-      } else {
-        await deleteAgentConfig(configId)
-      }
-    } catch (err) {
-      toast.error(`Failed to ${next ? 'enable' : 'disable'} ${agent.name}: ${String(err)}`)
-    }
-  }
+  const warmState = useConfigWarmState(entry.configId)
+  const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
 
   // Warm state for the badge: an enabled agent is warming while a background
-  // spawn is in flight (any project), ready once any process is connected,
-  // needs auth, or idle.
-  const warmBadge: { label: string; tone: 'ready' | 'auth' | 'muted' } | null = !enabled
-    ? null
-    : warmState.connected
-      ? { label: 'Ready', tone: 'ready' }
-      : warmState.needsAuth
-        ? { label: 'Auth required', tone: 'auth' }
-        : warmState.warming
-          ? { label: 'Warming…', tone: 'muted' }
-          : null
+  // spawn is in flight (any project), ready once any process is connected, or
+  // idle.
+  const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.connected
+    ? { label: 'Ready', tone: 'ready' }
+    : warmState.warming
+      ? { label: 'Warming…', tone: 'muted' }
+      : entry.status === 'ready'
+        ? { label: 'Available', tone: 'ready' }
+        : entry.status === 'install-required'
+          ? { label: 'Install from Agent Chat', tone: 'warn' }
+          : { label: 'Unavailable', tone: 'muted' }
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
@@ -127,79 +54,70 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
           <InlineIcon svg={iconEntry.svg} />
         ) : (
           <span className="text-xs font-semibold uppercase text-muted-foreground">
-            {agent.name.charAt(0)}
+            {entry.agent.name.charAt(0)}
           </span>
         )}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
-          {agent.version && (
+          <span className="truncate text-sm font-medium text-foreground">{entry.agent.name}</span>
+          {entry.agent.version && (
             <span className="shrink-0 font-mono text-3xs text-muted-foreground">
-              v{agent.version}
+              v{entry.agent.version}
             </span>
           )}
-          {warmBadge && (
-            <Badge
-              variant="secondary"
-              className={cn(
-                'h-4 px-1.5 text-3xs',
-                warmBadge.tone === 'ready' && 'text-green-500',
-                warmBadge.tone === 'auth' && 'text-amber-500'
-              )}
-            >
-              {warmBadge.label}
-            </Badge>
-          )}
+          <Badge
+            variant="secondary"
+            className={cn(
+              'h-4 px-1.5 text-3xs',
+              statusBadge.tone === 'ready' && 'text-green-500',
+              statusBadge.tone === 'warn' && 'text-amber-500'
+            )}
+          >
+            {statusBadge.label}
+          </Badge>
         </div>
-        {agent.description && (
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{agent.description}</p>
-        )}
-        {!runnable && (
-          <p className="mt-1 text-2xs text-amber-500">
-            {derived.kind === 'needs-install'
-              ? derived.archiveUrl
-                ? installing
-                  ? 'Downloading and installing…'
-                  : 'Turn on to download the release binary for your platform.'
-                : 'Install the binary manually, then add a custom agent.'
-              : 'Not available for your platform.'}
+        {entry.agent.description && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+            {entry.agent.description}
           </p>
         )}
-      </div>
-
-      <div className="shrink-0 pt-0.5">
-        <Switch
-          checked={enabled}
-          disabled={(!canEnable && !enabled) || installing}
-          onCheckedChange={handleToggle}
-          aria-label={`Enable ${agent.name}`}
-        />
+        {entry.status !== 'ready' && (
+          <p className="mt-1 text-2xs text-amber-500">
+            {entry.status === 'install-required'
+              ? 'Open Agent Chat and choose Install before first use.'
+              : entry.unavailableReason}
+          </p>
+        )}
       </div>
     </div>
   )
 }
 
 /**
- * Registry-driven ACP agent list. Lists every agent from the offline snapshot
- * with an enable toggle; enabling derives an `AgentConfig` for the current
- * OS/arch, persists it, and warms the process in the background.
+ * Status-only ACP agent list. Agent Chat derives these supported agents without
+ * requiring a Preferences toggle; this view only shows availability/debug state.
  */
 export function AcpAgentsSettings(): React.JSX.Element {
   const [filter, setFilter] = useState('')
   const platformArch = useMemo(() => currentPlatformArch(), [])
+  const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  const supportedAgents = useMemo(
+    () => buildSupportedAcpAgents(agentConfigs, platformArch),
+    [agentConfigs, platformArch]
+  )
 
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    if (!q) return REGISTRY_AGENTS
-    return REGISTRY_AGENTS.filter(
-      (a) =>
-        a.name.toLowerCase().includes(q) ||
-        a.id.toLowerCase().includes(q) ||
-        a.description.toLowerCase().includes(q)
+    if (!q) return supportedAgents
+    return supportedAgents.filter(
+      (entry) =>
+        entry.agent.name.toLowerCase().includes(q) ||
+        entry.agent.id.toLowerCase().includes(q) ||
+        entry.agent.description.toLowerCase().includes(q)
     )
-  }, [filter])
+  }, [filter, supportedAgents])
 
   return (
     <div className="space-y-3">
@@ -220,9 +138,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
         {visible.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
         ) : (
-          visible.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} platformArch={platformArch} />
-          ))
+          visible.map((entry) => <AgentRow key={entry.id} entry={entry} />)
         )}
       </div>
     </div>
