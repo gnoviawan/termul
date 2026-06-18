@@ -42,12 +42,14 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   mkdir: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
   rename: vi.fn(async () => {}),
+  copyFile: vi.fn(async () => {}),
   stat: vi.fn(async () => defaultStat),
   watchImmediate: vi.fn(async (_paths: string[], _callback: WatchCallback) => vi.fn())
 }))
 
 import type { DirEntry } from '@tauri-apps/plugin-fs'
 import {
+  copyFile,
   mkdir,
   open,
   readDir,
@@ -85,6 +87,7 @@ describe('tauriFilesystemApi', () => {
     vi.mocked(mkdir).mockResolvedValue(undefined)
     vi.mocked(remove).mockResolvedValue(undefined)
     vi.mocked(rename).mockResolvedValue(undefined)
+    vi.mocked(copyFile).mockResolvedValue(undefined)
     vi.mocked(stat).mockResolvedValue(defaultStat)
     vi.mocked(watchImmediate).mockResolvedValue(vi.fn())
   })
@@ -202,6 +205,22 @@ describe('tauriFilesystemApi', () => {
       if (!result.success) {
         expect(result.code).toBe('FILE_TOO_LARGE')
       }
+      expect(readTextFile).not.toHaveBeenCalled()
+    })
+
+    it('should reject binary files by inspecting read content (no separate sample read)', async () => {
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 11 }))
+      // Contains a null byte within the first 512 chars -> isBinaryFile() true
+      vi.mocked(readTextFile).mockResolvedValue('Hello\u0000World')
+
+      const result = await tauriFilesystemApi.readFile('/test/binary.bin')
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('BINARY_FILE')
+      }
+      // Must NOT open a separate file handle for binary sampling
+      expect(open).not.toHaveBeenCalled()
     })
 
     it('should handle errors', async () => {
@@ -407,6 +426,26 @@ describe('tauriFilesystemApi', () => {
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.code).toBe('RENAME_ERROR')
+      }
+    })
+  })
+
+  describe('copyFile', () => {
+    it('should successfully copy file', async () => {
+      const result = await tauriFilesystemApi.copyFile('/test/src.bin', '/test/dest.bin')
+
+      expect(result.success).toBe(true)
+      expect(vi.mocked(copyFile)).toHaveBeenCalledWith('/test/src.bin', '/test/dest.bin')
+    })
+
+    it('should handle errors', async () => {
+      vi.mocked(copyFile).mockRejectedValue(new Error('Copy failed'))
+
+      const result = await tauriFilesystemApi.copyFile('/test/src.bin', '/test/dest.bin')
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('COPY_ERROR')
       }
     })
   })

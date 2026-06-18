@@ -104,7 +104,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
           ))}
         </div>
       ) : (
-        <p className="text-[10px] text-muted-foreground">No active port forwards</p>
+        <p className="text-3xs text-muted-foreground">No active port forwards</p>
       )}
 
       {/* Add form */}
@@ -142,13 +142,13 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
           <div className="flex justify-end gap-1">
             <button
               onClick={() => setShowAdd(false)}
-              className="px-2 py-0.5 text-[10px] rounded border border-border hover:bg-accent"
+              className="px-2 py-0.5 text-3xs rounded border border-border hover:bg-accent"
             >
               Cancel
             </button>
             <button
               onClick={handleAdd}
-              className="px-2 py-0.5 text-[10px] rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-2 py-0.5 text-3xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
             >
               Start
             </button>

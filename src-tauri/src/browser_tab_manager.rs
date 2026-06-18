@@ -318,7 +318,15 @@ impl BrowserTabManager {
     }
 
     fn escape_js_string_literal(value: &str) -> String {
-        value.replace('\\', "\\\\").replace('\'', "\\'")
+        value
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\0', "\\0")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
     }
 
     pub fn inject_annotation_markers(

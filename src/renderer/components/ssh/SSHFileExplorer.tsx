@@ -139,12 +139,12 @@ export function SSHFileExplorer({
           <Icon
             className={cn(
               'h-3.5 w-3.5 flex-shrink-0',
-              isDir ? 'text-blue-400' : 'text-muted-foreground'
+              isDir ? 'text-primary' : 'text-muted-foreground'
             )}
           />
           <span className="flex-1 truncate">{entry.name}</span>
           {!isDir && (
-            <span className="text-[10px] text-muted-foreground hidden group-hover:inline">
+            <span className="text-3xs text-muted-foreground hidden group-hover:inline">
               {formatSize(entry.size)}
             </span>
           )}
@@ -234,7 +234,7 @@ export function SSHFileExplorer({
 
       {isConnected && (
         <div className="px-3 py-1 border-b border-border">
-          <span className="text-[10px] text-muted-foreground font-mono truncate block">
+          <span className="text-3xs text-muted-foreground font-mono truncate block">
             {currentPath}
           </span>
         </div>

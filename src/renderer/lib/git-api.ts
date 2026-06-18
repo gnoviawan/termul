@@ -29,6 +29,12 @@ export const gitApi = {
 
   init: (cwd: string) => invoke<void>('git_init', { cwd }),
 
+  checkoutBranch: (cwd: string, branch: string, isRemote = false) =>
+    invoke<void>('git_checkout_branch', { cwd, branch, isRemote }),
+
+  createBranch: (cwd: string, branch: string, startRef?: string) =>
+    invoke<void>('git_create_branch', { cwd, branch, startRef }),
+
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) =>
     invoke<void>('git_stash_save', { cwd, message, includeUntracked }),
 

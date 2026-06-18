@@ -282,9 +282,11 @@ function noteForStopReason(reason: StopReason): string | null {
       return 'Response stopped: token limit reached.'
     case 'max_turn_requests':
       return 'Response stopped: too many tool-call rounds.'
-    default:
-      // 'end_turn' and 'cancelled' are expected completions — no error note.
+    case 'end_turn':
+    case 'cancelled':
       return null
+    default:
+      return `Response stopped: ${reason}`
   }
 }
 
@@ -1383,7 +1385,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
         }
       }
-      return { agentStatus }
+      const sessions = { ...s.sessions }
+      for (const id of Object.keys(sessions)) {
+        if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
+          sessions[id] = {
+            ...sessions[id],
+            lastError: e.message,
+            activeTurn: false,
+            openTurnId: null
+          }
+        }
+      }
+      return { agentStatus, sessions }
     }),
 
   _onAuthRequired: (e) =>

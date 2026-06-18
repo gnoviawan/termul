@@ -1,5 +1,6 @@
 import type React from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { getLanguageForFile, tokenizeLine } from '@/lib/diff-syntax-highlight'
 import {
   type GitDiffViewMode,
   type ParsedDiffLine,
@@ -7,10 +8,12 @@ import {
   parseUnifiedDiffSplit
 } from '@/lib/parse-unified-diff'
 import { cn } from '@/lib/utils'
+import { computeWordDiff, getChangedRanges } from '@/lib/word-diff'
 
 interface GitDiffViewProps {
   diff: string
   mode: GitDiffViewMode
+  filePath?: string
 }
 
 function lineClass(kind: ParsedDiffLine['kind']): string {
@@ -23,45 +26,308 @@ function lineClass(kind: ParsedDiffLine['kind']): string {
   )
 }
 
-function InlineDiff({ diff }: { diff: string }): React.JSX.Element {
-  const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
+interface ChangedRange {
+  start: number
+  end: number
+}
+
+function parseStyleString(styleStr: string): React.CSSProperties {
+  const props: Record<string, string> = {}
+  const parts = styleStr.split(';')
+  for (const part of parts) {
+    const idx = part.indexOf(':')
+    if (idx > 0) {
+      const key = part.slice(0, idx).trim()
+      const value = part.slice(idx + 1).trim()
+      if (key && value) {
+        props[key] = value
+      }
+    }
+  }
+  return props as React.CSSProperties
+}
+
+function shiftRanges(ranges: ChangedRange[], offset: number): ChangedRange[] {
+  return ranges
+    .map((r) => ({ start: Math.max(0, r.start - offset), end: r.end - offset }))
+    .filter((r) => r.end > r.start)
+}
+
+function WordDiffSpan({
+  text,
+  kind
+}: {
+  text: string
+  kind: 'deletion' | 'addition'
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'rounded-sm',
+        kind === 'deletion' && 'bg-red-500/25',
+        kind === 'addition' && 'bg-green-500/25'
+      )}
+    >
+      {text}
+    </span>
+  )
+}
+
+function renderWithWordDiff(
+  text: string,
+  changedRanges: ChangedRange[],
+  kind: 'deletion' | 'addition'
+): React.JSX.Element {
+  if (changedRanges.length === 0) {
+    return <>{text}</>
+  }
+
+  const result: React.ReactNode[] = []
+  let pos = 0
+
+  for (let i = 0; i < changedRanges.length; i += 1) {
+    const range = changedRanges[i]
+    if (range.start > pos) {
+      result.push(text.slice(pos, range.start))
+    }
+    result.push(<WordDiffSpan key={i} text={text.slice(range.start, range.end)} kind={kind} />)
+    pos = range.end
+  }
+
+  if (pos < text.length) {
+    result.push(text.slice(pos))
+  }
+
+  return <>{result}</>
+}
+
+function HighlightedContent({
+  text,
+  language,
+  changedRanges,
+  kind
+}: {
+  text: string
+  language: string
+  changedRanges: ChangedRange[]
+  kind: 'deletion' | 'addition' | 'context'
+}): React.JSX.Element {
+  const tokenSpans = tokenizeLine(text, language)
+  const hasChanged = kind !== 'context' && changedRanges.length > 0
+
+  if (tokenSpans.length === 0) {
+    if (hasChanged) {
+      return <>{renderWithWordDiff(text, changedRanges, kind)}</>
+    }
+    return <>{text}</>
+  }
 
   return (
-    <div
-      className="p-4 whitespace-pre inline-block min-w-full"
-      style={{ tabSize: 4, MozTabSize: 4 }}
-    >
-      {lines.map((line, i) => (
-        <div key={i} className={lineClass(line.kind)}>
-          {line.raw || ' '}
-        </div>
-      ))}
+    <>
+      {tokenSpans.map((span, i) => {
+        const spanText = text.slice(span.start, span.end)
+        const shifted = shiftRanges(changedRanges, span.start)
+        const style = span.color ? parseStyleString(span.color) : undefined
+        if (hasChanged) {
+          return (
+            <span key={i} style={style}>
+              {renderWithWordDiff(spanText, shifted, kind)}
+            </span>
+          )
+        }
+        return (
+          <span key={i} style={style}>
+            {spanText}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+function computeInlineWordDiffRanges(
+  lines: ParsedDiffLine[]
+): Map<number, { removed: ChangedRange[]; added: ChangedRange[] }> {
+  const result = new Map<number, { removed: ChangedRange[]; added: ChangedRange[] }>()
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    if (line.kind !== 'deletion') {
+      i += 1
+      continue
+    }
+
+    const deletionStart = i
+    while (i < lines.length && lines[i].kind === 'deletion') {
+      i += 1
+    }
+    const deletionEnd = i
+
+    const additionStart = i
+    while (i < lines.length && lines[i].kind === 'addition') {
+      i += 1
+    }
+    const additionEnd = i
+
+    const deletionCount = deletionEnd - deletionStart
+    const additionCount = additionEnd - additionStart
+
+    if (additionCount === 0) {
+      continue
+    }
+
+    const pairCount = Math.min(deletionCount, additionCount)
+    for (let p = 0; p < pairCount; p += 1) {
+      const delLine = lines[deletionStart + p]
+      const addLine = lines[additionStart + p]
+      const segments = computeWordDiff(delLine.text, addLine.text)
+      const removedRanges = getChangedRanges(segments, 'removed')
+      const addedRanges = getChangedRanges(segments, 'added')
+      result.set(deletionStart + p, { removed: removedRanges, added: [] })
+      result.set(additionStart + p, { removed: [], added: addedRanges })
+    }
+  }
+
+  return result
+}
+
+function InlineDiff({ diff, language }: { diff: string; language: string }): React.JSX.Element {
+  const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
+  const wordDiffRanges = useMemo(() => computeInlineWordDiffRanges(lines), [lines])
+
+  return (
+    <div className="flex p-4 font-mono text-xs min-w-full" style={{ tabSize: 4, MozTabSize: 4 }}>
+      {/* Line number gutters */}
+      <div className="flex-shrink-0 select-none border-r border-border/40">
+        {lines.map((line, i) => (
+          <div
+            key={`old-${i}`}
+            className="px-2 py-0.5 min-h-[1.25rem] text-right text-muted-foreground/60"
+          >
+            {line.oldLineNumber !== undefined ? line.oldLineNumber : ''}
+          </div>
+        ))}
+      </div>
+      <div className="flex-shrink-0 select-none border-r border-border/40 mr-2">
+        {lines.map((line, i) => (
+          <div
+            key={`new-${i}`}
+            className="px-2 py-0.5 min-h-[1.25rem] text-right text-muted-foreground/60"
+          >
+            {line.newLineNumber !== undefined ? line.newLineNumber : ''}
+          </div>
+        ))}
+      </div>
+
+      {/* Code content */}
+      <div className="flex-1 whitespace-pre-wrap break-words">
+        {lines.map((line, i) => {
+          const isHunkBody =
+            line.kind === 'context' || line.kind === 'deletion' || line.kind === 'addition'
+          const diffRanges = wordDiffRanges.get(i)
+          const changedRanges =
+            line.kind === 'deletion'
+              ? (diffRanges?.removed ?? [])
+              : line.kind === 'addition'
+                ? (diffRanges?.added ?? [])
+                : []
+
+          return (
+            <div
+              key={i}
+              className={cn(
+                lineClass(line.kind),
+                line.kind === 'deletion' && changedRanges.length > 0 && 'bg-red-500/15',
+                line.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15'
+              )}
+            >
+              {isHunkBody ? (
+                <HighlightedContent
+                  text={line.text || ' '}
+                  language={language}
+                  changedRanges={changedRanges}
+                  kind={line.kind as 'deletion' | 'addition' | 'context'}
+                />
+              ) : (
+                line.raw || ' '
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
 function SplitCell({
   cell,
-  side
+  side,
+  language,
+  changedRanges,
+  showLineNumber = true
 }: {
   cell: ParsedDiffLine | null
   side: 'left' | 'right'
+  language: string
+  changedRanges: ChangedRange[]
+  showLineNumber?: boolean
 }): React.JSX.Element {
+  const lineNumber = side === 'left' ? cell?.oldLineNumber : cell?.newLineNumber
+
   return (
-    <div
-      className={cn(
-        'px-2 py-0.5 min-h-[1.25rem] border-border/40 overflow-x-auto',
-        side === 'left' && 'border-r',
-        cell ? lineClass(cell.kind) : 'bg-muted/5'
+    <div className="flex">
+      {showLineNumber && (
+        <div className="flex-shrink-0 min-w-[3rem] px-2 py-0.5 min-h-[1.25rem] text-right text-muted-foreground/60 select-none border-r border-border/40">
+          {lineNumber !== undefined ? lineNumber : ''}
+        </div>
       )}
-    >
-      {cell ? cell.text || ' ' : '\u00a0'}
+      <div
+        className={cn(
+          'flex-1 px-2 py-0.5 min-h-[1.25rem] whitespace-pre-wrap break-words',
+          cell ? lineClass(cell.kind) : 'bg-muted/5',
+          cell?.kind === 'deletion' && changedRanges.length > 0 && 'bg-red-500/15',
+          cell?.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15'
+        )}
+      >
+        {cell ? (
+          cell.kind === 'context' || cell.kind === 'deletion' || cell.kind === 'addition' ? (
+            <HighlightedContent
+              text={cell.text || ' '}
+              language={language}
+              changedRanges={changedRanges}
+              kind={cell.kind as 'deletion' | 'addition' | 'context'}
+            />
+          ) : (
+            cell.raw || ' '
+          )
+        ) : (
+          '\u00a0'
+        )}
+      </div>
     </div>
   )
 }
 
-function SplitDiff({ diff }: { diff: string }): React.JSX.Element {
+function SplitDiff({ diff, language }: { diff: string; language: string }): React.JSX.Element {
   const rows = useMemo(() => parseUnifiedDiffSplit(diff), [diff])
+
+  const splitWordDiffRanges = useMemo(() => {
+    const leftRanges = new Map<number, ChangedRange[]>()
+    const rightRanges = new Map<number, ChangedRange[]>()
+
+    rows.forEach((row, i) => {
+      if (row.fullWidth || !row.left || !row.right) return
+      if (row.left.kind !== 'deletion' || row.right.kind !== 'addition') return
+
+      const segments = computeWordDiff(row.left.text, row.right.text)
+      leftRanges.set(i, getChangedRanges(segments, 'removed'))
+      rightRanges.set(i, getChangedRanges(segments, 'added'))
+    })
+
+    return { leftRanges, rightRanges }
+  }, [rows])
 
   return (
     <div className="p-4 font-mono text-xs" style={{ tabSize: 4, MozTabSize: 4 }}>
@@ -71,9 +337,19 @@ function SplitDiff({ diff }: { diff: string }): React.JSX.Element {
             {row.fullWidth.raw}
           </div>
         ) : (
-          <div key={i} className="grid grid-cols-2 gap-0 whitespace-pre">
-            <SplitCell cell={row.left} side="left" />
-            <SplitCell cell={row.right} side="right" />
+          <div key={i} className="grid grid-cols-2 gap-0 border-b border-border/20">
+            <SplitCell
+              cell={row.left}
+              side="left"
+              language={language}
+              changedRanges={splitWordDiffRanges.leftRanges.get(i) ?? []}
+            />
+            <SplitCell
+              cell={row.right}
+              side="right"
+              language={language}
+              changedRanges={splitWordDiffRanges.rightRanges.get(i) ?? []}
+            />
           </div>
         )
       )}
@@ -81,9 +357,39 @@ function SplitDiff({ diff }: { diff: string }): React.JSX.Element {
   )
 }
 
-export function GitDiffView({ diff, mode }: GitDiffViewProps): React.JSX.Element {
+export function GitDiffView({ diff, mode, filePath }: GitDiffViewProps): React.JSX.Element {
+  const language = useMemo(() => (filePath ? getLanguageForFile(filePath) : ''), [filePath])
+
+  useEffect(() => {
+    if (language) {
+      void import('@/lib/diff-syntax-highlight').then((mod) => {
+        void mod.preloadParser(filePath ?? '')
+      })
+    }
+  }, [language, filePath])
+
+  const [, setRenderTick] = useState(0)
+  useEffect(() => {
+    if (!language) return
+    let mounted = true
+    const checkReady = (): void => {
+      if (!mounted) return
+      void import('@/lib/diff-syntax-highlight').then((mod) => {
+        if (mod.isParserReady(language)) {
+          setRenderTick((n) => n + 1)
+        } else {
+          setTimeout(checkReady, 50)
+        }
+      })
+    }
+    setTimeout(checkReady, 50)
+    return () => {
+      mounted = false
+    }
+  }, [language])
+
   if (mode === 'split') {
-    return <SplitDiff diff={diff} />
+    return <SplitDiff diff={diff} language={language} />
   }
-  return <InlineDiff diff={diff} />
+  return <InlineDiff diff={diff} language={language} />
 }

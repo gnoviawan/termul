@@ -69,9 +69,7 @@ export function EmptyTerminalPane({ onCreateTerminal }: { onCreateTerminal: () =
       <div className="flex-1 flex flex-col items-center justify-center text-center">
         <h3 className="text-muted-foreground font-medium mb-4">Create New Terminal</h3>
         <div className="flex items-center gap-2 mb-4">
-          <label className="text-xs text-muted-foreground uppercase font-semibold tracking-wide">
-            Shell:
-          </label>
+          <label className="label-section text-muted-foreground">Shell:</label>
           <select className="bg-secondary text-foreground text-sm border-none rounded px-2 py-1 focus:ring-1 focus:ring-primary cursor-pointer">
             <option>PowerShell</option>
             <option>Command Prompt</option>

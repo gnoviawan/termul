@@ -80,6 +80,16 @@ export default {
           orange: 'hsl(var(--project-orange) / <alpha-value>)'
         }
       },
+      fontSize: {
+        // Sub-xs scale. Tailwind's default fontSize stops at `xs` (12px),
+        // which forced ad-hoc `text-[Npx]` values for captions / badges /
+        // micro-labels across the renderer. These three size-only tokens
+        // fill that gap. Size-only (no [size, lineHeight] tuple) on purpose
+        // so existing `leading-*` and inherited line-heights are preserved.
+        '2xs': '0.6875rem', // 11px
+        '3xs': '0.625rem', // 10px
+        '4xs': '0.5625rem' // 9px
+      },
       fontFamily: {
         // Variable Inter (bundled). Fall through to native UI fonts so we still
         // look right if the bundled font fails to load. Ubuntu/Cantarell are

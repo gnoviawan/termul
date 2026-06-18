@@ -10,6 +10,7 @@ import type {
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
+  copyFile,
   mkdir,
   open,
   readDir,
@@ -191,32 +192,35 @@ export function createTauriFilesystemApi(): FilesystemApi {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
 
-        const filtered: DirectoryEntry[] = []
-        for (const entry of entries) {
-          const name = entry.name
+        // Stat all entries in parallel instead of sequentially — a directory
+        // with N entries previously incurred N sequential IPC round-trips,
+        // which dominated tree-expansion latency for large directories (#378).
+        const filtered = await Promise.all(
+          entries.map(async (entry): Promise<DirectoryEntry> => {
+            const name = entry.name
+            const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
+            let size = 0
+            let modified = Date.now()
+            try {
+              const info = await stat(fullPath)
+              size = info.size
+              modified = info.mtime?.getTime() ?? Date.now()
+            } catch {
+              // Ignore stat errors, use defaults
+            }
 
-          const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
-          let size = 0
-          let modified = Date.now()
-          try {
-            const info = await stat(fullPath)
-            size = info.size
-            modified = info.mtime?.getTime() ?? Date.now()
-          } catch {
-            // Ignore stat errors, use defaults
-          }
-
-          const isDir = entry.isDirectory ?? false
-          filtered.push({
-            name,
-            path: fullPath,
-            type: isDir ? 'directory' : 'file',
-            extension: isDir ? null : getExtension(name),
-            size,
-            modifiedAt: modified,
-            ignored: shouldIgnore(name)
+            const isDir = entry.isDirectory ?? false
+            return {
+              name,
+              path: fullPath,
+              type: isDir ? 'directory' : 'file',
+              extension: isDir ? null : getExtension(name),
+              size,
+              modifiedAt: modified,
+              ignored: shouldIgnore(name)
+            }
           })
-        }
+        )
 
         // Sort: directories first, then files, both A-Z
         const sorted = sortDirectoryEntries(filtered)
@@ -238,7 +242,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
         }
 
         const content = await readTextFile(filePath)
-        const _isBinary = isBinaryFile(content)
+
+        // Binary detection on already-read content: avoids a separate
+        // open()/read()/close() round-trip that getFileInfo() used to perform.
+        if (isBinaryFile(content)) {
+          return {
+            success: false,
+            error: 'Binary file cannot be displayed',
+            code: 'BINARY_FILE'
+          }
+        }
 
         return {
           success: true,
@@ -467,31 +480,96 @@ export function createTauriFilesystemApi(): FilesystemApi {
       return () => cleanupTauriListener(unlisten)
     },
 
-    async searchFileNames(scopeRoot: string, rootPath: string, query: string) {
+    async searchFileNamesStreamStart(
+      searchId: string,
+      scopeRoot: string,
+      rootPath: string,
+      query: string
+    ) {
       try {
-        const response = await invoke<{
-          success: boolean
-          data?: { files: string[]; truncated: boolean }
-          error?: string
-          code?: string
-        }>('search_file_names', {
-          request: { scopeRoot, rootPath, query }
-        })
-        if (!response?.success || !response.data) {
+        const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+          'search_file_names_stream',
+          { request: { searchId, scopeRoot, rootPath, query } }
+        )
+        if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to search file names',
-            code: response?.code ?? 'SEARCH_FILENAME_ERROR'
+            error: response?.error ?? 'Failed to start file names stream',
+            code: response?.code ?? 'SEARCH_FILENAMES_STREAM_ERROR'
           }
         }
-        return { success: true as const, data: response.data }
+        return { success: true as const, data: undefined }
       } catch (err) {
         return {
           success: false as const,
           error: String(err),
-          code: 'SEARCH_FILENAME_ERROR'
+          code: 'SEARCH_FILENAMES_STREAM_ERROR'
         }
       }
+    },
+
+    async searchFileNamesStreamCancel(searchId: string) {
+      try {
+        const response = await invoke<{ success: boolean; error?: string; code?: string }>(
+          'search_file_names_cancel',
+          { request: { searchId } }
+        )
+        if (!response?.success) {
+          return {
+            success: false as const,
+            error: response?.error ?? 'Failed to cancel file names stream',
+            code: response?.code ?? 'SEARCH_FILENAMES_CANCEL_ERROR'
+          }
+        }
+        return { success: true as const, data: undefined }
+      } catch (err) {
+        return {
+          success: false as const,
+          error: String(err),
+          code: 'SEARCH_FILENAMES_CANCEL_ERROR'
+        }
+      }
+    },
+
+    onSearchFileNamesBatch(
+      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+    ) {
+      if (!isTauriContext()) return () => {}
+      let unlisten: Promise<UnlistenFn> | undefined
+      try {
+        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
+          'search-file-names-batch',
+          ({ payload }) => callback(payload)
+        )
+      } catch {
+        return () => {}
+      }
+      return () => cleanupTauriListener(unlisten)
+    },
+
+    onSearchFileNamesDone(
+      callback: (event: {
+        searchId: string
+        truncated: boolean
+        totalFiles: number
+        code?: string
+        error?: string
+      }) => void
+    ) {
+      if (!isTauriContext()) return () => {}
+      let unlisten: Promise<UnlistenFn> | undefined
+      try {
+        unlisten = listen<{
+          searchId: string
+          truncated: boolean
+          totalFiles: number
+          code?: string
+          error?: string
+        }>('search-file-names-done', ({ payload }) => callback(payload))
+      } catch {
+        return () => {}
+      }
+      return () => cleanupTauriListener(unlisten)
     },
 
     onSearchContentDone(callback) {
@@ -553,6 +631,19 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return { success: true, data: undefined }
       } catch (err) {
         return { success: false, error: String(err), code: 'RENAME_ERROR' }
+      }
+    },
+
+    /**
+     * Copy a file to a new path using a binary-safe native copy.
+     * Returns `COPY_ERROR` on failure (e.g. when the source is a directory).
+     */
+    async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+      try {
+        await copyFile(srcPath, destPath)
+        return { success: true, data: undefined }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'COPY_ERROR' }
       }
     },
 

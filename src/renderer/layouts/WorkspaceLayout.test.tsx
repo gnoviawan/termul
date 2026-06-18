@@ -110,6 +110,7 @@ vi.mock('@/stores/app-settings-store', () => ({
     }
   ),
   useTerminalFontSize: vi.fn(() => 14),
+  useUiZoomLevel: vi.fn(() => 1),
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),

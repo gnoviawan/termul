@@ -505,15 +505,9 @@ fn build_app_menu<R: tauri::Runtime>(
     let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size")
-        .accelerator("CmdOrCtrl+0")
-        .build(app)?;
-    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In")
-        .accelerator("CmdOrCtrl+=")
-        .build(app)?;
-    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out")
-        .accelerator("CmdOrCtrl+-")
-        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out").build(app)?;
     let toggle_fullscreen =
         MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen").build(app)?;
 
@@ -1098,7 +1092,8 @@ pub fn run() {
             commands::search_content,
             commands::search_content_stream,
             commands::search_content_cancel,
-            commands::search_file_names,
+            commands::search_file_names_stream,
+            commands::search_file_names_cancel,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
@@ -1139,6 +1134,8 @@ pub fn run() {
             commands::git_push,
             commands::git_get_commit_context,
             commands::git_init,
+            commands::git_checkout_branch,
+            commands::git_create_branch,
             commands::git_stash_save,
             commands::git_stash_list,
             commands::git_stash_apply,

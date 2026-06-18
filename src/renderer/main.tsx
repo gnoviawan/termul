@@ -36,6 +36,7 @@
 
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { preloadCommonLanguages } from './hooks/use-codemirror'
 import { installGlobalErrorForwarding } from './lib/log-api'
 import TauriApp from './TauriApp'
 import './index.css'
@@ -65,6 +66,11 @@ const isTauri = isTauriContext()
 if (isTauri) {
   installGlobalErrorForwarding()
 }
+
+// Prime CodeMirror language caches (js/ts/json) so the first open of these
+// common file types doesn't pay the dynamic-import latency. Fire-and-forget;
+// runs in parallel with React bootstrap (issue #378).
+preloadCommonLanguages()
 
 const AppComponent = isTauri ? TauriApp : App
 

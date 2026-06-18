@@ -1215,6 +1215,99 @@ describe('acp-store multi-project isolation', () => {
     expect(identity).toEqual({ name: 'Claude', templateId: 'claude-acp' })
   })
 
+  it('agent_error with session_id sets lastError on that session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'credit limit exceeded'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('credit limit exceeded')
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('agent_error with session_id None sets lastError on all sessions for that agent', () => {
+    seedSession('s1', 'agent-1')
+    seedSession('s2', 'agent-1')
+    // seedSession overwrites; re-seed both
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 0
+        },
+        s2: {
+          id: 's2',
+          agentId: 'agent-1',
+          cwd: '/work',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 0
+        }
+      }
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      message: 'insufficient credit'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('insufficient credit')
+    expect(useAcpStore.getState().sessions['s2'].lastError).toBe('insufficient credit')
+  })
+
+  it('agent_error followed by agent_disconnected preserves lastError on closed sessions', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      message: 'fatal: api key revoked'
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('fatal: api key revoked')
+  })
+
+  it('stop reasons end_turn and cancelled produce no error note', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
+    seedSession('s2', 'agent-1')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's2',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().sessions['s2'].lastError).toBeNull()
+  })
+
+  it('unknown stop reasons surface a descriptive note instead of being silently dropped', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'insufficient_credit'
+    })
+    expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/insufficient_credit/i)
+  })
+
   it('selectConfigWarmState rolls up status across all per-cwd processes', () => {
     useAcpStore.setState((s) => ({
       agentStatus: { ...s.agentStatus, 'agent-a': 'needs-auth', 'agent-b': 'connected' },
