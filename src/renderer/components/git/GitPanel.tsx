@@ -906,7 +906,11 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
-                <GitDiffView diff={currentDiff} mode={diffViewMode} />
+                <GitDiffView
+                  diff={currentDiff}
+                  mode={diffViewMode}
+                  filePath={selectedFile ?? undefined}
+                />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
                   <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
