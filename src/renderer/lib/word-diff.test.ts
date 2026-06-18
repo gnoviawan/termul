@@ -109,4 +109,33 @@ describe('getChangedRanges', () => {
     expect(getChangedRanges(segments, 'removed')).toEqual([])
     expect(getChangedRanges(segments, 'added')).toEqual([])
   })
+
+  it('returns side-relative coordinates that reconstruct correct text', () => {
+    const oldText = 'a x b'
+    const newText = 'a b y'
+    const segments = computeWordDiff(oldText, newText)
+
+    const removedRanges = getChangedRanges(segments, 'removed')
+    const addedRanges = getChangedRanges(segments, 'added')
+
+    // Removed ranges should slice into oldText and match removed segment text
+    const removedFromRanges = removedRanges.map((r) => oldText.slice(r.start, r.end)).join('')
+    const expectedRemoved = segments
+      .filter((s) => s.type === 'removed')
+      .map((s) => s.text)
+      .join('')
+    expect(removedFromRanges).toBe(expectedRemoved)
+
+    // Added ranges should slice into newText and match added segment text
+    const addedFromRanges = addedRanges.map((r) => newText.slice(r.start, r.end)).join('')
+    const expectedAdded = segments
+      .filter((s) => s.type === 'added')
+      .map((s) => s.text)
+      .join('')
+    expect(addedFromRanges).toBe(expectedAdded)
+
+    // Ranges must stay within text bounds
+    expect(removedRanges.every((r) => r.end <= oldText.length)).toBe(true)
+    expect(addedRanges.every((r) => r.end <= newText.length)).toBe(true)
+  })
 })

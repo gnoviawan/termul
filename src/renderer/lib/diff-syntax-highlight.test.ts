@@ -78,7 +78,7 @@ describe('tokenizeLine', () => {
 
 describe('isParserReady', () => {
   it('returns false for unloaded language', () => {
-    expect(isParserReady('typescript')).toBe(false)
+    expect(isParserReady('foobar')).toBe(false)
   })
 
   it('returns false for empty language', () => {

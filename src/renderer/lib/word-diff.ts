@@ -140,13 +140,18 @@ export function getChangedRanges(
 ): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = []
   let pos = 0
+  const oppositeSide = side === 'removed' ? 'added' : 'removed'
 
   for (const seg of segments) {
     const segLen = seg.text.length
     if (seg.type === side) {
       ranges.push({ start: pos, end: pos + segLen })
     }
-    pos += segLen
+    // Only advance position for segments present in this side's text
+    // (common segments appear in both; opposite-side segments do not)
+    if (seg.type !== oppositeSide) {
+      pos += segLen
+    }
   }
 
   return ranges
