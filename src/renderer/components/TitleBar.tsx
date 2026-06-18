@@ -2,6 +2,7 @@ import { Copy, Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { windowApi } from '@/lib/api'
 import { isMac } from '@/lib/platform'
+import { useActiveProject } from '@/stores/project-store'
 
 const windowControlClass =
   'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer'
@@ -20,6 +21,7 @@ const windowControlClass =
  */
 export function TitleBar(): React.JSX.Element | null {
   const [isMaximized, setIsMaximized] = useState(false)
+  const activeProject = useActiveProject()
 
   useEffect(() => {
     return windowApi.onMaximizeChange((maximized) => {
@@ -32,9 +34,15 @@ export function TitleBar(): React.JSX.Element | null {
 
   return (
     <header
-      className="h-8 flex items-center bg-background select-none shrink-0"
+      className="h-8 flex items-center bg-background select-none shrink-0 relative"
       data-tauri-drag-region
     >
+      {activeProject && (
+        <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
+          {activeProject.name}
+        </span>
+      )}
+
       <div className="flex-1 h-full" data-tauri-drag-region />
 
       <div

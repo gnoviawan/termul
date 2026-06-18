@@ -126,9 +126,19 @@ function getShortcutTargetContext(target: EventTarget | null): {
 }
 
 function MacOsTitlebarStrip(): React.JSX.Element | null {
+  const activeProject = useActiveProject()
+
   if (!isMac) return null
 
-  return <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden="true" />
+  return (
+    <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden={!activeProject}>
+      {activeProject && (
+        <span className="text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
+          {activeProject.name}
+        </span>
+      )}
+    </div>
+  )
 }
 
 export default function WorkspaceLayout(): React.JSX.Element {
