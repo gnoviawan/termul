@@ -247,6 +247,31 @@ describe('normalizeKeyEvent', () => {
     })
     expect(normalizeKeyEvent(event)).toBe('ctrl+shift+alt+n')
   })
+
+  it('should emit both cmd and ctrl for a ⌘⌃ combo on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    if (currentIsMac) {
+      // macOS: both modifiers emitted in canonical order (ctrl before cmd).
+      expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+t')
+    } else {
+      // Non-macOS: ctrl takes precedence, cmd is dropped.
+      expect(normalizeKeyEvent(event)).toBe('ctrl+t')
+    }
+  })
+
+  it('should emit a full four-modifier combo on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) return
+    const event = new KeyboardEvent('keydown', {
+      key: 't',
+      ctrlKey: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+shift+alt+t')
+  })
 })
 
 describe('formatKeyForDisplay', () => {
@@ -342,5 +367,17 @@ describe('matchesShortcut', () => {
     if (currentIsMac) return // tested in shell passthrough guard test
     const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })
     expect(matchesShortcut(event, 'ctrl+k')).toBe(true)
+  })
+
+  it('should match a ⌘⌃ combo exactly without aliasing on macOS', async () => {
+    const { isMac: currentIsMac } = await import('@/lib/platform')
+    if (!currentIsMac) return
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    // Exact multi-modifier match succeeds.
+    expect(matchesShortcut(event, 'ctrl+cmd+t')).toBe(true)
+    // The cross-modifier alias must NOT fire for multi-modifier combos,
+    // so it never collapses into a single-modifier binding.
+    expect(matchesShortcut(event, 'cmd+t')).toBe(false)
+    expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
   })
 })

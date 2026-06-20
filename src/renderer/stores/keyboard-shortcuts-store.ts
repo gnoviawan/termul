@@ -100,18 +100,19 @@ function shortcutsEqual(left: string, right: string): boolean {
 //   ctrl → Ctrl key on Windows/Linux, or Ctrl key on macOS
 //   cmd  → Meta/⌘ key on macOS (only emitted on macOS)
 //
-// On macOS both modifiers can technically be held simultaneously, but in
-// practice users only use one at a time for app shortcuts, so we emit the
-// first that matches the platform convention.
+// On macOS both modifiers can be held simultaneously (e.g. ⌘⌃T); each is
+// emitted as its own token so multi-modifier combos record correctly.
 export function normalizeKeyEvent(e: KeyboardEvent): string {
   const parts: string[] = []
 
   // Add modifiers in canonical order matching persisted defaults.
   if (isMac) {
-    // macOS: prefer cmd (metaKey) but also track ctrl if only ctrl is held.
-    // This lets us distinguish ⌘+K from Ctrl+K on macOS.
+    // macOS: emit ctrl and cmd independently so multi-modifier combos like
+    // ⌘⌃T (cmd+ctrl held together) can be recorded. A single modifier still
+    // emits just that token, preserving the ⌘+K vs Ctrl+K distinction.
+    // Canonical order is ctrl before cmd (see MODIFIER_ORDER).
+    if (e.ctrlKey) parts.push('ctrl')
     if (e.metaKey) parts.push('cmd')
-    else if (e.ctrlKey) parts.push('ctrl')
   } else {
     if (e.ctrlKey) parts.push('ctrl')
     else if (e.metaKey) parts.push('cmd')
@@ -190,13 +191,19 @@ export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean 
 
   // macOS cross-modifier alias: 'cmd+x' matches 'ctrl+x' config and vice-versa.
   // This lets the same 'ctrl+k' default work with both ⌘+K and Ctrl+K on Mac.
+  // Only single-modifier combos are aliased — when both ⌘ and ⌃ are held
+  // (e.g. ⌘⌃T) the combo is matched exactly, never swapped, otherwise the
+  // alias would corrupt it into 'cmd+cmd+t'.
   if (isMac) {
-    const aliased = normalized.startsWith('cmd+')
-      ? `ctrl+${normalized.slice(4)}`
-      : normalized.startsWith('ctrl+')
-        ? `cmd+${normalized.slice(5)}`
-        : normalized
-    return shortcutsEqual(aliased, shortcutKey)
+    const parts = normalized.split('+')
+    const hasCmd = parts.includes('cmd')
+    const hasCtrl = parts.includes('ctrl')
+    if (hasCmd !== hasCtrl) {
+      const aliased = parts
+        .map((part) => (part === 'cmd' ? 'ctrl' : part === 'ctrl' ? 'cmd' : part))
+        .join('+')
+      return shortcutsEqual(aliased, shortcutKey)
+    }
   }
 
   return false
