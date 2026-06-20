@@ -370,13 +370,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     addTabToPane: (paneId: string, tab: WorkspaceTab): void => {
-      const { root } = get()
+      const { root, agentLauncherPaneId } = get()
       const pane = findPaneById(root, paneId)
       if (pane?.type !== 'leaf') return
 
+      // Opening or activating any tab means the user has moved on from the
+      // agent launcher overlay; auto-dismiss it so it never blocks the panel
+      // the user just opened (e.g. an editor, git, or browser tab).
+      const nextLauncherPaneId = agentLauncherPaneId === paneId ? null : agentLauncherPaneId
+
       // Prevent duplicate in same pane
       if (pane.tabs.some((t) => t.id === tab.id)) {
-        set({ root: updateLeaf(root, paneId, (l) => ({ ...l, activeTabId: tab.id })) })
+        set({
+          root: updateLeaf(root, paneId, (l) => ({ ...l, activeTabId: tab.id })),
+          agentLauncherPaneId: nextLauncherPaneId
+        })
         return
       }
 
@@ -387,7 +395,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }))
       set((state) => ({
         root: newRoot,
-        activePaneId: resolveActivePaneId(state.fullscreenPaneId, paneId)
+        activePaneId: resolveActivePaneId(state.fullscreenPaneId, paneId),
+        agentLauncherPaneId: nextLauncherPaneId
       }))
     },
 
@@ -597,14 +606,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     setActiveTab: (paneId: string, tabId: string): void => {
-      const { root, fullscreenPaneId } = get()
+      const { root, fullscreenPaneId, agentLauncherPaneId } = get()
       const newRoot = updateLeaf(root, paneId, (leaf) => ({
         ...leaf,
         activeTabId: tabId
       }))
       set({
         root: newRoot,
-        activePaneId: resolveActivePaneId(fullscreenPaneId, paneId)
+        activePaneId: resolveActivePaneId(fullscreenPaneId, paneId),
+        // Switching to an existing tab dismisses the launcher overlay for that pane.
+        agentLauncherPaneId: agentLauncherPaneId === paneId ? null : agentLauncherPaneId
       })
     },
 
@@ -712,7 +723,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     addTerminalTab: (terminalId: string, targetPaneId?: string): void => {
       const id = terminalTabId(terminalId)
-      const { root, activePaneId } = get()
+      const { root, activePaneId, agentLauncherPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
       // Check if already exists in any pane
@@ -722,7 +733,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
         })
         return
       }
@@ -765,7 +777,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     addEditorTab: (filePath: string, targetPaneId?: string): void => {
       const id = editorTabId(filePath)
-      const { root, activePaneId } = get()
+      const { root, activePaneId, agentLauncherPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
       // Check if already exists in target pane — activate it
@@ -774,7 +786,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, paneId, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: resolveActivePaneId(fullscreenPaneId, paneId)
+          activePaneId: resolveActivePaneId(fullscreenPaneId, paneId),
+          agentLauncherPaneId: agentLauncherPaneId === paneId ? null : agentLauncherPaneId
         })
         return
       }
@@ -785,7 +798,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     addBrowserTab: (browserTabId: string, targetPaneId?: string): void => {
       const id = makeBrowserTabId(browserTabId)
-      const { root, activePaneId } = get()
+      const { root, activePaneId, agentLauncherPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
       // Check if already exists in any pane — activate it
@@ -794,7 +807,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
         })
         return
       }
@@ -805,7 +819,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     addAgentChatTab: (sessionId: string, targetPaneId?: string): void => {
       const id = agentChatTabId(sessionId)
-      const { root, activePaneId } = get()
+      const { root, activePaneId, agentLauncherPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
       // Check if already exists in any pane — activate it
@@ -814,7 +828,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const { fullscreenPaneId } = get()
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
-          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id)
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
         })
         return
       }

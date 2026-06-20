@@ -1,4 +1,5 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
+import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
@@ -422,6 +423,15 @@ export function PaneContent({
             if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
           }}
         >
+          <button
+            type="button"
+            className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            title="Close agent launcher (Esc)"
+            aria-label="Close agent launcher"
+            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+          >
+            <X className="h-4 w-4" />
+          </button>
           <AgentLauncher paneId={pane.id} />
         </div>
       ) : null}
