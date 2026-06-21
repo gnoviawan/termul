@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import {
   findConflictingShortcut,
@@ -377,6 +377,54 @@ describe('matchesShortcut', () => {
     expect(matchesShortcut(event, 'ctrl+cmd+t')).toBe(true)
     // The cross-modifier alias must NOT fire for multi-modifier combos,
     // so it never collapses into a single-modifier binding.
+    expect(matchesShortcut(event, 'cmd+t')).toBe(false)
+    expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
+  })
+})
+
+// The macOS branches above are guarded by the runtime `isMac` value, so they
+// no-op on non-macOS CI. This block mocks `@/lib/platform` to force macOS and
+// re-imports the store, exercising the regression deterministically everywhere.
+describe('macOS multi-modifier normalization (platform mocked)', () => {
+  let normalizeKeyEvent: typeof import('./keyboard-shortcuts-store').normalizeKeyEvent
+  let matchesShortcut: typeof import('./keyboard-shortcuts-store').matchesShortcut
+
+  beforeAll(async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/platform', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
+      return { ...actual, isMac: true }
+    })
+    const mod = await import('./keyboard-shortcuts-store')
+    normalizeKeyEvent = mod.normalizeKeyEvent
+    matchesShortcut = mod.matchesShortcut
+  })
+
+  afterAll(() => {
+    vi.doUnmock('@/lib/platform')
+    vi.resetModules()
+  })
+
+  it('emits both cmd and ctrl for a ⌘⌃ combo', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+t')
+  })
+
+  it('emits a full four-modifier combo', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 't',
+      ctrlKey: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: true
+    })
+    expect(normalizeKeyEvent(event)).toBe('ctrl+cmd+shift+alt+t')
+  })
+
+  it('matches a ⌘⌃ combo exactly without aliasing', () => {
+    const event = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, metaKey: true })
+    expect(matchesShortcut(event, 'ctrl+cmd+t')).toBe(true)
+    // The cross-modifier alias must not fire for multi-modifier combos.
     expect(matchesShortcut(event, 'cmd+t')).toBe(false)
     expect(matchesShortcut(event, 'ctrl+t')).toBe(false)
   })
