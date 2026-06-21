@@ -175,6 +175,36 @@ fn get_home_directory() -> Result<String, String> {
     }
 }
 
+/// Temporarily remove the native application menu so its keyboard accelerators
+/// (e.g. `Cmd+W`, `Cmd+R`, `Cmd+C`) stop intercepting key events before they
+/// reach the webview. The renderer's shortcut recorder calls this while it is
+/// capturing a keybinding so the user can record any combination, including
+/// ones that collide with a menu accelerator. No-op on Linux (no app menu).
+#[tauri::command]
+fn suspend_app_menu(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        app.remove_menu().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    let _ = &app;
+    Ok(())
+}
+
+/// Restore the native application menu removed by `suspend_app_menu`. Rebuilds
+/// the menu from scratch so accelerators resume working once recording ends.
+#[tauri::command]
+fn restore_app_menu(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let menu = build_app_menu(&app).map_err(|e| e.to_string())?;
+        app.set_menu(menu).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    let _ = &app;
+    Ok(())
+}
+
 #[tauri::command]
 fn reveal_log_dir_command(app: tauri::AppHandle) -> Result<(), String> {
     reveal_log_dir(&app)
@@ -1031,6 +1061,8 @@ pub fn run() {
             detect_shells,
             get_default_shell,
             get_home_directory,
+            suspend_app_menu,
+            restore_app_menu,
             reveal_log_dir_command,
             export_log_file_command,
             copy_log_contents_command,
