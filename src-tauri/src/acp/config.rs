@@ -220,7 +220,7 @@ mod tests {
         let plain = empty_dir.join("npx");
         std::fs::write(&plain, b"not exec").unwrap();
         assert_eq!(
-            resolve_executable_in_path("missing-binary-xyz", &empty_dir.display().to_string()),
+            resolve_executable_in_path("npx", &empty_dir.display().to_string()),
             None
         );
 
