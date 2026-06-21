@@ -92,12 +92,44 @@ pub struct AgentConfig {
     pub allow_terminal: bool,
 }
 
+/// Resolve a bare command name against a `:`-separated PATH, returning the first
+/// existing, executable match as an absolute path. An input that already
+/// contains a `/` is treated as an explicit path and returned as-is. Returns
+/// `None` when nothing executable is found so the caller keeps the bare name and
+/// the spawn still surfaces a meaningful "not found" error.
+#[cfg(not(target_os = "windows"))]
+fn resolve_executable_in_path(command: &str, path: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if command.contains('/') {
+        return Some(command.to_string());
+    }
+    for dir in path.split(':').filter(|segment| !segment.is_empty()) {
+        let candidate = std::path::Path::new(dir).join(command);
+        if let Ok(meta) = std::fs::metadata(&candidate) {
+            if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 impl AgentConfig {
     /// Convert this config into the protocol stdio server config used to spawn
     /// the subprocess via `agent_client_protocol::AcpAgent`.
     pub(crate) fn to_mcp_server(&self) -> agent_client_protocol::schema::McpServer {
-        let env: Vec<agent_client_protocol::schema::EnvVariable> = self
-            .env
+        // Merge the login-shell PATH into the agent env. A GUI-launched app
+        // (Finder/Dock/Spotlight on macOS, desktop launchers on Linux) only
+        // inherits a minimal PATH, so npx/uvx/node from nvm/Homebrew are not on
+        // it. PTY terminals avoid this via `env_refresh::apply_fresh_path`; ACP
+        // agents (e.g. the npx-launched `claude-acp`) need the same treatment or
+        // they fail to spawn (ENOENT) and never reach the connected/"Ready"
+        // state. Custom PATH overrides already in `self.env` are preserved.
+        let mut env_map = self.env.clone();
+        crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+
+        let env: Vec<agent_client_protocol::schema::EnvVariable> = env_map
             .iter()
             .map(|(name, value)| agent_client_protocol::schema::EnvVariable::new(name, value))
             .collect();
@@ -122,6 +154,17 @@ impl AgentConfig {
                 self.args.clone(),
             ),
         };
+
+        // On non-Windows `resolve_spawn_program` returns a bare command name
+        // unchanged, leaving PATH resolution to whoever spawns the process. The
+        // ACP runtime spawns it for us, so we cannot rely on it searching the
+        // refreshed PATH — resolve the bare name against the merged PATH here so
+        // the absolute path is launched regardless of the spawner's environment.
+        #[cfg(not(target_os = "windows"))]
+        let command = env_map
+            .get("PATH")
+            .and_then(|path| resolve_executable_in_path(&command, path))
+            .unwrap_or(command);
 
         agent_client_protocol::schema::McpServer::Stdio(
             agent_client_protocol::schema::McpServerStdio::new(
@@ -153,6 +196,43 @@ mod tests {
         assert_eq!(original, back);
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn resolve_executable_in_path_finds_executable_in_later_segment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("termul-acp-path-{}", uuid::Uuid::new_v4()));
+        let empty_dir = base.join("empty");
+        let bin_dir = base.join("bin");
+        std::fs::create_dir_all(&empty_dir).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let exe = bin_dir.join("npx");
+        std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = format!("{}:{}", empty_dir.display(), bin_dir.display());
+        assert_eq!(
+            resolve_executable_in_path("npx", &path),
+            Some(exe.to_string_lossy().into_owned())
+        );
+
+        // A non-executable file of the same name is skipped, yielding None.
+        let plain = empty_dir.join("npx");
+        std::fs::write(&plain, b"not exec").unwrap();
+        assert_eq!(
+            resolve_executable_in_path("npx", &empty_dir.display().to_string()),
+            None
+        );
+
+        // An explicit path is returned unchanged.
+        assert_eq!(
+            resolve_executable_in_path("/usr/bin/npx", &path),
+            Some("/usr/bin/npx".to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn agent_config_builds_stdio_server() {
         let mut env = HashMap::new();
@@ -170,9 +250,15 @@ mod tests {
                 assert_eq!(stdio.name, "test-agent");
                 assert_eq!(stdio.command, std::path::PathBuf::from("/usr/bin/agent"));
                 assert_eq!(stdio.args, vec!["--acp".to_string()]);
-                assert_eq!(stdio.env.len(), 1);
-                assert_eq!(stdio.env[0].name, "API_KEY");
-                assert_eq!(stdio.env[0].value, "secret");
+                // The configured env is preserved. A login-shell PATH may also be
+                // merged in (env-dependent), so look the var up by name rather
+                // than asserting an exact count/order.
+                let api_key = stdio
+                    .env
+                    .iter()
+                    .find(|var| var.name == "API_KEY")
+                    .expect("API_KEY env var preserved");
+                assert_eq!(api_key.value, "secret");
             }
             _ => panic!("expected stdio server"),
         }
