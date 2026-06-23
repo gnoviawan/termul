@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
@@ -279,7 +279,12 @@ vi.mock('@/stores/app-settings-store', () => ({
 import { useTerminalRenderer } from '@/stores/app-settings-store'
 
 const mockTerminalStoreState = {
-  terminals: [] as Array<{ id: string; ptyId?: string; healthStatus?: string }>,
+  terminals: [] as Array<{
+    id: string
+    ptyId?: string
+    healthStatus?: string
+    recoveryStatus?: string
+  }>,
   activeTerminalId: '',
   selectTerminal: vi.fn(),
   addTerminal: vi.fn(),
@@ -301,6 +306,7 @@ const mockTerminalStoreState = {
   consumeDetachedOutput: vi.fn(() => ''),
   setRendererAttached: vi.fn(),
   setTerminalHealthStatus: vi.fn(),
+  setTerminalRecoveryStatus: vi.fn(),
   setTerminalHidden: vi.fn(),
   updateTerminalActivity: vi.fn(),
   updateTerminalLastActivityTimestamp: vi.fn(),
@@ -390,6 +396,7 @@ describe('ConnectedTerminal', () => {
     mockTerminalStoreState.updateTerminalLastActivityTimestamp.mockReset()
     mockTerminalStoreState.updateTerminalActivityBatch.mockReset()
     mockTerminalStoreState.setRendererAttached.mockReset()
+    mockTerminalStoreState.setTerminalRecoveryStatus.mockReset()
     mockTerminalStoreState.peekTranscript.mockReset()
     mockTerminalStoreState.peekTranscript.mockReturnValue('')
     mockTerminalStoreState.consumeTranscript.mockReset()
@@ -639,6 +646,24 @@ describe('ConnectedTerminal', () => {
   it('should apply custom className', () => {
     const { container } = render(<ConnectedTerminal className="custom-class" />)
     expect(container.querySelector('.custom-class')).toBeTruthy()
+  })
+
+  it('shows recoverable terminal reconnect state', () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'store-term-1', ptyId: 'pty-1', recoveryStatus: 'live_attachable' }
+    ]
+
+    render(<ConnectedTerminal storeTerminalId="store-term-1" autoSpawn={false} />)
+
+    expect(screen.getByText('Session still running in background')).toBeTruthy()
+    expect(screen.getByText('Reconnect')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Reconnect'))
+
+    expect(mockTerminalStoreState.setTerminalRecoveryStatus).toHaveBeenCalledWith(
+      'store-term-1',
+      'restored'
+    )
   })
 
   it('should dispose terminal on unmount', () => {
