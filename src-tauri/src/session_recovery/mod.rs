@@ -8,3 +8,5 @@ pub mod daemon;
 pub mod server;
 #[cfg(unix)]
 pub mod client;
+#[cfg(unix)]
+pub mod bridge;

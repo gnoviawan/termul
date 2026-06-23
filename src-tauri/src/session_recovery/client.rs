@@ -78,6 +78,36 @@ impl SupervisorClient {
             other => Err(format!("unexpected list response: {other:?}")),
         }
     }
+
+    /// Send a request frame without consuming a response (caller drives reads).
+    pub fn send_request(&mut self, req: &SupervisorRequest) -> Result<(), String> {
+        self.send(req)
+    }
+
+    /// Read one response frame (blocking, subject to the read timeout).
+    pub fn recv_response(&mut self) -> Result<SupervisorResponse, String> {
+        self.recv()
+    }
+
+    /// Clear the read timeout so a streaming consumer can block on live frames.
+    pub fn set_blocking(&mut self) {
+        let _ = self.reader.get_ref().set_read_timeout(None);
+    }
+
+    /// Spawn a session and return (session_id, pid).
+    pub fn spawn(
+        &mut self,
+        spec: crate::session_recovery::ipc::SpawnSpec,
+    ) -> Result<(String, u32), String> {
+        self.send(&SupervisorRequest::Spawn { spec })?;
+        match self.recv()? {
+            SupervisorResponse::Spawned { session_id, pid } => Ok((session_id, pid)),
+            SupervisorResponse::Error { code, message } => {
+                Err(format!("spawn error ({code}): {message}"))
+            }
+            other => Err(format!("unexpected spawn response: {other:?}")),
+        }
+    }
 }
 
 /// Convenience: connect with the persisted token and list sessions. Returns an

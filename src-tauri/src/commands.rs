@@ -153,7 +153,53 @@ pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    #[cfg(unix)] bridge: State<
+        '_,
+        Arc<crate::session_recovery::bridge::DaemonTerminalBridge>,
+    >,
 ) -> Result<IpcResult<TerminalInfo>, String> {
+    // Daemon-backed terminals (opt-in): route spawn through the supervisor so
+    // the CLI survives a force-closed Termul. Falls back to PtyManager when
+    // disabled or when the daemon spawn fails.
+    #[cfg(unix)]
+    {
+        if crate::session_recovery::bridge::daemon_terminals_enabled() {
+            let terminal_id = uuid::Uuid::new_v4().to_string();
+            let shell = options.shell.clone();
+            let cwd = options.cwd.clone();
+            let spec = crate::session_recovery::ipc::SpawnSpec {
+                shell: options.shell.clone(),
+                cwd: options.cwd.clone(),
+                cols: options.cols.unwrap_or(80),
+                rows: options.rows.unwrap_or(24),
+                command: options.program.clone(),
+                args: options.args.clone().unwrap_or_default(),
+                env: options
+                    .env
+                    .clone()
+                    .map(|m| m.into_iter().collect())
+                    .unwrap_or_default(),
+            };
+            match bridge.spawn(terminal_id.clone(), spec, on_data) {
+                Ok(pid) => {
+                    return Ok(IpcResult::success(TerminalInfo {
+                        id: terminal_id,
+                        shell: shell.unwrap_or_else(|| "/bin/sh".to_string()),
+                        cwd: cwd.unwrap_or_default(),
+                        pid,
+                        cols: options.cols.unwrap_or(80),
+                        rows: options.rows.unwrap_or(24),
+                    }));
+                }
+                Err(e) => {
+                    // The channel was consumed by the bridge attempt; we cannot
+                    // reuse it for a PtyManager fallback, so surface the error.
+                    log::error!("[bridge] daemon spawn failed: {e}");
+                    return Ok(IpcResult::error(e, "SPAWN_FAILED"));
+                }
+            }
+        }
+    }
     match pty_manager.spawn(options, Some(on_data)).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
@@ -166,7 +212,20 @@ pub async fn terminal_write(
     terminal_id: String,
     data: String,
     pty_manager: State<'_, Arc<PtyManager>>,
+    #[cfg(unix)] bridge: State<
+        '_,
+        Arc<crate::session_recovery::bridge::DaemonTerminalBridge>,
+    >,
 ) -> Result<IpcResult<()>, String> {
+    #[cfg(unix)]
+    {
+        if bridge.has(&terminal_id) {
+            return match bridge.write(&terminal_id, data.as_bytes()) {
+                Ok(()) => Ok(IpcResult::success(())),
+                Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
+            };
+        }
+    }
     match pty_manager.write(&terminal_id, &data).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
@@ -180,7 +239,20 @@ pub async fn terminal_resize(
     cols: u16,
     rows: u16,
     pty_manager: State<'_, Arc<PtyManager>>,
+    #[cfg(unix)] bridge: State<
+        '_,
+        Arc<crate::session_recovery::bridge::DaemonTerminalBridge>,
+    >,
 ) -> Result<IpcResult<()>, String> {
+    #[cfg(unix)]
+    {
+        if bridge.has(&terminal_id) {
+            return match bridge.resize(&terminal_id, cols, rows) {
+                Ok(()) => Ok(IpcResult::success(())),
+                Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
+            };
+        }
+    }
     match pty_manager.resize(&terminal_id, cols, rows).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "RESIZE_FAILED")),
@@ -192,7 +264,20 @@ pub async fn terminal_resize(
 pub async fn terminal_kill(
     terminal_id: String,
     pty_manager: State<'_, Arc<PtyManager>>,
+    #[cfg(unix)] bridge: State<
+        '_,
+        Arc<crate::session_recovery::bridge::DaemonTerminalBridge>,
+    >,
 ) -> Result<IpcResult<()>, String> {
+    #[cfg(unix)]
+    {
+        if bridge.has(&terminal_id) {
+            return match bridge.kill(&terminal_id) {
+                Ok(()) => Ok(IpcResult::success(())),
+                Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
+            };
+        }
+    }
     match pty_manager.kill(&terminal_id).await {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),

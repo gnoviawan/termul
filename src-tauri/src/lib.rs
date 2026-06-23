@@ -961,6 +961,12 @@ pub fn run() {
             // Session recovery: supervisor client state seam (Task 8).
             app.manage(session_recovery::supervisor::SupervisorClientState::default());
 
+            // Daemon-backed terminal bridge (opt-in via TERMUL_DAEMON_TERMINALS=1).
+            #[cfg(unix)]
+            app.manage(std::sync::Arc::new(
+                session_recovery::bridge::DaemonTerminalBridge::new(),
+            ));
+
             // Linux/Unix: launch the detached supervisor daemon so local CLI
             // sessions survive a force-closed/crashed Termul. Best-effort: a
             // launch failure must not block app startup.
