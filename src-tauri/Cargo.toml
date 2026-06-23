@@ -5,6 +5,7 @@ description = "Project-aware terminal that treats workspaces as first-class citi
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
 rust-version = "1.77"
+default-run = "termul-manager"
 
 [lib]
 name = "termul_manager_lib"
