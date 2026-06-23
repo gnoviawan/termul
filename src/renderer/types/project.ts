@@ -1,6 +1,6 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
-import type { GitStatus } from '@shared/types/ipc.types'
+import type { GitStatus, RecoveryStatus } from '@shared/types/ipc.types'
 
 // Re-export for convenience
 export type { GitStatus }
@@ -81,6 +81,9 @@ export interface Terminal {
   detachedOutput?: string // Raw PTY output captured while no renderer is mounted
   rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status
+  recoveryStatus?: RecoveryStatus
+  recoveredSessionId?: string
+  recoveryReason?: string
   isHidden?: boolean // Whether terminal is currently hidden within the workspace/pane model
   hiddenSince?: number // Timestamp when terminal became hidden within the workspace/pane model
   isAppHidden?: boolean // Whether the entire app/window is currently hidden or minimized
