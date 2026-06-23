@@ -277,8 +277,9 @@ pub async fn terminal_remove_renderer_ref(
 
 #[tauri::command]
 pub async fn terminal_list_recovered_sessions(
+    supervisor_state: State<'_, crate::session_recovery::supervisor::SupervisorClientState>,
 ) -> Result<IpcResult<Vec<crate::session_recovery::registry::RecoveredSession>>, String> {
-    Ok(IpcResult::success(Vec::new()))
+    Ok(IpcResult::success(supervisor_state.recovered_sessions()))
 }
 
 /// Update a terminal's orphan-reaping protection.
