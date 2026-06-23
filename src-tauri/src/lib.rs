@@ -10,7 +10,7 @@ mod path_validation;
 mod pty;
 mod remote;
 mod secure_storage;
-mod session_recovery;
+pub mod session_recovery;
 mod shell_paths;
 mod skills;
 mod ssh;
