@@ -121,7 +121,141 @@ impl SessionRegistry {
             }
         }
     }
+
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
+            format!(
+                "failed to read session registry {}: {}",
+                path.display(),
+                e
+            )
+        })?;
+        serde_json::from_str(&contents).map_err(|e| {
+            format!(
+                "failed to parse session registry {}: {}",
+                path.display(),
+                e
+            )
+        })
+    }
+
+    pub fn load_or_new(path: &std::path::Path, supervisor_pid: u32) -> Result<Self, String> {
+        if path.exists() {
+            Self::load(path)
+        } else {
+            Ok(Self::new(supervisor_pid))
+        }
+    }
+
+    pub fn save_atomic(&self, path: &std::path::Path) -> Result<(), String> {
+        if let Some(parent) = non_empty_parent(path) {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create session registry directory {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
+
+        let tmp_path = path.with_file_name(format!(
+            ".{}.{}.tmp",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("sessions.json"),
+            uuid::Uuid::new_v4()
+        ));
+        let bytes = serde_json::to_vec_pretty(self)
+            .map_err(|e| format!("failed to serialize session registry: {}", e))?;
+        {
+            use std::io::Write;
+
+            let mut tmp_file = std::fs::File::create(&tmp_path).map_err(|e| {
+                format!(
+                    "failed to create session registry temp {}: {}",
+                    tmp_path.display(),
+                    e
+                )
+            })?;
+            tmp_file.write_all(&bytes).map_err(|e| {
+                format!(
+                    "failed to write session registry temp {}: {}",
+                    tmp_path.display(),
+                    e
+                )
+            })?;
+            tmp_file.sync_all().map_err(|e| {
+                format!(
+                    "failed to sync session registry temp {}: {}",
+                    tmp_path.display(),
+                    e
+                )
+            })?;
+        }
+
+        replace_file(&tmp_path, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!(
+                "failed to replace session registry {}: {}",
+                path.display(),
+                e
+            )
+        })?;
+
+        if let Some(parent) = non_empty_parent(path) {
+            sync_directory(parent);
+        }
+
+        Ok(())
+    }
 }
+
+fn non_empty_parent(path: &std::path::Path) -> Option<&std::path::Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(tmp_path: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::rename(tmp_path, path)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(tmp_path: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let mut tmp_wide: Vec<u16> = tmp_path.as_os_str().encode_wide().collect();
+    tmp_wide.push(0);
+    let mut path_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    path_wide.push(0);
+
+    let result = unsafe {
+        MoveFileExW(
+            tmp_wide.as_ptr(),
+            path_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_directory(path: &std::path::Path) {
+    if let Ok(dir) = std::fs::File::open(path) {
+        let _ = dir.sync_all();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn sync_directory(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -163,5 +297,73 @@ mod tests {
         registry.sessions.push(RecoveredSession::terminal("s1", 456));
         registry.mark_lost_sessions(&|pid| pid != 456);
         assert_eq!(registry.sessions[0].status, RecoveredSessionStatus::Lost);
+    }
+
+    #[test]
+    fn registry_round_trips_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "termul-registry-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sessions.json");
+
+        let mut registry = SessionRegistry::new(42);
+        registry.last_shutdown = LastShutdown::KeepRunning;
+        registry.sessions.push(RecoveredSession::terminal("term-1", 9001));
+
+        registry.save_atomic(&path).unwrap();
+        let loaded = SessionRegistry::load(&path).unwrap();
+
+        assert_eq!(loaded.schema_version, SESSION_REGISTRY_SCHEMA_VERSION);
+        assert_eq!(loaded.last_shutdown, LastShutdown::KeepRunning);
+        assert_eq!(loaded.sessions[0].session_id, "term-1");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn registry_overwrites_existing_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "termul-registry-overwrite-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sessions.json");
+
+        let mut registry = SessionRegistry::new(42);
+        registry.save_atomic(&path).unwrap();
+        registry.last_shutdown = LastShutdown::KeepRunning;
+        registry.save_atomic(&path).unwrap();
+
+        let loaded = SessionRegistry::load(&path).unwrap();
+        assert_eq!(loaded.last_shutdown, LastShutdown::KeepRunning);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn registry_saves_to_relative_path_without_parent() {
+        let current_dir = std::env::current_dir().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "termul-registry-relative-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::env::set_current_dir(&dir).unwrap();
+        let result = SessionRegistry::new(42).save_atomic(std::path::Path::new("sessions.json"));
+        std::env::set_current_dir(current_dir).unwrap();
+
+        result.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_registry_loads_empty_clean_registry() {
+        let path = std::env::temp_dir().join(format!("missing-{}.json", uuid::Uuid::new_v4()));
+        let loaded = SessionRegistry::load_or_new(&path, 77).unwrap();
+        assert_eq!(loaded.supervisor_pid, 77);
+        assert_eq!(loaded.last_shutdown, LastShutdown::Clean);
     }
 }
