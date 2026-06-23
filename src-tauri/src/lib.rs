@@ -958,6 +958,9 @@ pub fn run() {
 
             app.manage(ViewMenuState::default());
 
+            // Session recovery: supervisor client state seam (Task 8).
+            app.manage(session_recovery::supervisor::SupervisorClientState::default());
+
             // Create CWD Tracker (takes app_handle directly)
             let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
             app.manage(cwd_tracker.clone());
