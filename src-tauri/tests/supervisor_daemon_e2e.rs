@@ -52,27 +52,31 @@ impl Drop for Daemon {
 /// the socket is connectable.
 #[allow(clippy::zombie_processes)] // child is reaped in Daemon::drop
 fn launch_daemon() -> Daemon {
-    let socket = std::env::temp_dir().join(format!(
-        "termul-sup-e2e-{}-{}.sock",
+    launch_daemon_with_token(None)
+}
+
+#[allow(clippy::zombie_processes)] // child is reaped in Daemon::drop
+fn launch_daemon_with_token(token: Option<&str>) -> Daemon {
+    // Each daemon gets its own XDG_RUNTIME_DIR so its socket name does not
+    // collide with other concurrently-running test daemons.
+    let xdg_dir = std::env::temp_dir().join(format!(
+        "termul-sup-e2e-{}-{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));
-    let _ = std::fs::remove_file(&socket);
+    std::fs::create_dir_all(&xdg_dir).expect("create xdg dir");
 
-    let child = Command::new(supervisor_bin())
-        .env("XDG_RUNTIME_DIR", socket.parent().unwrap())
-        // Force our deterministic socket name via XDG dir + rename trick:
-        // the daemon derives the path from XDG_RUNTIME_DIR/termul-supervisor.sock.
+    let mut cmd = Command::new(supervisor_bin());
+    cmd.env("XDG_RUNTIME_DIR", &xdg_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("launch termul-supervisor");
+        .stderr(Stdio::null());
+    if let Some(t) = token {
+        cmd.env("TERMUL_SUPERVISOR_TOKEN", t);
+    }
+    let child = cmd.spawn().expect("launch termul-supervisor");
 
     // The daemon uses XDG_RUNTIME_DIR/termul-supervisor.sock.
-    let actual_socket = socket
-        .parent()
-        .unwrap()
-        .join("termul-supervisor.sock");
+    let actual_socket = xdg_dir.join("termul-supervisor.sock");
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -133,7 +137,7 @@ fn cli_survives_client_disconnect_and_reattaches() {
 
     // --- Client A: handshake + spawn a long-lived CLI that emits a marker.
     let mut client_a = Client::connect(&daemon.socket);
-    client_a.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"a"}"#);
+    client_a.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"a","auth_token":""}"#);
     let ack = client_a.recv_until("hello_ack");
     assert_eq!(ack["protocol_version"], 1);
 
@@ -165,7 +169,7 @@ fn cli_survives_client_disconnect_and_reattaches() {
 
     // --- Client B reconnects, lists sessions, finds the survivor.
     let mut client_b = Client::connect(&daemon.socket);
-    client_b.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"b"}"#);
+    client_b.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"b","auth_token":""}"#);
     client_b.recv_until("hello_ack");
     client_b.send(r#"{"type":"list_sessions"}"#);
     let sessions = client_b.recv_until("sessions");
@@ -201,4 +205,48 @@ fn cli_survives_client_disconnect_and_reattaches() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!is_pid_alive(pid), "kill_all must terminate the CLI");
+}
+
+#[test]
+fn daemon_rejects_wrong_auth_token() {
+    let daemon = launch_daemon_with_token(Some("correct-horse-battery-staple"));
+
+    // Wrong token: handshake must be rejected with an unauthorized error.
+    let mut bad = Client::connect(&daemon.socket);
+    bad.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"x","auth_token":"WRONG"}"#);
+    let err = bad.recv_until("error");
+    assert_eq!(err["code"], "unauthorized");
+    drop(bad);
+
+    // Correct token: handshake succeeds and the session is usable.
+    let mut good = Client::connect(&daemon.socket);
+    good.send(
+        r#"{"type":"hello","protocol_version":1,"app_instance_id":"y","auth_token":"correct-horse-battery-staple"}"#,
+    );
+    let ack = good.recv_until("hello_ack");
+    assert_eq!(ack["protocol_version"], 1);
+
+    good.send(r#"{"type":"list_sessions"}"#);
+    good.recv_until("sessions");
+
+    good.send(r#"{"type":"shutdown","kill_all":true}"#);
+    good.recv_until("ok");
+}
+
+#[test]
+fn daemon_requires_hello_before_other_requests() {
+    let daemon = launch_daemon_with_token(Some("tok-123"));
+
+    // Sending a request before authenticating must be rejected.
+    let mut client = Client::connect(&daemon.socket);
+    client.send(r#"{"type":"list_sessions"}"#);
+    let err = client.recv_until("error");
+    assert_eq!(err["code"], "unauthorized");
+
+    // Clean shutdown via an authenticated client so the daemon exits.
+    let mut admin = Client::connect(&daemon.socket);
+    admin.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"z","auth_token":"tok-123"}"#);
+    admin.recv_until("hello_ack");
+    admin.send(r#"{"type":"shutdown","kill_all":true}"#);
+    admin.recv_until("ok");
 }

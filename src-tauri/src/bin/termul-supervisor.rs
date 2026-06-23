@@ -12,6 +12,10 @@ fn main() {
     let table = Arc::new(daemon::SessionTable::new());
     let shutdown = Arc::new(AtomicBool::new(false));
 
+    // Auth token is passed in by the launching Tauri process via the
+    // environment. When unset (e.g. manual debugging), auth is disabled.
+    let auth_token = std::env::var("TERMUL_SUPERVISOR_TOKEN").ok().filter(|t| !t.is_empty());
+
     eprintln!(
         "termul-supervisor protocol={} pid={} socket={}",
         termul_manager_lib::session_recovery::ipc::SUPERVISOR_PROTOCOL_VERSION,
@@ -19,7 +23,7 @@ fn main() {
         socket_path.display()
     );
 
-    if let Err(e) = server::serve(&socket_path, table, shutdown) {
+    if let Err(e) = server::serve_with_auth(&socket_path, table, shutdown, auth_token) {
         eprintln!("termul-supervisor server error: {e}");
         std::process::exit(1);
     }

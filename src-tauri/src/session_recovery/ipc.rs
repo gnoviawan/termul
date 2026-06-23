@@ -25,6 +25,10 @@ pub enum SupervisorRequest {
     Hello {
         protocol_version: u32,
         app_instance_id: String,
+        /// Shared secret the daemon was started with. Connections that do not
+        /// present the matching token are rejected.
+        #[serde(default)]
+        auth_token: String,
     },
     Spawn {
         spec: SpawnSpec,
@@ -102,6 +106,7 @@ mod tests {
         let msg = SupervisorRequest::Hello {
             protocol_version: 1,
             app_instance_id: "app-1".to_string(),
+            auth_token: "secret".to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: SupervisorRequest = serde_json::from_str(&json).unwrap();

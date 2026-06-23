@@ -33,6 +33,19 @@ pub fn serve(
     table: Arc<SessionTable>,
     shutdown: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
+    serve_with_auth(socket_path, table, shutdown, None)
+}
+
+/// Like [`serve`], but rejects any connection whose `Hello.auth_token` does not
+/// match `expected_token`. When `expected_token` is `None`, auth is disabled
+/// (used by lower-level tests that exercise the table directly).
+pub fn serve_with_auth(
+    socket_path: &std::path::Path,
+    table: Arc<SessionTable>,
+    shutdown: Arc<AtomicBool>,
+    expected_token: Option<String>,
+) -> std::io::Result<()> {
+    let expected_token = Arc::new(expected_token);
     // Remove a stale socket file from a previous run before binding.
     if socket_path.exists() {
         let _ = std::fs::remove_file(socket_path);
@@ -45,8 +58,9 @@ pub fn serve(
             Ok((stream, _addr)) => {
                 let table = table.clone();
                 let shutdown = shutdown.clone();
+                let expected_token = expected_token.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, table, shutdown) {
+                    if let Err(e) = handle_client(stream, table, shutdown, expected_token) {
                         log::debug!("[supervisor] client handler ended: {e}");
                     }
                 });
@@ -78,12 +92,16 @@ fn handle_client(
     stream: UnixStream,
     table: Arc<SessionTable>,
     shutdown: Arc<AtomicBool>,
+    expected_token: Arc<Option<String>>,
 ) -> std::io::Result<()> {
     let reader_stream = stream.try_clone()?;
     let write_stream = Arc::new(std::sync::Mutex::new(stream));
     let mut reader = BufReader::new(reader_stream);
     // Forwarder threads stop when this client disconnects.
     let client_alive = Arc::new(AtomicBool::new(true));
+    // A client must authenticate with a valid Hello before any other request
+    // is honored (only enforced when the daemon was started with a token).
+    let mut authenticated = expected_token.is_none();
 
     let mut line = String::new();
     loop {
@@ -111,6 +129,32 @@ fn handle_client(
             }
         };
 
+        // Gate every non-Hello request behind successful authentication.
+        if let SupervisorRequest::Hello { auth_token, .. } = &request {
+            if let Some(expected) = expected_token.as_ref() {
+                if !constant_time_eq(auth_token.as_bytes(), expected.as_bytes()) {
+                    write_frame(
+                        &write_stream,
+                        &SupervisorResponse::Error {
+                            code: "unauthorized".to_string(),
+                            message: "invalid auth token".to_string(),
+                        },
+                    );
+                    break;
+                }
+            }
+            authenticated = true;
+        } else if !authenticated {
+            write_frame(
+                &write_stream,
+                &SupervisorResponse::Error {
+                    code: "unauthorized".to_string(),
+                    message: "hello with valid auth token required first".to_string(),
+                },
+            );
+            continue;
+        }
+
         let response = dispatch(&request, &table, &write_stream, &client_alive, &shutdown);
         if let Some(resp) = response {
             if !write_frame(&write_stream, &resp) {
@@ -125,6 +169,19 @@ fn handle_client(
 
     client_alive.store(false, Ordering::Relaxed);
     Ok(())
+}
+
+/// Constant-time byte comparison so token checks do not leak length/content via
+/// timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn dispatch(
