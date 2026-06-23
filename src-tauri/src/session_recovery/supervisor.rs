@@ -7,7 +7,8 @@ pub fn supervisor_binary_name() -> &'static str {
 
 #[derive(Debug, Default)]
 pub struct SupervisorClientState {
-    pub supervisor_pid: Option<u32>,
+    supervisor_pid: RwLock<Option<u32>>,
+    auth_token: RwLock<Option<String>>,
     registry: Arc<RwLock<Option<crate::session_recovery::registry::SessionRegistry>>>,
 }
 
@@ -22,6 +23,24 @@ impl SupervisorClientState {
 
     pub fn set_registry(&self, registry: crate::session_recovery::registry::SessionRegistry) {
         *self.registry.write() = Some(registry);
+    }
+
+    pub fn set_supervisor_pid(&self, pid: u32) {
+        *self.supervisor_pid.write() = Some(pid);
+    }
+
+    pub fn supervisor_pid(&self) -> Option<u32> {
+        *self.supervisor_pid.read()
+    }
+
+    /// Record the launched daemon's auth token (used by the renderer-facing
+    /// client when connecting to the socket).
+    pub fn set_auth_token(&self, token: String) {
+        *self.auth_token.write() = Some(token);
+    }
+
+    pub fn auth_token(&self) -> Option<String> {
+        self.auth_token.read().clone()
     }
 }
 

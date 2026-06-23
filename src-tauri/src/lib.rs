@@ -961,6 +961,24 @@ pub fn run() {
             // Session recovery: supervisor client state seam (Task 8).
             app.manage(session_recovery::supervisor::SupervisorClientState::default());
 
+            // Linux/Unix: launch the detached supervisor daemon so local CLI
+            // sessions survive a force-closed/crashed Termul. Best-effort: a
+            // launch failure must not block app startup.
+            #[cfg(unix)]
+            {
+                match session_recovery::supervisor::launch_supervisor() {
+                    Ok((pid, token)) => {
+                        let state = app.state::<session_recovery::supervisor::SupervisorClientState>();
+                        state.set_supervisor_pid(pid);
+                        state.set_auth_token(token);
+                        log::info!("[supervisor] launched daemon pid={pid}");
+                    }
+                    Err(e) => {
+                        log::warn!("[supervisor] failed to launch daemon: {e}");
+                    }
+                }
+            }
+
             // Create CWD Tracker (takes app_handle directly)
             let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
             app.manage(cwd_tracker.clone());
