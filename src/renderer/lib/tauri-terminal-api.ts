@@ -1,6 +1,7 @@
 import type {
   GitStatus,
   IpcResult,
+  RecoveredSessionInfo,
   TerminalApi,
   TerminalCwdChangedCallback,
   TerminalDataCallback,
@@ -58,7 +59,8 @@ const IPC_COMMANDS = {
   UPDATE_ORPHAN_DETECTION: 'terminal_update_orphan_detection',
   ADD_RENDERER_REF: 'terminal_add_renderer_ref',
   REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref',
-  SET_PROTECTED: 'terminal_set_protected'
+  SET_PROTECTED: 'terminal_set_protected',
+  LIST_RECOVERED_SESSIONS: 'terminal_list_recovered_sessions'
 } as const
 
 /**
@@ -513,6 +515,10 @@ export function createTauriTerminalApi(): TerminalApi {
         timeoutMinutes: timeout ? Math.floor(timeout / 60000) : null
       }
       return invokeIpc<void>(IPC_COMMANDS.UPDATE_ORPHAN_DETECTION, { settings })
+    },
+
+    async listRecoveredSessions(): Promise<IpcResult<RecoveredSessionInfo[]>> {
+      return invokeIpc<RecoveredSessionInfo[]>(IPC_COMMANDS.LIST_RECOVERED_SESSIONS)
     }
   }
 }

@@ -1080,6 +1080,7 @@ pub fn run() {
             commands::terminal_update_orphan_detection,
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
+            commands::terminal_list_recovered_sessions,
             commands::terminal_set_protected,
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)

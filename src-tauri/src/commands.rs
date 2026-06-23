@@ -275,6 +275,12 @@ pub async fn terminal_remove_renderer_ref(
     }
 }
 
+#[tauri::command]
+pub async fn terminal_list_recovered_sessions(
+) -> Result<IpcResult<Vec<crate::session_recovery::registry::RecoveredSession>>, String> {
+    Ok(IpcResult::success(Vec::new()))
+}
+
 /// Update a terminal's orphan-reaping protection.
 ///
 /// Protection is enabled automatically at spawn. The renderer calls this with
