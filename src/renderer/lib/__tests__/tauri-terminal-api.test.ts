@@ -95,4 +95,18 @@ describe('tauri-terminal-api', () => {
     expect(mockInvoke).toHaveBeenCalledWith('terminal_list_recovered_sessions', undefined)
     expect(result).toEqual({ success: true, data: [] })
   })
+
+  it('attaches recovered terminal through Tauri IPC', async () => {
+    mockInvoke.mockResolvedValueOnce({ success: true, data: undefined })
+
+    const { createTauriTerminalApi } = await import('../tauri-terminal-api')
+    const api = createTauriTerminalApi()
+
+    const result = await api.attachRecoveredSession('s1')
+
+    expect(mockInvoke).toHaveBeenCalledWith('terminal_attach_recovered_session', {
+      sessionId: 's1'
+    })
+    expect(result.success).toBe(true)
+  })
 })

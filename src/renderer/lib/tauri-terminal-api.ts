@@ -60,7 +60,8 @@ const IPC_COMMANDS = {
   ADD_RENDERER_REF: 'terminal_add_renderer_ref',
   REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref',
   SET_PROTECTED: 'terminal_set_protected',
-  LIST_RECOVERED_SESSIONS: 'terminal_list_recovered_sessions'
+  LIST_RECOVERED_SESSIONS: 'terminal_list_recovered_sessions',
+  ATTACH_RECOVERED_SESSION: 'terminal_attach_recovered_session'
 } as const
 
 /**
@@ -519,6 +520,10 @@ export function createTauriTerminalApi(): TerminalApi {
 
     async listRecoveredSessions(): Promise<IpcResult<RecoveredSessionInfo[]>> {
       return invokeIpc<RecoveredSessionInfo[]>(IPC_COMMANDS.LIST_RECOVERED_SESSIONS)
+    },
+
+    async attachRecoveredSession(sessionId: string): Promise<IpcResult<void>> {
+      return invokeIpc<void>(IPC_COMMANDS.ATTACH_RECOVERED_SESSION, { sessionId })
     }
   }
 }

@@ -282,6 +282,15 @@ pub async fn terminal_list_recovered_sessions(
     Ok(IpcResult::success(supervisor_state.recovered_sessions()))
 }
 
+#[tauri::command]
+pub async fn terminal_attach_recovered_session(session_id: String) -> Result<IpcResult<()>, String> {
+    log::info!(
+        "[recovery] attach requested for recovered session {}",
+        session_id
+    );
+    Ok(IpcResult::success(()))
+}
+
 /// Update a terminal's orphan-reaping protection.
 ///
 /// Protection is enabled automatically at spawn. The renderer calls this with

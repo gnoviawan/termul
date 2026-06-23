@@ -170,6 +170,7 @@ export interface TerminalApi {
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
   updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
   listRecoveredSessions: () => Promise<IpcResult<RecoveredSessionInfo[]>>
+  attachRecoveredSession: (sessionId: string) => Promise<IpcResult<void>>
 }
 
 // Error codes
