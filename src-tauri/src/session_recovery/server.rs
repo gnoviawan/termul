@@ -51,6 +51,13 @@ pub fn serve_with_auth(
         let _ = std::fs::remove_file(socket_path);
     }
     let listener = UnixListener::bind(socket_path)?;
+    // Restrict the socket to the owning user (defense in depth on top of the
+    // auth token): no group/other connect access.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(socket_path, perms);
+    }
     listener.set_nonblocking(true)?;
 
     while !shutdown.load(Ordering::Relaxed) {

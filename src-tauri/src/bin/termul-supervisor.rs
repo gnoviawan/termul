@@ -13,8 +13,12 @@ fn main() {
     let shutdown = Arc::new(AtomicBool::new(false));
 
     // Auth token is passed in by the launching Tauri process via the
-    // environment. When unset (e.g. manual debugging), auth is disabled.
-    let auth_token = std::env::var("TERMUL_SUPERVISOR_TOKEN").ok().filter(|t| !t.is_empty());
+    // environment, or persisted in the token file so a relaunched app can adopt
+    // a surviving daemon. When neither is present, auth is disabled.
+    let auth_token = std::env::var("TERMUL_SUPERVISOR_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .or_else(termul_manager_lib::session_recovery::supervisor::read_token);
 
     eprintln!(
         "termul-supervisor protocol={} pid={} socket={}",

@@ -47,6 +47,48 @@ pub fn registry_path(base_dir: &std::path::Path) -> std::path::PathBuf {
     base_dir.join("sessions.json")
 }
 
+/// Path to the 0600 token file that lets a relaunched app adopt a surviving
+/// daemon. Lives next to the socket (XDG_RUNTIME_DIR or temp).
+#[cfg(unix)]
+pub fn token_path() -> std::path::PathBuf {
+    crate::session_recovery::server::default_socket_path()
+        .with_file_name("termul-supervisor.token")
+}
+
+/// Read the persisted auth token, if any.
+#[cfg(unix)]
+pub fn read_token() -> Option<String> {
+    std::fs::read_to_string(token_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Persist the auth token with user-only (0600) permissions.
+#[cfg(unix)]
+fn write_token(token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = token_path();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(token.as_bytes())?;
+    file.flush()
+}
+
+/// True if a daemon is already listening on the socket (so the relaunching app
+/// can adopt it instead of spawning a duplicate).
+#[cfg(unix)]
+fn daemon_is_live() -> bool {
+    use std::os::unix::net::UnixStream;
+    let socket = crate::session_recovery::server::default_socket_path();
+    socket.exists() && UnixStream::connect(&socket).is_ok()
+}
+
 /// Generate a random hex auth token for the supervisor socket handshake.
 pub fn generate_auth_token() -> String {
     let mut bytes = [0u8; 32];
@@ -102,7 +144,8 @@ pub fn run_as_supervisor_if_requested() -> bool {
     let shutdown = Arc::new(AtomicBool::new(false));
     let token = std::env::var("TERMUL_SUPERVISOR_TOKEN")
         .ok()
-        .filter(|t| !t.is_empty());
+        .filter(|t| !t.is_empty())
+        .or_else(read_token);
 
     if let Err(e) =
         crate::session_recovery::server::serve_with_auth(&socket_path, table, shutdown, token)
@@ -123,7 +166,19 @@ pub fn run_as_supervisor_if_requested() -> bool {
 pub fn launch_supervisor() -> Result<(u32, String), String> {
     use std::process::{Command, Stdio};
 
+    // Adopt a daemon that survived a previous Termul run instead of spawning a
+    // duplicate (otherwise every relaunch leaks an orphaned daemon).
+    if daemon_is_live() {
+        if let Some(token) = read_token() {
+            return Ok((0, token));
+        }
+        // Live daemon but no readable token: cannot authenticate to it. Fall
+        // through and spawn a fresh one with a new token (it will rebind the
+        // socket on start).
+    }
+
     let token = generate_auth_token();
+    let _ = write_token(&token);
     let bin = resolve_supervisor_path();
 
     // Prefer the standalone supervisor binary (dev / when shipped as a sidecar).
