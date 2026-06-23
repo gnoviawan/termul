@@ -32,7 +32,6 @@ impl SupervisorClientState {
     pub fn supervisor_pid(&self) -> Option<u32> {
         *self.supervisor_pid.read()
     }
-
     /// Record the launched daemon's auth token (used by the renderer-facing
     /// client when connecting to the socket).
     pub fn set_auth_token(&self, token: String) {
@@ -81,6 +80,39 @@ pub fn resolve_supervisor_path() -> std::path::PathBuf {
     std::path::PathBuf::from(supervisor_binary_name())
 }
 
+/// Entry point used when the main executable is re-spawned as the supervisor
+/// daemon (env `TERMUL_RUN_AS_SUPERVISOR=1`). Returns `true` if it handled the
+/// run (caller must exit), `false` for the normal app path.
+///
+/// This guarantees a working daemon in packaged builds where a separate
+/// `[[bin]]` is not placed next to the app executable: the launcher re-execs
+/// `current_exe` with this env flag instead of relying on a sidecar.
+#[cfg(unix)]
+pub fn run_as_supervisor_if_requested() -> bool {
+    if std::env::var("TERMUL_RUN_AS_SUPERVISOR").as_deref() != Ok("1") {
+        return false;
+    }
+
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    crate::session_recovery::daemon::daemonize_detach();
+    let socket_path = crate::session_recovery::server::default_socket_path();
+    let table = Arc::new(crate::session_recovery::daemon::SessionTable::new());
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let token = std::env::var("TERMUL_SUPERVISOR_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+
+    if let Err(e) =
+        crate::session_recovery::server::serve_with_auth(&socket_path, table, shutdown, token)
+    {
+        eprintln!("termul-supervisor (embedded) server error: {e}");
+        std::process::exit(1);
+    }
+    true
+}
+
 /// Launch the supervisor daemon on Linux/Unix, detached from this process so it
 /// survives a Termul force-close. Returns the spawned child pid and the auth
 /// token the daemon was started with (clients must present it in `Hello`).
@@ -94,13 +126,29 @@ pub fn launch_supervisor() -> Result<(u32, String), String> {
     let token = generate_auth_token();
     let bin = resolve_supervisor_path();
 
-    let child = Command::new(&bin)
-        .env("TERMUL_SUPERVISOR_TOKEN", &token)
+    // Prefer the standalone supervisor binary (dev / when shipped as a sidecar).
+    // Fall back to re-execing the current executable with TERMUL_RUN_AS_SUPERVISOR
+    // so packaged builds without a separate sidecar still get a daemon.
+    let (program, extra_env): (std::path::PathBuf, bool) = if bin.exists() {
+        (bin, false)
+    } else {
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("cannot resolve current exe for supervisor: {e}"))?;
+        (exe, true)
+    };
+
+    let mut cmd = Command::new(&program);
+    cmd.env("TERMUL_SUPERVISOR_TOKEN", &token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if extra_env {
+        cmd.env("TERMUL_RUN_AS_SUPERVISOR", "1");
+    }
+
+    let child = cmd
         .spawn()
-        .map_err(|e| format!("failed to launch supervisor {}: {e}", bin.display()))?;
+        .map_err(|e| format!("failed to launch supervisor {}: {e}", program.display()))?;
 
     Ok((child.id(), token))
 }

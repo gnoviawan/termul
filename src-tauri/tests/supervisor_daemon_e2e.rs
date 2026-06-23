@@ -250,3 +250,51 @@ fn daemon_requires_hello_before_other_requests() {
     admin.send(r#"{"type":"shutdown","kill_all":true}"#);
     admin.recv_until("ok");
 }
+
+/// Production fallback: the main app binary, re-execed with
+/// TERMUL_RUN_AS_SUPERVISOR=1, must serve as the daemon (used when no separate
+/// sidecar binary is shipped next to the app).
+#[test]
+fn embedded_supervisor_via_main_binary_serves_socket() {
+    let app_bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_termul-manager"));
+    let xdg_dir = std::env::temp_dir().join(format!(
+        "termul-embed-e2e-{}-{}",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    std::fs::create_dir_all(&xdg_dir).expect("create xdg dir");
+
+    #[allow(clippy::zombie_processes)]
+    let mut child = Command::new(&app_bin)
+        .env("TERMUL_RUN_AS_SUPERVISOR", "1")
+        .env("TERMUL_SUPERVISOR_TOKEN", "embed-tok")
+        .env("XDG_RUNTIME_DIR", &xdg_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("launch embedded supervisor");
+
+    let socket = xdg_dir.join("termul-supervisor.sock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut connected = false;
+    while Instant::now() < deadline {
+        if UnixStream::connect(&socket).is_ok() {
+            connected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(connected, "embedded supervisor socket never became connectable");
+
+    let mut client = Client::connect(&socket);
+    client.send(r#"{"type":"hello","protocol_version":1,"app_instance_id":"e","auth_token":"embed-tok"}"#);
+    let ack = client.recv_until("hello_ack");
+    assert_eq!(ack["protocol_version"], 1);
+
+    client.send(r#"{"type":"shutdown","kill_all":true}"#);
+    client.recv_until("ok");
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&xdg_dir);
+}
