@@ -279,6 +279,17 @@ pub async fn terminal_remove_renderer_ref(
 pub async fn terminal_list_recovered_sessions(
     supervisor_state: State<'_, crate::session_recovery::supervisor::SupervisorClientState>,
 ) -> Result<IpcResult<Vec<crate::session_recovery::registry::RecoveredSession>>, String> {
+    // On Unix, query the live daemon over its socket so the renderer sees
+    // sessions that survived a previous Termul run. Fall back to the in-memory
+    // mirror (and on non-unix) when the daemon is unreachable.
+    #[cfg(unix)]
+    {
+        let _ = &supervisor_state;
+        let sessions = crate::session_recovery::client::list_recovered_sessions();
+        if !sessions.is_empty() {
+            return Ok(IpcResult::success(sessions));
+        }
+    }
     Ok(IpcResult::success(supervisor_state.recovered_sessions()))
 }
 

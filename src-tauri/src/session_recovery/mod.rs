@@ -6,3 +6,5 @@ pub mod supervisor;
 pub mod daemon;
 #[cfg(unix)]
 pub mod server;
+#[cfg(unix)]
+pub mod client;
