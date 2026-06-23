@@ -23,6 +23,7 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useSessionRecovery } from './hooks/use-session-recovery'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
@@ -45,6 +46,7 @@ const queryClient = new QueryClient()
 function AppEffects(): null {
   useTerminalAutoSave()
   useTerminalRestore()
+  useSessionRecovery()
   useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()

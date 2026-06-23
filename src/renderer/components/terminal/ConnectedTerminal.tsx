@@ -176,15 +176,18 @@ function ConnectedTerminalComponent({
   const targetId = storeTerminalId || externalTerminalId
 
   // 2. STORE HOOKS (Must be at the top)
-  const { healthStatus, restartTerminal } = useTerminalStore(
-    useShallow((state) => {
-      const term = state.terminals.find((t) => t.id === targetId)
-      return {
-        healthStatus: term?.healthStatus || 'running',
-        restartTerminal: state.restartTerminal
-      }
-    })
-  )
+  const { healthStatus, recoveryStatus, restartTerminal, setTerminalRecoveryStatus } =
+    useTerminalStore(
+      useShallow((state) => {
+        const term = state.terminals.find((t) => t.id === targetId)
+        return {
+          healthStatus: term?.healthStatus || 'running',
+          recoveryStatus: term?.recoveryStatus,
+          restartTerminal: state.restartTerminal,
+          setTerminalRecoveryStatus: state.setTerminalRecoveryStatus
+        }
+      })
+    )
 
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
@@ -1719,6 +1722,7 @@ function ConnectedTerminalComponent({
   ])
 
   const isCrashed = healthStatus === 'disconnected' || healthStatus === 'crashed'
+  const isRecoverable = recoveryStatus === 'live_attachable'
 
   return (
     <ContextMenu>
@@ -1738,7 +1742,34 @@ function ConnectedTerminalComponent({
           >
             <div ref={containerRef} className="w-full h-full" />
           </div>
-          {isCrashed && (
+          {isRecoverable && (
+            <div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+              <div className="flex flex-col items-center justify-center bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-lg w-full text-center">
+                <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 shadow-inner">
+                  <RefreshCcw className="text-primary" size={32} />
+                </div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider opacity-70">
+                  Recovery Available
+                </div>
+                <h3 className="text-2xl font-bold tracking-tighter mb-3">
+                  Session still running in background
+                </h3>
+                <p className="text-muted-foreground leading-relaxed text-sm mb-6">
+                  Reconnect to replay scrollback and resume live output.
+                </p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (targetId) setTerminalRecoveryStatus(targetId, 'restored')
+                  }}
+                  className="inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/20 active:scale-95 transition-all font-bold shadow-md"
+                >
+                  <RefreshCcw size={20} /> Reconnect
+                </button>
+              </div>
+            </div>
+          )}
+          {isCrashed && !isRecoverable && (
             <div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
               <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-destructive">
                 <div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">

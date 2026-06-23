@@ -3,6 +3,28 @@ export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code: string }
 
+export type RecoveryStatus = 'live_attachable' | 'needs_reconnect' | 'lost' | 'restored'
+
+export type RecoveredSessionKind = 'terminal' | 'acp' | 'ssh' | 'browser' | 'editor'
+export type RecoveredSessionRuntimeStatus = 'running' | 'exited' | 'detached' | 'lost'
+
+export interface RecoveredSessionInfo {
+  sessionId: string
+  kind: RecoveredSessionKind
+  status: RecoveredSessionRuntimeStatus
+  pid?: number | null
+  processGroupId?: number | null
+  command?: string | null
+  args: string[]
+  shell?: string | null
+  cwd?: string | null
+  cols?: number | null
+  rows?: number | null
+  scrollbackJournalPath?: string | null
+  exitCode?: number | null
+  recoveryReason?: string | null
+}
+
 // Terminal spawn options
 export interface TerminalSpawnOptions {
   shell?: string
@@ -147,6 +169,8 @@ export interface TerminalApi {
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
   updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
+  listRecoveredSessions: () => Promise<IpcResult<RecoveredSessionInfo[]>>
+  attachRecoveredSession: (sessionId: string) => Promise<IpcResult<void>>
 }
 
 // Error codes

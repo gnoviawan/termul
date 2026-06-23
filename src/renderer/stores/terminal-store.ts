@@ -66,6 +66,11 @@ export interface TerminalState {
   consumeDetachedOutput: (ptyId: string) => string
   setRendererAttached: (ptyId: string, attached: boolean) => void
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus) => void
+  setTerminalRecoveryStatus: (
+    id: string,
+    recoveryStatus: Terminal['recoveryStatus'],
+    recoveryReason?: string
+  ) => void
   setTerminalHidden: (id: string, isHidden: boolean) => void
   setTerminalNeedsAttention: (id: string, value: boolean) => void
   setAppHidden: (isHidden: boolean) => void
@@ -416,6 +421,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setTerminalHealthStatus: (id: string, status: TerminalHealthStatus): void => {
     set((state) => ({
       terminals: state.terminals.map((t) => (t.id === id ? { ...t, healthStatus: status } : t))
+    }))
+  },
+
+  setTerminalRecoveryStatus: (id, recoveryStatus, recoveryReason): void => {
+    set((state) => ({
+      terminals: state.terminals.map((t) =>
+        t.id === id ? { ...t, recoveryStatus, recoveryReason } : t
+      )
     }))
   },
 

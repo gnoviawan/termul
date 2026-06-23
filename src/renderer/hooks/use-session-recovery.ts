@@ -1,87 +1,66 @@
-import type { SessionData, TerminalSession, WorkspaceState } from '@shared/types/ipc.types'
+import type { RecoveredSessionInfo } from '@shared/types/ipc.types'
 import { useEffect, useRef } from 'react'
-import { sessionApi } from '@/lib/api'
-import { useProjectStore } from '@/stores/project-store'
-import { useTerminalStore } from '@/stores/terminal-store'
+import { toast } from 'sonner'
+import { terminalApi } from '@/lib/api'
+import type { Terminal } from '@/types/project'
 
-const SESSION_SAVE_DEBOUNCE_MS = 2000
-const SESSION_SAVE_INTERVAL_MS = 15000
-
-function toTerminalSession(
-  terminal: ReturnType<typeof useTerminalStore.getState>['terminals'][number]
-): TerminalSession {
+export function mapRecoveredTerminalToStorePatch(session: RecoveredSessionInfo): Partial<Terminal> {
   return {
-    id: terminal.id,
-    shell: terminal.shell,
-    cwd: terminal.cwd ?? '',
-    history: terminal.pendingScrollback ?? terminal.transcript?.split(/\r\n|\r|\n/) ?? [],
-    env: undefined
+    ptyId: session.sessionId,
+    recoveredSessionId: session.sessionId,
+    shell: session.shell ?? 'shell',
+    cwd: session.cwd ?? undefined,
+    lastExitCode: session.exitCode ?? null,
+    recoveryStatus:
+      session.status === 'running' || session.status === 'detached'
+        ? 'live_attachable'
+        : session.status === 'lost'
+          ? 'lost'
+          : 'restored',
+    recoveryReason: session.recoveryReason ?? undefined
   }
 }
 
-function buildSessionData(): SessionData {
-  const projectState = useProjectStore.getState()
-  const terminalState = useTerminalStore.getState()
-
-  return {
-    timestamp: new Date().toISOString(),
-    terminals: terminalState.terminals.map(toTerminalSession),
-    workspaces: projectState.projects.map<WorkspaceState>((project) => {
-      const projectTerminals = terminalState.terminals.filter(
-        (terminal) => terminal.projectId === project.id
-      )
-      const activeTerminal =
-        projectTerminals.find((terminal) => terminal.id === terminalState.activeTerminalId) ??
-        projectTerminals.find((terminal) => terminal.ptyId) ??
-        projectTerminals[0] ??
-        null
-
-      return {
-        projectId: project.id,
-        activeTerminalId: activeTerminal?.id ?? null,
-        terminals: projectTerminals.map(toTerminalSession)
-      }
-    })
-  }
-}
-
+/**
+ * On startup, ask the supervisor daemon for any sessions that survived a
+ * previous Termul run and surface a recovery indicator. This does not yet
+ * reattach the live xterm buffers (the renderer terminal path is not daemon
+ * backed); it confirms survivors exist so the user knows background CLIs are
+ * still running.
+ */
 export function useSessionRecovery(): void {
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const checked = useRef(false)
 
   useEffect(() => {
+    if (checked.current) {
+      return
+    }
+    checked.current = true
+
     let cancelled = false
-
-    const flushSession = async (): Promise<void> => {
-      if (cancelled) return
-      const result = await sessionApi.save(buildSessionData())
-      if (!result.success) {
-        console.error('Failed to persist crash recovery session:', result.error)
+    void (async () => {
+      try {
+        const result = await terminalApi.listRecoveredSessions()
+        if (cancelled || !result.success) {
+          return
+        }
+        const live = result.data.filter((s) => s.status === 'running' || s.status === 'detached')
+        if (live.length > 0) {
+          toast.info(
+            live.length === 1
+              ? '1 background session is still running'
+              : `${live.length} background sessions are still running`,
+            {
+              description: 'Recovered from the session supervisor after restart.'
+            }
+          )
+        }
+      } catch {
+        // Daemon unreachable or unsupported platform: no indicator.
       }
-    }
-
-    const scheduleSave = (): void => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
-      saveTimeoutRef.current = setTimeout(() => {
-        void flushSession()
-      }, SESSION_SAVE_DEBOUNCE_MS)
-    }
-
-    const unsubscribeProject = useProjectStore.subscribe(scheduleSave)
-    const unsubscribeTerminal = useTerminalStore.subscribe(scheduleSave)
-
-    intervalRef.current = setInterval(() => {
-      void flushSession()
-    }, SESSION_SAVE_INTERVAL_MS)
-
-    void flushSession()
+    })()
 
     return () => {
-      void flushSession()
-      unsubscribeProject()
-      unsubscribeTerminal()
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
-      if (intervalRef.current) clearInterval(intervalRef.current)
       cancelled = true
     }
   }, [])

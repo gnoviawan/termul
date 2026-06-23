@@ -10,6 +10,7 @@ mod path_validation;
 mod pty;
 mod remote;
 mod secure_storage;
+pub mod session_recovery;
 mod shell_paths;
 mod skills;
 mod ssh;
@@ -957,6 +958,33 @@ pub fn run() {
 
             app.manage(ViewMenuState::default());
 
+            // Session recovery: supervisor client state seam (Task 8).
+            app.manage(session_recovery::supervisor::SupervisorClientState::default());
+
+            // Daemon-backed terminal bridge (opt-in via TERMUL_DAEMON_TERMINALS=1).
+            #[cfg(unix)]
+            app.manage(std::sync::Arc::new(
+                session_recovery::bridge::DaemonTerminalBridge::new(),
+            ));
+
+            // Linux/Unix: launch the detached supervisor daemon so local CLI
+            // sessions survive a force-closed/crashed Termul. Best-effort: a
+            // launch failure must not block app startup.
+            #[cfg(unix)]
+            {
+                match session_recovery::supervisor::launch_supervisor() {
+                    Ok((pid, token)) => {
+                        let state = app.state::<session_recovery::supervisor::SupervisorClientState>();
+                        state.set_supervisor_pid(pid);
+                        state.set_auth_token(token);
+                        log::info!("[supervisor] launched daemon pid={pid}");
+                    }
+                    Err(e) => {
+                        log::warn!("[supervisor] failed to launch daemon: {e}");
+                    }
+                }
+            }
+
             // Create CWD Tracker (takes app_handle directly)
             let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
             app.manage(cwd_tracker.clone());
@@ -1079,6 +1107,8 @@ pub fn run() {
             commands::terminal_update_orphan_detection,
             commands::terminal_add_renderer_ref,
             commands::terminal_remove_renderer_ref,
+            commands::terminal_list_recovered_sessions,
+            commands::terminal_attach_recovered_session,
             commands::terminal_set_protected,
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)

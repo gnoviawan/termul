@@ -109,6 +109,21 @@ describe('terminal-store', () => {
       expect(newTerminal.cwd).toBe('/home/user/project')
     })
 
+    it('stores terminal recovery status metadata', () => {
+      const terminal = useTerminalStore.getState().addTerminal('Recovered', '1', 'bash')
+
+      useTerminalStore
+        .getState()
+        .setTerminalRecoveryStatus(terminal.id, 'live_attachable', 'process survived restart')
+
+      const recoveredTerminal = useTerminalStore
+        .getState()
+        .terminals.find((t) => t.id === terminal.id)
+
+      expect(recoveredTerminal?.recoveryStatus).toBe('live_attachable')
+      expect(recoveredTerminal?.recoveryReason).toBe('process survived restart')
+    })
+
     it('should have undefined cwd when not provided', () => {
       const { addTerminal } = useTerminalStore.getState()
       const newTerminal = addTerminal('Test', '1', 'powershell')

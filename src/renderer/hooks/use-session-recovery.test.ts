@@ -1,58 +1,54 @@
-import { act, renderHook } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSessionRecovery } from './use-session-recovery'
+import { describe, expect, it } from 'vitest'
+import { mapRecoveredTerminalToStorePatch } from './use-session-recovery'
 
-const mocks = vi.hoisted(() => ({
-  save: vi.fn(),
-  restore: vi.fn()
-}))
-
-vi.mock('@/lib/api', () => ({
-  sessionApi: {
-    save: mocks.save,
-    restore: mocks.restore,
-    clear: vi.fn(),
-    flush: vi.fn(),
-    hasSession: vi.fn()
-  }
-}))
-
-vi.mock('@/stores/project-store', () => ({
-  useProjectStore: {
-    getState: vi.fn(() => ({ projects: [], activeProjectId: '' })),
-    subscribe: vi.fn((listener: () => void) => {
-      return () => void listener
-    })
-  }
-}))
-
-vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: {
-    getState: vi.fn(() => ({ terminals: [], activeTerminalId: '' })),
-    subscribe: vi.fn((listener: () => void) => {
-      return () => void listener
-    })
-  }
-}))
-
-describe('useSessionRecovery', () => {
-  beforeEach(() => {
-    mocks.save.mockReset()
-    mocks.restore.mockReset()
-    mocks.save.mockResolvedValue({ success: true, data: undefined })
-    mocks.restore.mockResolvedValue({
-      success: false,
-      error: 'No saved session found',
-      code: 'SESSION_NOT_FOUND'
+describe('mapRecoveredTerminalToStorePatch', () => {
+  it('maps running terminal to live attachable recovery status', () => {
+    expect(
+      mapRecoveredTerminalToStorePatch({
+        sessionId: 's1',
+        kind: 'terminal',
+        status: 'running',
+        args: [],
+        shell: 'bash',
+        cwd: '/repo'
+      })
+    ).toMatchObject({
+      ptyId: 's1',
+      recoveryStatus: 'live_attachable',
+      cwd: '/repo',
+      shell: 'bash'
     })
   })
 
-  it('saves a crash-recovery session immediately on mount', async () => {
-    renderHook(() => useSessionRecovery())
-    await act(async () => {
-      await Promise.resolve()
+  it('maps lost terminal to lost recovery status', () => {
+    expect(
+      mapRecoveredTerminalToStorePatch({
+        sessionId: 's2',
+        kind: 'terminal',
+        status: 'lost',
+        args: [],
+        recoveryReason: 'process_not_found'
+      })
+    ).toMatchObject({
+      ptyId: 's2',
+      recoveryStatus: 'lost',
+      recoveryReason: 'process_not_found'
     })
+  })
 
-    expect(mocks.save).toHaveBeenCalled()
+  it('maps exited terminal to restored recovery status', () => {
+    expect(
+      mapRecoveredTerminalToStorePatch({
+        sessionId: 's3',
+        kind: 'terminal',
+        status: 'exited',
+        args: [],
+        exitCode: 0
+      })
+    ).toMatchObject({
+      ptyId: 's3',
+      recoveryStatus: 'restored',
+      lastExitCode: 0
+    })
   })
 })
