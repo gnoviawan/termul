@@ -4,10 +4,29 @@ import { Store } from '@tauri-apps/plugin-store'
 const STORE_FILE = 'termul-data.json'
 const DEBOUNCE_MS = 500
 const CURRENT_VERSION = 1
+const SCHEMA_VERSION_KEY = '_schema_version'
 
 interface PersistedStore<T> {
   _version: number
   data: T
+}
+
+// ==================== Migration System ====================
+
+export interface Migration {
+  fromVersion: number
+  toVersion: number
+  migrate: () => Promise<IpcResult<void>>
+}
+
+interface MigrationRegistry {
+  [key: string]: Migration
+}
+
+const migrationRegistry: MigrationRegistry = {}
+
+function migrationKey(fromVersion: number, toVersion: number): string {
+  return `${fromVersion}->${toVersion}`
 }
 
 type PendingWriteResolver = (result: IpcResult<void>) => void
@@ -212,4 +231,189 @@ export function _resetStoreInstanceForTesting() {
   }
 
   pendingDebounce.clear()
+
+  // Clear migration registry
+  for (const key in migrationRegistry) {
+    delete migrationRegistry[key]
+  }
+}
+
+// ==================== Migration API ====================
+
+/**
+ * Get the current schema version from the store.
+ * Returns 1 for fresh installs with no stored data.
+ */
+export async function getCurrentSchemaVersion(): Promise<IpcResult<number>> {
+  try {
+    const store = await getStore()
+    const version = await store.get<number>(SCHEMA_VERSION_KEY)
+
+    if (version === null || version === undefined) {
+      return { success: true, data: 1 } // Fresh install defaults to v1
+    }
+
+    return { success: true, data: version }
+  } catch (err) {
+    return { success: false, error: String(err), code: 'VERSION_READ_ERROR' }
+  }
+}
+
+/**
+ * Register a migration from one version to another.
+ * Migrations are executed in order when runMigrations() is called.
+ *
+ * Graph validation rules:
+ * - Migrations must be strictly forward-moving (toVersion > fromVersion)
+ * - Only one migration per fromVersion allowed (no branching)
+ * - No duplicate migration paths
+ */
+export function registerMigration(migration: Migration): IpcResult<void> {
+  const key = migrationKey(migration.fromVersion, migration.toVersion)
+
+  // Check for duplicate migration path
+  if (migrationRegistry[key]) {
+    return {
+      success: false,
+      error: `Migration ${key} is already registered`,
+      code: 'MIGRATION_ALREADY_REGISTERED'
+    }
+  }
+
+  // Validate migration is forward-moving
+  if (migration.toVersion <= migration.fromVersion) {
+    return {
+      success: false,
+      error: `Migration must be forward-moving: toVersion (${migration.toVersion}) must be greater than fromVersion (${migration.fromVersion})`,
+      code: 'MIGRATION_NOT_FORWARD'
+    }
+  }
+
+  // Check for conflicting migrations from the same fromVersion
+  for (const existingKey in migrationRegistry) {
+    const existing = migrationRegistry[existingKey]
+    if (
+      existing.fromVersion === migration.fromVersion &&
+      existing.toVersion !== migration.toVersion
+    ) {
+      return {
+        success: false,
+        error: `Conflicting migration: fromVersion ${migration.fromVersion} already has a migration to version ${existing.toVersion}. Cannot add migration to version ${migration.toVersion}. Only one migration path per version is allowed.`,
+        code: 'MIGRATION_GRAPH_CONFLICT'
+      }
+    }
+  }
+
+  migrationRegistry[key] = migration
+  return { success: true, data: undefined }
+}
+
+/**
+ * Migration run result with partial results support.
+ * Returns successful migrations even when the chain is interrupted.
+ */
+export type MigrationRunResult =
+  | { success: true; data: Array<{ fromVersion: number; toVersion: number; success: boolean }> }
+  | {
+      success: false
+      error: string
+      code: string
+      /** Migrations that succeeded before the failure */
+      partialResults?: Array<{ fromVersion: number; toVersion: number; success: boolean }>
+    }
+
+/**
+ * Run all pending migrations from current version to the latest registered version.
+ * Returns a list of migration results showing which migrations ran and their outcomes.
+ *
+ * When a migration fails, returns partialResults containing migrations that succeeded
+ * before the failure occurred.
+ */
+export async function runMigrations(): Promise<MigrationRunResult> {
+  try {
+    const versionResult = await getCurrentSchemaVersion()
+    if (!versionResult.success) {
+      return { success: false, error: versionResult.error, code: versionResult.code }
+    }
+
+    let currentVersion = versionResult.data!
+    const results: Array<{ fromVersion: number; toVersion: number; success: boolean }> = []
+
+    // Find the highest registered version
+    const allVersions = new Set<number>()
+    for (const key in migrationRegistry) {
+      const migration = migrationRegistry[key]
+      allVersions.add(migration.fromVersion)
+      allVersions.add(migration.toVersion)
+    }
+
+    if (allVersions.size === 0) {
+      // No migrations registered
+      return { success: true, data: [] }
+    }
+
+    const targetVersion = Math.max(...Array.from(allVersions))
+
+    // Run migrations sequentially from current version to target
+    while (currentVersion < targetVersion) {
+      let migrationFound = false
+
+      // Look for a migration from currentVersion
+      for (const key in migrationRegistry) {
+        const migration = migrationRegistry[key]
+
+        if (migration.fromVersion === currentVersion) {
+          migrationFound = true
+
+          // Execute the migration
+          const migrateResult = await migration.migrate()
+
+          if (!migrateResult.success) {
+            // Migration failed - stop the chain
+            results.push({
+              fromVersion: migration.fromVersion,
+              toVersion: migration.toVersion,
+              success: false
+            })
+
+            return {
+              success: false,
+              error: migrateResult.error || 'Migration failed',
+              code: migrateResult.code || 'MIGRATION_FAILED',
+              partialResults: results
+            }
+          }
+
+          // Migration succeeded - update version
+          const store = await getStore()
+          await store.set(SCHEMA_VERSION_KEY, migration.toVersion)
+          await store.save()
+
+          currentVersion = migration.toVersion
+
+          results.push({
+            fromVersion: migration.fromVersion,
+            toVersion: migration.toVersion,
+            success: true
+          })
+
+          break
+        }
+      }
+
+      if (!migrationFound) {
+        // No migration path found from current version - this is a failure
+        return {
+          success: false,
+          error: `No migration path found from version ${currentVersion} to ${targetVersion}`,
+          code: 'MIGRATION_PATH_NOT_FOUND',
+          partialResults: results
+        }
+      }
+    }
+
+    return { success: true, data: results }
+  } catch (err) {
+    return { success: false, error: String(err), code: 'MIGRATION_ERROR' }
+  }
 }
