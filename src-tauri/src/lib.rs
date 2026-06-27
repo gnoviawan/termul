@@ -48,6 +48,11 @@ const MENU_ID_EXPORT_LOG_DEFAULT: &str = "help-export-log-default";
 const MENU_ID_CLOSE_TAB: &str = "window-close-tab";
 const MENU_EVENT_CLOSE_TAB: &str = "menu:close-tab";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
+
+// Tray menu IDs
+const TRAY_ID: &str = "termul-tray";
+const TRAY_MENU_SHOW: &str = "tray-show";
+const TRAY_MENU_QUIT: &str = "tray-quit";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
@@ -886,6 +891,9 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     Ok(())
 }
 
+static IS_QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install the panic hook before anything can panic so Rust panics are
@@ -922,6 +930,16 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
+
+    // Single-instance guard: jika user buka termul lagi padahal sudah jalan,
+    // cukup fokuskan window yang ada — jangan spawn instance baru.
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.unminimize();
+        }
+    }));
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -1053,6 +1071,87 @@ pub fn run() {
 
                 return Err(anyhow::anyhow!(failure_message).into());
             }
+
+            // ── System Tray Icon ────────────────────────────────────────────
+            // Buat tray icon dengan menu klik kanan seperti Telegram.
+            // Klik icon → show/focus window.
+            // Close button (X) → minimize ke tray, bukan quit.
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Termul")
+                    .build(app)?;
+                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Termul")
+                    .build(app)?;
+                let separator = PredefinedMenuItem::separator(app)?;
+
+                let tray_menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .item(&separator)
+                    .item(&quit_item)
+                    .build()?;
+
+                let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                    .tooltip("Termul Manager")
+                    .icon(app.default_window_icon().cloned().unwrap())
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| match event.id().as_ref() {
+                            id if id == TRAY_MENU_SHOW => {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                    let _ = window.unminimize();
+                                }
+                            }
+                            id if id == TRAY_MENU_QUIT => {
+                                IS_QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+                                app_handle.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                    let _ = window.unminimize();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+
+                // Intercept window close (X button) → sembunyikan ke tray,
+                // bukan terminate proses. User bisa quit lewat menu tray.
+                if let Some(window) = app.get_webview_window("main") {
+                    let app_handle_for_close = handle.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            if IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+                                // Allow close to proceed and terminate the app
+                            } else {
+                                api.prevent_close();
+                                if let Some(w) = app_handle_for_close.get_webview_window("main") {
+                                    let _ = w.hide();
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            // ── End Tray ────────────────────────────────────────────────────
 
             Ok(())
         })
@@ -1213,6 +1312,9 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
+            if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             // Prevent the default exit behavior so we can cleanup first
             api.prevent_exit();
 
@@ -1251,6 +1353,8 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    // Mark cleanup as done so the subsequent exit event isn't prevented
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // After cleanup completes, allow the app to exit with code 0
                     app_handle_clone.exit(0);
                 });
@@ -1261,6 +1365,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     app_handle_clone.exit(0);
                 });
             } else {
@@ -1275,6 +1380,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // No PTY or ACP manager, just exit
                     app_handle_clone.exit(0);
                 });

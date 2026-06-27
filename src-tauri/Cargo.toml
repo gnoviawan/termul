@@ -10,12 +10,16 @@ rust-version = "1.77"
 name = "termul_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools"] }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
@@ -28,6 +32,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -46,6 +51,9 @@ portable-pty = "0.9"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
+futures = "0.3"
+futures-concurrency = "7"
+async-process = "2"
 
 # ACP (Agent Client Protocol) — ADR-003 P0
 # NOTE: agent-client-protocol 0.12 ships its own `AcpAgent`/`Stdio` transport
@@ -108,6 +116,9 @@ keyring = { version = "3.6", features = ["apple-native"] }
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+gtk = "0.18"
+webkit2gtk = "2.0"
+
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
@@ -134,3 +145,8 @@ winapi = { version = "0.3", features = [
 # Keep the `= "0.12"` requirement above; this only redirects where it resolves.
 [patch.crates-io]
 agent-client-protocol = { path = "vendor/agent-client-protocol" }
+
+
+
+
+
