@@ -14,6 +14,7 @@ import type { AgentId } from '@/lib/acp-api'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { agentTurnMeta, type TimelineItem } from './chat-timeline'
+import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
@@ -90,6 +91,8 @@ export function ChatMessageList({
                 >
                   {it.kind === 'tool' ? (
                     <ToolCallCard toolCall={it.tool} />
+                  ) : it.kind === 'thought-group' ? (
+                    <ThoughtGroup messages={it.messages} isLiveTail={i === items.length - 1} />
                   ) : (
                     <ChatMessage
                       message={it.message}

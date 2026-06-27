@@ -6,7 +6,7 @@ import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
-import { buildTimeline } from './chat-timeline'
+import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
 
@@ -130,12 +130,14 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     })
   }, [lastUserText, sendPrompt, sessionId, session?.lastError])
 
-  const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
-  // Show the typing indicator while a turn is active but no agent text has
-  // streamed yet (a trailing agent message means text is already rendering).
+  const timeline = useMemo(
+    () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
+    [messages, toolCalls]
+  )
+  // Typing dots only before any thought or agent text arrives in the turn.
   const lastMessage = messages[messages.length - 1]
-  const hasAgentTextTail = lastMessage?.role === 'agent'
-  const showTyping = Boolean(session?.activeTurn) && !hasAgentTextTail
+  const hasTurnOutput = lastMessage?.role === 'agent' || lastMessage?.role === 'thought'
+  const showTyping = Boolean(session?.activeTurn) && !hasTurnOutput
 
   if (!session) {
     return (

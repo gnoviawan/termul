@@ -1,6 +1,6 @@
 import { readFile } from '@tauri-apps/plugin-fs'
 import { motion, useReducedMotion } from 'framer-motion'
-import { Brain, FileText } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Attachment,
@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/attachment'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
-import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
 import { inlineCodeClass } from '@/lib/chat-inline-code'
@@ -264,34 +263,6 @@ function ChatMessageComponent({
   onRetry
 }: ChatMessageProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-
-  // Thought: collapsible, de-emphasized, surfaced as a status marker. The
-  // "Thinking…" shimmer runs only while this thought is the live tail; once any
-  // output (a tool call or the reply) follows it, the thinking step is done —
-  // even though its `streaming` flag stays set until the whole turn finalizes.
-  if (message.role === 'thought') {
-    const text = blocksToText(message.blocks)
-    const lines = text.split('\n').filter((l) => l.trim().length > 0).length
-    const thinking = message.streaming && isLast
-    return (
-      <details className="border-b border-border/50 py-2">
-        <summary className="cursor-pointer list-none marker:hidden">
-          <Marker variant="border" className="inline-flex italic">
-            <MarkerIcon>
-              <Brain />
-            </MarkerIcon>
-            <MarkerContent className={cn(thinking && 'shimmer')}>
-              {thinking ? 'Thinking…' : 'Thought'}
-              {lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
-            </MarkerContent>
-          </Marker>
-        </summary>
-        <div className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border/70 pl-3 text-xs italic text-muted-foreground">
-          {text}
-        </div>
-      </details>
-    )
-  }
 
   const isUser = message.role === 'user'
   const text = blocksToText(message.blocks)

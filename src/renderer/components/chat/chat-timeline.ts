@@ -4,6 +4,7 @@ import type { ChatMessage } from '@/stores/acp-store'
 export type TimelineItem =
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'tool'; key: string; tool: ToolCall }
+  | { kind: 'thought-group'; key: string; messages: ChatMessage[] }
 
 interface Stamped {
   item: TimelineItem
@@ -61,6 +62,37 @@ export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): T
   })
 
   return stamped.map((s) => s.item)
+}
+
+/**
+ * Merge adjacent thought messages into a single display group (one Reasoning
+ * block per thinking stretch, per AI SDK Elements pattern).
+ */
+export function consolidateThoughtGroups(items: TimelineItem[]): TimelineItem[] {
+  const out: TimelineItem[] = []
+  let batch: ChatMessage[] = []
+
+  const flush = (): void => {
+    if (batch.length === 0) return
+    out.push({
+      kind: 'thought-group',
+      key: batch.map((m) => m.id).join(':'),
+      messages: batch
+    })
+    batch = []
+  }
+
+  for (const it of items) {
+    if (it.kind === 'message' && it.message.role === 'thought') {
+      batch.push(it.message)
+    } else {
+      flush()
+      out.push(it)
+    }
+  }
+  flush()
+
+  return out
 }
 
 /** Per-turn metadata for agent replies in a timeline. */
