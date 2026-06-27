@@ -296,7 +296,7 @@ function ChatMessageComponent({
         transition={enter.transition}
       >
         <Message align="end" className="py-2">
-          <MessageContent className="w-fit max-w-[85%]">
+          <MessageContent className="max-w-[85%]">
             <MediaBlocks blocks={message.blocks} />
             {text.length > 0 && (
               <Bubble variant="tinted" align="end">
