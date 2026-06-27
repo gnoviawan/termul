@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
-import { baseName, describeToolCall, readableOutput } from './tool-call-summary'
+import { baseName, describeToolCall, isSubagentCall, readableOutput } from './tool-call-summary'
 
 function call(partial: Partial<ToolCall>): ToolCall {
   return { toolCallId: 't1', ...partial }
@@ -66,6 +66,48 @@ describe('describeToolCall', () => {
   it('falls back to title when an execute command is not in input', () => {
     const s = describeToolCall(call({ kind: 'execute', title: 'git status' }))
     expect(s.primary).toBe('git status')
+  })
+
+  it('renders a subagent/Task call as the task name with no verb', () => {
+    const s = describeToolCall(
+      call({
+        kind: 'think',
+        title: 'Task',
+        rawInput: {
+          subagent_type: 'explore',
+          description: 'Find chat response cursor rendering',
+          prompt: 'long prompt...'
+        }
+      })
+    )
+    expect(s).toEqual({
+      verb: '',
+      primary: 'Find chat response cursor rendering',
+      detail: null
+    })
+  })
+
+  it('still renders a genuine think call as "Thinking"', () => {
+    const s = describeToolCall(call({ kind: 'think', rawInput: { thought: 'pondering' } }))
+    expect(s).toEqual({ verb: 'Thinking', primary: 'pondering', detail: null })
+  })
+})
+
+describe('isSubagentCall', () => {
+  it('detects a subagent_type input', () => {
+    expect(isSubagentCall(call({ rawInput: { subagent_type: 'explore' } }))).toBe(true)
+  })
+
+  it('detects a description + prompt input', () => {
+    expect(isSubagentCall(call({ rawInput: { description: 'do x', prompt: 'p' } }))).toBe(true)
+  })
+
+  it('is false for a plain think call', () => {
+    expect(isSubagentCall(call({ kind: 'think', rawInput: { thought: 'pondering' } }))).toBe(false)
+  })
+
+  it('is false when rawInput is absent', () => {
+    expect(isSubagentCall(call({ kind: 'read', title: 'Task' }))).toBe(false)
   })
 })
 

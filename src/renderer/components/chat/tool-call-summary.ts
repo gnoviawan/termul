@@ -55,6 +55,23 @@ const PATH_KEYS = [
 const COMMAND_KEYS = ['command', 'cmd', 'script', 'commandLine']
 const QUERY_KEYS = ['query', 'pattern', 'q', 'search', 'searchTerm', 'regex']
 const URL_KEYS = ['url', 'uri', 'href', 'link']
+const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
+
+/**
+ * Detect a subagent/Task dispatch. ACP gives no dedicated kind for these and
+ * discards the raw tool name, so such calls arrive looking like a `think` chunk.
+ * We discriminate on `rawInput`: a subagent dispatch carries a `subagent_type`,
+ * or both a `description` and a `prompt`. Genuine reasoning has neither.
+ */
+export function isSubagentCall(toolCall: ToolCall): boolean {
+  const input = asRecord(toolCall.rawInput)
+  if (!input) return false
+  if (firstString(input, ['subagent_type', 'subagentType'])) return true
+  return (
+    firstString(input, ['description']) !== undefined &&
+    firstString(input, ['prompt']) !== undefined
+  )
+}
 
 /** Final path segment (handles both `/` and `\\`). */
 export function baseName(p: string): string {
@@ -154,6 +171,13 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
   const content = toolCall.content ?? []
   const title = toolCall.title?.trim()
   const verb = verbForKind(toolCall.kind)
+
+  // Subagent/Task dispatch: render as the task name with no verb (the robot
+  // icon carries the meaning), rather than the misleading "Thinking" of `think`.
+  if (isSubagentCall(toolCall)) {
+    const name = firstString(input, TASK_NAME_KEYS) ?? title ?? 'Subagent task'
+    return { verb: '', primary: name, detail: null }
+  }
 
   switch (toolCall.kind) {
     case 'read':

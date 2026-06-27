@@ -245,6 +245,8 @@ interface ChatMessageProps {
   agentId: AgentId
   /** Hide the agent header (grouped under the previous same-role reply). */
   showHeader?: boolean
+  /** True for the last item in the timeline (only it shows the streaming caret). */
+  isLast?: boolean
   /** Seed the composer with this message's text for editing (user turns). */
   onEdit?: (text: string) => void
   /** Re-run the latest user turn (assistant turns). */
@@ -255,6 +257,7 @@ function ChatMessageComponent({
   message,
   agentId,
   showHeader = true,
+  isLast = false,
   onEdit,
   onRetry
 }: ChatMessageProps): React.JSX.Element {
@@ -339,7 +342,7 @@ function ChatMessageComponent({
           <Bubble variant="ghost">
             <BubbleContent>
               <AgentProse blocks={message.blocks} />
-              {message.streaming && (
+              {message.streaming && isLast && (
                 <span
                   aria-hidden="true"
                   className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"

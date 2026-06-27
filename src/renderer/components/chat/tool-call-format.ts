@@ -2,7 +2,14 @@
  * Pure helpers for rendering tool calls and permission options. No React/store
  * dependency, so they're directly unit-testable.
  */
-import type { DiffContent, PermissionOption, ToolCallStatus, ToolKind } from '@/lib/acp-api'
+import type {
+  DiffContent,
+  PermissionOption,
+  ToolCall,
+  ToolCallStatus,
+  ToolKind
+} from '@/lib/acp-api'
+import { isSubagentCall } from './tool-call-summary'
 
 export type ToolIconName =
   | 'read'
@@ -14,6 +21,7 @@ export type ToolIconName =
   | 'think'
   | 'fetch'
   | 'switch'
+  | 'agent'
   | 'tool'
 
 /** Map an ACP tool kind to a stable icon name (unknown → generic 'tool'). */
@@ -40,6 +48,16 @@ export function kindIcon(kind: ToolKind | undefined): ToolIconName {
     default:
       return 'tool'
   }
+}
+
+/**
+ * Icon name for a full tool call. Subagent/Task dispatches get the 'agent'
+ * (robot) icon regardless of their reported kind; everything else falls back
+ * to the kind-based mapping.
+ */
+export function toolIconName(toolCall: ToolCall): ToolIconName {
+  if (isSubagentCall(toolCall)) return 'agent'
+  return kindIcon(toolCall.kind)
 }
 
 export interface StatusStyle {

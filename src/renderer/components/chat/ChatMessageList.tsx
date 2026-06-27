@@ -85,6 +85,7 @@ export function ChatMessageList({
                       message={it.message}
                       agentId={agentId}
                       showHeader={!isGroupedReply(items, i)}
+                      isLast={i === items.length - 1}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />

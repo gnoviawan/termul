@@ -8,7 +8,6 @@ import {
   FolderInput,
   Globe,
   Loader2,
-  type LucideIcon,
   Search,
   Shuffle,
   TerminalSquare,
@@ -16,15 +15,45 @@ import {
   Wrench
 } from 'lucide-react'
 import { memo, useEffect, useRef, useState } from 'react'
+import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { bubbleEnter, CHAT_SPRING } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
-import { kindIcon, type ToolIconName } from './tool-call-format'
+import { type ToolIconName, toolIconName } from './tool-call-format'
 import { describeToolCall, readableOutput } from './tool-call-summary'
 
-const ICONS: Record<ToolIconName, LucideIcon> = {
+/** Common prop shape shared by lucide icons and the bundled RobotIcon. */
+type ToolIconComponent = React.ComponentType<{ size?: number | string; className?: string }>
+
+/** Inner markup of the bundled robot SVG (drops the outer <svg> wrapper). */
+const ROBOT_INNER = robotIconRaw.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')
+
+/** Robot glyph for subagent/Task calls, matching the lucide icon prop shape. */
+function RobotIcon({
+  size = 24,
+  className
+}: {
+  size?: number | string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: bundled static asset
+      dangerouslySetInnerHTML={{ __html: ROBOT_INNER }}
+    />
+  )
+}
+
+const ICONS: Record<ToolIconName, ToolIconComponent> = {
   read: FileText,
   edit: FilePen,
   delete: Trash2,
@@ -34,6 +63,7 @@ const ICONS: Record<ToolIconName, LucideIcon> = {
   think: Brain,
   fetch: Globe,
   switch: Shuffle,
+  agent: RobotIcon,
   tool: Wrench
 }
 
@@ -115,7 +145,7 @@ interface ToolCallCardProps {
 
 function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-  const Icon = ICONS[kindIcon(toolCall.kind)]
+  const Icon = ICONS[toolIconName(toolCall)]
   const content = toolCall.content ?? []
   const hasContent = content.length > 0
   // Show the readable RESULT only — never the raw input or the JSON envelope.
