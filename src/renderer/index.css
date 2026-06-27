@@ -488,6 +488,36 @@
     padding: 0;
     font-size: inherit;
   }
+  /* Hover "Copy" button injected onto code blocks by ChatMessage. */
+  .chat-code-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 2px 8px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    line-height: 1.4;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--background) / 0.85);
+    border: 1px solid hsl(var(--border));
+    border-radius: 6px;
+    opacity: 0;
+    transition:
+      opacity 150ms var(--ease-out),
+      color 150ms var(--ease-out);
+    cursor: pointer;
+  }
+  .chat-prose pre:hover .chat-code-copy,
+  .chat-code-copy:focus-visible {
+    opacity: 1;
+  }
+  .chat-code-copy:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-code-copy.is-copied {
+    opacity: 1;
+    color: hsl(142 71% 45%);
+  }
   .chat-prose table {
     width: 100%;
     border-collapse: collapse;

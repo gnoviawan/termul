@@ -1,6 +1,8 @@
 import { readFile } from '@tauri-apps/plugin-fs'
+import { formatDistanceToNow } from 'date-fns'
+import { motion, useReducedMotion } from 'framer-motion'
 import { Brain, FileText } from 'lucide-react'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Attachment,
   AttachmentContent,
@@ -12,13 +14,16 @@ import {
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
-import { Message, MessageContent, MessageHeader } from '@/components/ui/message'
+import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message'
 import type { AgentId, ContentBlock } from '@/lib/acp-api'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
+import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { blockDisplayName, blockMimeType, guessMimeType, uint8ToBase64 } from './chat-attachments'
+import { bubbleEnter } from './chat-motion'
+import { MessageActions } from './MessageActions'
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -165,11 +170,59 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
   )
 }
 
+/**
+ * Attach a hover "Copy" button to every `<pre>` code block under `root`.
+ * Runs against the live DOM (post-sanitize) so it can't reintroduce markup the
+ * sanitizer stripped. Idempotent via a data flag; cleans up its listeners.
+ */
+function enhanceCodeBlocks(root: HTMLElement): () => void {
+  const cleanups: Array<() => void> = []
+  for (const pre of Array.from(root.querySelectorAll('pre'))) {
+    if (pre.dataset.copyEnhanced) continue
+    pre.dataset.copyEnhanced = 'true'
+    pre.style.position = 'relative'
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'chat-code-copy'
+    btn.textContent = 'Copy'
+    const onClick = (): void => {
+      const code = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
+      void copyText(code).then((ok) => {
+        btn.textContent = ok ? 'Copied' : 'Failed'
+        btn.classList.toggle('is-copied', ok)
+        setTimeout(() => {
+          btn.textContent = 'Copy'
+          btn.classList.remove('is-copied')
+        }, 1500)
+      })
+    }
+    btn.addEventListener('click', onClick)
+    pre.appendChild(btn)
+    cleanups.push(() => {
+      btn.removeEventListener('click', onClick)
+      btn.remove()
+      delete pre.dataset.copyEnhanced
+    })
+  }
+  return () => {
+    for (const c of cleanups) c()
+  }
+}
+
 /** Agent reply rendered as sanitized markdown prose. */
 function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
   const html = useMemo(() => renderChatMarkdown(blocksToText(blocks)), [blocks])
+  const ref = useRef<HTMLDivElement>(null)
+  // Re-run after each render of new markdown so freshly-streamed code blocks get
+  // a copy button; `html` is the change trigger even though it's read indirectly.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: html drives re-enhancement
+  useEffect(() => {
+    if (!ref.current) return
+    return enhanceCodeBlocks(ref.current)
+  }, [html])
   return (
     <div
+      ref={ref}
       className="chat-prose text-sm leading-relaxed text-foreground"
       // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
       dangerouslySetInnerHTML={{ __html: html }}
@@ -177,12 +230,36 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
   )
 }
 
+/** Short relative time (e.g. "2 minutes ago") for a message footer. */
+function RelativeTime({ ts }: { ts: number }): React.JSX.Element | null {
+  if (!ts) return null
+  return (
+    <time dateTime={new Date(ts).toISOString()} className="tabular-nums">
+      {formatDistanceToNow(ts, { addSuffix: true })}
+    </time>
+  )
+}
+
 interface ChatMessageProps {
   message: ChatMessageType
   agentId: AgentId
+  /** Hide the agent header (grouped under the previous same-role reply). */
+  showHeader?: boolean
+  /** Seed the composer with this message's text for editing (user turns). */
+  onEdit?: (text: string) => void
+  /** Re-run the latest user turn (assistant turns). */
+  onRetry?: () => void
 }
 
-function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX.Element {
+function ChatMessageComponent({
+  message,
+  agentId,
+  showHeader = true,
+  onEdit,
+  onRetry
+}: ChatMessageProps): React.JSX.Element {
+  const reduced = useReducedMotion() ?? false
+
   // Thought: collapsible, de-emphasized, surfaced as a status marker.
   if (message.role === 'thought') {
     const text = blocksToText(message.blocks)
@@ -195,8 +272,8 @@ function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX
               <Brain />
             </MarkerIcon>
             <MarkerContent className={cn(message.streaming && 'shimmer')}>
-              Thinking{lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
-              {message.streaming && '…'}
+              {message.streaming ? 'Thinking…' : 'Thought'}
+              {lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
             </MarkerContent>
           </Marker>
         </summary>
@@ -211,37 +288,75 @@ function ChatMessageComponent({ message, agentId }: ChatMessageProps): React.JSX
   const text = blocksToText(message.blocks)
 
   if (isUser) {
+    const enter = bubbleEnter('end', reduced)
     return (
-      <Message align="end" className="py-2 duration-200 animate-in fade-in-0">
-        <MessageContent>
-          <MediaBlocks blocks={message.blocks} />
-          {text.length > 0 && (
-            <Bubble variant="tinted" align="end">
-              <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
-            </Bubble>
-          )}
-        </MessageContent>
-      </Message>
+      <motion.div
+        className="w-full"
+        initial={enter.initial}
+        animate={enter.animate}
+        transition={enter.transition}
+      >
+        <Message align="end" className="py-2">
+          <MessageContent>
+            <MediaBlocks blocks={message.blocks} />
+            {text.length > 0 && (
+              <Bubble variant="tinted" align="end">
+                <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
+              </Bubble>
+            )}
+            <MessageFooter className="h-6 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100">
+              <MessageActions
+                text={text}
+                align="end"
+                onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
+              />
+              <RelativeTime ts={message.timestamp} />
+            </MessageFooter>
+          </MessageContent>
+        </Message>
+      </motion.div>
     )
   }
 
+  const enter = bubbleEnter('start', reduced)
   return (
-    <Message align="start" className="py-2 duration-200 animate-in fade-in-0">
-      <MessageContent>
-        <MessageHeader className="flex items-center gap-1.5">
-          <AgentBadge agentId={agentId} iconSize={12} />
-          {message.streaming && (
-            <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
+    <motion.div
+      className="w-full"
+      initial={enter.initial}
+      animate={enter.animate}
+      transition={enter.transition}
+    >
+      <Message align="start" className={cn(showHeader ? 'py-2' : 'pb-2')}>
+        <MessageContent>
+          {showHeader && (
+            <MessageHeader className="flex items-center gap-1.5">
+              <AgentBadge agentId={agentId} iconSize={12} />
+              {message.streaming && (
+                <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
+              )}
+            </MessageHeader>
           )}
-        </MessageHeader>
-        <Bubble variant="ghost">
-          <BubbleContent>
-            <AgentProse blocks={message.blocks} />
-            <MediaBlocks blocks={message.blocks} />
-          </BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
+          <Bubble variant="ghost">
+            <BubbleContent>
+              <AgentProse blocks={message.blocks} />
+              {message.streaming && (
+                <span
+                  aria-hidden="true"
+                  className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                />
+              )}
+              <MediaBlocks blocks={message.blocks} />
+            </BubbleContent>
+          </Bubble>
+          {!message.streaming && (
+            <MessageFooter className="h-6 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100">
+              <MessageActions text={text} align="start" onRetry={onRetry} />
+              <RelativeTime ts={message.timestamp} />
+            </MessageFooter>
+          )}
+        </MessageContent>
+      </Message>
+    </motion.div>
   )
 }
 

@@ -1,6 +1,8 @@
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowDown } from 'lucide-react'
 import * as React from 'react'
 
+import { CHAT_SPRING } from '@/components/chat/chat-motion'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -17,6 +19,10 @@ interface MessageScrollerContextValue {
   registerViewport: (el: HTMLDivElement | null) => void
   pinned: boolean
   showButton: boolean
+  /** Number of items added while the reader was scrolled away from the live edge. */
+  newCount: number
+  /** Report the current item count so unread can be derived. */
+  setItemCount: (n: number) => void
   scrollToEnd: (behavior?: ScrollBehavior) => void
 }
 
@@ -40,8 +46,17 @@ function MessageScrollerProvider({
   const [viewportEl, setViewportEl] = React.useState<HTMLDivElement | null>(null)
   const [pinned, setPinned] = React.useState(true)
   const [showButton, setShowButton] = React.useState(false)
+  const [itemCount, setItemCount] = React.useState(0)
+  const [seenCount, setSeenCount] = React.useState(0)
   const pinnedRef = React.useRef(pinned)
   pinnedRef.current = pinned
+
+  // While pinned to the live edge, everything is "seen". Unread is whatever
+  // arrived since the reader last sat at the bottom.
+  React.useEffect(() => {
+    if (pinned) setSeenCount(itemCount)
+  }, [pinned, itemCount])
+  const newCount = pinned ? 0 : Math.max(0, itemCount - seenCount)
 
   const scrollToEnd = React.useCallback(
     (behavior: ScrollBehavior = 'smooth') => {
@@ -87,8 +102,15 @@ function MessageScrollerProvider({
   }, [viewportEl, autoScroll])
 
   const value = React.useMemo<MessageScrollerContextValue>(
-    () => ({ registerViewport: setViewportEl, pinned, showButton, scrollToEnd }),
-    [pinned, showButton, scrollToEnd]
+    () => ({
+      registerViewport: setViewportEl,
+      pinned,
+      showButton,
+      newCount,
+      setItemCount,
+      scrollToEnd
+    }),
+    [pinned, showButton, newCount, scrollToEnd]
   )
 
   return <MessageScrollerContext.Provider value={value}>{children}</MessageScrollerContext.Provider>
@@ -162,26 +184,51 @@ function MessageScrollerButton({
   className,
   ...props
 }: Omit<React.ComponentProps<typeof Button>, 'children'>): React.JSX.Element {
-  const { showButton, scrollToEnd } = useMessageScroller()
+  const { showButton, newCount, scrollToEnd } = useMessageScroller()
+  const reduced = useReducedMotion() ?? false
+  const hasNew = newCount > 0
   return (
-    <Button
-      data-slot="message-scroller-button"
-      type="button"
-      variant="secondary"
-      size="icon-sm"
-      aria-hidden={!showButton}
-      tabIndex={showButton ? 0 : -1}
-      onClick={() => scrollToEnd('smooth')}
-      className={cn(
-        'absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background text-foreground shadow-md transition-[opacity,transform] duration-200 hover:bg-muted',
-        showButton ? 'opacity-100' : 'pointer-events-none translate-y-2 opacity-0',
-        className
-      )}
-      {...props}
-    >
-      <ArrowDown />
-      <span className="sr-only">Scroll to latest</span>
-    </Button>
+    <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+      <AnimatePresence>
+        {showButton && (
+          <motion.div
+            key="jump-to-latest"
+            className="pointer-events-auto relative"
+            initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, y: 8 }}
+            animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.8, y: 8 }}
+            transition={CHAT_SPRING}
+          >
+            {hasNew && (
+              <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/30 motion-reduce:animate-none" />
+            )}
+            {hasNew && (
+              <span className="pointer-events-none absolute -top-1.5 left-1/2 z-10 -translate-x-1/2 rounded-full bg-primary px-1.5 text-3xs font-semibold tabular-nums text-primary-foreground shadow-sm">
+                {newCount > 99 ? '99+' : newCount}
+              </span>
+            )}
+            <Button
+              data-slot="message-scroller-button"
+              type="button"
+              variant="secondary"
+              size="icon-sm"
+              onClick={() => scrollToEnd('smooth')}
+              className={cn(
+                'relative rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted',
+                hasNew && 'border-primary/50',
+                className
+              )}
+              {...props}
+            >
+              <ArrowDown />
+              <span className="sr-only">
+                {hasNew ? `Scroll to latest (${newCount} new)` : 'Scroll to latest'}
+              </span>
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   )
 }
 

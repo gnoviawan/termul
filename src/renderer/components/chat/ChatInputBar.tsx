@@ -1,5 +1,14 @@
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowUp, Paperclip, Square } from 'lucide-react'
-import { type DragEvent, type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  type DragEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 import {
   buildPromptWithLoadedSkill,
@@ -24,6 +33,7 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
+import { CHAT_SPRING } from './chat-motion'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -63,6 +73,10 @@ interface ChatInputBarProps {
   onSetMode: (modeId: string) => void
   /** Apply a native ACP model selection immediately. */
   onSetModel: (modelId: string) => void
+  /** External text to load into the composer (edit a message / pick a suggestion). */
+  seedText?: string
+  /** Bump to re-apply `seedText` even if the text is unchanged. */
+  seedNonce?: number
 }
 
 export function ChatInputBar({
@@ -80,7 +94,9 @@ export function ChatInputBar({
   modes,
   onSetConfig,
   onSetMode,
-  onSetModel
+  onSetModel,
+  seedText,
+  seedNonce
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
@@ -95,6 +111,10 @@ export function ChatInputBar({
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [sending, setSending] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const dragDepth = useRef(0)
+  const reduced = useReducedMotion() ?? false
   const {
     attachments,
     addFiles,
@@ -110,12 +130,26 @@ export function ChatInputBar({
 
   const handleDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
+      dragDepth.current = 0
+      setDragActive(false)
       if (!canDropPaste || e.dataTransfer.files.length === 0) return
       e.preventDefault()
       void addFiles(e.dataTransfer.files)
     },
     [canDropPaste, addFiles]
   )
+
+  const handleDragEnter = useCallback(() => {
+    if (!canDropPaste) return
+    dragDepth.current += 1
+    setDragActive(true)
+  }, [canDropPaste])
+
+  const handleDragLeave = useCallback(() => {
+    if (!canDropPaste) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragActive(false)
+  }, [canDropPaste])
 
   const menuOpen = isSlashTrigger(value) && !disabled
   const filter = slashFilter(value)
@@ -239,6 +273,24 @@ export function ChatInputBar({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
+  // Load externally-seeded text (edit a message, pick a starter prompt), then
+  // focus and place the cursor at the end. Keyed on a nonce so re-picking the
+  // same text still applies.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the intended trigger
+  useEffect(() => {
+    if (seedNonce === undefined) return
+    const next = seedText ?? ''
+    setValue(next)
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    requestAnimationFrame(() => {
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+      el.setSelectionRange(next.length, next.length)
+    })
+  }, [seedNonce])
+
   const canSend =
     !disabled &&
     !sending &&
@@ -250,10 +302,22 @@ export function ChatInputBar({
         {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
         <div
-          className="overflow-hidden rounded-2xl bg-secondary/40"
+          className={cn(
+            'relative overflow-hidden rounded-2xl bg-secondary/40 ring-1 ring-transparent transition-[box-shadow,background-color] duration-200 focus-within:bg-secondary/60 focus-within:ring-primary/40',
+            dragActive && 'ring-primary/70'
+          )}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
           onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
           onDrop={handleDrop}
         >
+          {dragActive && canDropPaste && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
+              <span className="flex items-center gap-2">
+                <Paperclip size={16} /> Drop files to attach
+              </span>
+            </div>
+          )}
           {loadedSkill && (
             <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
           )}
@@ -265,6 +329,8 @@ export function ChatInputBar({
               onChange={handleInput}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               disabled={disabled || sending}
               rows={1}
               placeholder={
@@ -337,37 +403,84 @@ export function ChatInputBar({
                   <Paperclip size={16} />
                 </button>
               )}
-              {busy ? (
-                <button
-                  type="button"
-                  onClick={onCancel}
-                  title="Cancel turn"
-                  aria-label="Cancel turn"
-                  className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
-                >
-                  <Square size={14} />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void submit()}
-                  disabled={!canSend}
-                  title="Send"
-                  aria-label="Send message"
-                  className={cn(
-                    'flex h-[34px] w-[34px] items-center justify-center rounded-full transition-colors',
-                    canSend
-                      ? 'bg-foreground text-background hover:bg-foreground/90'
-                      : 'bg-foreground/20 text-background/70 cursor-not-allowed'
+              <div className="relative h-[34px] w-[34px]">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  {busy ? (
+                    <motion.button
+                      key="cancel"
+                      type="button"
+                      data-press-feedback="off"
+                      onClick={onCancel}
+                      title="Cancel turn"
+                      aria-label="Cancel turn"
+                      initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
+                      animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
+                      exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
+                      transition={CHAT_SPRING}
+                      whileTap={reduced ? undefined : { scale: 0.9 }}
+                      className="absolute inset-0 flex items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
+                    >
+                      <Square size={14} />
+                    </motion.button>
+                  ) : (
+                    <motion.button
+                      key="send"
+                      type="button"
+                      data-press-feedback="off"
+                      onClick={() => void submit()}
+                      disabled={!canSend}
+                      title="Send"
+                      aria-label="Send message"
+                      initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
+                      animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
+                      exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
+                      transition={CHAT_SPRING}
+                      whileTap={reduced || !canSend ? undefined : { scale: 0.9 }}
+                      className={cn(
+                        'absolute inset-0 flex items-center justify-center rounded-full transition-colors',
+                        canSend
+                          ? 'bg-foreground text-background hover:bg-foreground/90'
+                          : 'bg-foreground/20 text-background/70 cursor-not-allowed'
+                      )}
+                    >
+                      <motion.span
+                        key={canSend ? 'ready' : 'idle'}
+                        initial={reduced ? false : { scale: 0.6 }}
+                        animate={reduced ? undefined : { scale: 1 }}
+                        transition={CHAT_SPRING}
+                        className="flex items-center justify-center"
+                      >
+                        <ArrowUp size={16} strokeWidth={2.5} />
+                      </motion.span>
+                    </motion.button>
                   )}
-                >
-                  <ArrowUp size={16} strokeWidth={2.5} />
-                </button>
-              )}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
+        </div>
+        <div
+          className={cn(
+            'flex items-center px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
+            focused ? 'opacity-100' : 'opacity-0'
+          )}
+        >
+          <KbdHint k="Enter" /> to send
+          <span className="mx-1.5 text-border">·</span>
+          <KbdHint k="Shift+Enter" /> newline
+          {busy && (
+            <>
+              <span className="mx-1.5 text-border">·</span>
+              <KbdHint k="Esc" /> to stop
+            </>
+          )}
         </div>
       </div>
     </div>
   )
+}
+
+/** Inline keyboard-key hint used in the composer footer. */
+function KbdHint({ k }: { k: string }): React.JSX.Element {
+  return <kbd className="mr-1 font-mono text-[0.6rem] font-medium text-foreground">{k}</kbd>
 }

@@ -1,14 +1,23 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentHeader } from './AgentHeader'
+import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { buildTimeline } from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
+
+/** Concatenate the text blocks of a message into a single string. */
+function messageText(blocks: ContentBlock[]): string {
+  return blocks
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text ?? '')
+    .join('')
+}
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
@@ -49,6 +58,11 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
+
+  // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
+  const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
+  const [dismissedError, setDismissedError] = useState<string | null>(null)
+  const seedComposer = useCallback((text: string) => setSeed({ text, nonce: Date.now() }), [])
 
   const handleSend = useCallback(
     (text: string) => {
@@ -101,6 +115,23 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     [setModel, sessionId]
   )
 
+  // Most recent user-turn text — drives the regenerate/retry affordances.
+  const lastUserText = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messageText(messages[i].blocks)
+    }
+    return ''
+  }, [messages])
+
+  const handleRetry = useCallback(() => {
+    const text = lastUserText.trim()
+    if (!text) return
+    setDismissedError(session?.lastError ?? null)
+    void sendPrompt(sessionId, text).catch((err) => {
+      toast.error(`Failed to send: ${String(err)}`)
+    })
+  }, [lastUserText, sendPrompt, sessionId, session?.lastError])
+
   const timeline = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
   // Show the typing indicator while a turn is active but no agent text has
   // streamed yet (a trailing agent message means text is already rendering).
@@ -117,17 +148,25 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   }
 
   const isClosed = session.status === 'closed'
+  const activeError =
+    session.lastError && session.lastError !== dismissedError ? session.lastError : null
 
   return (
     <div className="flex h-full flex-col bg-background">
       <AgentHeader session={session} agentStatus={agentStatus} />
-      {session.lastError && (
-        <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1 text-2xs text-red-400">
-          {session.lastError}
-        </div>
-      )}
+      <ChatErrorNotice
+        message={activeError}
+        onRetry={lastUserText.trim() && !session.activeTurn ? handleRetry : undefined}
+        onDismiss={() => setDismissedError(session.lastError)}
+      />
       <PlanPanel entries={plan} />
-      <ChatMessageList items={timeline} agentId={session.agentId} showTyping={showTyping} />
+      <ChatMessageList
+        items={timeline}
+        agentId={session.agentId}
+        showTyping={showTyping}
+        onEditMessage={seedComposer}
+        onRetry={lastUserText.trim() && !session.activeTurn ? handleRetry : undefined}
+      />
       <ChatInputBar
         session={session}
         busy={session.activeTurn}
@@ -143,6 +182,8 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         onSetConfig={handleSetConfig}
         onSetMode={handleSetMode}
         onSetModel={handleSetModel}
+        seedText={seed?.text}
+        seedNonce={seed?.nonce}
       />
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>
