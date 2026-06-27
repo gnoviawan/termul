@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { persistenceApi } from '@/lib/api'
+import { logApi, persistenceApi } from '@/lib/api'
 import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 import type { Terminal } from '@/types/project'
 import type {
@@ -179,6 +179,12 @@ export function useTerminalAutoSave(): void {
         return
       }
 
+      void logApi.logFrontendError({
+        level: 'warn',
+        source: 'useTerminalAutoSave',
+        message: `Subscriber triggered. Terminals count: ${state.terminals.length}, activeTerminalId: ${state.activeTerminalId}, isRestoring: ${isTerminalRestoreInProgress()}, mapSize: ${terminalRestoreProjectsInProgress.size}`
+      })
+
       // Skip activity-only changes (hasActivity/lastActivityTimestamp) and reorderings
       // These create new array refs but don't affect persisted layout
       if (state.activeTerminalId === prevState.activeTerminalId) {
@@ -213,6 +219,11 @@ export function useTerminalAutoSave(): void {
       }
 
       if (isTerminalRestoreInProgress()) {
+        void logApi.logFrontendError({
+          level: 'warn',
+          source: 'useTerminalAutoSave',
+          message: `Blocked auto-save because restore is in progress! map: ${JSON.stringify(Array.from(terminalRestoreProjectsInProgress.entries()))}`
+        })
         return
       }
 
@@ -227,6 +238,12 @@ export function useTerminalAutoSave(): void {
         projectId,
         state.activeTerminalId
       )
+
+      void logApi.logFrontendError({
+        level: 'warn',
+        source: 'useTerminalAutoSave',
+        message: `Saving terminals layout: ${JSON.stringify(layout)}`
+      })
 
       // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
       // before writing to disk, so we skip it here to avoid double writes.

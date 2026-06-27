@@ -106,10 +106,10 @@ describe('launchAgentInPane', () => {
     )
   })
 
-  it('uses the flag form for gemini', async () => {
+  it('uses the flag form for agy (Antigravity CLI)', async () => {
     await launchAgentInPane('pane-1', 'proj-1', '/test', gemini, 'query')
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
-      expect.objectContaining({ program: 'gemini', args: ['-i', 'query'], kind: 'agent' })
+      expect.objectContaining({ program: 'agy', args: ['-i', 'query'], kind: 'agent' })
     )
   })
 

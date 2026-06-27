@@ -146,12 +146,16 @@ fn probe_unix_login_path() -> Option<String> {
         .unwrap_or("sh");
 
     let output = match shell_name {
-        "bash" | "zsh" => Command::new(&shell)
-            .args(["-lc", "printf %s \"$PATH\""])
+        "zsh" => Command::new(&shell)
+            .args(["-c", "source ~/.zshrc >/dev/null 2>&1; printf \"__TERMUL_PATH__%s__TERMUL_PATH__\" \"$PATH\""])
+            .output()
+            .ok()?,
+        "bash" => Command::new(&shell)
+            .args(["-c", "source ~/.bashrc >/dev/null 2>&1; printf \"__TERMUL_PATH__%s__TERMUL_PATH__\" \"$PATH\""])
             .output()
             .ok()?,
         "fish" => Command::new(&shell)
-            .args(["-lc", "string join : $PATH"])
+            .args(["-c", "source ~/.config/fish/config.fish >/dev/null 2>&1; printf \"__TERMUL_PATH__%s__TERMUL_PATH__\" (string join : $PATH)"])
             .output()
             .ok()?,
         _ => return None,
@@ -161,7 +165,17 @@ fn probe_unix_login_path() -> Option<String> {
         return None;
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let path = if let Some(start) = raw.find("__TERMUL_PATH__") {
+        if let Some(end) = raw[start + 15..].find("__TERMUL_PATH__") {
+            raw[start + 15..start + 15 + end].to_string()
+        } else {
+            raw[start + 15..].trim().to_string()
+        }
+    } else {
+        raw.trim().to_string()
+    };
+
     if path.is_empty() {
         None
     } else {
