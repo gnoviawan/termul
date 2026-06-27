@@ -77,7 +77,7 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
               animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
               transition={transition(i + 1)}
               whileTap={reduced ? undefined : { scale: 0.97 }}
-              className="flex items-center gap-2.5 rounded-xl border border-border/60 bg-secondary/30 px-3.5 py-2.5 text-left text-sm text-foreground transition-colors hover:border-border hover:bg-secondary/60"
+              className="flex items-center gap-2.5 rounded-lg border border-border/60 bg-secondary/30 px-3.5 py-2.5 text-left text-sm text-foreground transition-colors hover:border-border hover:bg-secondary/60"
             >
               <s.icon className="size-4 shrink-0 text-muted-foreground" />
               <span className="truncate">{s.label}</span>

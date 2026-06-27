@@ -22,7 +22,7 @@ export function LoadedSkillChip({
       <button
         type="button"
         onClick={onRemove}
-        className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        className="ml-auto shrink-0 rounded-md p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
         aria-label="Remove loaded skill"
         title="Remove skill"
       >

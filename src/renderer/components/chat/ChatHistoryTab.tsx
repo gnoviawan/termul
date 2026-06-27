@@ -96,7 +96,7 @@ export function ChatHistoryTab(): React.JSX.Element {
                     aria-label="Delete chat"
                     title="Delete chat"
                     onClick={() => handleDelete(entry.id)}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50"
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-background/50"
                   >
                     <Trash2 size={11} />
                   </button>
