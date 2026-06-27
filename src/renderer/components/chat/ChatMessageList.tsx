@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import {
   MessageScroller,
@@ -11,10 +11,9 @@ import {
   useMessageScroller
 } from '@/components/ui/message-scroller'
 import type { AgentId } from '@/lib/acp-api'
-import { AgentBadge } from './AgentBadge'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
-import type { TimelineItem } from './chat-timeline'
+import { agentTurnMeta, type TimelineItem } from './chat-timeline'
 import { ToolCallCard } from './ToolCallCard'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
@@ -58,6 +57,8 @@ export function ChatMessageList({
   onEditMessage,
   onRetry
 }: ChatMessageListProps): React.JSX.Element {
+  const turnMeta = useMemo(() => agentTurnMeta(items), [items])
+
   if (items.length === 0 && !showTyping) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
@@ -83,18 +84,17 @@ export function ChatMessageList({
                   ) : (
                     <ChatMessage
                       message={it.message}
-                      agentId={agentId}
                       showHeader={!isGroupedReply(items, i)}
                       isLast={i === items.length - 1}
+                      isTurnTail={turnMeta.tail.has(it.message.id)}
+                      turnText={turnMeta.text.get(it.message.id)}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />
                   )}
                 </MessageScrollerItem>
               ))}
-              <AnimatePresence>
-                {showTyping && <TypingIndicator key="typing" agentId={agentId} />}
-              </AnimatePresence>
+              <AnimatePresence>{showTyping && <TypingIndicator key="typing" />}</AnimatePresence>
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />
@@ -105,7 +105,7 @@ export function ChatMessageList({
 }
 
 /** "Agent is typing" status shown before the first text chunk streams. */
-function TypingIndicator({ agentId }: { agentId: AgentId }): React.JSX.Element {
+function TypingIndicator(): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   return (
     <motion.div
@@ -115,9 +115,6 @@ function TypingIndicator({ agentId }: { agentId: AgentId }): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <div className="mb-1.5">
-        <AgentBadge agentId={agentId} iconSize={12} />
-      </div>
       <Marker role="status">
         <MarkerIcon className="gap-1">
           <TypingDots />

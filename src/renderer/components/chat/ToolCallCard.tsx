@@ -171,7 +171,7 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
   const startedAt = typeof toolCall.timestamp === 'number' ? toolCall.timestamp : null
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
 
-  const { verb, primary, detail } = describeToolCall(toolCall)
+  const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
   const enter = bubbleEnter('neutral', reduced)
 
   const row = (
@@ -186,8 +186,17 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
           {primary}
         </span>
       </span>
-      {detail && (
-        <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">{detail}</span>
+      {diffStat ? (
+        <span className="shrink-0 text-3xs tabular-nums">
+          <span className="text-green-700 dark:text-green-400">+{diffStat.added}</span>
+          {diffStat.removed > 0 && (
+            <span className="text-red-700 dark:text-red-400"> &minus;{diffStat.removed}</span>
+          )}
+        </span>
+      ) : (
+        detail && (
+          <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">{detail}</span>
+        )
       )}
       {durationMs != null && (
         <span className="hidden shrink-0 text-3xs tabular-nums text-muted-foreground group-hover/tool:inline">
@@ -216,7 +225,7 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
 
   return (
     <motion.div
-      className="group/tool mx-4 my-0.5"
+      className="group/tool mx-4 my-1 overflow-hidden rounded-lg border border-border/60 bg-card/30"
       initial={enter.initial}
       animate={enter.animate}
       transition={enter.transition}
@@ -227,16 +236,16 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           data-press-feedback="off"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-card/50"
+          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-card/60"
         >
           {row}
         </button>
       ) : (
-        <div className="flex items-center gap-2 rounded-md px-2 py-1 text-xs">{row}</div>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs">{row}</div>
       )}
       {hasDetail && (
         <CollapseExpandMotion open={open}>
-          <div className="flex flex-col gap-1.5 px-2 pb-2 pt-1">
+          <div className="flex flex-col gap-1.5 border-t border-border/50 bg-background/30 px-2.5 pb-2.5 pt-2">
             {hasContent
               ? content.map((item, i) => renderContentItem(item, i))
               : resultText && <ResultBlock text={resultText} />}

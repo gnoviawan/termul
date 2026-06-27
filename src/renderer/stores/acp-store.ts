@@ -79,6 +79,13 @@ export interface ChatMessage {
   blocks: ContentBlock[]
   streaming: boolean
   timestamp: number
+  /**
+   * Monotonic arrival sequence stamped at append time. Orders messages and
+   * tool calls on one chronological timeline, robust against same-millisecond
+   * ties that `timestamp` alone can't break. Absent on history persisted
+   * before seq existed (those order by `timestamp`).
+   */
+  seq?: number
 }
 
 export interface AcpSession {
@@ -226,6 +233,18 @@ function newId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`
 }
 
+/**
+ * Monotonic arrival sequence for timeline ordering. Stamped on every message
+ * and tool call as it lands so the UI can interleave the two on one
+ * chronological timeline without relying on `Date.now()` (which ties within a
+ * millisecond when text and tool events arrive back-to-back).
+ */
+let seqCounter = 0
+function nextSeq(): number {
+  seqCounter += 1
+  return seqCounter
+}
+
 /** Index of the last user message in a thread, or -1 if none. */
 function lastUserIndex(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -247,6 +266,16 @@ function hasActiveAssistantTail(messages: ChatMessage[], role: MessageRole): boo
   const userIdx = lastUserIndex(messages)
   if (userIdx === -1) return false
   return messages.length - 1 > userIdx
+}
+
+/**
+ * True when a tool call landed after `message` (by seq). Marks the point where
+ * a new text run must start its own bubble instead of merging back into the
+ * pre-tool message.
+ */
+function toolIntervened(toolCalls: ToolCall[], message: ChatMessage): boolean {
+  if (message.seq == null) return false
+  return toolCalls.some((t) => typeof t.seq === 'number' && t.seq > message.seq!)
 }
 
 /** Whether a chunk may open a new message (not coalesced into the previous one). */
@@ -1094,7 +1123,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       role: 'user',
       blocks: [{ type: 'text', text }],
       streaming: false,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      seq: nextSeq()
     }
     set((s) => ({
       messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
@@ -1144,7 +1174,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       role: 'user',
       blocks,
       streaming: false,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      seq: nextSeq()
     }
     set((s) => ({
       messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
@@ -1305,8 +1336,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const last = list[list.length - 1]
       const role = e.role as MessageRole
       // Attach to the trailing assistant/user message for this turn (including
-      // chunks that arrive after streaming was finalized but IPC lagged).
-      if (last && last.role === role && (last.streaming || hasActiveAssistantTail(list, role))) {
+      // chunks that arrive after streaming was finalized but IPC lagged) —
+      // UNLESS a tool call landed after that message. Coalescing across a tool
+      // boundary would fold a post-tool text run back into the pre-tool bubble,
+      // collapsing the real `text → tool → text` order into one position.
+      const tools = s.toolCalls[e.sessionId] ?? []
+      if (
+        last &&
+        last.role === role &&
+        (last.streaming || hasActiveAssistantTail(list, role)) &&
+        !toolIntervened(tools, last)
+      ) {
         const updated: ChatMessage = {
           ...last,
           blocks: appendBlocks(last.blocks, e.content),
@@ -1322,19 +1362,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         role,
         blocks: [e.content],
         streaming: true,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        seq: nextSeq()
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
     }),
 
   _onToolCall: (e) =>
     set((s) => {
-      // Stamp arrival time (unless already present) so the UI can interleave
-      // tool calls with messages on a single chronological timeline.
-      const stamped =
-        typeof e.toolCall.timestamp === 'number'
-          ? e.toolCall
-          : { ...e.toolCall, timestamp: Date.now() }
+      // Stamp arrival time + monotonic seq (unless already present) so the UI
+      // can interleave tool calls with messages on one chronological timeline.
+      const stamped: ToolCall = {
+        ...e.toolCall,
+        timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+      }
       return {
         toolCalls: {
           ...s.toolCalls,

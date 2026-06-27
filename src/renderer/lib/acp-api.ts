@@ -126,6 +126,8 @@ export interface ToolCall {
   rawOutput?: unknown
   /** Client-side arrival time (stamped in the store for timeline ordering). */
   timestamp?: number
+  /** Monotonic arrival sequence (stamped in the store) for timeline ordering. */
+  seq?: number
   [k: string]: unknown
 }
 

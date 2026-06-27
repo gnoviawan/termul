@@ -16,6 +16,12 @@ export interface ToolCallSummary {
   primary: string
   /** Trailing meta, e.g. "L185-219" or "+8 −3". Null when none applies. */
   detail: string | null
+  /**
+   * Structured add/remove line counts for an edit diff, so the UI can color the
+   * `+N` green and `−N` red. Null for non-edit calls (the plain `detail` string
+   * still carries any other trailing meta).
+   */
+  diffStat?: { added: number; removed: number } | null
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -192,10 +198,12 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
       const p = firstString(input, PATH_KEYS) ?? diff.path
       const primary = p ? baseName(p) : (title ?? 'file')
       let detail: string | null = null
+      let diffStat: { added: number; removed: number } | null = null
       if (diff.hasDiff) {
         detail = diff.removed > 0 ? `+${diff.added} \u2212${diff.removed}` : `+${diff.added}`
+        diffStat = { added: diff.added, removed: diff.removed }
       }
-      return { verb, primary, detail }
+      return { verb, primary, detail, diffStat }
     }
     case 'execute': {
       const cmd = firstString(input, COMMAND_KEYS) ?? title ?? 'command'

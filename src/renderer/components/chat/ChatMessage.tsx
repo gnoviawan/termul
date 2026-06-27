@@ -1,5 +1,4 @@
 import { readFile } from '@tauri-apps/plugin-fs'
-import { formatDistanceToNow } from 'date-fns'
 import { motion, useReducedMotion } from 'framer-motion'
 import { Brain, FileText } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
@@ -14,13 +13,12 @@ import {
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
-import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message'
-import type { AgentId, ContentBlock } from '@/lib/acp-api'
+import { Message, MessageContent } from '@/components/ui/message'
+import type { ContentBlock } from '@/lib/acp-api'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { AgentBadge } from './AgentBadge'
 import { blockDisplayName, blockMimeType, guessMimeType, uint8ToBase64 } from './chat-attachments'
 import { bubbleEnter } from './chat-motion'
 import { MessageActions } from './MessageActions'
@@ -230,23 +228,16 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
   )
 }
 
-/** Short relative time (e.g. "2 minutes ago") for a message footer. */
-function RelativeTime({ ts }: { ts: number }): React.JSX.Element | null {
-  if (!ts) return null
-  return (
-    <time dateTime={new Date(ts).toISOString()} className="tabular-nums">
-      {formatDistanceToNow(ts, { addSuffix: true })}
-    </time>
-  )
-}
-
 interface ChatMessageProps {
   message: ChatMessageType
-  agentId: AgentId
   /** Hide the agent header (grouped under the previous same-role reply). */
   showHeader?: boolean
   /** True for the last item in the timeline (only it shows the streaming caret). */
   isLast?: boolean
+  /** True when this agent reply ends its turn — only the tail shows the action bar. */
+  isTurnTail?: boolean
+  /** Full turn text (every agent reply in the turn) for the turn-level copy action. */
+  turnText?: string
   /** Seed the composer with this message's text for editing (user turns). */
   onEdit?: (text: string) => void
   /** Re-run the latest user turn (assistant turns). */
@@ -255,18 +246,23 @@ interface ChatMessageProps {
 
 function ChatMessageComponent({
   message,
-  agentId,
   showHeader = true,
   isLast = false,
+  isTurnTail = false,
+  turnText,
   onEdit,
   onRetry
 }: ChatMessageProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
 
-  // Thought: collapsible, de-emphasized, surfaced as a status marker.
+  // Thought: collapsible, de-emphasized, surfaced as a status marker. The
+  // "Thinking…" shimmer runs only while this thought is the live tail; once any
+  // output (a tool call or the reply) follows it, the thinking step is done —
+  // even though its `streaming` flag stays set until the whole turn finalizes.
   if (message.role === 'thought') {
     const text = blocksToText(message.blocks)
     const lines = text.split('\n').filter((l) => l.trim().length > 0).length
+    const thinking = message.streaming && isLast
     return (
       <details className="px-1 py-1">
         <summary className="cursor-pointer list-none marker:hidden">
@@ -274,8 +270,8 @@ function ChatMessageComponent({
             <MarkerIcon>
               <Brain />
             </MarkerIcon>
-            <MarkerContent className={cn(message.streaming && 'shimmer')}>
-              {message.streaming ? 'Thinking…' : 'Thought'}
+            <MarkerContent className={cn(thinking && 'shimmer')}>
+              {thinking ? 'Thinking…' : 'Thought'}
               {lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
             </MarkerContent>
           </Marker>
@@ -300,21 +296,18 @@ function ChatMessageComponent({
         transition={enter.transition}
       >
         <Message align="end" className="py-2">
-          <MessageContent>
+          <MessageContent className="w-fit max-w-[85%]">
             <MediaBlocks blocks={message.blocks} />
             {text.length > 0 && (
               <Bubble variant="tinted" align="end">
                 <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
               </Bubble>
             )}
-            <MessageFooter className="h-6 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100">
-              <MessageActions
-                text={text}
-                align="end"
-                onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
-              />
-              <RelativeTime ts={message.timestamp} />
-            </MessageFooter>
+            <MessageActions
+              text={text}
+              align="end"
+              onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
+            />
           </MessageContent>
         </Message>
       </motion.div>
@@ -330,16 +323,8 @@ function ChatMessageComponent({
       transition={enter.transition}
     >
       <Message align="start" className={cn(showHeader ? 'py-2' : 'pb-2')}>
-        <MessageContent>
-          {showHeader && (
-            <MessageHeader className="flex items-center gap-1.5">
-              <AgentBadge agentId={agentId} iconSize={12} />
-              {message.streaming && (
-                <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
-              )}
-            </MessageHeader>
-          )}
-          <Bubble variant="ghost">
+        <MessageContent className="min-w-0 flex-1">
+          <Bubble variant="ghost" className="w-fit max-w-full">
             <BubbleContent>
               <AgentProse blocks={message.blocks} />
               {message.streaming && isLast && (
@@ -351,11 +336,8 @@ function ChatMessageComponent({
               <MediaBlocks blocks={message.blocks} />
             </BubbleContent>
           </Bubble>
-          {!message.streaming && (
-            <MessageFooter className="h-6 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100">
-              <MessageActions text={text} align="start" onRetry={onRetry} />
-              <RelativeTime ts={message.timestamp} />
-            </MessageFooter>
+          {!message.streaming && isTurnTail && (
+            <MessageActions text={turnText ?? text} align="start" onRetry={onRetry} />
           )}
         </MessageContent>
       </Message>
