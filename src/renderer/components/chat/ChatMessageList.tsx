@@ -45,6 +45,14 @@ function isGroupedReply(items: TimelineItem[], index: number): boolean {
   return prev?.kind === 'message' && prev.message.role === 'agent'
 }
 
+/** Index of the last message item in the timeline (skips trailing tool cards). */
+function lastMessageIndex(items: TimelineItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'message') return i
+  }
+  return -1
+}
+
 /**
  * Scrollable message thread built on the MessageScroller engine. Auto-follows
  * the live edge only while the reader is pinned to the bottom; a jump-to-latest
@@ -58,6 +66,7 @@ export function ChatMessageList({
   onRetry
 }: ChatMessageListProps): React.JSX.Element {
   const turnMeta = useMemo(() => agentTurnMeta(items), [items])
+  const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
 
   if (items.length === 0 && !showTyping) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
@@ -88,6 +97,7 @@ export function ChatMessageList({
                       isLast={i === items.length - 1}
                       isTurnTail={turnMeta.tail.has(it.message.id)}
                       turnText={turnMeta.text.get(it.message.id)}
+                      actionsPinned={i === lastMsgIndex}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />

@@ -225,7 +225,7 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
 
   return (
     <motion.div
-      className="group/tool mx-4 my-1 overflow-hidden rounded-lg border border-border/60 bg-card/30"
+      className="group/tool my-1.5 w-full overflow-hidden rounded-lg border border-border/60 bg-card/30"
       initial={enter.initial}
       animate={enter.animate}
       transition={enter.transition}
@@ -236,12 +236,12 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           data-press-feedback="off"
-          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-card/60"
+          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-card/60"
         >
           {row}
         </button>
       ) : (
-        <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs">{row}</div>
+        <div className="flex items-center gap-2 px-3 py-2 text-xs">{row}</div>
       )}
       {hasDetail && (
         <CollapseExpandMotion open={open}>

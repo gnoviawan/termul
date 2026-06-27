@@ -28,6 +28,8 @@ interface MessageActionsProps {
   /** Plain text to place on the clipboard for the copy action. */
   text: string
   align: 'start' | 'end'
+  /** Keep actions visible without hover (e.g. last message in thread). */
+  pinned?: boolean
   /** Edit the message (e.g. seed the composer with this text). */
   onEdit?: () => void
   /** Re-run the turn (regenerate the response). */
@@ -36,12 +38,13 @@ interface MessageActionsProps {
 }
 
 /**
- * Hover toolbar for a chat message — copy, plus optional edit (user turns) and
- * retry (assistant turns). Revealed by the parent `group/message` on hover.
+ * Toolbar for a chat message — copy, plus optional edit (user turns) and
+ * retry (assistant turns). Hover-revealed by default; pinned stays visible.
  */
 export function MessageActions({
   text,
   align,
+  pinned = false,
   onEdit,
   onRetry,
   className
@@ -63,7 +66,8 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/message:opacity-100',
+        'flex items-center gap-0.5 transition-opacity duration-150 focus-within:opacity-100',
+        pinned ? 'opacity-100' : 'opacity-0 group-hover/message:opacity-100',
         align === 'end' && 'flex-row-reverse',
         className
       )}

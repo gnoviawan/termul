@@ -15,6 +15,7 @@ import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
+import { inlineCodeClass } from '@/lib/chat-inline-code'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
@@ -169,12 +170,18 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
 }
 
 /**
- * Attach a hover "Copy" button to every `<pre>` code block under `root`.
- * Runs against the live DOM (post-sanitize) so it can't reintroduce markup the
- * sanitizer stripped. Idempotent via a data flag; cleans up its listeners.
+ * Post-process sanitized prose: inline code pill classes + `<pre>` copy buttons.
+ * Runs against the live DOM so it can't reintroduce markup the sanitizer stripped.
  */
-function enhanceCodeBlocks(root: HTMLElement): () => void {
+function enhanceProse(root: HTMLElement): () => void {
   const cleanups: Array<() => void> = []
+
+  for (const code of Array.from(root.querySelectorAll('code'))) {
+    if (code.closest('pre')) continue
+    const cls = inlineCodeClass(code.textContent ?? '')
+    code.classList.add(cls)
+  }
+
   for (const pre of Array.from(root.querySelectorAll('pre'))) {
     if (pre.dataset.copyEnhanced) continue
     pre.dataset.copyEnhanced = 'true'
@@ -216,7 +223,7 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
   // biome-ignore lint/correctness/useExhaustiveDependencies: html drives re-enhancement
   useEffect(() => {
     if (!ref.current) return
-    return enhanceCodeBlocks(ref.current)
+    return enhanceProse(ref.current)
   }, [html])
   return (
     <div
@@ -230,7 +237,7 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
 
 interface ChatMessageProps {
   message: ChatMessageType
-  /** Hide the agent header (grouped under the previous same-role reply). */
+  /** Tighter top padding when grouped under a previous same-role agent reply. */
   showHeader?: boolean
   /** True for the last item in the timeline (only it shows the streaming caret). */
   isLast?: boolean
@@ -238,6 +245,8 @@ interface ChatMessageProps {
   isTurnTail?: boolean
   /** Full turn text (every agent reply in the turn) for the turn-level copy action. */
   turnText?: string
+  /** Keep message actions visible without hover (last message in thread). */
+  actionsPinned?: boolean
   /** Seed the composer with this message's text for editing (user turns). */
   onEdit?: (text: string) => void
   /** Re-run the latest user turn (assistant turns). */
@@ -250,6 +259,7 @@ function ChatMessageComponent({
   isLast = false,
   isTurnTail = false,
   turnText,
+  actionsPinned = false,
   onEdit,
   onRetry
 }: ChatMessageProps): React.JSX.Element {
@@ -264,9 +274,9 @@ function ChatMessageComponent({
     const lines = text.split('\n').filter((l) => l.trim().length > 0).length
     const thinking = message.streaming && isLast
     return (
-      <details className="px-1 py-1">
+      <details className="border-b border-border/50 py-2">
         <summary className="cursor-pointer list-none marker:hidden">
-          <Marker className="inline-flex italic">
+          <Marker variant="border" className="inline-flex italic">
             <MarkerIcon>
               <Brain />
             </MarkerIcon>
@@ -276,7 +286,7 @@ function ChatMessageComponent({
             </MarkerContent>
           </Marker>
         </summary>
-        <div className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border/70 pl-3 text-xs italic text-muted-foreground">
+        <div className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border/70 pl-3 text-xs italic text-muted-foreground">
           {text}
         </div>
       </details>
@@ -306,6 +316,7 @@ function ChatMessageComponent({
             <MessageActions
               text={text}
               align="end"
+              pinned={actionsPinned}
               onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
             />
           </MessageContent>
@@ -337,7 +348,12 @@ function ChatMessageComponent({
             </BubbleContent>
           </Bubble>
           {!message.streaming && isTurnTail && (
-            <MessageActions text={turnText ?? text} align="start" onRetry={onRetry} />
+            <MessageActions
+              text={turnText ?? text}
+              align="start"
+              pinned={actionsPinned}
+              onRetry={onRetry}
+            />
           )}
         </MessageContent>
       </Message>

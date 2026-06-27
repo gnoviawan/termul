@@ -469,9 +469,23 @@
   .chat-prose code {
     font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
     font-size: 0.85em;
-    background: hsl(var(--muted) / 0.6);
-    padding: 0.12em 0.4em;
-    border-radius: 4px;
+    font-weight: 500;
+    padding: 0.1em 0.45em;
+    border-radius: 6px;
+    border: 1px solid hsl(var(--border) / 0.4);
+  }
+  .chat-prose code.chat-code-token {
+    background: hsl(var(--muted) / 0.55);
+    color: hsl(var(--foreground));
+  }
+  .chat-prose code.chat-code-path {
+    background: hsl(142 71% 45% / 0.12);
+    color: hsl(142 45% 32%);
+    border-color: hsl(142 40% 40% / 0.25);
+  }
+  .dark .chat-prose code.chat-code-path {
+    color: hsl(142 55% 62%);
+    border-color: hsl(142 40% 50% / 0.3);
   }
   .chat-prose pre {
     background: hsl(var(--muted) / 0.5);
