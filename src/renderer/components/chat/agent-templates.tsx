@@ -34,14 +34,14 @@ export interface AgentTemplate {
 
 export const AGENT_TEMPLATES: AgentTemplate[] = [
   {
-    id: 'gemini',
-    label: 'Gemini CLI',
-    notes: "Google's official CLI for Gemini. Runs via npx.",
+    id: 'antigravity',
+    label: 'Antigravity CLI',
+    notes: "Google's official CLI for Antigravity. Runs natively via agy.",
     icon: GeminiIcon,
     config: {
-      name: 'Gemini CLI',
-      command: 'npx',
-      args: ['-y', '@google/gemini-cli', '--acp'],
+      name: 'Antigravity CLI',
+      command: 'agy',
+      args: ['--acp'],
       env: {},
       allowTerminal: false
     }

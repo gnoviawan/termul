@@ -80,18 +80,18 @@ describe('useAcpAgents', () => {
     mockLoadAgentConfigs.mockImplementation(async () => {
       stateRef.current.agentConfigs = [
         config('acp-registry:claude-acp'),
-        config('acp-registry:gemini')
+        config('acp-registry:antigravity')
       ]
     })
     mockPersistRead.mockResolvedValue({
       success: true,
-      data: { agentId: 'acp-registry:gemini', mode: 'acp' }
+      data: { agentId: 'acp-registry:antigravity', mode: 'acp' }
     })
 
     renderHook(() => useAcpAgents())
 
     await waitFor(() => {
-      expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:gemini', '/work/proj-1')
+      expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:antigravity', '/work/proj-1')
     })
     expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
   })

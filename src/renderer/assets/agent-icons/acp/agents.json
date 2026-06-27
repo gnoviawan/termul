@@ -344,14 +344,32 @@
     }
   },
   {
-    "id": "gemini",
-    "name": "Gemini CLI",
-    "version": "0.45.1",
-    "description": "Google's official CLI for Gemini",
+    "id": "antigravity",
+    "name": "Antigravity CLI",
+    "version": "1.0.12",
+    "description": "Google's official CLI for Antigravity",
     "distribution": {
-      "npx": {
-        "package": "@google/gemini-cli@0.45.1",
-        "args": ["--acp"]
+      "binary": {
+        "darwin-aarch64": {
+          "cmd": "agy",
+          "args": ["--acp"]
+        },
+        "darwin-x86_64": {
+          "cmd": "agy",
+          "args": ["--acp"]
+        },
+        "linux-aarch64": {
+          "cmd": "agy",
+          "args": ["--acp"]
+        },
+        "linux-x86_64": {
+          "cmd": "agy",
+          "args": ["--acp"]
+        },
+        "windows-x86_64": {
+          "cmd": "agy.exe",
+          "args": ["--acp"]
+        }
       }
     }
   },

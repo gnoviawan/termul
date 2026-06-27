@@ -34,7 +34,7 @@ describe('currentPlatformArch', () => {
 describe('deriveAgentConfig', () => {
   it('derives an npx distribution with -y prefix', () => {
     const res = deriveAgentConfig(
-      agent({ npx: { package: '@google/gemini-cli@0.45.0', args: ['--acp'] } }),
+      agent({ npx: { package: 'some-acp-agent@1.0.0', args: ['--acp'] } }),
       'windows-x86_64'
     )
     expect(res).toEqual({
@@ -42,7 +42,7 @@ describe('deriveAgentConfig', () => {
       config: {
         name: 'Agent X',
         command: 'npx',
-        args: ['-y', '@google/gemini-cli@0.45.0', '--acp'],
+        args: ['-y', 'some-acp-agent@1.0.0', '--acp'],
         env: {},
         allowTerminal: false
       }
@@ -113,9 +113,17 @@ describe('deriveAgentConfig', () => {
     }
   })
 
-  it('returns needs-install for a binary present on the current platform-arch', () => {
+  it('returns needs-install for a binary present on the current platform-arch with archive', () => {
     const res = deriveAgentConfig(
-      agent({ binary: { 'windows-x86_64': { cmd: './stakpak.exe', args: ['acp'] } } }),
+      agent({
+        binary: {
+          'windows-x86_64': {
+            cmd: './stakpak.exe',
+            archive: 'https://example.com/stakpak.zip',
+            args: ['acp']
+          }
+        }
+      }),
       'windows-x86_64'
     )
     expect(res).toEqual({
@@ -123,7 +131,24 @@ describe('deriveAgentConfig', () => {
       cmd: './stakpak.exe',
       args: ['acp'],
       env: {},
-      archiveUrl: undefined
+      archiveUrl: 'https://example.com/stakpak.zip'
+    })
+  })
+
+  it('returns runnable for a binary present on the current platform-arch without archive', () => {
+    const res = deriveAgentConfig(
+      agent({ binary: { 'windows-x86_64': { cmd: './stakpak.exe', args: ['acp'] } } }),
+      'windows-x86_64'
+    )
+    expect(res).toEqual({
+      kind: 'runnable',
+      config: {
+        name: 'Agent X',
+        command: './stakpak.exe',
+        args: ['acp'],
+        env: {},
+        allowTerminal: false
+      }
     })
   })
 
@@ -131,7 +156,12 @@ describe('deriveAgentConfig', () => {
     const res = deriveAgentConfig(
       agent({
         binary: {
-          'windows-x86_64': { cmd: 'vtcode.exe', args: ['acp'], env: { VT_ACP_ENABLED: '1' } }
+          'windows-x86_64': {
+            cmd: 'vtcode.exe',
+            archive: 'https://example.com/vt.zip',
+            args: ['acp'],
+            env: { VT_ACP_ENABLED: '1' }
+          }
         }
       }),
       'windows-x86_64'
@@ -141,13 +171,21 @@ describe('deriveAgentConfig', () => {
       cmd: 'vtcode.exe',
       args: ['acp'],
       env: { VT_ACP_ENABLED: '1' },
-      archiveUrl: undefined
+      archiveUrl: 'https://example.com/vt.zip'
     })
   })
 
   it('rejects a flag-like package and falls through to binary/unavailable', () => {
     const res = deriveAgentConfig(
-      agent({ npx: { package: '--evil-flag' }, binary: { 'windows-x86_64': { cmd: './x.exe' } } }),
+      agent({
+        npx: { package: '--evil-flag' },
+        binary: {
+          'windows-x86_64': {
+            cmd: './x.exe',
+            archive: 'https://example.com/x.zip'
+          }
+        }
+      }),
       'windows-x86_64'
     )
     // npx is skipped (unsafe package) -> falls through to the binary path.
@@ -156,7 +194,7 @@ describe('deriveAgentConfig', () => {
       cmd: './x.exe',
       args: [],
       env: {},
-      archiveUrl: undefined
+      archiveUrl: 'https://example.com/x.zip'
     })
   })
 

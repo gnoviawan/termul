@@ -113,7 +113,7 @@ describe('built-in agent definitions', () => {
     expect(byId.codex).toMatchObject({ command: 'codex', promptMode: 'positional' })
     expect(byId.cursor).toMatchObject({ command: 'cursor-agent', promptMode: 'positional' })
     expect(byId['gemini-cli']).toMatchObject({
-      command: 'gemini',
+      command: 'agy',
       promptMode: 'flag',
       promptFlag: '-i'
     })
@@ -149,7 +149,7 @@ describe('built-in agent definitions', () => {
       args: ['P']
     })
     expect(buildAgentArgv(getBuiltInAgent('gemini-cli')!, 'P')).toEqual({
-      program: 'gemini',
+      program: 'agy',
       args: ['-i', 'P']
     })
     expect(buildAgentArgv(getBuiltInAgent('opencode')!, 'P')).toEqual({

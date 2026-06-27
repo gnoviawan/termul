@@ -407,7 +407,7 @@ describe('AgentLauncher ACP new thread', () => {
     expect(agentPicker).not.toHaveTextContent('Codex CLI')
     fireEvent.click(agentPicker)
     expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
-    expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
+    expect(screen.getByText('Antigravity CLI')).toBeInTheDocument()
     expect(screen.getByText('Cursor')).toBeInTheDocument()
     expect(screen.getByText('OpenCode')).toBeInTheDocument()
     expect(screen.getByText('pi ACP')).toBeInTheDocument()

@@ -36,7 +36,7 @@ describe('AcpAgentsSettings', () => {
 
     expect(screen.getByText('Codex CLI')).toBeInTheDocument()
     expect(screen.getByText('Claude Agent')).toBeInTheDocument()
-    expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
+    expect(screen.getByText('Antigravity CLI')).toBeInTheDocument()
     expect(screen.getByText('Cursor')).toBeInTheDocument()
     expect(screen.getByText('OpenCode')).toBeInTheDocument()
     expect(screen.getByText('pi ACP')).toBeInTheDocument()

@@ -9,7 +9,7 @@ import {
 export const SUPPORTED_ACP_AGENT_IDS = [
   'codex-acp',
   'claude-acp',
-  'gemini',
+  'antigravity',
   'cursor',
   'opencode',
   'pi-acp'

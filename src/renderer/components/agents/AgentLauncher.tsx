@@ -175,14 +175,33 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [persistSelection, selectedConfigId, supportedAgents])
 
+  const selectedConfigRef = useRef(selectedConfig)
+  selectedConfigRef.current = selectedConfig
+
+  const acpConfigsRef = useRef(acpConfigs)
+  acpConfigsRef.current = acpConfigs
+
+  const configSpawnKey = useMemo(() => {
+    if (!selectedConfig) return ''
+    return `${selectedConfig.command} ${selectedConfig.args.join(' ')} ${JSON.stringify(selectedConfig.env)}`
+  }, [selectedConfig])
+
   useEffect(() => {
-    if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
+    if (
+      !activeConfigId ||
+      !projectRoot ||
+      selectedEntry?.status !== 'ready' ||
+      !selectedConfigRef.current
+    )
       return
     let cancelled = false
     void (async () => {
       try {
-        if (!acpConfigs.some((config) => config.id === selectedConfig.id)) {
-          await saveAgentConfig(selectedConfig)
+        const currentConfig = selectedConfigRef.current
+        if (!currentConfig) return
+        const currentConfigs = acpConfigsRef.current
+        if (!currentConfigs.some((config) => config.id === currentConfig.id)) {
+          await saveAgentConfig(currentConfig)
           if (cancelled) return
         }
         useAcpStore.getState().prepareChat(activeConfigId, projectRoot)
@@ -190,19 +209,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
       }
     })()
+    // Re-prepare when command/args/env change
+    void configSpawnKey
     const key = prepareChatKey(activeConfigId, projectRoot, undefined)
     return () => {
       cancelled = true
       useAcpStore.getState().cancelPreparedChat(key)
     }
-  }, [
-    activeConfigId,
-    acpConfigs,
-    projectRoot,
-    saveAgentConfig,
-    selectedConfig,
-    selectedEntry?.status
-  ])
+  }, [activeConfigId, projectRoot, saveAgentConfig, selectedEntry?.status, configSpawnKey])
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {

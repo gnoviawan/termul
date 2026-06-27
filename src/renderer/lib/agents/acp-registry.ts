@@ -158,12 +158,25 @@ export function deriveAgentConfig(agent: RegistryAgent, platformArch: string): D
   const target = dist.binary?.[platformArch]
   if (target) {
     const archiveUrl = supportedArchiveUrl(target.archive)
-    return {
-      kind: 'needs-install',
-      cmd: target.cmd,
-      args: [...(target.args ?? [])],
-      env: env(target.env),
-      archiveUrl
+    if (target.archive !== undefined) {
+      return {
+        kind: 'needs-install',
+        cmd: target.cmd,
+        args: [...(target.args ?? [])],
+        env: env(target.env),
+        archiveUrl
+      }
+    } else {
+      return {
+        kind: 'runnable',
+        config: {
+          name: agent.name,
+          command: target.cmd,
+          args: [...(target.args ?? [])],
+          env: env(target.env),
+          allowTerminal: false
+        }
+      }
     }
   }
 
