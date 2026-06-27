@@ -2,6 +2,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
+struct SendWrapper<T>(pub T);
+unsafe impl<T> Send for SendWrapper<T> {}
+unsafe impl<T> Sync for SendWrapper<T> {}
+
+impl<T> SendWrapper<T> {
+    pub fn take(self) -> T {
+        self.0
+    }
+}
+
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserTabInfo {
@@ -189,13 +200,102 @@ impl BrowserTabManager {
             tauri::WebviewUrl::External(parsed_url),
         );
 
+        let scale_factor = window.scale_factor().unwrap_or(1.0);
+        log::info!("[BrowserTab] create original bounds: x={}, y={}, w={}, h={}, scale_factor={}", bounds.x, bounds.y, bounds.width, bounds.height, scale_factor);
+
+        #[cfg(target_os = "linux")]
+        let (x, y, w, h) = (
+            bounds.x / scale_factor,
+            bounds.y / scale_factor,
+            bounds.width / scale_factor,
+            bounds.height / scale_factor,
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        let (x, y, w, h) = (bounds.x, bounds.y, bounds.width, bounds.height);
+
+        log::info!("[BrowserTab] create scaled bounds: x={}, y={}, w={}, h={}", x, y, w, h);
+
         let _webview = window
             .add_child(
                 builder,
-                tauri::LogicalPosition::new(bounds.x, bounds.y),
-                tauri::LogicalSize::new(bounds.width, bounds.height),
+                tauri::LogicalPosition::new(x, y),
+                tauri::LogicalSize::new(w, h),
             )
             .map_err(|e| format!("Failed to create webview: {}", e))?;
+
+        #[cfg(target_os = "linux")]
+        {
+            let child_webview = _webview.clone();
+            if let Ok(main_webview) = window.get_webview("main").ok_or_else(|| "Main webview not found".to_string()) {
+                let bounds_clone = bounds.clone();
+                let _ = main_webview.with_webview(move |main_platform| {
+                    let main_widget = main_platform.inner().clone();
+                    let main_widget_wrapped = SendWrapper(main_widget);
+                    let _ = child_webview.with_webview(move |child_platform| {
+                        let child_widget = child_platform.inner().clone();
+                        let main_widget = main_widget_wrapped.take();
+                        let handle_reparent = || -> Result<(), String> {
+                            use gtk::prelude::*;
+
+                            let parent = main_widget.parent()
+                                .ok_or_else(|| "Main webview has no parent".to_string())?;
+
+                            let overlay = if parent.type_().name() == "GtkOverlay" {
+                                parent.dynamic_cast::<gtk::Overlay>()
+                                    .map_err(|_| "Parent is not GtkOverlay".to_string())?
+                            } else {
+                                let vbox = parent.dynamic_cast::<gtk::Box>()
+                                    .map_err(|_| "Main webview parent is not GtkBox".to_string())?;
+
+                                let new_overlay = gtk::Overlay::new();
+                                new_overlay.set_hexpand(true);
+                                new_overlay.set_vexpand(true);
+
+                                main_widget.set_hexpand(true);
+                                main_widget.set_vexpand(true);
+
+                                vbox.remove(&main_widget);
+                                vbox.pack_start(&new_overlay, true, true, 0);
+                                new_overlay.add(&main_widget);
+                                new_overlay.show();
+                                new_overlay
+                            };
+
+                            if let Some(child_parent) = child_widget.parent() {
+                                if let Ok(vbox) = child_parent.dynamic_cast::<gtk::Box>() {
+                                    vbox.remove(&child_widget);
+                                }
+                            }
+
+                            let width = (bounds_clone.width / scale_factor) as i32;
+                            let height = (bounds_clone.height / scale_factor) as i32;
+                            let x_pos = (bounds_clone.x / scale_factor) as i32;
+                            let y_pos = (bounds_clone.y / scale_factor) as i32;
+
+                            child_widget.set_halign(gtk::Align::Start);
+                            child_widget.set_valign(gtk::Align::Start);
+                            child_widget.set_margin_start(x_pos);
+                            child_widget.set_margin_top(y_pos);
+                            child_widget.set_size_request(width, height);
+                            child_widget.show();
+
+                            overlay.add_overlay(&child_widget);
+                            overlay.show_all();
+                            Ok(())
+                        };
+
+                        if let Err(e) = handle_reparent() {
+                            log::error!("[BrowserTab] Linux GTK reparent failed: {}", e);
+                        } else {
+                            log::info!("[BrowserTab] Linux GTK reparent succeeded");
+                        }
+                    });
+                });
+            } else {
+                log::error!("[BrowserTab] Linux GTK reparent failed: Main webview not found");
+            }
+        }
 
         // Start background poller to sync URL and loading state from webview
         self.start_url_poller(tab_id.clone());
@@ -414,17 +514,53 @@ impl BrowserTabManager {
 
     pub fn resize(&self, tab_id: &str, bounds: BrowserBounds) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
-        webview
-            .set_bounds(tauri::Rect {
-                position: tauri::LogicalPosition::new(bounds.x, bounds.y).into(),
-                size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
-            })
-            .map_err(|e| format!("Resize failed: {}", e))?;
-        Ok(())
+
+        #[cfg(target_os = "linux")]
+        {
+            let window = self.get_window()?;
+            let scale_factor = window.scale_factor().unwrap_or(1.0);
+            let w = bounds.width / scale_factor;
+            let h = bounds.height / scale_factor;
+            let x = bounds.x / scale_factor;
+            let y = bounds.y / scale_factor;
+
+            log::info!("[BrowserTab] resize: scaled target bounds x={}, y={}, w={}, h={}, scale={}", x, y, w, h, scale_factor);
+
+            let _ = webview.with_webview(move |child_platform| {
+                use gtk::prelude::*;
+                let child_widget = child_platform.inner();
+                child_widget.set_margin_start(x as i32);
+                child_widget.set_margin_top(y as i32);
+                child_widget.set_size_request(w as i32, h as i32);
+                child_widget.queue_resize();
+            });
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            webview
+                .set_bounds(tauri::Rect {
+                    position: tauri::LogicalPosition::new(bounds.x, bounds.y).into(),
+                    size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
+                })
+                .map_err(|e| format!("Resize failed: {}", e))?;
+            Ok(())
+        }
     }
 
     pub fn show(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
+
+        #[cfg(target_os = "linux")]
+        {
+            let _ = webview.with_webview(move |child_platform| {
+                use gtk::prelude::*;
+                let child_widget = child_platform.inner();
+                child_widget.show();
+            });
+        }
+
         webview
             .show()
             .map_err(|e| format!("Show failed: {}", e))?;
@@ -433,6 +569,16 @@ impl BrowserTabManager {
 
     pub fn hide(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
+
+        #[cfg(target_os = "linux")]
+        {
+            let _ = webview.with_webview(move |child_platform| {
+                use gtk::prelude::*;
+                let child_widget = child_platform.inner();
+                child_widget.hide();
+            });
+        }
+
         webview
             .hide()
             .map_err(|e| format!("Hide failed: {}", e))?;
@@ -445,6 +591,21 @@ impl BrowserTabManager {
     }
 
     pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(webview) = self.get_webview(tab_id) {
+                let _ = webview.with_webview(move |child_platform| {
+                    use gtk::prelude::*;
+                    let child_widget = child_platform.inner();
+                    if let Some(parent) = child_widget.parent() {
+                        if let Ok(overlay) = parent.dynamic_cast::<gtk::Overlay>() {
+                            overlay.remove(&child_widget);
+                        }
+                    }
+                });
+            }
+        }
+
         if let Ok(webview) = self.get_webview(tab_id) {
             let _ = webview.close();
         }
@@ -493,6 +654,24 @@ impl BrowserTabManager {
     pub fn destroy_all(&self) {
         let mut tabs = self.tabs.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<String> = tabs.keys().cloned().collect();
+
+        #[cfg(target_os = "linux")]
+        {
+            for id in &ids {
+                if let Ok(webview) = self.get_webview(id) {
+                    let _ = webview.with_webview(move |child_platform| {
+                        use gtk::prelude::*;
+                        let child_widget = child_platform.inner();
+                        if let Some(parent) = child_widget.parent() {
+                            if let Ok(overlay) = parent.dynamic_cast::<gtk::Overlay>() {
+                                overlay.remove(&child_widget);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
         for id in ids {
             if let Ok(webview) = self.get_webview(&id) {
                 let _ = webview.close();

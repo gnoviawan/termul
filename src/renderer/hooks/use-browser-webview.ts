@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { useCallback, useEffect, useRef } from 'react'
 import {
   browserTabCreate,
@@ -54,7 +55,29 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
 
   const updateBounds = useCallback(() => {
     const el = containerRef.current
-    if (!el || !createdRef.current) return
+    if (!el) return
+
+    const ancestors = []
+    let current: HTMLElement | null = el
+    for (let i = 0; i < 9; i++) {
+      if (!current) break
+      ancestors.push({
+        level: i,
+        tagName: current.tagName,
+        className: current.className,
+        clientHeight: current.clientHeight,
+        rectHeight: current.getBoundingClientRect().height
+      })
+      current = current.parentElement
+    }
+
+    console.log('[BrowserWebview] DOM heights debug:', ancestors)
+    invoke('log_frontend_error', {
+      level: 'warn',
+      message: `[BrowserWebview] DOM heights debug: ${JSON.stringify(ancestors)}`
+    }).catch(console.error)
+
+    if (!createdRef.current) return
     const bounds = getElementBounds(el)
     browserTabResize(browserTabId, bounds)
       .then((result) => {
