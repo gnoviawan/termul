@@ -1,5 +1,6 @@
+import { readFile } from '@tauri-apps/plugin-fs'
 import { Brain, FileText } from 'lucide-react'
-import { memo, useMemo } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import {
   Attachment,
   AttachmentContent,
@@ -9,6 +10,7 @@ import {
   AttachmentTitle
 } from '@/components/ui/attachment'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
+import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { Message, MessageContent, MessageHeader } from '@/components/ui/message'
 import type { AgentId, ContentBlock } from '@/lib/acp-api'
@@ -16,7 +18,7 @@ import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
-import { blockDisplayName, blockMimeType } from './chat-attachments'
+import { blockDisplayName, blockMimeType, guessMimeType, uint8ToBase64 } from './chat-attachments'
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -31,15 +33,123 @@ function mediaBlocks(blocks: ContentBlock[]): ContentBlock[] {
   return blocks.filter((b) => b.type !== 'text')
 }
 
-function blockImageSrc(block: ContentBlock): string | null {
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
+
+function blockUri(block: ContentBlock): string | undefined {
+  const direct = block.uri as string | undefined
+  if (direct) return direct
+  return (block.resource as { uri?: string } | undefined)?.uri
+}
+
+/** Whether a content block represents an image. */
+function blockIsImage(block: ContentBlock): boolean {
+  if (block.type === 'image') return true
+  if (blockMimeType(block)?.startsWith('image/')) return true
+  const ref = (block.name as string | undefined) ?? blockUri(block) ?? ''
+  return IMAGE_EXT_RE.test(ref)
+}
+
+/** Convert a `file://` URL back to a filesystem path readable by plugin-fs. */
+function fileUrlToPath(uri: string): string {
+  if (!uri.startsWith('file://')) return uri
+  let p = decodeURI(uri.slice('file://'.length))
+  if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1) // /C:/x -> C:/x
+  return p
+}
+
+type ImageSource = { url: string } | { path: string } | null
+
+/** Resolve a renderable image source for a block: a ready URL or a path to read. */
+function imageSourceForBlock(block: ContentBlock): ImageSource {
+  if (!blockIsImage(block)) return null
   const data = block.data as string | undefined
-  const mimeType = (block.mimeType as string | undefined) ?? 'image/png'
-  if (data) return `data:${mimeType};base64,${data}`
-  const uri = block.uri as string | undefined
-  if (uri && (uri.startsWith('data:') || uri.startsWith('http') || uri.startsWith('file:'))) {
-    return uri
+  const blob = (block.resource as { blob?: string } | undefined)?.blob
+  const inline = data ?? blob
+  if (inline) return { url: `data:${blockMimeType(block) ?? 'image/png'};base64,${inline}` }
+  const uri = blockUri(block)
+  if (!uri) return null
+  if (uri.startsWith('data:') || uri.startsWith('http')) return { url: uri }
+  if (uri.startsWith('file:') || uri.startsWith('/') || /^[A-Za-z]:/.test(uri)) {
+    return { path: fileUrlToPath(uri) }
   }
   return null
+}
+
+function ImageCard({ src, name }: { src: string; name: string }): React.JSX.Element {
+  return (
+    <Attachment orientation="vertical" className="w-44">
+      <AttachmentMedia variant="image">
+        <ImageLightbox src={src} alt={name}>
+          <img src={src} alt={name} className="cursor-zoom-in" />
+        </ImageLightbox>
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>{name}</AttachmentTitle>
+      </AttachmentContent>
+    </Attachment>
+  )
+}
+
+function FileCard({ block, name }: { block: ContentBlock; name: string }): React.JSX.Element {
+  const description =
+    block.type === 'resource_link'
+      ? 'Linked file'
+      : block.type === 'resource'
+        ? 'Embedded text'
+        : (blockMimeType(block) ?? block.type)
+  return (
+    <Attachment className="w-56">
+      <AttachmentMedia>
+        <FileText />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>{name}</AttachmentTitle>
+        <AttachmentDescription>{description}</AttachmentDescription>
+      </AttachmentContent>
+    </Attachment>
+  )
+}
+
+/** A single media block: image thumbnail (incl. lazily-read `file://`) or file card. */
+function MediaBlockCard({ block }: { block: ContentBlock }): React.JSX.Element {
+  const name = blockDisplayName(block)
+  const source = imageSourceForBlock(block)
+  const path = source && 'path' in source ? source.path : null
+  const [pathSrc, setPathSrc] = useState<string | null>(null)
+  const [pathFailed, setPathFailed] = useState(false)
+
+  useEffect(() => {
+    if (!path) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const bytes = await readFile(path)
+        if (!cancelled) setPathSrc(`data:${guessMimeType(path)};base64,${uint8ToBase64(bytes)}`)
+      } catch {
+        if (!cancelled) setPathFailed(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [path])
+
+  const readyUrl = source && 'url' in source ? source.url : pathSrc
+  if (readyUrl) return <ImageCard src={readyUrl} name={name} />
+  if (path && !pathFailed) {
+    // Image file still loading — reserve the thumbnail slot.
+    return (
+      <Attachment orientation="vertical" className="w-44">
+        <AttachmentMedia variant="image">
+          <div className="size-full animate-pulse bg-muted" />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{name}</AttachmentTitle>
+        </AttachmentContent>
+      </Attachment>
+    )
+  }
+  return <FileCard block={block} name={name} />
 }
 
 /** Render image / resource blocks as attachment cards. */
@@ -48,39 +158,9 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
   if (media.length === 0) return null
   return (
     <AttachmentGroup className="max-w-full">
-      {media.map((block, i) => {
-        const src = block.type === 'image' ? blockImageSrc(block) : null
-        const name = blockDisplayName(block)
-        if (src) {
-          return (
-            <Attachment key={`${block.type}-${i}`} orientation="vertical" className="w-44">
-              <AttachmentMedia variant="image">
-                <img src={src} alt={name} />
-              </AttachmentMedia>
-              <AttachmentContent>
-                <AttachmentTitle>{name}</AttachmentTitle>
-              </AttachmentContent>
-            </Attachment>
-          )
-        }
-        const description =
-          block.type === 'resource_link'
-            ? 'Linked file'
-            : block.type === 'resource'
-              ? 'Embedded text'
-              : (blockMimeType(block) ?? block.type)
-        return (
-          <Attachment key={`${block.type}-${i}`} className="w-56">
-            <AttachmentMedia>
-              <FileText />
-            </AttachmentMedia>
-            <AttachmentContent>
-              <AttachmentTitle>{name}</AttachmentTitle>
-              <AttachmentDescription>{description}</AttachmentDescription>
-            </AttachmentContent>
-          </Attachment>
-        )
-      })}
+      {media.map((block, i) => (
+        <MediaBlockCard key={`${block.type}-${i}`} block={block} />
+      ))}
     </AttachmentGroup>
   )
 }

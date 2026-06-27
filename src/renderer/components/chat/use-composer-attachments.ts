@@ -105,7 +105,10 @@ async function writeImageBytesToTempLink(
   const dir = await tempDir()
   const path = await join(dir, `faizui-${crypto.randomUUID()}-${safe}`)
   await writeFile(path, bytes)
-  return { kind: 'file-ref', id: attachmentId(), name: name || safe, mimeType, path }
+  const previewUrl = isImageMime(mimeType)
+    ? `data:${mimeType};base64,${uint8ToBase64(bytes)}`
+    : undefined
+  return { kind: 'file-ref', id: attachmentId(), name: name || safe, mimeType, path, previewUrl }
 }
 
 /** Read a browser image File's bytes into a temp-file `resource_link`. */
@@ -271,7 +274,17 @@ export function useComposerAttachments(opts: {
             next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
           }
         } else {
-          next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
+          // Link the path, but read the bytes for a thumbnail preview.
+          let previewUrl: string | undefined
+          try {
+            const bytes = await readFile(path)
+            if (bytes.byteLength <= MAX_IMAGE_BYTES) {
+              previewUrl = `data:${mimeType};base64,${uint8ToBase64(bytes)}`
+            }
+          } catch {
+            // No preview; the card falls back to a file icon.
+          }
+          next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path, previewUrl })
         }
       } else if (isTextLike(name)) {
         next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })

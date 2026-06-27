@@ -21,7 +21,15 @@ export type PendingAttachment =
       /** Base64 payload (no data-URL prefix) for the ACP image block. */
       base64: string
     }
-  | { kind: 'file-ref'; id: string; name: string; mimeType: string; path: string }
+  | {
+      kind: 'file-ref'
+      id: string
+      name: string
+      mimeType: string
+      path: string
+      /** Data-URL thumbnail when the linked file is an image. */
+      previewUrl?: string
+    }
   | { kind: 'file-embed'; id: string; name: string; mimeType: string; text: string; size: number }
 
 /** Max bytes for an inline image attachment. */
