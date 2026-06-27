@@ -1,0 +1,48 @@
+import { File } from 'lucide-react'
+import { forwardRef } from 'react'
+import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
+import type { MentionMatch, MentionSection } from './mention-menu-model'
+
+export type FileMentionMenuHandle = {
+  move: (delta: 1 | -1) => void
+  selectHighlighted: () => boolean
+}
+
+interface FileMentionMenuProps {
+  sections: MentionSection[]
+  onSelect: (match: MentionMatch) => void
+}
+
+/**
+ * Inline @-file mention picker rendered above the chat composer. A thin
+ * wrapper over the shared {@link ComposerMenu} shell; the mention-specific
+ * part is the MentionItem → ComposerMenuItem mapping (file icon, dimmed
+ * ignored entries). See ADR 0003.
+ */
+export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenuProps>(
+  ({ sections, onSelect }, ref) => {
+    const composerSections: ComposerMenuSection[] = sections.map((s) => ({
+      id: s.id,
+      heading: s.heading,
+      items: s.items.map<ComposerMenuItem>((item) => ({
+        key: item.key,
+        label: item.label,
+        description: item.description,
+        icon: File,
+        dimmed: item.ignored,
+        payload: item.payload
+      }))
+    }))
+
+    return (
+      <ComposerMenu
+        ref={ref}
+        sections={composerSections}
+        emptyLabel="No matching files."
+        onSelect={(_sectionId, cItem) => onSelect(cItem.payload as MentionMatch)}
+      />
+    )
+  }
+)
+
+FileMentionMenu.displayName = 'FileMentionMenu'

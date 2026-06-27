@@ -15,6 +15,7 @@ import {
   type LoadedAgentSkill,
   useAgentSkills
 } from '@/hooks/use-agent-skills'
+import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type {
   AvailableCommand,
   ContentBlock,
@@ -23,18 +24,19 @@ import type {
 } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
-import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
-import { ComposerPill } from './ComposerPill'
-import { attachmentToBlock } from './chat-attachments'
+import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
 import { CHAT_SPRING } from './chat-motion'
+import { FileMentionMenu } from './FileMentionMenu'
 import { LoadedSkillChip } from './LoadedSkillChip'
+import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
+import type { MentionMatch } from './mention-menu-model'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
@@ -45,9 +47,10 @@ import {
   slashFilter
 } from './slash-menu-model'
 import { useComposerAttachments } from './use-composer-attachments'
+import { useComposerMentions } from './use-composer-mentions'
 
 interface ChatInputBarProps {
-  /** Active session — drives the agent icon and selector chips. */
+  /** Active session — drives selector chips. */
   session: AcpSession
   /** Project/worktree root used to discover project-local skills. */
   projectRoot?: string
@@ -119,6 +122,7 @@ export function ChatInputBar({
     attachments,
     addFiles,
     pickFiles,
+    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,
@@ -126,7 +130,21 @@ export function ChatInputBar({
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const menuRef = useRef<SlashMenuHandle>(null)
+  const slashMenuRef = useRef<SlashMenuHandle>(null)
+  const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
+    session.projectId,
+    session.cwd
+  )
+  const mentions = useComposerMentions({
+    rootPath: session.cwd,
+    scopeRoot: projectRoot ?? session.cwd,
+    disabled,
+    recents: mentionRecents,
+    onStageFileRef: (m) => {
+      addFileRef(m)
+      pushMentionRecent(m)
+    }
+  })
 
   const handleDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
@@ -151,12 +169,20 @@ export function ChatInputBar({
     if (dragDepth.current === 0) setDragActive(false)
   }, [canDropPaste])
 
-  const menuOpen = isSlashTrigger(value) && !disabled
+  const slashOpen = isSlashTrigger(value) && !disabled
   const filter = slashFilter(value)
+  const {
+    sections: mentionSections,
+    menuRef: mentionMenuRef,
+    reset: resetMentions,
+    select: selectMention,
+    update: updateMentions
+  } = mentions
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
 
   const sections = useMemo(
-    () => (menuOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
-    [menuOpen, commands, configOptions, modes, skills, filter]
+    () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
+    [slashOpen, commands, configOptions, modes, skills, filter]
   )
 
   const resetHeight = useCallback(() => {
@@ -184,13 +210,14 @@ export function ChatInputBar({
         const blocks: ContentBlock[] = []
         if (trimmed) blocks.push({ type: 'text', text })
         for (const a of attachments) blocks.push(attachmentToBlock(a))
-        onSendBlocks(blocks)
+        onSendBlocks(dedupeAttachmentBlocks(blocks))
       } else {
         onSend(text)
       }
       setValue('')
       setLoadedSkill(null)
       clearAttachments()
+      mentions.reset()
       resetHeight()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load skill')
@@ -209,7 +236,8 @@ export function ChatInputBar({
     onSendBlocks,
     resetHeight,
     projectRoot,
-    session.cwd
+    session.cwd,
+    mentions.reset
   ])
 
   const handleSelect = useCallback(
@@ -217,12 +245,15 @@ export function ChatInputBar({
       if (item.kind === 'skill') {
         setLoadedSkill({ name: item.name, description: item.description ?? '' })
         setValue('')
+        updateMentions('', 0)
         resetHeight()
         textareaRef.current?.focus()
         return
       }
       if (item.kind === 'command') {
-        setValue(applyCommandToInput(value, item.name))
+        const next = applyCommandToInput(value, item.name)
+        setValue(next)
+        updateMentions(next, next.length)
         textareaRef.current?.focus()
         return
       }
@@ -232,22 +263,56 @@ export function ChatInputBar({
         onSetMode(item.modeId)
       }
       setValue('')
+      updateMentions('', 0)
       resetHeight()
     },
-    [value, onSetConfig, onSetMode, resetHeight]
+    [value, onSetConfig, onSetMode, resetHeight, updateMentions]
+  )
+
+  const handleMentionSelect = useCallback(
+    (match: MentionMatch) => {
+      const el = textareaRef.current
+      const currentValue = el?.value ?? ''
+      const caret = el?.selectionStart ?? currentValue.length
+      const outcome = selectMention(currentValue, caret, match)
+      if (!outcome) return
+      setValue(outcome.value)
+      resetHeight()
+      requestAnimationFrame(() => {
+        const t = textareaRef.current
+        if (!t) return
+        t.style.height = 'auto'
+        t.style.height = `${Math.min(t.scrollHeight, 160)}px`
+        t.setSelectionRange(outcome.caret, outcome.caret)
+        t.focus()
+        updateMentions(outcome.value, outcome.caret)
+      })
+    },
+    [selectMention, updateMentions, resetHeight]
   )
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (
         tryHandleSlashMenuKeyDown(e, {
-          menuOpen,
+          menuOpen: slashOpen,
           sectionsLength: sections.length,
-          menuRef,
+          menuRef: slashMenuRef,
           onClearInput: () => {
             setValue('')
+            updateMentions('', 0)
             resetHeight()
           }
+        })
+      ) {
+        return
+      }
+      if (
+        tryHandleMentionMenuKeyDown(e, {
+          menuOpen: mentionMenuOpen,
+          sectionsLength: mentionSections.length,
+          menuRef: mentionMenuRef,
+          onReset: resetMentions
         })
       ) {
         return
@@ -263,15 +328,39 @@ export function ChatInputBar({
         void submit()
       }
     },
-    [menuOpen, sections.length, busy, onCancel, submit, resetHeight]
+    [
+      slashOpen,
+      sections.length,
+      mentionMenuOpen,
+      mentionSections,
+      mentionMenuRef,
+      resetMentions,
+      updateMentions,
+      busy,
+      onCancel,
+      submit,
+      resetHeight
+    ]
   )
 
-  const handleInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget
-    setValue(el.value)
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }, [])
+  const syncCaret = useCallback(
+    (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+      const el = e.currentTarget
+      updateMentions(el.value, el.selectionStart ?? el.value.length)
+    },
+    [updateMentions]
+  )
+
+  const handleInput = useCallback(
+    (e: React.FormEvent<HTMLTextAreaElement>) => {
+      const el = e.currentTarget
+      setValue(el.value)
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+      updateMentions(el.value, el.selectionStart ?? el.value.length)
+    },
+    [updateMentions]
+  )
 
   // Load externally-seeded text (edit a message, pick a starter prompt), then
   // focus and place the cursor at the end. Keyed on a nonce so re-picking the
@@ -281,6 +370,7 @@ export function ChatInputBar({
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
+    updateMentions(next, next.length)
     const el = textareaRef.current
     if (!el) return
     el.focus()
@@ -289,7 +379,7 @@ export function ChatInputBar({
       el.style.height = `${Math.min(el.scrollHeight, 160)}px`
       el.setSelectionRange(next.length, next.length)
     })
-  }, [seedNonce])
+  }, [seedNonce, updateMentions])
 
   const canSend =
     !disabled &&
@@ -299,12 +389,21 @@ export function ChatInputBar({
   return (
     <div className="px-5 pb-3.5 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
-        {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
+        {slashOpen && (
+          <SlashCommandMenu ref={slashMenuRef} sections={sections} onSelect={handleSelect} />
+        )}
+        {mentionMenuOpen && (
+          <FileMentionMenu
+            ref={mentionMenuRef}
+            sections={mentionSections}
+            onSelect={handleMentionSelect}
+          />
+        )}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
         <div
           className={cn(
-            'relative overflow-hidden rounded-2xl bg-secondary/40 ring-1 ring-transparent transition-[box-shadow,background-color] duration-200 focus-within:bg-secondary/60 focus-within:ring-primary/40',
-            dragActive && 'ring-primary/70'
+            'relative overflow-hidden rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+            dragActive && 'border-primary/70'
           )}
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}
@@ -328,6 +427,8 @@ export function ChatInputBar({
               value={value}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
+              onKeyUp={syncCaret}
+              onSelect={syncCaret}
               onPaste={handlePaste}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
@@ -338,20 +439,17 @@ export function ChatInputBar({
                   ? 'Session closed'
                   : loadedSkill
                     ? 'Add a message (optional)…'
-                    : 'Ask anything… (/ for commands & skills)'
+                    : 'Ask anything… (/ for commands, @ for files)'
               }
               className={cn(
-                'w-full resize-none bg-transparent text-sm leading-relaxed',
+                'min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
                 'placeholder:text-muted-foreground focus:outline-none',
                 'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
               )}
             />
           </div>
           <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <ComposerPill as="span" interactive={false}>
-                <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
-              </ComposerPill>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {modelOption && (
                 <ConfigChip
                   key={modelOption.id}
@@ -398,7 +496,7 @@ export function ChatInputBar({
                   onClick={() => void pickFiles()}
                   title="Attach files"
                   aria-label="Attach files"
-                  className="flex size-[34px] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:scale-[0.96]"
+                  className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <Paperclip size={16} />
                 </button>
@@ -418,7 +516,7 @@ export function ChatInputBar({
                       exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
                       transition={CHAT_SPRING}
                       whileTap={reduced ? undefined : { scale: 0.9 }}
-                      className="absolute inset-0 flex items-center justify-center rounded-full bg-secondary text-foreground hover:bg-secondary/80"
+                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-muted text-foreground hover:bg-muted/80"
                     >
                       <Square size={14} />
                     </motion.button>
@@ -437,10 +535,10 @@ export function ChatInputBar({
                       transition={CHAT_SPRING}
                       whileTap={reduced || !canSend ? undefined : { scale: 0.9 }}
                       className={cn(
-                        'absolute inset-0 flex items-center justify-center rounded-full transition-colors',
+                        'absolute inset-0 flex items-center justify-center rounded-lg transition-colors',
                         canSend
                           ? 'bg-foreground text-background hover:bg-foreground/90'
-                          : 'bg-foreground/20 text-background/70 cursor-not-allowed'
+                          : 'cursor-not-allowed bg-muted text-muted-foreground'
                       )}
                     >
                       <motion.span

@@ -1,6 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import {
-  Bot,
   Edit2,
   GitBranch,
   Globe,
@@ -16,12 +15,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { ContextMenu } from '@/components/ContextMenu'
+import { AgentBadge } from '@/components/chat/AgentBadge'
+import { AgentConnectionLamp, isAgentConnected } from '@/components/chat/AgentConnectionLamp'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
 import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -641,8 +642,11 @@ function AgentChatTabInline({
   } | null>(null)
 
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
-  const label = session?.title ?? 'Agent Chat'
+  const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
+  const connected = isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
+  const tabLabel = agentName ?? 'Agent Chat'
 
   return (
     <>
@@ -657,8 +661,9 @@ function AgentChatTabInline({
           e.preventDefault()
           setContextMenu({ x: e.clientX, y: e.clientY })
         }}
+        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
         className={cn(
-          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
             ? 'bg-background border-b-primary text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
@@ -667,15 +672,22 @@ function AgentChatTabInline({
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        <Bot size={12} className={isActive ? 'text-primary' : ''} />
-        <span
-          className={cn(
-            'truncate text-2xs font-medium flex-1',
-            isClosed && 'line-through opacity-60'
-          )}
-        >
-          {label}
-        </span>
+        {session ? (
+          <>
+            <AgentBadge
+              agentId={session.agentId}
+              iconSize={12}
+              className={cn(
+                'min-w-0 flex-1 truncate text-2xs font-medium',
+                isClosed && 'line-through opacity-60',
+                isActive ? 'text-foreground' : 'text-inherit'
+              )}
+            />
+            <AgentConnectionLamp connected={connected} />
+          </>
+        ) : (
+          <span className="truncate text-2xs font-medium flex-1">Agent Chat</span>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()

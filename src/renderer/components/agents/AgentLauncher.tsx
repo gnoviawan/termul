@@ -43,7 +43,7 @@ import { persistenceApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
-import { useProjectStore } from '@/stores/project-store'
+import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 interface AgentLauncherProps {
@@ -73,6 +73,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const activeProject = useActiveProject()
+  const projectLabel = activeProject?.name ?? 'this folder'
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
   const platformArch = useMemo(() => currentPlatformArch(), [])
   const supportedAgents = useMemo(
@@ -426,7 +428,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           size="lg"
         />
         <h1 className="text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          What should we do <span className="text-muted-foreground/55">in this folder?</span>
+          {`What should we do in ${projectLabel}?`}
         </h1>
       </div>
 
@@ -437,7 +439,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
-            className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm transition-colors focus-within:border-border/80 focus-within:ring-1 focus-within:ring-border/50"
+            className="overflow-hidden rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
             onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
             onDrop={
               canDropPaste
@@ -498,13 +500,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 type="button"
                 onClick={() => void pickFiles()}
                 disabled={!canPick}
-                className="flex h-[34px] w-[34px] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Paperclip size={16} />
               </button>
-              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
                 <AcpAgentPicker
                   agents={supportedAgents}
                   selectedEntry={selectedEntry}
@@ -551,10 +553,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onClick={() => void launch()}
                   disabled={!canLaunch}
                   className={cn(
-                    'flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full transition-colors',
+                    'flex size-[34px] shrink-0 items-center justify-center rounded-lg transition-colors',
                     canLaunch
                       ? 'bg-foreground text-background hover:bg-foreground/90'
-                      : 'cursor-not-allowed bg-foreground/20 text-background/70'
+                      : 'cursor-not-allowed bg-muted text-muted-foreground'
                   )}
                   aria-label="Start agent chat"
                   title={isLaunching ? 'Starting…' : 'Start agent chat'}

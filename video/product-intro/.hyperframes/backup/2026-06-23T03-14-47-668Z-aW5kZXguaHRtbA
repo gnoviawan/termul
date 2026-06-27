@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0c0b0a;
+        font-family: "Montserrat", sans-serif;
+        color: #f2efe9;
+      }
+      .mono {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      /* ---------- scene chrome ---------- */
+      .scene {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0c0b0a;
+      }
+      #scene1 {
+        z-index: 1;
+      }
+      #scene2 {
+        z-index: 2;
+        opacity: 0;
+      }
+      #scene3 {
+        z-index: 3;
+        opacity: 0;
+      }
+
+      /* atmosphere */
+      .glow {
+        position: absolute;
+        width: 1400px;
+        height: 1400px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          rgba(232, 162, 76, 0.22) 0%,
+          rgba(232, 162, 76, 0.08) 32%,
+          rgba(232, 162, 76, 0) 68%
+        );
+        filter: blur(8px);
+        pointer-events: none;
+      }
+      .vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          120% 120% at 50% 42%,
+          rgba(12, 11, 10, 0) 46%,
+          rgba(6, 5, 4, 0.55) 78%,
+          rgba(4, 3, 2, 0.85) 100%
+        );
+        pointer-events: none;
+      }
+
+      /* corner metadata */
+      .meta {
+        position: absolute;
+        font-size: 20px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #968c7d;
+      }
+      .meta-tl {
+        top: 72px;
+        left: 96px;
+      }
+      .meta-tr {
+        top: 72px;
+        right: 96px;
+        text-align: right;
+      }
+      .meta-bl {
+        bottom: 72px;
+        left: 96px;
+      }
+      .meta-br {
+        bottom: 72px;
+        right: 96px;
+        text-align: right;
+      }
+      .dot {
+        color: #e8a24c;
+      }
+
+      /* ---------- scene 1 ---------- */
+      .s1-content {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 30px;
+      }
+      .wordmark {
+        font-weight: 800;
+        font-size: 280px;
+        line-height: 0.9;
+        letter-spacing: -0.045em;
+        color: #f6f3ec;
+      }
+      .s1-rule {
+        width: 520px;
+        height: 2px;
+        background: #e8a24c;
+        transform-origin: center;
+      }
+      .tagline {
+        font-size: 34px;
+        letter-spacing: 0.42em;
+        text-transform: uppercase;
+        color: #c9bfae;
+        padding-left: 0.42em;
+      }
+
+      /* ---------- scene 2 ---------- */
+      .s2-content {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 0 200px;
+        gap: 18px;
+      }
+      .s2-kicker {
+        font-size: 22px;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: #968c7d;
+        margin-bottom: 26px;
+      }
+      .s2-line {
+        font-weight: 700;
+        font-size: 132px;
+        line-height: 0.98;
+        letter-spacing: -0.03em;
+        color: #f4f1ea;
+      }
+      .s2-line.accent {
+        color: #e8a24c;
+      }
+      .s2-tags {
+        display: flex;
+        gap: 22px;
+        margin-top: 64px;
+      }
+      .s2-tag {
+        font-size: 22px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #cabfae;
+        padding: 16px 26px;
+        border: 1.5px solid rgba(201, 191, 174, 0.28);
+        border-radius: 4px;
+      }
+
+      /* ---------- scene 3 ---------- */
+      .s3-content {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 30px;
+      }
+      .s3-wordmark {
+        font-weight: 800;
+        font-size: 150px;
+        line-height: 0.9;
+        letter-spacing: -0.04em;
+        color: #f6f3ec;
+      }
+      .s3-tag {
+        font-size: 28px;
+        letter-spacing: 0.4em;
+        text-transform: uppercase;
+        color: #c9bfae;
+        padding-left: 0.4em;
+      }
+      .s3-rule {
+        width: 360px;
+        height: 2px;
+        background: rgba(201, 191, 174, 0.35);
+        transform-origin: center;
+        margin: 14px 0 6px;
+      }
+      .s3-prompt {
+        font-size: 32px;
+        letter-spacing: 0.04em;
+        color: #e8a24c;
+        margin-top: 22px;
+      }
+      .s3-prompt .muted {
+        color: #968c7d;
+      }
+      .s3-caret {
+        display: inline-block;
+        width: 16px;
+        height: 34px;
+        background: #e8a24c;
+        margin-left: 8px;
+        transform: translateY(5px);
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-j7pz" id="root" data-composition-id="main" data-start="0" data-duration="30" data-width="1920" data-height="1080">
+      <!-- ================= SCENE 1 — COLD OPEN / TITLE ================= -->
+      <div data-hf-id="hf-zet7" id="scene1" class="scene">
+        <div data-hf-id="hf-qywp" class="glow s1-glow" data-layout-ignore="" style="left: 260px; top: -160px"></div>
+        <div data-hf-id="hf-q7bi" class="vignette"></div>
+
+        <div data-hf-id="hf-xpju" class="meta mono meta-tl s1-boot">
+          <span data-hf-id="hf-b96b" class="dot">●</span> booting&#160;&#160;//&#160;&#160;session 01
+        </div>
+        <div data-hf-id="hf-r48x" class="meta mono meta-tr s1-tick">16 : 9 &#160;·&#160; 1920×1080</div>
+
+        <div data-hf-id="hf-kwf4" class="s1-content">
+          <div data-hf-id="hf-yoi8" class="wordmark">Termul</div>
+          <div data-hf-id="hf-5la3" class="s1-rule"></div>
+          <div data-hf-id="hf-o2vt" class="tagline mono">Terminal Ultra for a Hundred Agents</div>
+        </div>
+
+        <div data-hf-id="hf-px99" class="meta mono meta-bl s1-reg">Terminal Ultra</div>
+        <div data-hf-id="hf-12i3" class="meta mono meta-br s1-page">01 / 03</div>
+      </div>
+
+      <!-- ================= SCENE 2 — VALUE ================= -->
+      <div data-hf-id="hf-qqxc" id="scene2" class="scene">
+        <div data-hf-id="hf-w53w" class="glow s2-glow" data-layout-ignore="" style="right: 120px; top: 80px"></div>
+        <div data-hf-id="hf-8o0i" class="vignette"></div>
+
+        <div data-hf-id="hf-uteb" class="meta mono meta-tl">
+          <span data-hf-id="hf-tx8z" class="dot">●</span> agents&#160;&#160;//&#160;&#160;parallel
+        </div>
+        <div data-hf-id="hf-z7i7" class="meta mono meta-tr">scale&#160;·&#160;∞</div>
+
+        <div data-hf-id="hf-33cf" class="s2-content" data-layout-allow-overlap="">
+          <div data-hf-id="hf-dld5" class="s2-kicker mono">One terminal. Total command.</div>
+          <div data-hf-id="hf-uqn7" class="s2-line s2-l1">One terminal.</div>
+          <div data-hf-id="hf-3iqd" class="s2-line accent s2-l2">A hundred agents.</div>
+          <div data-hf-id="hf-1d0v" class="s2-tags">
+            <div data-hf-id="hf-5m3b" class="s2-tag mono">Parallel sessions</div>
+            <div data-hf-id="hf-d0bv" class="s2-tag mono">Zero context-switch</div>
+            <div data-hf-id="hf-lwwd" class="s2-tag mono">Full control</div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-31vi" class="meta mono meta-bl">Orchestrate</div>
+        <div data-hf-id="hf-ddew" class="meta mono meta-br">02 / 03</div>
+      </div>
+
+      <!-- ================= SCENE 3 — LOCKUP ================= -->
+      <div data-hf-id="hf-ril5" id="scene3" class="scene">
+        <div data-hf-id="hf-qhyo" class="glow s3-glow" data-layout-ignore="" style="left: 260px; bottom: -260px"></div>
+        <div data-hf-id="hf-92bj" class="vignette"></div>
+
+        <div data-hf-id="hf-tqvz" class="meta mono meta-tl">
+          <span data-hf-id="hf-tixy" class="dot">●</span> ready
+        </div>
+        <div data-hf-id="hf-6850" class="meta mono meta-tr">v0.4.8</div>
+
+        <div data-hf-id="hf-2tii" class="s3-content">
+          <div data-hf-id="hf-h4u7" class="s3-wordmark">Termulsdd</div>
+          <div data-hf-id="hf-ttyl" class="s3-rule"></div>
+          <div data-hf-id="hf-kchm" class="s3-tag mono">Terminal Ultra for a Hundred Agents</div>
+          <div data-hf-id="hf-vew5" class="s3-prompt mono">
+            <span data-hf-id="hf-k8e2" class="muted">$</span> termul start<span data-hf-id="hf-8cud" class="s3-caret"></span>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-gntc" class="meta mono meta-bl">Terminal Ultra</div>
+        <div data-hf-id="hf-z4o1" class="meta mono meta-br">03 / 03</div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const T1 = 10.6; // scene 1 -> 2
+      const T2 = 20.6; // scene 2 -> 3
+
+      /* ---------------- SCENE 1 — entrances + ambient ---------------- */
+      tl.fromTo(".s1-glow", { opacity: 0, scale: 0.82 }, { opacity: 1, scale: 1, duration: 1.6, ease: "sine.out" }, 0.2);
+      tl.to(".s1-glow", { scale: 1.12, duration: 2.0, ease: "sine.inOut", yoyo: true, repeat: 3 }, 1.8);
+
+      tl.fromTo(".s1-boot", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.8, ease: "power1.out" }, 0.5);
+      tl.fromTo(".s1-tick", { opacity: 0 }, { opacity: 1, duration: 0.9, ease: "sine.out" }, 0.7);
+
+      // the fade-in title
+      tl.fromTo(".wordmark", { opacity: 0, y: 26, scale: 1.02 }, { opacity: 1, y: 0, scale: 1, duration: 1.5, ease: "power2.out" }, 0.95);
+      tl.fromTo(".s1-rule", { scaleX: 0, opacity: 0 }, { scaleX: 1, opacity: 1, duration: 0.9, ease: "expo.out" }, 1.7);
+      tl.fromTo(".tagline", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.9, ease: "power1.out" }, 1.95);
+
+      tl.fromTo(".s1-reg", { opacity: 0 }, { opacity: 1, duration: 0.8, ease: "sine.out" }, 2.3);
+      tl.fromTo(".s1-page", { opacity: 0 }, { opacity: 1, duration: 0.8, ease: "sine.out" }, 2.45);
+
+      /* ---------------- TRANSITION 1 — calm blur crossfade ---------------- */
+      tl.to("#scene1", { filter: "blur(25px)", scale: 1.05, duration: 0.6, ease: "power1.in" }, T1);
+      tl.to("#scene1", { opacity: 0, duration: 0.4, ease: "power1.in" }, T1 + 0.4);
+      tl.set("#scene1", { visibility: "hidden" }, T1 + 0.8);
+      tl.fromTo("#scene2", { filter: "blur(25px)", scale: 0.95, opacity: 0 }, { filter: "blur(25px)", scale: 0.95, opacity: 1, duration: 0.3, ease: "power1.inOut" }, T1 + 0.5);
+      tl.to("#scene2", { filter: "blur(0px)", scale: 1, duration: 0.7, ease: "power1.out" }, T1 + 0.8);
+
+      /* ---------------- SCENE 2 — entrances + ambient ---------------- */
+      tl.fromTo(".s2-glow", { opacity: 0, scale: 0.85 }, { opacity: 1, scale: 1, duration: 1.2, ease: "sine.out" }, T1 + 0.6);
+      tl.to(".s2-glow", { scale: 1.14, duration: 2.4, ease: "sine.inOut", yoyo: true, repeat: 2 }, T1 + 1.8);
+
+      tl.fromTo(".s2-kicker", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, T1 + 0.6);
+      tl.fromTo(".s2-l1", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }, T1 + 0.75);
+      tl.fromTo(".s2-l2", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.85, ease: "expo.out" }, T1 + 0.95);
+      tl.fromTo(".s2-tag", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)", stagger: 0.12 }, T1 + 1.7);
+
+      /* ---------------- TRANSITION 2 — calm blur crossfade ---------------- */
+      tl.to("#scene2", { filter: "blur(25px)", scale: 1.05, duration: 0.6, ease: "power1.in" }, T2);
+      tl.to("#scene2", { opacity: 0, duration: 0.4, ease: "power1.in" }, T2 + 0.4);
+      tl.set("#scene2", { visibility: "hidden" }, T2 + 0.8);
+      tl.fromTo("#scene3", { filter: "blur(25px)", scale: 0.95, opacity: 0 }, { filter: "blur(25px)", scale: 0.95, opacity: 1, duration: 0.3, ease: "power1.inOut" }, T2 + 0.5);
+      tl.to("#scene3", { filter: "blur(0px)", scale: 1, duration: 0.7, ease: "power1.out" }, T2 + 0.8);
+
+      /* ---------------- SCENE 3 — entrances + ambient ---------------- */
+      tl.fromTo(".s3-glow", { opacity: 0, scale: 0.85 }, { opacity: 1, scale: 1, duration: 1.4, ease: "sine.out" }, T2 + 0.6);
+      tl.to(".s3-glow", { scale: 1.12, duration: 2.6, ease: "sine.inOut", yoyo: true, repeat: 2 }, T2 + 2.0);
+
+      tl.fromTo(".s3-wordmark", { opacity: 0, scale: 1.04 }, { opacity: 1, scale: 1, duration: 1.0, ease: "power2.out" }, T2 + 0.6);
+      tl.fromTo(".s3-rule", { scaleX: 0, opacity: 0 }, { scaleX: 1, opacity: 1, duration: 0.8, ease: "expo.out" }, T2 + 1.0);
+      tl.fromTo(".s3-tag", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.8, ease: "power1.out" }, T2 + 1.2);
+      tl.fromTo(".s3-prompt", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.7, ease: "power2.out" }, T2 + 1.5);
+
+      // terminal caret blink (finite, deterministic)
+      tl.to(".s3-caret", { opacity: 0, duration: 0.55, ease: "steps(1)", yoyo: true, repeat: 12 }, T2 + 1.9);
+
+      /* ---------------- FINAL — gentle fade to near-black ---------------- */
+      tl.to(".s3-content", { opacity: 0, duration: 1.0, ease: "power1.in" }, 29.0);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

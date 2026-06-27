@@ -6,22 +6,20 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * Canonical chrome for every composer "pill"/"chip": the agent badge, the
- * mode/model/config selector triggers, and the launcher agent picker. One
- * height (34px — matches the round attach/send buttons), one radius, one
- * padding, one background/hover, and one text treatment so the bottom toolbar
- * row stays pixel-consistent across the chat input bar and the agent launcher.
+ * Canonical chrome for flat composer controls: mode/model/config selector triggers
+ * and the launcher agent picker. One padding, one text treatment, and one hover
+ * so the bottom toolbar row stays pixel-consistent across the chat input bar and
+ * the agent launcher.
  *
- * `interactive` (default) adds hover/press feedback and disabled styling for
- * `<button>` pills; non-interactive container pills (e.g. the agent badge) opt
- * out via `interactive={false}` so they don't fake affordances.
+ * `interactive` (default) adds hover feedback and disabled styling for `<button>`
+ * triggers; non-interactive containers opt out via `interactive={false}`.
  */
 const composerPillVariants = cva(
-  'flex h-[34px] min-w-0 items-center gap-1.5 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/80',
+  'inline-flex min-w-0 items-center gap-1 px-1 py-1 text-xs text-muted-foreground',
   {
     variants: {
       interactive: {
-        true: 'transition-[background-color,transform] hover:bg-foreground/[0.09] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50',
+        true: 'transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
         false: ''
       }
     },
@@ -32,15 +30,15 @@ const composerPillVariants = cva(
 export interface ComposerPillProps
   extends React.HTMLAttributes<HTMLElement>,
     VariantProps<typeof composerPillVariants> {
-  /** Merge pill chrome onto a child element instead of rendering our own (Radix Slot). */
+  /** Merge control chrome onto a child element instead of rendering our own (Radix Slot). */
   asChild?: boolean
-  /** Underlying element when not using `asChild` (default `button`). Use `span` for non-interactive pills. */
+  /** Underlying element when not using `asChild` (default `button`). Use `span` for non-interactive labels. */
   as?: 'button' | 'span'
   /** Native button type — only applied when rendering a `<button>`. */
   type?: 'button' | 'submit' | 'reset'
   /** Disabled state — only applied when rendering a `<button>`. */
   disabled?: boolean
-  /** Append the standardized trailing chevron used by popover-trigger pills. */
+  /** Append the standardized trailing chevron used by popover-trigger controls. */
   chevron?: boolean
 }
 

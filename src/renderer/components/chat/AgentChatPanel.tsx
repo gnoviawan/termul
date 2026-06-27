@@ -3,7 +3,6 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
-import { AgentHeader } from './AgentHeader'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -34,7 +33,6 @@ interface AgentChatPanelProps {
 export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
-  const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const imageCapable = useAcpStore((s) =>
     session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
   )
@@ -153,7 +151,6 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <AgentHeader session={session} agentStatus={agentStatus} />
       <ChatErrorNotice
         message={activeError}
         onRetry={lastUserText.trim() && !session.activeTurn ? handleRetry : undefined}

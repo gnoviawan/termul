@@ -372,7 +372,8 @@ import type {
   FileChangeEvent,
   FileContent,
   FileInfo,
-  FileSearchResponse
+  FileSearchResponse,
+  SearchFileHit
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -424,11 +425,13 @@ export interface FilesystemApi {
     searchId: string,
     scopeRoot: string,
     rootPath: string,
-    query: string
+    query: string,
+    /** When true, surface ignored/hidden files with `ignored: true` (ADR 0003). */
+    includeIgnored?: boolean
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+    callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
@@ -461,7 +464,14 @@ export interface FilesystemApi {
   onFileDeleted: (callback: FileChangeCallback) => () => void
 }
 
-export type { DirectoryEntry, FileChangeEvent, FileContent, FileInfo, FileSearchResponse }
+export type {
+  DirectoryEntry,
+  FileChangeEvent,
+  FileContent,
+  FileInfo,
+  FileSearchResponse,
+  SearchFileHit
+}
 
 // ============================================================================
 // Session Persistence Types

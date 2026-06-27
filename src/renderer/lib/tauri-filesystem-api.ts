@@ -5,7 +5,8 @@ import type {
   FileContent,
   FileInfo,
   FilesystemApi,
-  IpcResult
+  IpcResult,
+  SearchFileHit
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -484,12 +485,21 @@ export function createTauriFilesystemApi(): FilesystemApi {
       searchId: string,
       scopeRoot: string,
       rootPath: string,
-      query: string
+      query: string,
+      includeIgnored?: boolean
     ) {
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_stream',
-          { request: { searchId, scopeRoot, rootPath, query } }
+          {
+            request: {
+              searchId,
+              scopeRoot,
+              rootPath,
+              query,
+              ...(includeIgnored ? { includeIgnored } : {})
+            }
+          }
         )
         if (!response?.success) {
           return {
@@ -532,12 +542,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onSearchFileNamesBatch(
-      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+      callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
     ) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
+        unlisten = listen<{ searchId: string; files: SearchFileHit[]; truncated?: boolean }>(
           'search-file-names-batch',
           ({ payload }) => callback(payload)
         )

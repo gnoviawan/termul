@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
@@ -1173,13 +1172,30 @@ pub struct SearchFileNamesStreamRequest {
     pub root_path: String,
     pub query: String,
     pub search_id: String,
+    /// When true, run `rg --no-ignore --hidden` and emit ignored/hidden files
+    /// with `ignored: true` so the @-mention picker can dim them. When false
+    /// (the default), the common-ignore exclusions are applied and every hit
+    /// carries `ignored: false`. See ADR 0003.
+    #[serde(default)]
+    pub include_ignored: bool,
+}
+
+/// One filename-search hit. `ignored` is set when the path runs through a
+/// commonly-ignored directory or a hidden/cruft segment, so the @-mention
+/// picker can dim it. `ignored: false` for every hit when the caller did not
+/// request `include_ignored`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileHit {
+    pub path: String,
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesBatchEvent {
     pub search_id: String,
-    pub files: Vec<String>,
+    pub files: Vec<SearchFileHit>,
     /// `None` on mid-stream batches (final truncation state is not yet known).
     /// `Some(true)` is set on the trailing batch if the result was capped, and
     /// `Some(false)` otherwise. `serde` skips `None` so the field is omitted
@@ -1385,6 +1401,70 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
     args
 }
 
+/// Directory basenames that are commonly git-ignored. Entries under these are
+/// still walked when `include_ignored` is set, but classified as `ignored` so
+/// the @-mention picker can dim them. Mirrors the renderer's `ALWAYS_IGNORE`
+/// list in `tauri-filesystem-api.ts` so the two sides agree on "ignored".
+const COMMONLY_IGNORED_NAMES: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".next",
+    ".cache",
+    ".turbo",
+    "dist",
+    "build",
+    ".output",
+    ".nuxt",
+    ".svelte-kit",
+    "__pycache__",
+    ".pytest_cache",
+    "venv",
+    "coverage",
+    ".nyc_output",
+];
+
+/// Cruft file basenames (not dir names) that should be dimmed when surfaced.
+const COMMONLY_IGNORED_FILES: &[&str] = &["Thumbs.db", "desktop.ini", ".DS_Store"];
+
+/// True when a (slash-normalized, relative) path runs through a
+/// commonly-ignored directory, a hidden segment, or a cruft basename. Used to
+/// tag `SearchFileHit.ignored` for the @-mention picker. Pure so it can be
+/// unit-tested directly.
+fn path_is_ignored(rel_path: &str) -> bool {
+    let segments: Vec<&str> = rel_path.split(['/', '\\']).collect();
+    for seg in &segments {
+        if seg.is_empty() {
+            continue;
+        }
+        if seg.starts_with('.') || COMMONLY_IGNORED_NAMES.contains(seg) {
+            return true;
+        }
+    }
+    if let Some(basename) = segments.last() {
+        if COMMONLY_IGNORED_FILES.contains(basename) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Concatenate non-ignored hits first, then ignored hits up to `cap`. Pure so
+/// it can be unit-tested directly. The caller is expected to have already
+/// capped `non_ignored` at `cap`; this extends with ignored only into the
+/// remaining slots so ignored files can never crowd out non-ignored ones.
+fn rank_search_hits(
+    non_ignored: Vec<SearchFileHit>,
+    ignored: Vec<SearchFileHit>,
+    cap: usize,
+) -> Vec<SearchFileHit> {
+    let mut out = non_ignored;
+    let remaining = cap.saturating_sub(out.len());
+    if remaining > 0 {
+        out.extend(ignored.into_iter().take(remaining));
+    }
+    out
+}
+
 /// Build the ripgrep argv for a streaming filename search.
 ///
 /// We rely on `rg --files --iglob` so we get the same multi-threaded tree walk
@@ -1394,7 +1474,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
 /// default is already case-insensitive on Windows, but Linux/macOS would
 /// otherwise be sensitive). Glob metacharacters in the query are escaped so
 /// they match literally, mirroring the old `contains` semantics.
-fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
+///
+/// When `include_ignored` is true, the common-ignore exclusions are dropped
+/// and `--no-ignore --hidden` are added so ignored/hidden files surface;
+/// classification + non-ignored-first ranking happen after the walk. See ADR
+/// 0003.
+fn build_file_name_search_args(query: &str, root_path: &str, include_ignored: bool) -> Vec<String> {
     // Escape glob metacharacters that ripgrep would otherwise interpret as
     // wildcards (`*`, `?`, `[`, `]`, `{`, `}`, `\`) so the query is matched
     // as a substring of the basename. `{`/`}` are alternation in globset.
@@ -1416,42 +1501,34 @@ fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
         format!("**/*{}*", escaped),
     ];
 
-    // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
-    // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
-    // `!**/name/**` form that `build_search_args` uses for content search
-    // is silently dropped here, so we explicitly use the basename form.
-    for ignored in [
-        "node_modules",
-        ".git",
-        ".next",
-        ".cache",
-        ".turbo",
-        "dist",
-        "build",
-        ".output",
-        ".nuxt",
-        ".svelte-kit",
-        "__pycache__",
-        ".pytest_cache",
-        "venv",
-        "coverage",
-        ".nyc_output",
-    ] {
+    if include_ignored {
+        // Surface ignored + hidden files so they can be mentioned and dimmed.
+        // No `-g !<name>` exclusions; per-hit classification and non-ignored-
+        // first ranking happen after the walk.
+        args.push("--no-ignore".to_string());
+        args.push("--hidden".to_string());
+    } else {
+        // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
+        // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
+        // `!**/name/**` form that `build_search_args` uses for content search
+        // is silently dropped here, so we explicitly use the basename form.
+        for ignored in COMMONLY_IGNORED_NAMES {
+            args.push("-g".to_string());
+            args.push(format!("!{}", ignored));
+        }
+        // Exclude platform cruft and common dotenv secrets. The exact `.env`
+        // exclusion matches the spec; `.env.local` / `.env.production` are
+        // deliberately left to `.gitignore` so a project's own ignore list is
+        // honored.
         args.push("-g".to_string());
-        args.push(format!("!{}", ignored));
+        args.push("!.env".to_string());
+        args.push("-g".to_string());
+        args.push("!Thumbs.db".to_string());
+        args.push("-g".to_string());
+        args.push("!desktop.ini".to_string());
+        args.push("-g".to_string());
+        args.push("!.DS_Store".to_string());
     }
-    // Exclude platform cruft and common dotenv secrets. The exact `.env`
-    // exclusion matches the spec; `.env.local` / `.env.production` are
-    // deliberately left to `.gitignore` so a project's own ignore list is
-    // honored.
-    args.push("-g".to_string());
-    args.push("!.env".to_string());
-    args.push("-g".to_string());
-    args.push("!Thumbs.db".to_string());
-    args.push("-g".to_string());
-    args.push("!desktop.ini".to_string());
-    args.push("-g".to_string());
-    args.push("!.DS_Store".to_string());
 
     args.push(root_path.to_string());
     args
@@ -1856,7 +1933,7 @@ pub async fn search_file_names_stream(
         }
     };
 
-    let args = build_file_name_search_args(&trimmed_query, &validated_root);
+    let args = build_file_name_search_args(&trimmed_query, &validated_root, request.include_ignored);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -1912,13 +1989,25 @@ pub async fn search_file_names_stream(
         guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
 
+    let include_ignored = request.include_ignored;
+
     tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
-        let mut files: Vec<String> = Vec::new();
         let max_files: usize = 100;
         let batch_size: usize = 25;
         let mut truncated = false;
         let mut stream_error: Option<String> = None;
+
+        // `files` is the default-path bucket (mid-stream batched).
+        // `non_ignored` + `ignored_bucket` are the `include_ignored`-path
+        // buckets, ranked after the walk so node_modules can't crowd out
+        // source files. See ADR 0003.
+        let mut files: Vec<SearchFileHit> = Vec::new();
+        let mut non_ignored: Vec<SearchFileHit> = Vec::new();
+        let mut ignored_bucket: Vec<SearchFileHit> = Vec::new();
+        const IGNORED_CAP: usize = 20;
+        let mut ignored_dropped: usize = 0;
+        let mut broke_at_cap = false;
         let mut last_batch_count: usize = 0;
 
         // Collect output until we hit the cap, EOF, or a pipe error. The
@@ -1928,35 +2017,58 @@ pub async fn search_file_names_stream(
         loop {
             match iter.next() {
                 Some(Ok(line)) => {
-                    if files.len() >= max_files {
-                        truncated = true;
-                        break;
-                    }
                     // ripgrep on Windows may emit verbatim paths
                     // (e.g. `\\?\C:\...`) when the root is canonicalized.
                     // Strip the prefix before the slash-normalization so the
                     // renderer never sees a `\\?\` blob in click paths.
                     let normalized =
                         path_validation::strip_verbatim_prefix(&line).replace('\\', "/");
-                    files.push(normalized);
-
-                    // Emit a mid-stream batch when we cross a batch
-                    // boundary, but skip the trailing batch below if we
-                    // already published this exact count.
-                    if files.len() % batch_size == 0 {
-                        // Mid-stream batch — final truncation state is not
-                        // known yet, so the field is `None` (serde omits it
-                        // from the wire). The trailing batch below carries
-                        // the authoritative value.
-                        let _ = app_handle.emit(
-                            "search-file-names-batch",
-                            SearchFileNamesBatchEvent {
-                                search_id: search_id.clone(),
-                                files: files.clone(),
-                                truncated: None,
-                            },
-                        );
-                        last_batch_count = files.len();
+                    if include_ignored {
+                        if path_is_ignored(&normalized) {
+                            if ignored_bucket.len() < IGNORED_CAP {
+                                ignored_bucket.push(SearchFileHit {
+                                    path: normalized,
+                                    ignored: true,
+                                });
+                            } else {
+                                ignored_dropped += 1;
+                            }
+                        } else if non_ignored.len() < max_files {
+                            non_ignored.push(SearchFileHit {
+                                path: normalized,
+                                ignored: false,
+                            });
+                        } else {
+                            broke_at_cap = true;
+                            break;
+                        }
+                    } else {
+                        if files.len() >= max_files {
+                            truncated = true;
+                            break;
+                        }
+                        files.push(SearchFileHit {
+                            path: normalized,
+                            ignored: false,
+                        });
+                        // Emit a mid-stream batch when we cross a batch
+                        // boundary, but skip the trailing batch below if we
+                        // already published this exact count.
+                        if files.len() % batch_size == 0 {
+                            // Mid-stream batch — final truncation state is
+                            // not known yet, so the field is `None` (serde
+                            // omits it from the wire). The trailing batch
+                            // below carries the authoritative value.
+                            let _ = app_handle.emit(
+                                "search-file-names-batch",
+                                SearchFileNamesBatchEvent {
+                                    search_id: search_id.clone(),
+                                    files: files.clone(),
+                                    truncated: None,
+                                },
+                            );
+                            last_batch_count = files.len();
+                        }
                     }
                 }
                 Some(Err(e)) => {
@@ -1967,19 +2079,35 @@ pub async fn search_file_names_stream(
             }
         }
 
-        // Always publish a final batch with the authoritative list so the
-        // renderer converges to the same total. Skip if the count is exactly
-        // what the last mid-stream batch carried.
-        if files.len() != last_batch_count {
+        // Publish the authoritative final batch. For `include_ignored`, emit
+        // a single ranked batch (non-ignored first) so the picker never
+        // flickers between mid-stream order and the ranked order. For the
+        // default path, skip if the count matches the last mid-stream batch.
+        let final_files: Vec<SearchFileHit> = if include_ignored {
+            truncated = broke_at_cap || ignored_dropped > 0;
+            let ranked = rank_search_hits(non_ignored, ignored_bucket, max_files);
             let _ = app_handle.emit(
                 "search-file-names-batch",
                 SearchFileNamesBatchEvent {
                     search_id: search_id.clone(),
-                    files: files.clone(),
+                    files: ranked.clone(),
                     truncated: Some(truncated),
                 },
             );
-        }
+            ranked
+        } else {
+            if files.len() != last_batch_count {
+                let _ = app_handle.emit(
+                    "search-file-names-batch",
+                    SearchFileNamesBatchEvent {
+                        search_id: search_id.clone(),
+                        files: files.clone(),
+                        truncated: Some(truncated),
+                    },
+                );
+            }
+            files
+        };
 
         // Reap the child and propagate a non-zero exit status (other than 1,
         // which rg uses for "no matches") as a surfaced error. The previous
@@ -2024,7 +2152,7 @@ pub async fn search_file_names_stream(
             SearchFileNamesDoneEvent {
                 search_id,
                 truncated,
-                total_files: files.len(),
+                total_files: final_files.len(),
                 code: final_code,
                 error: final_error,
             },
@@ -3310,7 +3438,7 @@ mod tests {
         // interpreted as a glob wildcard or alternation. Each metacharacter
         // should be prefixed with a backslash so rg treats it as a literal
         // substring match.
-        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp");
+        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp", false);
         let iglob_idx = args
             .iter()
             .position(|a| a == "--iglob")
@@ -3323,7 +3451,7 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_includes_ignore_list_and_excludes() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         // The hardcoded ignore list must show up as bare-basename `-g !<name>`
         // entries so rg actually skips those directories in `--files` mode.
         for ignored in [
@@ -3344,14 +3472,14 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_appends_root_path() {
-        let args = build_file_name_search_args("term", "/some/root path");
+        let args = build_file_name_search_args("term", "/some/root path", false);
         // Root paths with spaces should appear verbatim, not split.
         assert_eq!(args.last().map(String::as_str), Some("/some/root path"));
     }
 
     #[test]
     fn build_file_name_search_args_starts_with_files_and_case_insensitive() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         assert_eq!(args[0], "--files");
         assert_eq!(args[1], "-i");
     }
@@ -3388,7 +3516,10 @@ mod tests {
         // unknown; serde should drop the field from the wire.
         let mid_stream = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: None,
         };
         let json = serde_json::to_string(&mid_stream).unwrap();
@@ -3396,11 +3527,89 @@ mod tests {
 
         let final_batch = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: Some(true),
         };
         let json = serde_json::to_string(&final_batch).unwrap();
         assert!(json.contains("\"truncated\":true"));
+        // The per-hit `ignored` flag is on the wire.
+        assert!(json.contains("\"ignored\":false"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_include_ignored_surfaces_hidden_and_drops_exclusions() {
+        let args = build_file_name_search_args("foo", "/tmp", true);
+        assert!(args.contains(&"--no-ignore".to_string()));
+        assert!(args.contains(&"--hidden".to_string()));
+        // The common-ignore exclusions must be absent so ignored/hidden files
+        // are actually walked.
+        for needle in ["!node_modules", "!.env", "!Thumbs.db", "!.DS_Store"] {
+            let has = args.windows(2).any(|w| w[0] == "-g" && w[1] == needle);
+            assert!(!has, "include_ignored must not exclude `{}`", needle);
+        }
+        assert_eq!(args.last().map(String::as_str), Some("/tmp"));
+    }
+
+    #[test]
+    fn path_is_ignored_classifies_commonly_ignored_paths() {
+        assert!(path_is_ignored("node_modules/pkg/index.js"));
+        assert!(path_is_ignored(".git/HEAD"));
+        assert!(path_is_ignored("dist/bundle.js"));
+        assert!(path_is_ignored(".env"));
+        assert!(path_is_ignored("src/.hidden.ts"));
+        assert!(path_is_ignored("assets/Thumbs.db"));
+        assert!(path_is_ignored("assets/.DS_Store"));
+        // Source files and non-cruft paths are not ignored.
+        assert!(!path_is_ignored("src/auth.ts"));
+        assert!(!path_is_ignored("README.md"));
+        assert!(!path_is_ignored("lib/router/index.ts"));
+    }
+
+    #[test]
+    fn rank_search_hits_puts_non_ignored_first_and_caps_total() {
+        let non_ignored = vec![
+            SearchFileHit { path: "a".to_string(), ignored: false },
+            SearchFileHit { path: "b".to_string(), ignored: false },
+        ];
+        let ignored = vec![
+            SearchFileHit { path: "c".to_string(), ignored: true },
+            SearchFileHit { path: "d".to_string(), ignored: true },
+            SearchFileHit { path: "e".to_string(), ignored: true },
+        ];
+        // cap=3 → all non-ignored (2) + one ignored.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 3);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        // cap=2 → only non-ignored; ignored never crowds them out.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 2);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        // No non-ignored → ignored fills up to cap.
+        let ranked = rank_search_hits(vec![], ignored.clone(), 100);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["c", "d", "e"]
+        );
+        // No ignored → non-ignored only, untruncated when under cap.
+        let ranked = rank_search_hits(
+            vec![
+                SearchFileHit { path: "a".to_string(), ignored: false },
+                SearchFileHit { path: "b".to_string(), ignored: false },
+            ],
+            vec![],
+            100,
+        );
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 
     #[test]

@@ -16,7 +16,6 @@ import {
   FolderPlus,
   GitBranch,
   Home,
-  Loader2,
   Palette,
   Plus,
   RotateCcw,
@@ -29,6 +28,7 @@ import {
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { BrailleSpinner } from '@/components/ui/BrailleSpinner'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
@@ -41,6 +41,7 @@ import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { filterWorktrees } from '@/lib/worktree-filter'
 import { groupWorktrees } from '@/lib/worktree-grouping'
+import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
@@ -303,6 +304,12 @@ export function ProjectSidebar({
   // Optimized subscription: only re-render sidebar if which projects have activity changes.
   // This prevents re-renders when terminal text output changes.
   const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()]
+  const agentChatActivityIds = useProjectsWithActiveAgentChat()
+  const projectHasActivity = useCallback(
+    (projectId: string) =>
+      projectActivityIds.includes(projectId) || agentChatActivityIds.includes(projectId),
+    [projectActivityIds, agentChatActivityIds]
+  )
 
   const toggleProjectExpanded = useCallback((projectId: string): void => {
     setExpandedProjects((prev) => {
@@ -1268,7 +1275,7 @@ export function ProjectSidebar({
                             data-group-container-id={group.id}
                           >
                             {gpProjects.map((project) => {
-                              const hasActivity = projectActivityIds.includes(project.id)
+                              const hasActivity = projectHasActivity(project.id)
                               const shortcutIndex = activeIndexById.get(project.id) ?? -1
                               return (
                                 <Reorder.Item
@@ -1388,7 +1395,7 @@ export function ProjectSidebar({
                   data-testid="ungrouped-projects-container"
                 >
                   {ungroupedActiveProjects.map((project) => {
-                    const hasActivity = projectActivityIds.includes(project.id)
+                    const hasActivity = projectHasActivity(project.id)
                     const shortcutIndex = activeIndexById.get(project.id) ?? -1
                     return (
                       <Reorder.Item
@@ -1502,7 +1509,7 @@ export function ProjectSidebar({
                 </button>
                 {(showArchived || isSearching) &&
                   filteredArchivedProjects.map((project) => {
-                    const hasActivity = projectActivityIds.includes(project.id)
+                    const hasActivity = projectHasActivity(project.id)
                     return (
                       <ArchivedProjectItem
                         key={project.id}
@@ -1959,10 +1966,10 @@ const ProjectItem = memo(function ProjectItem({
         {!isEditing && hasActivity && (
           <span
             className="flex items-center mr-3"
-            title="Terminal activity"
+            title="Activity"
             style={{ isolation: 'isolate' }}
           >
-            <Loader2 size={12} className={'animate-spin text-primary opacity-100'} />
+            <BrailleSpinner className="text-xs text-primary" aria-hidden />
           </span>
         )}
       </div>
@@ -2246,12 +2253,8 @@ function ArchivedProjectItem({
         {project.name}
       </span>
       {hasActivity && (
-        <span
-          className="flex items-center mr-2"
-          title="Terminal activity"
-          style={{ isolation: 'isolate' }}
-        >
-          <Loader2 size={10} className="animate-spin text-primary opacity-60" />
+        <span className="flex items-center mr-2" title="Activity" style={{ isolation: 'isolate' }}>
+          <BrailleSpinner className="text-3xs text-primary opacity-60" aria-hidden />
         </span>
       )}
       {hasError && (

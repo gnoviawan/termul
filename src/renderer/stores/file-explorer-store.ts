@@ -171,7 +171,7 @@ function ensureFileNameStreamSubscription(
     if (event.searchId !== activeId) return
 
     set({
-      searchFileNameMatches: event.files,
+      searchFileNameMatches: event.files.map((f) => f.path),
       searchTruncated: event.truncated || state.searchTruncated
     })
   })

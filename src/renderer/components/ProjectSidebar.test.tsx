@@ -10,13 +10,15 @@ const {
   mockSpawnTerminalInPane,
   mockActivateAndOpenTerminal,
   mockUseProjectsWithActivity,
-  mockUseProjectsWithErrors
+  mockUseProjectsWithErrors,
+  mockUseProjectsWithActiveAgentChat
 } = vi.hoisted(() => ({
   mockGetAvailableShells: vi.fn(),
   mockSpawnTerminalInPane: vi.fn(),
   mockActivateAndOpenTerminal: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
-  mockUseProjectsWithErrors: vi.fn()
+  mockUseProjectsWithErrors: vi.fn(),
+  mockUseProjectsWithActiveAgentChat: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -43,6 +45,14 @@ vi.mock('@/stores/terminal-store', async () => {
     ...actual,
     useProjectsWithActivity: () => mockUseProjectsWithActivity(),
     useProjectsWithErrors: () => mockUseProjectsWithErrors()
+  }
+})
+
+vi.mock('@/stores/acp-store', async () => {
+  const actual = await vi.importActual('@/stores/acp-store')
+  return {
+    ...actual,
+    useProjectsWithActiveAgentChat: () => mockUseProjectsWithActiveAgentChat()
   }
 })
 
@@ -76,6 +86,8 @@ beforeEach(() => {
   })
   mockUseProjectsWithActivity.mockReset()
   mockUseProjectsWithActivity.mockReturnValue([])
+  mockUseProjectsWithActiveAgentChat.mockReset()
+  mockUseProjectsWithActiveAgentChat.mockReturnValue([])
   mockUseProjectsWithErrors.mockReset()
   mockUseProjectsWithErrors.mockReturnValue(new Set())
 })
@@ -483,26 +495,39 @@ describe('ProjectSidebar Default Shell Submenu', () => {
   })
 })
 
-describe('ProjectSidebar Terminal Activity Indicator', () => {
+describe('ProjectSidebar Activity Indicator', () => {
+  function activityIndicator(item: HTMLElement): HTMLElement | null {
+    return item.querySelector('[title="Activity"]')
+  }
+
+  beforeEach(() => {
+    mockUseProjectsWithActiveAgentChat.mockReturnValue([])
+  })
+
   it('should not show activity indicator when hasActivity is false', () => {
     mockUseProjectsWithActivity.mockReturnValue([])
     renderWithRouter()
 
     const item = screen.getByTestId('project-item-1')
-    const spinner = item.querySelector('svg.animate-spin')
-    expect(spinner).toBeNull()
+    expect(activityIndicator(item)).toBeNull()
   })
 
-  it('should show activity indicator when hasActivity is true and project is not active', () => {
+  it('should show activity indicator when terminal activity is true', () => {
     mockUseProjectsWithActivity.mockReturnValue(['2'])
     renderWithRouter()
 
     const item = screen.getByTestId('project-item-2')
-    const spinner = item.querySelector('svg.animate-spin')
-    expect(spinner).not.toBeNull()
+    expect(activityIndicator(item)).not.toBeNull()
+    expect(activityIndicator(item)).toHaveAttribute('title', 'Activity')
+  })
 
-    const wrapper = spinner!.closest('span')
-    expect(wrapper).toHaveAttribute('title', 'Terminal activity')
+  it('should show activity indicator when agent chat is active', () => {
+    mockUseProjectsWithActivity.mockReturnValue([])
+    mockUseProjectsWithActiveAgentChat.mockReturnValue(['2'])
+    renderWithRouter()
+
+    const item = screen.getByTestId('project-item-2')
+    expect(activityIndicator(item)).not.toBeNull()
   })
 
   it('should show activity indicator even when project is active if hasActivity is true', () => {
@@ -510,8 +535,7 @@ describe('ProjectSidebar Terminal Activity Indicator', () => {
     renderWithRouter()
 
     const item = screen.getByTestId('project-item-1')
-    const spinner = item.querySelector('svg.animate-spin')
-    expect(spinner).not.toBeNull()
+    expect(activityIndicator(item)).not.toBeNull()
   })
 })
 

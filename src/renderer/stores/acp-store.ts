@@ -1676,6 +1676,23 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
 
+/** Project IDs with at least one open agent-chat session in an active turn. */
+export function collectProjectsWithActiveAgentChat(
+  sessions: Record<SessionId, AcpSession>
+): string[] {
+  const ids = new Set<string>()
+  for (const session of Object.values(sessions)) {
+    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
+      ids.add(session.projectId)
+    }
+  }
+  return Array.from(ids).sort()
+}
+
+export function useProjectsWithActiveAgentChat(): string[] {
+  return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
+}
+
 /** Aggregate warm state for a config across all of its per-project processes. */
 export interface ConfigWarmState {
   /** A live process for this config is connected (in any project/cwd). */

@@ -37,6 +37,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 import { invoke } from '@tauri-apps/api/core'
 import {
   agentReuseKey,
+  collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
   prepareChatKey,
   selectAgentIdentity,
@@ -96,6 +97,70 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
     messages: { [sessionId]: [] }
   })
 }
+
+describe('collectProjectsWithActiveAgentChat', () => {
+  beforeEach(() => {
+    useAcpStore.setState(FRESH)
+  })
+
+  it('returns project ids with an open active turn', () => {
+    seedSession('s1', 'agent-1', true)
+    expect(collectProjectsWithActiveAgentChat(useAcpStore.getState().sessions)).toEqual(['p1'])
+  })
+
+  it('excludes closed sessions and idle turns', () => {
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: 'turn-1',
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s2: {
+          id: 's2',
+          agentId: 'agent-2',
+          cwd: '/work',
+          projectId: 'p2',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s3: {
+          id: 's3',
+          agentId: 'agent-3',
+          cwd: '/work',
+          projectId: 'p3',
+          status: 'closed',
+          title: null,
+          activeTurn: true,
+          openTurnId: 'turn-3',
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    })
+    expect(collectProjectsWithActiveAgentChat(useAcpStore.getState().sessions)).toEqual(['p1'])
+  })
+})
 
 describe('acp-store', () => {
   beforeEach(() => {

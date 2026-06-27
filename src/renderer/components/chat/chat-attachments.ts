@@ -216,6 +216,27 @@ export function attachmentToBlock(a: PendingAttachment): ContentBlock {
   }
 }
 
+/**
+ * Drop duplicate `resource_link` blocks by URI (e.g. the same file staged via
+ * the @-picker and the OS picker). Text/image/embed blocks are passed through
+ * untouched. See ADR 0003.
+ */
+export function dedupeAttachmentBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  const seen = new Set<string>()
+  const out: ContentBlock[] = []
+  for (const b of blocks) {
+    if (b.type === 'resource_link') {
+      const uri = b.uri as string | undefined
+      if (uri) {
+        if (seen.has(uri)) continue
+        seen.add(uri)
+      }
+    }
+    out.push(b)
+  }
+  return out
+}
+
 /** Display name for an incoming/own content block (text/image/resource/link). */
 export function blockDisplayName(block: ContentBlock): string {
   const direct = (block.name ?? block.title) as string | undefined

@@ -77,7 +77,8 @@ vi.mock('@/stores/project-store', () => {
   }
   const useProjectStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useProjectStore.getState = () => state
-  return { useProjectStore }
+  const useActiveProject = () => state.projects.find((p) => p.id === state.activeProjectId)
+  return { useProjectStore, useActiveProject }
 })
 
 vi.mock('@/stores/workspace-store', () => {
