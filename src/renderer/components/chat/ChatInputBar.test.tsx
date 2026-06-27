@@ -41,6 +41,7 @@ function session(): AcpSession {
     id: 'session-1',
     agentId: 'agent-1',
     cwd: '/work',
+    projectId: 'p1',
     status: 'active',
     title: null,
     activeTurn: false,

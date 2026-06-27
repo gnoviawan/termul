@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Sidebar tab listing persisted chat sessions, grouped by recency with search. */
@@ -12,16 +13,32 @@ export function ChatHistoryTab(): React.JSX.Element {
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
+  // Subscribe to the full active-project record so the sidebar re-scopes when
+  // the active worktree changes (not just when the active project id changes).
+  const activeProject = useActiveProject()
+  const activeProjectId = activeProject?.id ?? ''
+  const activeCwd = useMemo(() => {
+    if (!activeProject) return ''
+    const wt = getActiveWorktreeFromStore(activeProject.id)
+    return wt?.path ?? activeProject.path ?? ''
+  }, [activeProject])
+
+  // Hard isolation (ADR 0002): show only sessions whose `(projectId, cwd)`
+  // match the active project + its current worktree/root.
+  const scopedIndex = useMemo(() => {
+    if (!activeProjectId || !activeCwd) return []
+    return sessionIndex.filter((e) => e.projectId === activeProjectId && e.cwd === activeCwd)
+  }, [sessionIndex, activeProjectId, activeCwd])
 
   const [query, setQuery] = useState('')
 
   const groups = useMemo(() => {
     const filtered =
       query.trim().length === 0
-        ? sessionIndex
-        : sessionIndex.filter((e) => e.title.toLowerCase().includes(query.trim().toLowerCase()))
+        ? scopedIndex
+        : scopedIndex.filter((e) => e.title.toLowerCase().includes(query.trim().toLowerCase()))
     return groupSessionsByRecency(filtered, Date.now())
-  }, [sessionIndex, query])
+  }, [scopedIndex, query])
 
   const handleOpen = useCallback(
     async (id: string) => {
@@ -64,7 +81,7 @@ export function ChatHistoryTab(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto py-1">
-        {sessionIndex.length === 0 ? (
+        {scopedIndex.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground opacity-70">
             No chats yet. Start one with the New Chat button.
           </div>

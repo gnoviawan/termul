@@ -15,10 +15,12 @@ import {
   deriveTitle,
   groupSessionsByRecency,
   loadSessionIndex,
+  runHistoryWipeMigration,
   SESSION_INDEX_KEY,
   type SessionIndexEntry,
   saveSessionPayload,
-  sessionPayloadKey
+  sessionPayloadKey,
+  WIPE_MIGRATION_KEY
 } from './acp-history-persistence'
 
 function msg(role: ChatMessage['role'], text: string): ChatMessage {
@@ -48,6 +50,7 @@ describe('groupSessionsByRecency', () => {
       agentId: 'a',
       title: id,
       cwd: '',
+      projectId: 'p1',
       createdAt: 0,
       lastActivityAt,
       messageCount: 0,
@@ -90,6 +93,7 @@ describe('persistence I/O', () => {
         agentId: 'a',
         title: 'T',
         cwd: '',
+        projectId: 'p1',
         createdAt: 0,
         lastActivityAt: 0,
         messageCount: 1,
@@ -114,6 +118,7 @@ describe('persistence I/O', () => {
         agentId: 'a',
         title: 'T',
         cwd: '',
+        projectId: 'p1',
         createdAt: 0,
         lastActivityAt: 0,
         messageCount: 0,
@@ -123,5 +128,68 @@ describe('persistence I/O', () => {
     }
     await saveSessionPayload('s1', payload)
     expect(persistenceApi.writeDebounced).toHaveBeenCalledWith(sessionPayloadKey('s1'), payload)
+  })
+})
+
+describe('runHistoryWipeMigration', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('is a no-op when the v2 flag is already true', async () => {
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: true
+    })
+    await runHistoryWipeMigration()
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
+    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
+
+  it('deletes every payload, clears the index, and sets the flag on first run', async () => {
+    const stale: SessionIndexEntry[] = [
+      {
+        id: 'old-1',
+        agentId: 'a',
+        title: 'x',
+        cwd: '/p',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 1,
+        status: 'closed'
+      },
+      {
+        id: 'old-2',
+        agentId: 'a',
+        title: 'y',
+        cwd: '/p',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 2,
+        status: 'closed'
+      }
+    ]
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // flag not set
+      .mockResolvedValueOnce({ success: true, data: stale }) // index read
+    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+
+    await runHistoryWipeMigration()
+
+    expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-1'))
+    expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-2'))
+    expect(persistenceApi.write).toHaveBeenCalledWith(SESSION_INDEX_KEY, [])
+    expect(persistenceApi.write).toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
+
+  it('does not re-run after the flag is set', async () => {
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: true
+    })
+    await runHistoryWipeMigration()
+    await runHistoryWipeMigration()
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
   })
 })

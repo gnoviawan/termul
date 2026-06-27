@@ -141,6 +141,7 @@ function preparedSession(
     id: 'prepared-1',
     agentId: `agent:${config.id}`,
     cwd: '/work',
+    projectId: 'p1',
     status: 'active',
     title: null,
     activeTurn: false,
@@ -234,7 +235,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
-    expect(mockStartChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+    expect(mockStartChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work', undefined, 'p1')
     await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
     expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
@@ -247,7 +248,12 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith(
+        'acp-registry:codex-acp',
+        '/work',
+        undefined,
+        'p1'
+      )
     )
     expect(mockStartChat).not.toHaveBeenCalled()
   })
@@ -260,7 +266,12 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith(
+        'acp-registry:codex-acp',
+        '/work',
+        undefined,
+        'p1'
+      )
     )
     mockPrepareChat.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Model unavailable' }))
@@ -270,7 +281,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
-    expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+    expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work', undefined, 'p1')
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
@@ -281,7 +292,12 @@ describe('AgentLauncher ACP new thread', () => {
     )
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith(
+        'acp-registry:codex-acp',
+        '/work',
+        undefined,
+        'p1'
+      )
     )
     unmount()
 
@@ -297,7 +313,12 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:opencode', '/work')
+      expect(mockPrepareChat).toHaveBeenCalledWith(
+        'acp-registry:opencode',
+        '/work',
+        undefined,
+        'p1'
+      )
     )
   })
 

@@ -92,6 +92,11 @@ export interface AcpSession {
   id: SessionId
   agentId: AgentId
   cwd: string
+  /**
+   * Owning `Project.id`. Persisted onto every history entry so the index can
+   * be filtered per-project + per-worktree (`(projectId, cwd)`). See ADR 0002.
+   */
+  projectId: string
   status: SessionStatus
   title: string | null
   /** True while a prompt turn is in flight (UI spinners, cancel). */
@@ -161,7 +166,12 @@ interface AcpState {
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
-  createSession: (agentId: AgentId, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
+  createSession: (
+    agentId: AgentId,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string
+  ) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
 
@@ -182,11 +192,21 @@ interface AcpState {
    * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
    * dedupes in-flight work for the same key.
    */
-  prepareChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => void
+  prepareChat: (
+    configId: string,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string
+  ) => void
   /** Drop any prepared session for this key (e.g. dialog closed or inputs changed). */
   cancelPreparedChat: (key: string) => void
   /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
-  startChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
+  startChat: (
+    configId: string,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string
+  ) => Promise<SessionId>
 
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
@@ -442,6 +462,7 @@ function persistSession(
     agentConfigId,
     title: session.title ?? deriveTitle(messages, session.agentId),
     cwd: session.cwd,
+    projectId: session.projectId,
     createdAt: session.createdAt,
     lastActivityAt: Date.now(),
     messageCount: messages.length,
@@ -606,7 +627,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  createSession: async (agentId, cwd, mcpServers) => {
+  createSession: async (agentId, cwd, mcpServers, projectId) => {
     const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
     const sessionId = outcome.sessionId
     set((s) => {
@@ -620,6 +641,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             id: sessionId,
             agentId,
             cwd,
+            projectId,
             status: existing?.status === 'closed' ? 'closed' : 'active',
             title: existing?.title ?? null,
             activeTurn: existing?.activeTurn ?? false,
@@ -824,7 +846,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
   },
 
-  prepareChat: (configId, cwd, mcpServers) => {
+  prepareChat: (configId, cwd, mcpServers, projectId) => {
     const trimmedCwd = cwd.trim()
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
@@ -868,7 +890,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
           set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         }
-        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
+        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId)
         if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
           return null
         }
@@ -950,7 +972,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  startChat: async (configId, cwd, mcpServers) => {
+  startChat: async (configId, cwd, mcpServers, projectId) => {
     const trimmedCwd = cwd.trim()
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) throw new Error(`unknown agent config ${configId}`)
@@ -990,7 +1012,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
     }
-    return get().createSession(agentId, trimmedCwd, mcpServers)
+    return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
   },
 
   loadSessionIndex: async () => {
@@ -1022,6 +1044,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           id,
           agentId: meta.agentId,
           cwd: meta.cwd,
+          projectId: meta.projectId,
           status: 'closed',
           title: meta.title,
           activeTurn: false,
@@ -1312,6 +1335,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             id: e.sessionId,
             agentId: e.agentId,
             cwd: '',
+            projectId: '',
             status: 'active',
             title: null,
             activeTurn: false,

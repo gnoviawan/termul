@@ -12,6 +12,8 @@ import { persistenceApi } from '@/lib/api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
 export const SESSION_INDEX_KEY = 'acp/sessions/index'
+/** One-shot flag set after the v2 wipe (see `runHistoryWipeMigration`). */
+export const WIPE_MIGRATION_KEY = 'acp/sessions/migrated-v2'
 export function sessionPayloadKey(id: string): string {
   return `acp/sessions/${id}`
 }
@@ -22,6 +24,12 @@ export interface SessionIndexEntry {
   agentConfigId?: string
   title: string
   cwd: string
+  /**
+   * Owning `Project.id`. History is hard-isolated per project + worktree
+   * (`(projectId, cwd)`); sessions with any other value are invisible.
+   * See ADR 0002.
+   */
+  projectId: string
   createdAt: number
   lastActivityAt: number
   messageCount: number
@@ -108,5 +116,29 @@ export async function deleteSessionPayload(id: string): Promise<void> {
   const res = await persistenceApi.delete(sessionPayloadKey(id))
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to delete session payload')
+  }
+}
+
+/**
+ * One-shot, idempotent wipe of pre-v2 chat history. Sessions persisted before
+ * `projectId` was tracked (ADR 0002) cannot be backfilled reliably; the user
+ * opted for a fresh start over noise. Gated by `acp/sessions/migrated-v2` so
+ * it runs exactly once. Safe to call on every mount.
+ */
+export async function runHistoryWipeMigration(): Promise<void> {
+  const flagRes = await persistenceApi.read<boolean>(WIPE_MIGRATION_KEY)
+  if (flagRes.success && flagRes.data === true) return
+  const index = await loadSessionIndex()
+  for (const entry of index) {
+    try {
+      await persistenceApi.delete(sessionPayloadKey(entry.id))
+    } catch {
+      /* best-effort; the index clear below is what actually hides them */
+    }
+  }
+  await saveSessionIndex([])
+  const setFlag = await persistenceApi.write(WIPE_MIGRATION_KEY, true)
+  if (!setFlag.success) {
+    throw new Error(setFlag.error ?? 'Failed to set wipe-migration flag')
   }
 }

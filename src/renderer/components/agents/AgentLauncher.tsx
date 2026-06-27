@@ -208,7 +208,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
-        useAcpStore.getState().prepareChat(activeConfigId, projectRoot)
+        useAcpStore.getState().prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
       } catch (err) {
         console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
       }
@@ -224,7 +224,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     projectRoot,
     saveAgentConfig,
     selectedConfig,
-    selectedEntry?.status
+    selectedEntry?.status,
+    activeProjectId
   ])
 
   const handleSelectAgent = useCallback(
@@ -293,8 +294,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     if (!activeConfigId || !projectRoot || !preparedKey) return
     const store = useAcpStore.getState()
     store.cancelPreparedChat(preparedKey)
-    store.prepareChat(activeConfigId, projectRoot)
-  }, [activeConfigId, preparedKey, projectRoot])
+    store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+  }, [activeConfigId, preparedKey, projectRoot, activeProjectId])
 
   const handleSetMode = useCallback(
     (modeId: string) => {
@@ -342,7 +343,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         await saveAgentConfig(selectedConfig)
       }
       persistSelection(selectedConfig.id)
-      const sessionId = await useAcpStore.getState().startChat(selectedConfig.id, projectRoot)
+      const sessionId = await useAcpStore
+        .getState()
+        .startChat(selectedConfig.id, projectRoot, undefined, activeProjectId)
       useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
       const text = await buildPromptWithLoadedSkill(loadedSkill, prompt, projectRoot)
       const trimmed = text.trim()
