@@ -355,6 +355,7 @@ export function useTerminalRestore(): void {
     const isCancelled = (): boolean =>
       cancelled || previousProjectIdRef.current !== projectIdToRestore
 
+    let isDeferred = false
     const restoreTerminals = async (): Promise<void> => {
       try {
         // Check for cancellation before starting
@@ -372,6 +373,11 @@ export function useTerminalRestore(): void {
         // `visibilityRetry` dependency, and this check passes.
         if (!isVisibleReady()) {
           debugLog('useTerminalRestore', `DEFERRED [${callId}]: window not visible yet`)
+          isDeferred = true
+          previousProjectIdRef.current = actualPreviousProjectId
+          isRestoringRef.current.delete(projectIdToRestore)
+          PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
           setTimeout(() => setVisibilityRetry((v) => v + 1), DEFERRED_RETRY_MS)
           return
         }
@@ -488,43 +494,22 @@ export function useTerminalRestore(): void {
         let attempt = 0
 
         if (restoreMode !== 'layout') {
-          const sessionResult = await sessionApi.restore()
-          const sessionWorkspace = sessionResult.success
-            ? sessionResult.data.workspaces.find(
-                (workspace) => workspace.projectId === projectIdToRestore
-              )
-            : null
-          const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
-          const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
-
-          if (restoreResult.status === 'completed') {
-            if (!isCancelled()) {
-              emitTerminalContinuityEvent({
-                name: 'restore-complete',
-                correlationId: continuityCorrelationId,
-                projectId: projectIdToRestore,
-                terminalId: restoreResult.selectedTerminalId,
-                details: {
-                  path: sessionActiveTerminalId ? 'session-active-terminal' : restoreResult.path,
-                  persistedTerminalCount: layout?.terminals.length ?? 0,
-                  restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
-                  attempt
-                }
-              })
+          debugLog(
+            'useTerminalRestore',
+            `SKIPPED [${callId}]: No persisted terminals to restore, leaving workspace empty`
+          )
+          emitTerminalContinuityEvent({
+            name: 'restore-complete',
+            correlationId: continuityCorrelationId,
+            projectId: projectIdToRestore,
+            details: {
+              path: 'default-terminal',
+              persistedTerminalCount: 0,
+              restoredTerminalCount: 0,
+              attempt: 0
             }
-          } else if (restoreResult.status === 'failed') {
-            emitTerminalContinuityEvent({
-              name: 'restore-failed',
-              correlationId: continuityCorrelationId,
-              projectId: projectIdToRestore,
-              details: {
-                callId,
-                attempt,
-                reason: 'permanent-restore-failure',
-                path: restoreResult.path
-              }
-            })
-          }
+          })
+          return
         } else {
           // Layout restore: let restoreFromLayout manage its own lock
           while (!isCancelled()) {
@@ -609,8 +594,8 @@ export function useTerminalRestore(): void {
           debugLog('useTerminalRestore', `CANCELLED [${callId}] after error`)
           return
         }
-        // Fall back to default terminal
-        await createDefaultTerminal(projectIdToRestore, isCancelled)
+        // Do not fall back to default terminal to allow showing launcher dashboard
+        debugLog('useTerminalRestore', `RESTORE FAILED [${callId}], leaving workspace empty`)
       } finally {
         // FIX #2: Always release & force-clear lock on cleanup to prevent deadlock
         if (GLOBAL_SPAWN_LOCK_OWNER === restoreOwnerId) {
@@ -621,6 +606,13 @@ export function useTerminalRestore(): void {
           GLOBAL_SPAWN_LOCK_OWNER = null
           debugLog('SPAWN_LOCK', `FORCE-RELEASED LOCK [${restoreOwnerId}]`)
         }
+
+        if (!isDeferred) {
+          isRestoringRef.current.delete(projectIdToRestore)
+          PROJECT_RESTORE_LOCKS.delete(projectIdToRestore)
+          setTerminalRestoreInProgress(projectIdToRestore, false, restoreOwnerId)
+        }
+
         debugLog('useTerminalRestore', `RESTORE COMPLETE [${callId}]`, {
           projectId: projectIdToRestore
         })

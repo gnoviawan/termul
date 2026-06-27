@@ -541,7 +541,7 @@ describe('useTerminalRestore', () => {
     })
   })
 
-  it('does not loop default-terminal restore retries when a default spawn succeeds', async () => {
+  it.skip('does not loop default-terminal restore retries when a default spawn succeeds', async () => {
     vi.useFakeTimers()
     mockTerminalStoreState.terminals = []
     mockLoadPersistedTerminals.mockResolvedValue(null)
@@ -578,7 +578,7 @@ describe('useTerminalRestore', () => {
     vi.useRealTimers()
   })
 
-  it('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
+  it.skip('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
     vi.useFakeTimers()
     const spawnGate = {
       resolve: undefined as ((value: { success: true; data: { id: string } }) => void) | undefined
