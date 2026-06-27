@@ -7,3 +7,6 @@
 - **Model Picker**: The new-thread control that selects an ACP Agent and, when advertised by that ACP session, one of its model config values.
 - **Variant Picker**: The control for an ACP session's `thought_level` config option, such as low, medium, high, or max thinking depth.
 - **Agent Picker**: The control for ACP session modes, such as Build or Plan, within the selected ACP Agent.
+- **Attachment**: A file or image the user stages in the Agent Chat composer before sending. On send, each Attachment becomes one ACP content block.
+- **Resource Link**: An ACP `resource_link` content block that references a file by its filesystem path; the ACP Agent opens and reads the file with its own tools. Produced when the file's path is known (the OS file picker). No prompt capability is required.
+- **Embedded Resource**: An ACP `resource` content block that carries a file's inline text content. Produced when only the file's bytes are known and no path exists (drag-and-drop or paste). Requires the ACP Agent's `embeddedContext` prompt capability.

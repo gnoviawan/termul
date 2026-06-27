@@ -1,16 +1,24 @@
-import { ArrowUp, Square } from 'lucide-react'
-import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { ArrowUp, Paperclip, Square } from 'lucide-react'
+import { type DragEvent, type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   buildPromptWithLoadedSkill,
   type LoadedAgentSkill,
   useAgentSkills
 } from '@/hooks/use-agent-skills'
-import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type {
+  AvailableCommand,
+  ContentBlock,
+  SessionConfigOption,
+  SessionModeState
+} from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { ComposerPill } from './ComposerPill'
+import { attachmentToBlock } from './chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
@@ -26,6 +34,7 @@ import {
   type SlashItem,
   slashFilter
 } from './slash-menu-model'
+import { useComposerAttachments } from './use-composer-attachments'
 
 interface ChatInputBarProps {
   /** Active session — drives the agent icon and selector chips. */
@@ -36,7 +45,13 @@ interface ChatInputBarProps {
   busy: boolean
   /** Whether the session is closed/disconnected (fully disables input). */
   disabled: boolean
+  /** Whether the agent accepts inline image content blocks (drag/paste images). */
+  imageCapable?: boolean
+  /** Whether the agent accepts embedded `resource` blocks (drag/paste text files). */
+  embedCapable?: boolean
   onSend: (text: string) => void
+  /** Send a prompt carrying structured content blocks (text + attachments). */
+  onSendBlocks: (blocks: ContentBlock[]) => void
   onCancel: () => void
   /** Slash-menu data sources from the active session. */
   commands: AvailableCommand[]
@@ -55,7 +70,10 @@ export function ChatInputBar({
   projectRoot,
   busy,
   disabled,
+  imageCapable = false,
+  embedCapable = false,
   onSend,
+  onSendBlocks,
   onCancel,
   commands,
   configOptions,
@@ -77,8 +95,27 @@ export function ChatInputBar({
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [sending, setSending] = useState(false)
+  const {
+    attachments,
+    addFiles,
+    pickFiles,
+    handlePaste,
+    removeAttachment,
+    clearAttachments,
+    canPick,
+    canDropPaste
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!canDropPaste || e.dataTransfer.files.length === 0) return
+      e.preventDefault()
+      void addFiles(e.dataTransfer.files)
+    },
+    [canDropPaste, addFiles]
+  )
 
   const menuOpen = isSlashTrigger(value) && !disabled
   const filter = slashFilter(value)
@@ -96,7 +133,8 @@ export function ChatInputBar({
 
   const submit = useCallback(async () => {
     const userText = value.trim()
-    if ((!userText && !loadedSkill) || busy || disabled || sending) return
+    const hasAttachments = attachments.length > 0
+    if ((!userText && !loadedSkill && !hasAttachments) || busy || disabled || sending) return
 
     setSending(true)
     try {
@@ -105,17 +143,40 @@ export function ChatInputBar({
         userText,
         projectRoot ?? session.cwd
       )
-      if (!text.trim()) return
-      onSend(text)
+      const trimmed = text.trim()
+      if (!trimmed && !hasAttachments) return
+
+      if (hasAttachments) {
+        const blocks: ContentBlock[] = []
+        if (trimmed) blocks.push({ type: 'text', text })
+        for (const a of attachments) blocks.push(attachmentToBlock(a))
+        onSendBlocks(blocks)
+      } else {
+        onSend(text)
+      }
       setValue('')
       setLoadedSkill(null)
+      clearAttachments()
       resetHeight()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load skill')
     } finally {
       setSending(false)
     }
-  }, [value, loadedSkill, busy, disabled, sending, onSend, resetHeight, projectRoot, session.cwd])
+  }, [
+    value,
+    attachments,
+    loadedSkill,
+    busy,
+    disabled,
+    sending,
+    clearAttachments,
+    onSend,
+    onSendBlocks,
+    resetHeight,
+    projectRoot,
+    session.cwd
+  ])
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
@@ -178,22 +239,32 @@ export function ChatInputBar({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
-  const canSend = !disabled && !sending && (value.trim().length > 0 || loadedSkill !== null)
+  const canSend =
+    !disabled &&
+    !sending &&
+    (value.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
 
   return (
     <div className="px-5 pb-3.5 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
         {menuOpen && <SlashCommandMenu ref={menuRef} sections={sections} onSelect={handleSelect} />}
-        <div className="overflow-hidden rounded-2xl bg-secondary/40">
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+        <div
+          className="overflow-hidden rounded-2xl bg-secondary/40"
+          onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
+          onDrop={handleDrop}
+        >
           {loadedSkill && (
             <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
           )}
+          <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
           <div className="px-4 pb-1.5 pt-3.5">
             <textarea
               ref={textareaRef}
               value={value}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               disabled={disabled || sending}
               rows={1}
               placeholder={
@@ -212,9 +283,9 @@ export function ChatInputBar({
           </div>
           <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <span className="flex h-[30px] items-center gap-1.5 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80">
+              <ComposerPill as="span" interactive={false}>
                 <AgentBadge agentId={session.agentId} iconSize={16} className="max-w-[140px]" />
-              </span>
+              </ComposerPill>
               {modelOption && (
                 <ConfigChip
                   key={modelOption.id}
@@ -255,6 +326,17 @@ export function ChatInputBar({
               <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
             </div>
             <div className="flex flex-shrink-0 items-center gap-2">
+              {canPick && (
+                <button
+                  type="button"
+                  onClick={() => void pickFiles()}
+                  title="Attach files"
+                  aria-label="Attach files"
+                  className="flex size-[34px] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:scale-[0.96]"
+                >
+                  <Paperclip size={16} />
+                </button>
+              )}
               {busy ? (
                 <button
                   type="button"

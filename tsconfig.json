@@ -3,6 +3,10 @@
   "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }],
   "compilerOptions": {
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/renderer/*"]
+    }
   }
 }

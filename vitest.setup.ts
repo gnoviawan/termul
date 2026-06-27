@@ -34,7 +34,9 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readDir: vi.fn(),
+  readFile: vi.fn(),
   readTextFile: vi.fn(),
+  writeFile: vi.fn(),
   writeTextFile: vi.fn(),
   mkdir: vi.fn(),
   remove: vi.fn(),
@@ -52,7 +54,8 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   readText: vi.fn(),
-  writeText: vi.fn()
+  writeText: vi.fn(),
+  readImage: vi.fn()
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => ({

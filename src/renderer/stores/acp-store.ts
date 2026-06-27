@@ -193,6 +193,8 @@ interface AcpState {
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
+  /** Send a prompt turn carrying structured content blocks (text + image/resource). */
+  sendPromptBlocks: (sessionId: SessionId, blocks: ContentBlock[]) => Promise<void>
   cancelPrompt: (sessionId: SessionId) => Promise<void>
 
   // Actions — config (P2 drives the UI; method available now)
@@ -288,17 +290,22 @@ function noteForStopReason(reason: StopReason): string | null {
   }
 }
 
-/** Finalize the trailing streaming message for a session (mark non-streaming). */
+/**
+ * Finalize every streaming message for a session (mark non-streaming). A turn
+ * can leave several messages mid-stream (e.g. a thought followed by the agent
+ * reply); clearing only the trailing one strands earlier markers in their
+ * `streaming` state and leaves their shimmer animating forever.
+ */
 function finalizeStreaming(
   messages: Record<SessionId, ChatMessage[]>,
   sessionId: SessionId
 ): Record<SessionId, ChatMessage[]> {
   const list = messages[sessionId] ?? []
-  const last = list[list.length - 1]
-  if (last && last.streaming) {
-    return { ...messages, [sessionId]: [...list.slice(0, -1), { ...last, streaming: false }] }
+  if (!list.some((m) => m.streaming)) return messages
+  return {
+    ...messages,
+    [sessionId]: list.map((m) => (m.streaming ? { ...m, streaming: false } : m))
   }
-  return messages
 }
 
 /** Mark a reopened history session live after a successful load/resume IPC call. */
@@ -1107,6 +1114,48 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Command reply vs streamed chunks have no ordering guarantee; defer turn
       // end to a macrotask so chunk listeners run first. Idempotent with
       // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
+      scheduleTurnEnd(set, sessionId, stopReason)
+    } catch (err) {
+      set((s) => ({
+        messages: finalizeStreaming(s.messages, sessionId),
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...s.sessions[sessionId],
+            activeTurn: false,
+            openTurnId: null,
+            lastError: String(err)
+          }
+        }
+      }))
+      throw err
+    }
+  },
+
+  sendPromptBlocks: async (sessionId, blocks) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    if (session.status === 'closed') throw new Error('session is closed')
+    if (session.openTurnId) throw new Error('a prompt turn is already in progress')
+    if (blocks.length === 0) throw new Error('prompt content must not be empty')
+    const openTurnId = newId('turn')
+    const userMessage: ChatMessage = {
+      id: newId('msg'),
+      role: 'user',
+      blocks,
+      streaming: false,
+      timestamp: Date.now()
+    }
+    set((s) => ({
+      messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...s.sessions[sessionId], activeTurn: true, openTurnId, lastError: null }
+      }
+    }))
+    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+    try {
+      const stopReason = await acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
       scheduleTurnEnd(set, sessionId, stopReason)
     } catch (err) {
       set((s) => ({

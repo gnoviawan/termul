@@ -1,9 +1,12 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Check, ChevronDown, Download, Loader2 } from 'lucide-react'
+import { ArrowUp, Check, Download, Loader2, Paperclip } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
+import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
+import { ComposerPill } from '@/components/chat/ComposerPill'
+import { attachmentToBlock } from '@/components/chat/chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
@@ -18,6 +21,7 @@ import {
   type SlashItem,
   slashFilter
 } from '@/components/chat/slash-menu-model'
+import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -26,7 +30,7 @@ import {
   useAgentSkills
 } from '@/hooks/use-agent-skills'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import { acpApi } from '@/lib/acp-api'
+import { acpApi, type ContentBlock } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
@@ -98,6 +102,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
   )
   const draftSession = useAcpSession(preparedSessionId)
+  const promptCaps = useAcpStore((s) =>
+    draftSession?.agentId
+      ? s.agents?.[draftSession.agentId]?.capabilities?.promptCapabilities
+      : undefined
+  )
+  const imageCapable = Boolean(promptCaps?.image)
+  const embedCapable = Boolean(promptCaps?.embeddedContext)
+  const composerDisabled =
+    isLaunching || Boolean(installingConfigId) || selectedEntry?.status !== 'ready'
+  const {
+    attachments,
+    addFiles,
+    pickFiles,
+    handlePaste,
+    removeAttachment,
+    clearAttachments,
+    canPick,
+    canDropPaste
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
   )
@@ -322,10 +345,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       const sessionId = await useAcpStore.getState().startChat(selectedConfig.id, projectRoot)
       useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
       const text = await buildPromptWithLoadedSkill(loadedSkill, prompt, projectRoot)
-      if (text.trim().length > 0) {
-        void useAcpStore.getState().sendPrompt(sessionId, text.trim())
+      const trimmed = text.trim()
+      if (attachments.length > 0) {
+        const blocks: ContentBlock[] = []
+        if (trimmed) blocks.push({ type: 'text', text })
+        for (const a of attachments) blocks.push(attachmentToBlock(a))
+        void useAcpStore.getState().sendPromptBlocks(sessionId, blocks)
+      } else if (trimmed.length > 0) {
+        void useAcpStore.getState().sendPrompt(sessionId, trimmed)
       }
       setLoadedSkill(null)
+      clearAttachments()
       useWorkspaceStore.getState().hideAgentLauncher()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
@@ -343,7 +373,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     persistSelection,
     paneId,
     loadedSkill,
-    prompt
+    prompt,
+    attachments,
+    clearAttachments
   ])
 
   const handleKeyDown = useCallback(
@@ -377,7 +409,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
     !isLaunching &&
-    (prompt.trim().length > 0 || loadedSkill !== null)
+    (prompt.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
 
   return (
     <div
@@ -400,7 +432,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           {menuOpen && (
             <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
           )}
-          <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm transition-colors focus-within:border-border/80 focus-within:ring-1 focus-within:ring-border/50">
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+          <div
+            className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm transition-colors focus-within:border-border/80 focus-within:ring-1 focus-within:ring-border/50"
+            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
+            onDrop={
+              canDropPaste
+                ? (e) => {
+                    if (e.dataTransfer.files.length === 0) return
+                    e.preventDefault()
+                    void addFiles(e.dataTransfer.files)
+                  }
+                : undefined
+            }
+          >
             {selectedEntry?.status === 'install-required' && (
               <InstallRequiredBanner
                 entry={selectedEntry}
@@ -417,16 +462,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             {loadedSkill && (
               <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
             )}
+            <AttachmentPreviewGroup
+              attachments={attachments}
+              onRemove={removeAttachment}
+              className="px-5 pt-4"
+            />
             <div className="px-5 pb-2 pt-4">
               <textarea
                 ref={textareaRef}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={
                   loadedSkill
                     ? 'Add a message (optional)…'
-                    : 'Ask for follow-up changes or attach images'
+                    : 'Ask for follow-up changes or attach files'
                 }
                 rows={2}
                 aria-label="Agent prompt"
@@ -442,11 +493,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <button
                 type="button"
-                className="flex h-[34px] w-[34px] items-center justify-center rounded-full text-xl leading-none text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                title="Attachments are not available yet"
-                aria-label="Add attachment"
+                onClick={() => void pickFiles()}
+                disabled={!canPick}
+                className="flex h-[34px] w-[34px] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
+                title="Attach files"
+                aria-label="Attach files"
               >
-                +
+                <Paperclip size={16} />
               </button>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                 <AcpAgentPicker
@@ -586,11 +639,11 @@ function AcpAgentPicker({
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
-        <button
-          type="button"
+        <ComposerPill
           disabled={disabled}
           aria-label={`Select ACP agent: ${label}`}
-          className="flex h-[34px] max-w-[260px] items-center gap-2 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/85 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+          className="max-w-[260px]"
+          chevron
         >
           <EntryGlyph
             config={selectedConfig}
@@ -598,8 +651,7 @@ function AcpAgentPicker({
             name={selectedEntry?.agent.name}
           />
           <span className="truncate">{label}</span>
-          <ChevronDown size={12} className="text-muted-foreground" />
-        </button>
+        </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
@@ -674,15 +726,14 @@ function AcpModelPicker({
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
-        <button
-          type="button"
+        <ComposerPill
           disabled={disabled}
           aria-label={`Select model: ${label}`}
-          className="flex h-[34px] max-w-[220px] items-center gap-2 rounded-xl bg-foreground/[0.06] px-3 text-xs text-foreground/85 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+          className="max-w-[220px]"
+          chevron
         >
           <span className="truncate">{label}</span>
-          <ChevronDown size={12} className="text-muted-foreground" />
-        </button>
+        </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">

@@ -2,9 +2,9 @@
 @import "@fontsource-variable/inter/index.css";
 @import "@fontsource-variable/jetbrains-mono/index.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@config "../../tailwind.config.ts";
 
 @layer base {
   :root {

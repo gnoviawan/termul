@@ -1,10 +1,11 @@
-import { Brain, ChevronDown, Circle } from 'lucide-react'
+import { Brain, Circle } from 'lucide-react'
 import { useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession, AgentStatus } from '@/stores/acp-store'
 import { AgentBadge } from './AgentBadge'
+import { ComposerPill } from './ComposerPill'
 import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 
 interface AgentHeaderProps {
@@ -65,15 +66,10 @@ export function ConfigChip({
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
-        <button
-          type="button"
-          disabled={disabled}
-          className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {promoted && <Brain size={13} className="text-muted-foreground" />}
+        <ComposerPill disabled={disabled} chevron>
+          {promoted && <Brain size={13} className="shrink-0 text-muted-foreground" />}
           {current?.name ?? fallbackLabel}
-          <ChevronDown size={11} className="text-muted-foreground" />
-        </button>
+        </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="label-group px-2 py-1 text-muted-foreground/70">
@@ -139,14 +135,9 @@ export function ModeChip({
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
-        <button
-          type="button"
-          disabled={disabled}
-          className="flex h-[30px] items-center gap-1 rounded-lg bg-foreground/[0.06] px-2.5 text-xs text-foreground/80 hover:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <ComposerPill disabled={disabled} chevron>
           {current?.name ?? label}
-          <ChevronDown size={11} className="text-muted-foreground" />
-        </button>
+        </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className="label-group px-2 py-1 text-muted-foreground/70">{label}</div>

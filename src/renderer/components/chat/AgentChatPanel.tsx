@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
-import type { AvailableCommand, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentHeader } from './AgentHeader'
 import { ChatInputBar } from './ChatInputBar'
@@ -26,6 +26,14 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const imageCapable = useAcpStore((s) =>
+    session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
+  )
+  const embedCapable = useAcpStore((s) =>
+    session
+      ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.embeddedContext)
+      : false
+  )
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
@@ -36,6 +44,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     )
   )
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
+  const sendPromptBlocks = useAcpStore((s) => s.sendPromptBlocks)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
@@ -48,6 +57,15 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
       })
     },
     [sendPrompt, sessionId]
+  )
+
+  const handleSendBlocks = useCallback(
+    (blocks: ContentBlock[]) => {
+      void sendPromptBlocks(sessionId, blocks).catch((err) => {
+        toast.error(`Failed to send: ${String(err)}`)
+      })
+    },
+    [sendPromptBlocks, sessionId]
   )
 
   const handleCancel = useCallback(() => {
@@ -114,7 +132,10 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         session={session}
         busy={session.activeTurn}
         disabled={isClosed}
+        imageCapable={imageCapable}
+        embedCapable={embedCapable}
         onSend={handleSend}
+        onSendBlocks={handleSendBlocks}
         onCancel={handleCancel}
         commands={commands}
         configOptions={session.configOptions}
