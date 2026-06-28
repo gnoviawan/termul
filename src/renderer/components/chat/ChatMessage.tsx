@@ -1,15 +1,9 @@
 import { readFile } from '@tauri-apps/plugin-fs'
 import { motion, useReducedMotion } from 'framer-motion'
-import { FileText } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Attachment,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentMedia,
-  AttachmentTitle
-} from '@/components/ui/attachment'
+import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
+import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
 import { inlineCodeClass } from '@/lib/chat-inline-code'
@@ -18,14 +12,16 @@ import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import {
-  attachmentAriaLabel,
   blockDisplayName,
   blockMimeType,
+  blockToAttachmentData,
+  blockUri,
+  fileUrlToPath,
   guessMimeType,
+  isLocalFileUri,
   uint8ToBase64
 } from './chat-attachments'
 import { type BubbleAlign, staggerChild } from './chat-motion'
-import { ImageAttachmentChip } from './ImageAttachmentChip'
 import { MessageActions } from './MessageActions'
 
 /** Concatenate the text of all text blocks. */
@@ -43,12 +39,6 @@ function mediaBlocks(blocks: ContentBlock[]): ContentBlock[] {
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
 
-function blockUri(block: ContentBlock): string | undefined {
-  const direct = block.uri as string | undefined
-  if (direct) return direct
-  return (block.resource as { uri?: string } | undefined)?.uri
-}
-
 /** Whether a content block represents an image. */
 function blockIsImage(block: ContentBlock): boolean {
   if (block.type === 'image') return true
@@ -57,98 +47,66 @@ function blockIsImage(block: ContentBlock): boolean {
   return IMAGE_EXT_RE.test(ref)
 }
 
-/** Convert a `file://` URL back to a filesystem path readable by plugin-fs. */
-function fileUrlToPath(uri: string): string {
-  if (!uri.startsWith('file://')) return uri
-  let p = decodeURI(uri.slice('file://'.length))
-  if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1) // /C:/x -> C:/x
-  return p
-}
-
-type ImageSource = { url: string } | { path: string } | null
-
-/** Resolve a renderable image source for a block: a ready URL or a path to read. */
-function imageSourceForBlock(block: ContentBlock): ImageSource {
-  if (!blockIsImage(block)) return null
-  const data = block.data as string | undefined
-  const blob = (block.resource as { blob?: string } | undefined)?.blob
-  const inline = data ?? blob
-  if (inline) return { url: `data:${blockMimeType(block) ?? 'image/png'};base64,${inline}` }
-  const uri = blockUri(block)
-  if (!uri) return null
-  if (uri.startsWith('data:') || uri.startsWith('http')) return { url: uri }
-  if (uri.startsWith('file:') || uri.startsWith('/') || /^[A-Za-z]:/.test(uri)) {
-    return { path: fileUrlToPath(uri) }
-  }
-  return null
-}
-
-function ImageCard({ src, name }: { src: string; name: string }): React.JSX.Element {
-  return <ImageAttachmentChip src={src} alt={attachmentAriaLabel(name)} size="message" />
-}
-
-function FileCard({ block, name }: { block: ContentBlock; name: string }): React.JSX.Element {
-  const description =
-    block.type === 'resource_link'
-      ? 'Linked file'
-      : block.type === 'resource'
-        ? 'Embedded text'
-        : (blockMimeType(block) ?? block.type)
-  return (
-    <Attachment className="w-56">
-      <AttachmentMedia>
-        <FileText />
-      </AttachmentMedia>
-      <AttachmentContent>
-        <AttachmentTitle>{name}</AttachmentTitle>
-        <AttachmentDescription>{description}</AttachmentDescription>
-      </AttachmentContent>
-    </Attachment>
-  )
-}
-
-/** A single media block: image thumbnail (incl. lazily-read `file://`) or file card. */
-function MediaBlockCard({ block }: { block: ContentBlock }): React.JSX.Element {
+/** A single media block rendered as an AI Elements grid attachment. */
+function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
+  const initial = useMemo(() => blockToAttachmentData(block, id), [block, id])
+  const [data, setData] = useState(initial)
   const name = blockDisplayName(block)
-  const source = imageSourceForBlock(block)
-  const path = source && 'path' in source ? source.path : null
-  const [pathSrc, setPathSrc] = useState<string | null>(null)
-  const [pathFailed, setPathFailed] = useState(false)
+  // Images preview in a lightbox; non-image file/embedded blocks render as a
+  // static icon card. Nothing opens a backing path — temp/file paths can live
+  // in sandboxed dirs the OS opener refuses, which would surface as an error.
+  const inlineImage = blockIsImage(block) && Boolean(data.url)
 
   useEffect(() => {
-    if (!path) return
+    // Inline image blocks and data/http URIs are already renderable; only
+    // file:// images need a Tauri read to become a preview data URL.
+    if (initial.url) return
+    const uri = blockUri(block) ?? ''
+    if (!isLocalFileUri(uri) || !blockIsImage(block)) return
+    const resolvedPath = fileUrlToPath(uri)
     let cancelled = false
     void (async () => {
       try {
-        const bytes = await readFile(path)
-        if (!cancelled) setPathSrc(`data:${guessMimeType(path)};base64,${uint8ToBase64(bytes)}`)
+        const bytes = await readFile(resolvedPath)
+        if (cancelled) return
+        const mime = guessMimeType(resolvedPath)
+        setData((prev) => ({ ...prev, url: `data:${mime};base64,${uint8ToBase64(bytes)}` }))
       } catch {
-        if (!cancelled) setPathFailed(true)
+        // leave url empty — AttachmentPreview falls back to the image icon
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [path])
+  }, [initial.url, block])
 
-  const readyUrl = source && 'url' in source ? source.url : pathSrc
-  if (readyUrl) return <ImageCard src={readyUrl} name={name} />
-  if (path && !pathFailed) {
-    return <ImageAttachmentChip loading src="" alt={attachmentAriaLabel(name)} size="message" />
+  const attachment = (
+    <Attachment data={data} title={name} className={inlineImage ? 'cursor-zoom-in' : undefined}>
+      <AttachmentPreview />
+    </Attachment>
+  )
+
+  if (inlineImage) {
+    return (
+      <ImageLightbox src={data.url ?? ''} alt={name}>
+        {attachment}
+      </ImageLightbox>
+    )
   }
-  return <FileCard block={block} name={name} />
+
+  return attachment
 }
 
-/** Render image / resource blocks as attachment cards. */
+/** Render image / resource blocks as grid attachment thumbnails. */
 function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element | null {
   const media = mediaBlocks(blocks)
   if (media.length === 0) return null
   return (
-    <div className="flex max-w-full flex-wrap gap-2 overflow-visible py-0.5">
+    <Attachments variant="grid" className="ml-0 w-fit py-0.5">
       {media.map((block, i) => (
-        <MediaBlockCard key={`${block.type}-${i}`} block={block} />
+        <MediaGridItem key={`${block.type}-${i}`} block={block} id={`${block.type}-${i}`} />
       ))}
-    </div>
+    </Attachments>
   )
 }
 

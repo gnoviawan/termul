@@ -12,6 +12,7 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
+import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { LoadedSkillChip } from '@/components/chat/LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
@@ -22,6 +23,8 @@ import {
   slashFilter
 } from '@/components/chat/slash-menu-model'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
+import { useComposerMentions } from '@/components/chat/use-composer-mentions'
+import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -29,6 +32,7 @@ import {
   type LoadedAgentSkill,
   useAgentSkills
 } from '@/hooks/use-agent-skills'
+import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { acpApi, type ContentBlock } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
@@ -117,12 +121,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     attachments,
     addFiles,
     pickFiles,
+    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
+    activeProjectId,
+    projectRoot
+  )
+  const mentions = useComposerMentions({
+    rootPath: projectRoot,
+    disabled: composerDisabled,
+    recents: mentionRecents,
+    onStageFileRef: (m) => {
+      addFileRef(m)
+      pushMentionRecent(m)
+    }
+  })
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
   )
@@ -147,6 +165,27 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     draftSession?.modes ?? null
   )
   const menuOpen = isSlashTrigger(prompt)
+  const {
+    onInput,
+    onKeyUp,
+    onSelect,
+    onMentionSelect,
+    handleMentionKeyDown,
+    mentionMenuOpen,
+    mentionSections,
+    mentionMenuRef,
+    emptyLabel,
+    resetMentions,
+    resetHeight,
+    updateMentions
+  } = useComposerTextarea({
+    value: prompt,
+    setValue: setPrompt,
+    textareaRef,
+    mentions,
+    disabled: composerDisabled,
+    slashOpen: menuOpen
+  })
   const slashSections = useMemo(
     () =>
       menuOpen
@@ -315,6 +354,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (item.kind === 'skill') {
         setLoadedSkill({ name: item.name, description: item.description ?? '' })
         setPrompt('')
+        updateMentions('', 0)
+        resetHeight()
         textareaRef.current?.focus()
         return
       }
@@ -323,13 +364,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       } else if (item.kind === 'mode') {
         handleSetMode(item.modeId)
       } else if (item.kind === 'command') {
-        setPrompt(`/${item.name} `)
+        const next = `/${item.name} `
+        setPrompt(next)
+        updateMentions(next, next.length)
         textareaRef.current?.focus()
         return
       }
       setPrompt('')
+      updateMentions('', 0)
+      resetHeight()
     },
-    [handleSetConfig, handleSetMode]
+    [handleSetConfig, handleSetMode, updateMentions, resetHeight]
   )
 
   const launch = useCallback(async () => {
@@ -361,6 +406,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       }
       setLoadedSkill(null)
       clearAttachments()
+      resetMentions()
+      resetHeight()
       useWorkspaceStore.getState().hideAgentLauncher()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
@@ -380,7 +427,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     loadedSkill,
     prompt,
     attachments,
-    clearAttachments
+    clearAttachments,
+    resetMentions,
+    resetHeight
   ])
 
   const handleKeyDown = useCallback(
@@ -390,9 +439,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           menuOpen,
           sectionsLength: slashSections.length,
           menuRef,
-          onClearInput: () => setPrompt('')
+          onClearInput: () => {
+            setPrompt('')
+            updateMentions('', 0)
+            resetHeight()
+          }
         })
       ) {
+        return
+      }
+      if (handleMentionKeyDown(e)) {
         return
       }
       if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !menuOpen) {
@@ -407,7 +463,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         useWorkspaceStore.getState().hideAgentLauncher()
       }
     },
-    [launch, menuOpen, slashSections.length]
+    [launch, menuOpen, slashSections.length, handleMentionKeyDown, updateMentions, resetHeight]
   )
 
   const canLaunch =
@@ -436,6 +492,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         <div className="relative">
           {menuOpen && (
             <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
+          )}
+          {mentionMenuOpen && (
+            <FileMentionMenu
+              ref={mentionMenuRef}
+              sections={mentionSections}
+              onSelect={onMentionSelect}
+              emptyLabel={emptyLabel}
+            />
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
@@ -476,23 +540,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               <textarea
                 ref={textareaRef}
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={onInput}
                 onKeyDown={handleKeyDown}
+                onKeyUp={onKeyUp}
+                onSelect={onSelect}
                 onPaste={handlePaste}
                 placeholder={
                   loadedSkill
                     ? 'Add a message (optional)…'
-                    : 'Ask for follow-up changes or attach files'
+                    : 'Ask for follow-up changes or attach files (@ for files, / for commands)'
                 }
                 rows={2}
                 aria-label="Agent prompt"
                 autoFocus
                 className="max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55"
-                onInput={(e) => {
-                  const el = e.currentTarget
-                  el.style.height = 'auto'
-                  el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-                }}
               />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
@@ -579,6 +640,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               type="button"
               onClick={() => {
                 setPrompt(suggestion.prompt)
+                updateMentions(suggestion.prompt, suggestion.prompt.length)
                 textareaRef.current?.focus()
               }}
               className="rounded-2xl border border-border bg-card/60 px-4 py-3 text-left transition-colors hover:bg-muted/45"

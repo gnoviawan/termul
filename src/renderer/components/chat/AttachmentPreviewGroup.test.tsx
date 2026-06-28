@@ -11,10 +11,6 @@ vi.mock('framer-motion', async () => {
   }
 })
 
-vi.mock('@/components/ui/image-lightbox', () => ({
-  ImageLightbox: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
-}))
-
 const imageAtt: PendingAttachment = {
   kind: 'image',
   id: 'att-1',
@@ -33,6 +29,23 @@ const fileAtt: PendingAttachment = {
   size: 4
 }
 
+const fileRefText: PendingAttachment = {
+  kind: 'file-ref',
+  id: 'att-3',
+  name: 'app.tsx',
+  mimeType: 'text/tsx',
+  path: 'D:\\proj\\app.tsx'
+}
+
+const fileRefImage: PendingAttachment = {
+  kind: 'file-ref',
+  id: 'att-4',
+  name: 'pic.png',
+  mimeType: 'image/png',
+  path: 'D:\\proj\\pic.png',
+  previewUrl: 'data:image/png;base64,xyz'
+}
+
 describe('AttachmentPreviewGroup', () => {
   it('renders image attachments as thumbnail chips without raw filename', () => {
     render(<AttachmentPreviewGroup attachments={[imageAtt]} onRemove={() => {}} />)
@@ -41,9 +54,32 @@ describe('AttachmentPreviewGroup', () => {
     expect(screen.getByRole('button', { name: /Remove Image/ })).toBeInTheDocument()
   })
 
-  it('renders non-image files as attachment cards with filename', () => {
+  it('renders embedded text files as attachment badges with filename', () => {
     render(<AttachmentPreviewGroup attachments={[fileAtt]} onRemove={() => {}} />)
     expect(screen.getByText('notes.md')).toBeInTheDocument()
-    expect(screen.getByText('Embedded text')).toBeInTheDocument()
+  })
+
+  it('renders a text file-ref as a non-clickable badge without opening its path', () => {
+    render(<AttachmentPreviewGroup attachments={[fileRefText]} onRemove={() => {}} />)
+    expect(screen.getByText('app.tsx')).toBeInTheDocument()
+    // No open-path trigger — clicks are disabled to avoid sandbox/path errors.
+    expect(screen.queryByRole('button', { name: /Open / })).not.toBeInTheDocument()
+  })
+
+  it('previews an image file-ref inline without opening its path', () => {
+    render(<AttachmentPreviewGroup attachments={[fileRefImage]} onRemove={() => {}} />)
+    // Image refs render a hover-preview badge, not an open-path trigger.
+    expect(screen.queryByRole('button', { name: /Open pic\.png/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'pic.png' })).toBeInTheDocument()
+  })
+
+  it('does not render an open trigger for inline image attachments', () => {
+    render(<AttachmentPreviewGroup attachments={[imageAtt]} onRemove={() => {}} />)
+    expect(screen.queryByRole('button', { name: /Open / })).not.toBeInTheDocument()
+  })
+
+  it('does not render an open trigger for embedded text attachments', () => {
+    render(<AttachmentPreviewGroup attachments={[fileAtt]} onRemove={() => {}} />)
+    expect(screen.queryByRole('button', { name: /Open / })).not.toBeInTheDocument()
   })
 })

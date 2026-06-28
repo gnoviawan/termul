@@ -1,3 +1,4 @@
+import type { FileUIPart } from 'ai'
 import type { ContentBlock } from '@/lib/acp-api'
 
 /**
@@ -294,7 +295,7 @@ export function attachmentAriaLabel(name: string): string {
 export function blockDisplayName(block: ContentBlock): string {
   const direct = (block.name ?? block.title) as string | undefined
   if (direct) return humanizeAttachmentName(direct)
-  const resource = block.resource as { uri?: string } | undefined
+  const resource = blockResource(block)
   const uri = (block.uri as string | undefined) ?? resource?.uri
   if (uri) {
     let raw: string
@@ -309,10 +310,112 @@ export function blockDisplayName(block: ContentBlock): string {
   return block.type
 }
 
+/**
+ * Convert a `file://` URL back to a filesystem path readable by plugin-fs /
+ * `editorStore.openFile`. Strips the leading slash from Windows drive paths
+ * (`file:///D:/a/b` -> `D:/a/b`). Non-`file://` URIs are returned unchanged so
+ * callers can pass `attachment:///` URIs through without extra branching.
+ */
+export function fileUrlToPath(uri: string): string {
+  if (!uri.startsWith('file://')) return uri
+  let p = decodeURI(uri.slice('file://'.length))
+  if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1) // /C:/x -> C:/x
+  return p
+}
+
+/** Whether a `file://` (or bare absolute) URI points at a file we can open. */
+export function isLocalFileUri(uri: string | undefined): uri is string {
+  return Boolean(
+    uri && (uri.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(uri) || uri.startsWith('/'))
+  )
+}
+
 /** Best-effort MIME type for an incoming/own content block. */
 export function blockMimeType(block: ContentBlock): string | undefined {
   const direct = block.mimeType as string | undefined
   if (direct) return direct
-  const resource = block.resource as { mimeType?: string } | undefined
+  const resource = blockResource(block)
   return resource?.mimeType
+}
+
+/** URI of a content block: direct `uri` (image/resource_link) or nested `resource.uri`. */
+export function blockUri(block: ContentBlock): string | undefined {
+  const direct = block.uri as string | undefined
+  if (direct) return direct
+  return blockResource(block)?.uri
+}
+
+/** Inline base64 payload of an `image` block (the `data` field). */
+export function blockData(block: ContentBlock): string | undefined {
+  return block.data as string | undefined
+}
+
+/** Nested `resource` object of a `resource` block (uri/mimeType/text). */
+export function blockResource(
+  block: ContentBlock
+): { uri?: string; mimeType?: string; text?: string } | undefined {
+  return block.resource as { uri?: string; mimeType?: string; text?: string } | undefined
+}
+
+/** True when a URI is directly renderable in an `<img>`/`<video>` src (no Tauri fetch). */
+function isRenderableUrl(uri: string): boolean {
+  return (
+    uri.startsWith('data:') ||
+    uri.startsWith('http:') ||
+    uri.startsWith('https:') ||
+    uri.startsWith('blob:')
+  )
+}
+
+/**
+ * Map a staged composer attachment to an AI Elements `AttachmentData` file part.
+ * Image/file-ref carry a preview data URL when available; embedded text has none
+ * (the card falls back to a document icon).
+ */
+export function pendingToAttachmentData(a: PendingAttachment): FileUIPart & { id: string } {
+  const url = a.kind === 'file-embed' ? '' : (a.previewUrl ?? '')
+  // Hide opaque paste/GUID image names in the badge; keep real filenames for
+  // non-image refs/embeds (CSS truncates the visible width).
+  const filename = a.kind !== 'file-embed' && a.previewUrl ? humanizeAttachmentName(a.name) : a.name
+  return {
+    type: 'file',
+    id: a.id,
+    filename,
+    mediaType: a.mimeType,
+    url
+  }
+}
+
+/**
+ * Map an incoming/own ACP content block to an AI Elements `AttachmentData` file
+ * part. Inline `image` blocks (base64) and data/http URIs become a renderable
+ * `url` immediately; `file://` URIs are left empty for the bubble to resolve
+ * lazily via Tauri `readFile`.
+ */
+export function blockToAttachmentData(
+  block: ContentBlock,
+  id: string
+): FileUIPart & { id: string } {
+  const filename = blockDisplayName(block)
+  const mimeType = blockMimeType(block) ?? 'application/octet-stream'
+
+  if (block.type === 'image') {
+    const data = blockData(block)
+    return {
+      type: 'file',
+      id,
+      filename,
+      mediaType: mimeType,
+      url: data ? `data:${mimeType};base64,${data}` : ''
+    }
+  }
+
+  const uri = blockUri(block) ?? ''
+  return {
+    type: 'file',
+    id,
+    filename,
+    mediaType: mimeType,
+    url: isRenderableUrl(uri) ? uri : ''
+  }
 }

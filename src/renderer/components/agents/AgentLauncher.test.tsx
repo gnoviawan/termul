@@ -59,7 +59,12 @@ vi.mock('react-router-dom', async () => {
 })
 
 vi.mock('@/lib/api', () => ({
-  persistenceApi: { read: mockPersistRead, write: mockPersistWrite }
+  persistenceApi: { read: mockPersistRead, write: mockPersistWrite },
+  filesystemApi: {
+    onFileChanged: vi.fn(() => () => {}),
+    onFileCreated: vi.fn(() => () => {}),
+    onFileDeleted: vi.fn(() => () => {})
+  }
 }))
 
 vi.mock('@/lib/acp-api', () => ({

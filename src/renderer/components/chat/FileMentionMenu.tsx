@@ -11,6 +11,8 @@ export type FileMentionMenuHandle = {
 interface FileMentionMenuProps {
   sections: MentionSection[]
   onSelect: (match: MentionMatch) => void
+  /** Override the empty-state label (e.g. "Searching files…" while walking). */
+  emptyLabel?: string
 }
 
 /**
@@ -20,7 +22,7 @@ interface FileMentionMenuProps {
  * ignored entries). See ADR 0003.
  */
 export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenuProps>(
-  ({ sections, onSelect }, ref) => {
+  ({ sections, onSelect, emptyLabel }, ref) => {
     const composerSections: ComposerMenuSection[] = sections.map((s) => ({
       id: s.id,
       heading: s.heading,
@@ -38,7 +40,7 @@ export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenu
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel="No matching files."
+        emptyLabel={emptyLabel ?? 'No matching files.'}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as MentionMatch)}
       />
     )

@@ -35,8 +35,6 @@ import {
 import { CHAT_SPRING } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
 import { LoadedSkillChip } from './LoadedSkillChip'
-import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
-import type { MentionMatch } from './mention-menu-model'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
@@ -48,6 +46,7 @@ import {
 } from './slash-menu-model'
 import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerMentions } from './use-composer-mentions'
+import { useComposerTextarea } from './use-composer-textarea'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -137,7 +136,6 @@ export function ChatInputBar({
   )
   const mentions = useComposerMentions({
     rootPath: session.cwd,
-    scopeRoot: projectRoot ?? session.cwd,
     disabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -172,24 +170,25 @@ export function ChatInputBar({
   const slashOpen = isSlashTrigger(value) && !disabled
   const filter = slashFilter(value)
   const {
-    sections: mentionSections,
-    menuRef: mentionMenuRef,
-    reset: resetMentions,
-    select: selectMention,
-    update: updateMentions
-  } = mentions
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+    onInput,
+    onKeyUp,
+    onSelect,
+    onMentionSelect,
+    handleMentionKeyDown,
+    mentionMenuOpen,
+    mentionSections,
+    mentionMenuRef,
+    emptyLabel,
+    resetMentions,
+    resetHeight,
+    clampHeight,
+    updateMentions
+  } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
 
   const sections = useMemo(
     () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
     [slashOpen, commands, configOptions, modes, skills, filter]
   )
-
-  const resetHeight = useCallback(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-  }, [])
 
   const submit = useCallback(async () => {
     const userText = value.trim()
@@ -217,7 +216,7 @@ export function ChatInputBar({
       setValue('')
       setLoadedSkill(null)
       clearAttachments()
-      mentions.reset()
+      resetMentions()
       resetHeight()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load skill')
@@ -235,9 +234,9 @@ export function ChatInputBar({
     onSend,
     onSendBlocks,
     resetHeight,
+    resetMentions,
     projectRoot,
-    session.cwd,
-    mentions.reset
+    session.cwd
   ])
 
   const handleSelect = useCallback(
@@ -269,28 +268,6 @@ export function ChatInputBar({
     [value, onSetConfig, onSetMode, resetHeight, updateMentions]
   )
 
-  const handleMentionSelect = useCallback(
-    (match: MentionMatch) => {
-      const el = textareaRef.current
-      const currentValue = el?.value ?? ''
-      const caret = el?.selectionStart ?? currentValue.length
-      const outcome = selectMention(currentValue, caret, match)
-      if (!outcome) return
-      setValue(outcome.value)
-      resetHeight()
-      requestAnimationFrame(() => {
-        const t = textareaRef.current
-        if (!t) return
-        t.style.height = 'auto'
-        t.style.height = `${Math.min(t.scrollHeight, 160)}px`
-        t.setSelectionRange(outcome.caret, outcome.caret)
-        t.focus()
-        updateMentions(outcome.value, outcome.caret)
-      })
-    },
-    [selectMention, updateMentions, resetHeight]
-  )
-
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (
@@ -307,14 +284,7 @@ export function ChatInputBar({
       ) {
         return
       }
-      if (
-        tryHandleMentionMenuKeyDown(e, {
-          menuOpen: mentionMenuOpen,
-          sectionsLength: mentionSections.length,
-          menuRef: mentionMenuRef,
-          onReset: resetMentions
-        })
-      ) {
+      if (handleMentionKeyDown(e)) {
         return
       }
 
@@ -331,35 +301,13 @@ export function ChatInputBar({
     [
       slashOpen,
       sections.length,
-      mentionMenuOpen,
-      mentionSections,
-      mentionMenuRef,
-      resetMentions,
+      handleMentionKeyDown,
       updateMentions,
       busy,
       onCancel,
       submit,
       resetHeight
     ]
-  )
-
-  const syncCaret = useCallback(
-    (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-      const el = e.currentTarget
-      updateMentions(el.value, el.selectionStart ?? el.value.length)
-    },
-    [updateMentions]
-  )
-
-  const handleInput = useCallback(
-    (e: React.FormEvent<HTMLTextAreaElement>) => {
-      const el = e.currentTarget
-      setValue(el.value)
-      el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-      updateMentions(el.value, el.selectionStart ?? el.value.length)
-    },
-    [updateMentions]
   )
 
   // Load externally-seeded text (edit a message, pick a starter prompt), then
@@ -375,11 +323,10 @@ export function ChatInputBar({
     if (!el) return
     el.focus()
     requestAnimationFrame(() => {
-      el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+      clampHeight(el)
       el.setSelectionRange(next.length, next.length)
     })
-  }, [seedNonce, updateMentions])
+  }, [seedNonce, updateMentions, clampHeight])
 
   const canSend =
     !disabled &&
@@ -396,7 +343,8 @@ export function ChatInputBar({
           <FileMentionMenu
             ref={mentionMenuRef}
             sections={mentionSections}
-            onSelect={handleMentionSelect}
+            onSelect={onMentionSelect}
+            emptyLabel={emptyLabel}
           />
         )}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
@@ -425,10 +373,10 @@ export function ChatInputBar({
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={handleInput}
+              onChange={onInput}
               onKeyDown={handleKeyDown}
-              onKeyUp={syncCaret}
-              onSelect={syncCaret}
+              onKeyUp={onKeyUp}
+              onSelect={onSelect}
               onPaste={handlePaste}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}

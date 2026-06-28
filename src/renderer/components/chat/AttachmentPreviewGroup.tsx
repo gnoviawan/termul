@@ -1,25 +1,20 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { FileText, X } from 'lucide-react'
 import {
   Attachment,
-  AttachmentAction,
-  AttachmentActions,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentGroup,
-  AttachmentMedia,
-  AttachmentTitle
-} from '@/components/ui/attachment'
+  AttachmentHoverCard,
+  AttachmentHoverCardContent,
+  AttachmentHoverCardTrigger,
+  AttachmentInfo,
+  AttachmentPreview,
+  AttachmentRemove,
+  Attachments
+} from '@/components/ai-elements/attachments'
 import { cn } from '@/lib/utils'
-import { attachmentAriaLabel, type PendingAttachment } from './chat-attachments'
-import { ImageAttachmentChip } from './ImageAttachmentChip'
-
-/** Data-URL thumbnail for an attachment, when it is an image. */
-function attachmentPreviewUrl(a: PendingAttachment): string | undefined {
-  if (a.kind === 'image') return a.previewUrl
-  if (a.kind === 'file-ref') return a.previewUrl
-  return undefined
-}
+import {
+  attachmentAriaLabel,
+  type PendingAttachment,
+  pendingToAttachmentData
+} from './chat-attachments'
 
 interface AttachmentPreviewGroupProps {
   attachments: PendingAttachment[]
@@ -27,7 +22,7 @@ interface AttachmentPreviewGroupProps {
   className?: string
 }
 
-/** Staged-attachment chips shown in a composer above the textarea. */
+/** Staged-attachment badges shown in a composer above the textarea. */
 export function AttachmentPreviewGroup({
   attachments,
   onRemove,
@@ -37,63 +32,59 @@ export function AttachmentPreviewGroup({
 
   if (attachments.length === 0) return null
   return (
-    <AttachmentGroup className={cn('overflow-y-visible px-3 pb-1 pt-3', className)}>
+    <Attachments variant="inline" className={cn('overflow-y-visible px-3 pb-1 pt-3', className)}>
       <AnimatePresence initial={false}>
         {attachments.map((a) => {
-          const previewUrl = attachmentPreviewUrl(a)
-          const label = attachmentAriaLabel(a.name)
-
-          if (previewUrl) {
-            return (
-              <motion.div
-                key={a.id}
-                className="shrink-0 snap-start p-0.5"
-                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 6 }}
-                animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
-                transition={{ duration: 0.15, ease: 'easeOut' }}
-              >
-                <ImageAttachmentChip
-                  src={previewUrl}
-                  alt={label}
-                  size="composer"
-                  onRemove={() => onRemove(a.id)}
-                />
-              </motion.div>
-            )
-          }
-
+          const data = pendingToAttachmentData(a)
+          const ariaLabel = attachmentAriaLabel(a.name)
+          const previewUrl = a.kind === 'file-embed' ? undefined : a.previewUrl
+          const hasImagePreview = Boolean(previewUrl)
+          // Images preview inline via a hover card; non-image files render as a
+          // static badge. Nothing opens a backing path — temp/file paths can
+          // live in sandboxed dirs the OS opener refuses, which would surface as
+          // an error toast, so clicks are intentionally disabled.
           return (
             <motion.div
               key={a.id}
-              className="w-52 shrink-0 snap-start"
+              className="shrink-0 snap-start"
               initial={reduced ? { opacity: 0 } : { opacity: 0, y: 6 }}
               animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
               exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
               transition={{ duration: 0.15, ease: 'easeOut' }}
             >
-              <Attachment orientation="horizontal" size="sm" className="w-full">
-                <AttachmentMedia variant="icon">
-                  <FileText />
-                </AttachmentMedia>
-                <AttachmentContent>
-                  <AttachmentTitle>{a.name}</AttachmentTitle>
-                  {a.kind !== 'image' && (
-                    <AttachmentDescription>
-                      {a.kind === 'file-ref' ? 'Linked file' : 'Embedded text'}
-                    </AttachmentDescription>
-                  )}
-                </AttachmentContent>
-                <AttachmentActions>
-                  <AttachmentAction aria-label={`Remove ${label}`} onClick={() => onRemove(a.id)}>
-                    <X />
-                  </AttachmentAction>
-                </AttachmentActions>
+              <Attachment data={data} title={a.name} onRemove={() => onRemove(a.id)}>
+                {hasImagePreview ? (
+                  <AttachmentHoverCard>
+                    <AttachmentHoverCardTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-1.5"
+                        aria-label={ariaLabel}
+                      >
+                        <AttachmentPreview />
+                        <AttachmentInfo />
+                      </button>
+                    </AttachmentHoverCardTrigger>
+                    <AttachmentHoverCardContent>
+                      <img
+                        src={previewUrl}
+                        alt={ariaLabel}
+                        className="h-32 w-auto rounded object-cover"
+                      />
+                    </AttachmentHoverCardContent>
+                  </AttachmentHoverCard>
+                ) : (
+                  <>
+                    <AttachmentPreview />
+                    <AttachmentInfo />
+                  </>
+                )}
+                <AttachmentRemove label={`Remove ${ariaLabel}`} />
               </Attachment>
             </motion.div>
           )
         })}
       </AnimatePresence>
-    </AttachmentGroup>
+    </Attachments>
   )
 }

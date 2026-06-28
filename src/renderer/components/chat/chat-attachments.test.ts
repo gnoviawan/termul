@@ -5,14 +5,19 @@ import {
   basename,
   blockDisplayName,
   blockMimeType,
+  blockToAttachmentData,
+  blockUri,
   fileExtension,
+  fileUrlToPath,
   guessMimeType,
   humanizeAttachmentName,
   isImageMime,
+  isLocalFileUri,
   isOpaqueAttachmentName,
   isTextLike,
   type PendingAttachment,
   pathToFileUrl,
+  pendingToAttachmentData,
   uint8ToBase64
 } from './chat-attachments'
 
@@ -225,5 +230,183 @@ describe('blockMimeType', () => {
       'text/markdown'
     )
     expect(blockMimeType({ type: 'text', text: 'x' })).toBeUndefined()
+  })
+})
+
+describe('fileUrlToPath', () => {
+  it('strips the leading slash from a Windows drive path', () => {
+    expect(fileUrlToPath('file:///D:/Projects/a.ts')).toBe('D:/Projects/a.ts')
+  })
+
+  it('keeps a unix absolute path', () => {
+    expect(fileUrlToPath('file:///home/x/a.ts')).toBe('/home/x/a.ts')
+  })
+
+  it('returns non-file URIs unchanged', () => {
+    expect(fileUrlToPath('attachment:///note.md')).toBe('attachment:///note.md')
+    expect(fileUrlToPath('data:image/png;base64,abc')).toBe('data:image/png;base64,abc')
+  })
+})
+
+describe('isLocalFileUri', () => {
+  it('accepts file://, bare drive, and unix absolute paths', () => {
+    expect(isLocalFileUri('file:///D:/a/b.ts')).toBe(true)
+    expect(isLocalFileUri('D:\\a\\b.ts')).toBe(true)
+    expect(isLocalFileUri('/home/x/a.ts')).toBe(true)
+  })
+
+  it('rejects data:, attachment:, http:, and undefined', () => {
+    expect(isLocalFileUri('data:image/png;base64,abc')).toBe(false)
+    expect(isLocalFileUri('attachment:///note.md')).toBe(false)
+    expect(isLocalFileUri('http://x/y')).toBe(false)
+    expect(isLocalFileUri(undefined)).toBe(false)
+  })
+})
+
+describe('blockUri', () => {
+  it('reads the direct uri of an image/resource_link block', () => {
+    expect(blockUri({ type: 'resource_link', uri: 'file:///D:/a/b.ts' })).toBe('file:///D:/a/b.ts')
+  })
+
+  it('falls back to the nested resource uri', () => {
+    expect(blockUri({ type: 'resource', resource: { uri: 'attachment:///n.md' } })).toBe(
+      'attachment:///n.md'
+    )
+  })
+
+  it('returns undefined when no uri is present', () => {
+    expect(blockUri({ type: 'text', text: 'hi' })).toBeUndefined()
+  })
+})
+
+describe('pendingToAttachmentData', () => {
+  it('maps an inline image to a file part with a preview url and humanized name', () => {
+    const a: PendingAttachment = {
+      kind: 'image',
+      id: '1',
+      name: '{13A24D2D-A486-4}.png',
+      mimeType: 'image/png',
+      previewUrl: 'data:image/png;base64,AAA',
+      base64: 'AAA'
+    }
+    expect(pendingToAttachmentData(a)).toEqual({
+      type: 'file',
+      id: '1',
+      filename: 'Image',
+      mediaType: 'image/png',
+      url: 'data:image/png;base64,AAA'
+    })
+  })
+
+  it('maps a file-ref image to a file part carrying its thumbnail url', () => {
+    const a: PendingAttachment = {
+      kind: 'file-ref',
+      id: '2',
+      name: 'photo.png',
+      mimeType: 'image/png',
+      path: 'D:/p/photo.png',
+      previewUrl: 'data:image/png;base64,BBB'
+    }
+    expect(pendingToAttachmentData(a)).toEqual({
+      type: 'file',
+      id: '2',
+      filename: 'photo.png',
+      mediaType: 'image/png',
+      url: 'data:image/png;base64,BBB'
+    })
+  })
+
+  it('maps a non-image file-ref to a file part with an empty url', () => {
+    const a: PendingAttachment = {
+      kind: 'file-ref',
+      id: '3',
+      name: 'a.ts',
+      mimeType: 'text/typescript',
+      path: 'D:/a/a.ts'
+    }
+    expect(pendingToAttachmentData(a)).toEqual({
+      type: 'file',
+      id: '3',
+      filename: 'a.ts',
+      mediaType: 'text/typescript',
+      url: ''
+    })
+  })
+
+  it('maps an embedded text file to a file part with an empty url', () => {
+    const a: PendingAttachment = {
+      kind: 'file-embed',
+      id: '4',
+      name: 'notes.md',
+      mimeType: 'text/markdown',
+      text: '# hi',
+      size: 4
+    }
+    expect(pendingToAttachmentData(a)).toEqual({
+      type: 'file',
+      id: '4',
+      filename: 'notes.md',
+      mediaType: 'text/markdown',
+      url: ''
+    })
+  })
+})
+
+describe('blockToAttachmentData', () => {
+  it('maps an inline image block to a renderable data url', () => {
+    expect(
+      blockToAttachmentData({ type: 'image', mimeType: 'image/png', data: 'AAA' }, 'i0')
+    ).toEqual({
+      type: 'file',
+      id: 'i0',
+      filename: 'Image',
+      mediaType: 'image/png',
+      url: 'data:image/png;base64,AAA'
+    })
+  })
+
+  it('leaves file:// resource_link images empty for lazy bubble resolution', () => {
+    expect(
+      blockToAttachmentData(
+        { type: 'resource_link', uri: 'file:///D:/a.png', name: 'a.png', mimeType: 'image/png' },
+        'i1'
+      )
+    ).toEqual({
+      type: 'file',
+      id: 'i1',
+      filename: 'a.png',
+      mediaType: 'image/png',
+      url: ''
+    })
+  })
+
+  it('passes http/data urls through as renderable', () => {
+    expect(
+      blockToAttachmentData(
+        { type: 'resource_link', uri: 'http://x/y.png', name: 'y.png', mimeType: 'image/png' },
+        'i2'
+      )
+    ).toEqual({
+      type: 'file',
+      id: 'i2',
+      filename: 'y.png',
+      mediaType: 'image/png',
+      url: 'http://x/y.png'
+    })
+  })
+
+  it('maps an embedded resource to an empty-url document part', () => {
+    expect(
+      blockToAttachmentData(
+        { type: 'resource', resource: { uri: 'attachment:///n.md', mimeType: 'text/markdown' } },
+        'i3'
+      )
+    ).toEqual({
+      type: 'file',
+      id: 'i3',
+      filename: 'n.md',
+      mediaType: 'text/markdown',
+      url: ''
+    })
   })
 })
