@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url)
 const materialIconsDir = join(dirname(require.resolve('material-icon-theme/package.json')), 'icons')
 
 export default defineConfig({
-  plugins: [react() as any],
+  plugins: [react()],
   test: {
     globals: true,
     environment: 'jsdom',
