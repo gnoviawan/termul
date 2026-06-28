@@ -8,6 +8,8 @@
     "src/renderer/**/*.test.ts",
     "src/renderer/**/*.test.tsx",
     "src/renderer/**/__tests__/**/*",
-    "vitest.setup.ts"
+    "vitest.setup.ts",
+    "scripts/**/*.test.ts",
+    "scripts/validate-pr-body.ts"
   ]
 }
