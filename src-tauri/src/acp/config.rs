@@ -115,6 +115,40 @@ fn resolve_executable_in_path(command: &str, path: &str) -> Option<String> {
     None
 }
 
+fn is_registry_launcher_on_path(command: &str) -> bool {
+    let mut env_map = HashMap::new();
+    crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+
+    if crate::pty::manager::resolve_spawn_program(command).is_ok() {
+        return true;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    if let Some(path) = env_map.get("PATH") {
+        if resolve_executable_in_path(command, path).is_some() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Availability of package-manager launchers used by the ACP registry.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRuntimeProbe {
+    pub npx: bool,
+    pub uvx: bool,
+}
+
+/// Probe whether `npx` and `uvx` are resolvable on the current machine.
+pub fn probe_registry_runtime() -> AcpRuntimeProbe {
+    AcpRuntimeProbe {
+        npx: is_registry_launcher_on_path("npx"),
+        uvx: is_registry_launcher_on_path("uvx"),
+    }
+}
+
 impl AgentConfig {
     /// Convert this config into the protocol stdio server config used to spawn
     /// the subprocess via `agent_client_protocol::AcpAgent`.
@@ -180,6 +214,13 @@ impl AgentConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_registry_runtime_reports_launcher_flags() {
+        let probe = probe_registry_runtime();
+        assert_eq!(probe.npx, is_registry_launcher_on_path("npx"));
+        assert_eq!(probe.uvx, is_registry_launcher_on_path("uvx"));
+    }
 
     #[test]
     fn agent_id_is_unique() {

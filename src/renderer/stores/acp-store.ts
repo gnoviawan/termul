@@ -68,6 +68,7 @@ import {
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
+import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -968,10 +969,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       } catch (err) {
         console.warn('[acp] prepareChat failed', configId, err)
         if (inFlightPrepared.has(key)) {
-          const message = err instanceof Error ? err.message : String(err)
+          const config = get().agentConfigs.find((c) => c.id === configId)
+          const message = formatAcpSpawnError(err, config)
           set((s) => ({
             prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
           }))
+          toast.error(message)
         }
         return null
       } finally {

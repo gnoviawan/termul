@@ -36,6 +36,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:node && bun run typecheck:web",
+    "sync:acp-icons": "node scripts/sync-acp-icons.mjs",
+    "sync:acp-icons:check": "node scripts/sync-acp-icons.mjs && bunx biome format --write src/renderer/assets/agent-icons/acp/ && git diff --exit-code -- src/renderer/assets/agent-icons/acp/",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build --config src-tauri/tauri.conf.prod.json",
     "build:tauri:debug": "tauri build --debug --config src-tauri/tauri.conf.prod.json",

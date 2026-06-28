@@ -1,6 +1,10 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import {
+  buildSupportedAcpAgents,
+  pickDefaultSupportedAgent
+} from '@/lib/agents/supported-acp-agents'
 import { useAcpAgents } from './use-acp-agents'
 
 const {
@@ -30,6 +34,12 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/lib/worktree-context', () => ({
   getDefaultCwdForProject: (projectId: string) => `/work/${projectId}`
+}))
+
+vi.mock('@/lib/acp-api', () => ({
+  acpApi: {
+    probeRuntime: vi.fn(async () => ({ npx: true, uvx: true }))
+  }
 }))
 
 vi.mock('@/stores/project-store', () => {
@@ -97,13 +107,24 @@ describe('useAcpAgents', () => {
   })
 
   it('prewarms the default supported agent when no selection is persisted', async () => {
+    const defaultAgent = pickDefaultSupportedAgent(
+      buildSupportedAcpAgents([], 'windows-x86_64', undefined, {
+        npx: true,
+        uvx: true
+      })
+    )
+    expect(defaultAgent).toBeDefined()
+
     renderHook(() => useAcpAgents())
 
     await waitFor(() => {
-      expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:codex-acp', '/work/proj-1')
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(defaultAgent?.configId, '/work/proj-1')
     })
     expect(mockSaveAgentConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'acp-registry:codex-acp', templateId: 'codex-acp' })
+      expect.objectContaining({
+        id: defaultAgent?.configId,
+        templateId: defaultAgent?.id
+      })
     )
     expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
   })

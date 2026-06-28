@@ -182,3 +182,9 @@ pub async fn acp_respond_permission(
         .respond_permission(&agent_id, request_id, option_id)
         .await
 }
+
+/// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.
+#[tauri::command]
+pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
+    crate::acp::config::probe_registry_runtime()
+}

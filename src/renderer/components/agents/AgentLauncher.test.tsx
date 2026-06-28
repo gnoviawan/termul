@@ -2,8 +2,23 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import * as supportedAcpAgents from '@/lib/agents/supported-acp-agents'
+import {
+  buildSupportedAcpAgents,
+  pickDefaultSupportedAgent,
+  type SupportedAcpAgentEntry
+} from '@/lib/agents/supported-acp-agents'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
+
+function defaultReadyAgent(): SupportedAcpAgentEntry {
+  const entries = buildSupportedAcpAgents([], 'windows-x86_64')
+  return pickDefaultSupportedAgent(entries) ?? entries[0]
+}
+
+function pickerLabel(name: string): string {
+  return name.endsWith(' CLI') ? name.slice(0, -4) : name
+}
 
 const {
   mockStartChat,
@@ -67,8 +82,21 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/lib/dialog-api', () => ({
+  dialogApi: {
+    selectFile: vi.fn(async () => ({ success: true, data: 'C:/tools/legacy.exe' }))
+  }
+}))
+
+vi.mock('@/hooks/use-acp-runtime-probe', () => ({
+  useAcpRuntimeProbe: () => ({ npx: true, uvx: true })
+}))
+
 vi.mock('@/lib/acp-api', () => ({
-  acpApi: { installRegistryBinary: mockInstallRegistryBinary }
+  acpApi: {
+    installRegistryBinary: mockInstallRegistryBinary,
+    probeRuntime: vi.fn(async () => ({ npx: true, uvx: true }))
+  }
 }))
 
 vi.mock('@/lib/worktree-context', () => ({
@@ -208,6 +236,7 @@ function renderLauncher(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.restoreAllMocks()
   __resetLauncherSelectionCache()
   acpStateRef.current = {
     agentConfigs: [],
@@ -235,49 +264,42 @@ beforeEach(() => {
 
 describe('AgentLauncher ACP new thread', () => {
   it('routes submit to ACP startChat + addAgentChatTab and forwards the prompt', async () => {
+    const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
-    expect(mockStartChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work', undefined, 'p1')
+    expect(mockStartChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
     expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
-      agentId: 'acp-registry:codex-acp',
+      agentId: defaultAgent.configId,
       mode: 'acp'
     })
   })
 
   it('prepares the selected ACP session in the background', async () => {
+    const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(
-        'acp-registry:codex-acp',
-        '/work',
-        undefined,
-        'p1'
-      )
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
     expect(mockStartChat).not.toHaveBeenCalled()
   })
 
   it('surfaces prepare errors in the model picker and retries preparation', async () => {
-    const key = 'acp-registry:codex-acp\0/work\0'
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
       [key]: 'session/new timed out after 30s'
     }
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(
-        'acp-registry:codex-acp',
-        '/work',
-        undefined,
-        'p1'
-      )
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
     mockPrepareChat.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Model unavailable' }))
@@ -287,10 +309,11 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
-    expect(mockPrepareChat).toHaveBeenCalledWith('acp-registry:codex-acp', '/work', undefined, 'p1')
+    expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
+    const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
       <MemoryRouter>
         <AgentLauncher paneId="pane1" />
@@ -298,16 +321,11 @@ describe('AgentLauncher ACP new thread', () => {
     )
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(
-        'acp-registry:codex-acp',
-        '/work',
-        undefined,
-        'p1'
-      )
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
     unmount()
 
-    expect(mockCancelPreparedChat).toHaveBeenCalledWith('acp-registry:codex-acp\0/work\0')
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(`${defaultAgent.configId}\0/work\0`)
   })
 
   it('restores a persisted ACP selection', async () => {
@@ -426,12 +444,14 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('shows supported ACP agents when no configs are persisted', async () => {
+    const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
-    const agentPicker = await screen.findByRole('button', { name: 'Select ACP agent: Codex' })
-    expect(agentPicker).toHaveTextContent('Codex')
-    expect(agentPicker).not.toHaveTextContent('Codex CLI')
+    const agentPicker = await screen.findByRole('button', {
+      name: `Select ACP agent: ${pickerLabel(defaultAgent.agent.name)}`
+    })
+    expect(agentPicker).toHaveTextContent(pickerLabel(defaultAgent.agent.name))
     fireEvent.click(agentPicker)
     expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
     expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
@@ -482,6 +502,50 @@ describe('AgentLauncher ACP new thread', () => {
           id: 'acp-registry:opencode',
           templateId: 'opencode',
           command: 'opencode.exe',
+          args: ['acp']
+        })
+      )
+    )
+  })
+
+  it('saves a custom binary path for manual-install agents', async () => {
+    const manualEntry: SupportedAcpAgentEntry = {
+      id: 'legacy',
+      configId: 'acp-registry:legacy',
+      agent: {
+        id: 'legacy',
+        name: 'Legacy Agent',
+        version: '1.0.0',
+        description: 'Legacy desc',
+        distribution: { binary: { 'windows-x86_64': { cmd: './legacy.exe', args: ['acp'] } } }
+      },
+      config: null,
+      status: 'manual-install',
+      install: null,
+      manualInstall: { cmd: './legacy.exe', args: ['acp'], env: {} },
+      runtimeLauncher: null,
+      unavailableReason: 'Install Legacy Agent from the vendor.'
+    }
+    vi.spyOn(supportedAcpAgents, 'buildSupportedAcpAgents').mockReturnValue([manualEntry])
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:legacy', mode: 'acp' }
+    })
+
+    renderLauncher()
+
+    expect(await screen.findByText('Manual install')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('ACP agent executable path'), {
+      target: { value: 'C:/tools/legacy.exe' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(mockSaveAgentConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'acp-registry:legacy',
+          templateId: 'legacy',
+          command: 'C:/tools/legacy.exe',
           args: ['acp']
         })
       )

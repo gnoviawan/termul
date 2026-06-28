@@ -1,8 +1,13 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect } from 'react'
+import { getActiveAcpRegistry } from '@/hooks/use-acp-registry-catalog'
+import { acpApi } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
-import { buildSupportedAcpAgents } from '@/lib/agents/supported-acp-agents'
+import {
+  buildSupportedAcpAgents,
+  pickDefaultSupportedAgent
+} from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
@@ -20,11 +25,17 @@ export function useAcpAgents(): void {
   useEffect(() => {
     void (async () => {
       await loadAgentConfigs()
+      const runtime = await acpApi.probeRuntime()
       const { agentConfigs, prewarmAgent } = useAcpStore.getState()
       const activeProjectId = useProjectStore.getState().activeProjectId
       const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
       if (cwd.trim().length === 0) return
-      const supportedAgents = buildSupportedAcpAgents(agentConfigs, currentPlatformArch())
+      const supportedAgents = buildSupportedAcpAgents(
+        agentConfigs,
+        currentPlatformArch(),
+        getActiveAcpRegistry(),
+        runtime
+      )
       const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
       const saved = persisted.success ? (persisted.data as Partial<LastSelectedAgent> | null) : null
       const selected =
@@ -33,7 +44,7 @@ export function useAcpAgents(): void {
               (entry) => entry.configId === saved.agentId && entry.status === 'ready'
             )
           : null
-      const entry = selected ?? supportedAgents.find((candidate) => candidate.status === 'ready')
+      const entry = selected ?? pickDefaultSupportedAgent(supportedAgents)
       if (!entry?.config) return
       if (!agentConfigs.some((config) => config.id === entry.config?.id)) {
         await saveAgentConfig(entry.config)

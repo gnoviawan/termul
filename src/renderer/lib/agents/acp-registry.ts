@@ -70,6 +70,30 @@ function normalizeSnapshot(raw: unknown): RegistryAgent[] {
 /** The bundled registry catalog (normalized; sorted by id at sync time). */
 export const REGISTRY_AGENTS: readonly RegistryAgent[] = normalizeSnapshot(agentsSnapshot)
 
+/** Normalize untrusted registry JSON (bundled snapshot or CDN fetch). */
+export function normalizeRegistrySnapshot(raw: unknown): RegistryAgent[] {
+  return normalizeSnapshot(raw)
+}
+
+export function compareRegistryVersions(
+  bundled: readonly RegistryAgent[],
+  remote: readonly RegistryAgent[]
+): { updatedCount: number; newAgentIds: string[] } {
+  const bundledById = new Map(bundled.map((agent) => [agent.id, agent.version]))
+  const newAgentIds: string[] = []
+  let updatedCount = 0
+  for (const agent of remote) {
+    const bundledVersion = bundledById.get(agent.id)
+    if (bundledVersion === undefined) {
+      newAgentIds.push(agent.id)
+      updatedCount++
+      continue
+    }
+    if (bundledVersion !== agent.version) updatedCount++
+  }
+  return { updatedCount, newAgentIds }
+}
+
 /**
  * Outcome of deriving a launch config for the current platform:
  * - `runnable`: a ready `AgentConfig` (npx/uvx, or an installed binary).

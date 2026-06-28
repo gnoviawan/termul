@@ -13,6 +13,8 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 // --- Identifiers -----------------------------------------------------------
 
@@ -344,6 +346,26 @@ export async function acpInstallRegistryBinary(
   return invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request })
 }
 
+export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
+  if (!isTauriContext()) {
+    return { npx: true, uvx: true }
+  }
+  return invoke<AcpRuntimeAvailability>('acp_probe_runtime')
+}
+
+export interface AcpRegistrySnapshot {
+  agents: unknown
+  source: string
+  fetchedAt?: string | null
+}
+
+export async function acpFetchRegistrySnapshot(forceRefresh = false): Promise<AcpRegistrySnapshot> {
+  if (!isTauriContext()) {
+    return { agents: [], source: 'empty', fetchedAt: null }
+  }
+  return invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh })
+}
+
 export async function acpSpawnAgent(config: AgentConfig): Promise<AgentId> {
   return invoke<AgentId>('acp_spawn_agent', { config })
 }
@@ -502,5 +524,7 @@ export const acpApi = {
   respondPermission: acpRespondPermission,
   authenticate: acpAuthenticate,
   installRegistryBinary: acpInstallRegistryBinary,
+  probeRuntime: acpProbeRuntime,
+  fetchRegistrySnapshot: acpFetchRegistrySnapshot,
   onEvent: onAcpEvent
 }

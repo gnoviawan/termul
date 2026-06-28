@@ -1,6 +1,7 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Check, Download, Loader2, Paperclip } from 'lucide-react'
+import { platform as osPlatform } from '@tauri-apps/plugin-os'
+import { ArrowUp, Check, Download, FolderOpen, Loader2, Paperclip } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
@@ -26,7 +27,10 @@ import { useComposerAttachments } from '@/components/chat/use-composer-attachmen
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
+import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
 import {
   buildPromptWithLoadedSkill,
   type LoadedAgentSkill,
@@ -36,14 +40,19 @@ import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { acpApi, type ContentBlock } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
+import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   buildSupportedAcpAgents,
+  filterSupportedAcpAgents,
   installedBinaryConfig,
-  type SupportedAcpAgentEntry
+  manualBinaryConfig,
+  pickDefaultSupportedAgent,
+  type SupportedAcpAgentEntry,
+  type SupportedAcpAgentManualInstall
 } from '@/lib/agents/supported-acp-agents'
-import { persistenceApi } from '@/lib/api'
+import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
@@ -71,6 +80,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [isLaunching, setIsLaunching] = useState(false)
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
+  const [manualPath, setManualPath] = useState('')
+  const [savingManualPath, setSavingManualPath] = useState(false)
+  const [manualInstallOverride, setManualInstallOverride] =
+    useState<SupportedAcpAgentManualInstall | null>(null)
   const menuRef = useRef<SlashMenuHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -81,19 +94,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const projectLabel = activeProject?.name ?? 'this folder'
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
   const platformArch = useMemo(() => currentPlatformArch(), [])
+  const runtime = useAcpRuntimeProbe()
+  const { activeRegistry } = useAcpRegistryCatalog()
   const supportedAgents = useMemo(
-    () => buildSupportedAcpAgents(acpConfigs, platformArch),
-    [acpConfigs, platformArch]
+    () => buildSupportedAcpAgents(acpConfigs, platformArch, activeRegistry, runtime),
+    [acpConfigs, platformArch, activeRegistry, runtime]
   )
 
   const selectedEntry = useMemo(
     () =>
       supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
-      supportedAgents.find((entry) => entry.status === 'ready') ??
+      pickDefaultSupportedAgent(supportedAgents) ??
       supportedAgents[0] ??
       null,
     [supportedAgents, selectedConfigId]
   )
+  const manualInstallContext =
+    selectedEntry?.manualInstall ??
+    (selectedEntry?.status === 'install-required' ? manualInstallOverride : null)
   const selectedConfig = selectedEntry?.config ?? null
   const activeConfigId = selectedConfig?.id ?? ''
   const preparedKey =
@@ -107,6 +125,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const prepareError = useAcpStore((s) =>
     preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
   )
+  const displayPrepareError = useMemo(() => {
+    if (!prepareError) return null
+    return formatAcpSpawnError(prepareError, selectedConfig ?? undefined)
+  }, [prepareError, selectedConfig])
   const draftSession = useAcpSession(preparedSessionId)
   const promptCaps = useAcpStore((s) =>
     draftSession?.agentId
@@ -116,7 +138,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const imageCapable = Boolean(promptCaps?.image)
   const embedCapable = Boolean(promptCaps?.embeddedContext)
   const composerDisabled =
-    isLaunching || Boolean(installingConfigId) || selectedEntry?.status !== 'ready'
+    isLaunching ||
+    Boolean(installingConfigId) ||
+    savingManualPath ||
+    selectedEntry?.status !== 'ready'
   const {
     attachments,
     addFiles,
@@ -221,16 +246,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
             ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        const next =
-          restored ??
-          supportedAgents.find((entry) => entry.status === 'ready') ??
-          supportedAgents[0]
+        const next = restored ?? pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
         if (next) {
           setSelectedConfigId(next.configId)
           persistSelection(next.configId)
         }
       } catch {
-        const next = supportedAgents.find((entry) => entry.status === 'ready') ?? supportedAgents[0]
+        const next = pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
         if (next) setSelectedConfigId(next.configId)
       }
     })()
@@ -271,6 +293,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {
+      setManualPath('')
+      setManualInstallOverride(null)
       setSelectedConfigId(entry.configId)
       persistSelection(entry.configId)
       textareaRef.current?.focus()
@@ -298,11 +322,53 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         toast.success(`${entry.agent.name} installed`)
       } catch (err) {
         toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
+        setManualInstallOverride({
+          cmd: entry.install.cmd,
+          args: entry.install.args,
+          env: entry.install.env
+        })
       } finally {
         setInstallingConfigId(null)
       }
     },
     [installingConfigId, persistSelection, saveAgentConfig]
+  )
+
+  const handleBrowseManualPath = useCallback(async () => {
+    const result = await dialogApi.selectFile({
+      title: 'Select ACP agent executable',
+      filters:
+        osPlatform() === 'windows' ? [{ name: 'Executable', extensions: ['exe'] }] : undefined
+    })
+    if (result.success && result.data) {
+      setManualPath(result.data)
+    }
+  }, [])
+
+  const handleSaveManualPath = useCallback(
+    async (entry: SupportedAcpAgentEntry, manual: SupportedAcpAgentManualInstall) => {
+      if (savingManualPath) return
+      const command = manualPath.trim()
+      if (!command) {
+        toast.error('Enter the path to the installed ACP binary.')
+        return
+      }
+      setSelectedConfigId(entry.configId)
+      persistSelection(entry.configId)
+      setSavingManualPath(true)
+      try {
+        const config = manualBinaryConfig(entry.agent, command, manual)
+        await saveAgentConfig(config)
+        setSelectedConfigId(config.id)
+        persistSelection(config.id)
+        toast.success(`${entry.agent.name} configured`)
+      } catch (err) {
+        toast.error(`Failed to save ${entry.agent.name}: ${String(err)}`)
+      } finally {
+        setSavingManualPath(false)
+      }
+    },
+    [manualPath, persistSelection, saveAgentConfig, savingManualPath]
   )
 
   const handleSetConfig = useCallback(
@@ -515,12 +581,36 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 : undefined
             }
           >
-            {selectedEntry?.status === 'install-required' && (
+            {selectedEntry?.status === 'install-required' && !manualInstallContext && (
               <InstallRequiredBanner
                 entry={selectedEntry}
                 installing={installingConfigId === selectedEntry.configId}
                 onInstall={() => void handleInstallAgent(selectedEntry)}
+                onUseCustomPath={
+                  selectedEntry.install
+                    ? () =>
+                        setManualInstallOverride({
+                          cmd: selectedEntry.install!.cmd,
+                          args: selectedEntry.install!.args,
+                          env: selectedEntry.install!.env
+                        })
+                    : undefined
+                }
               />
+            )}
+            {manualInstallContext && selectedEntry && (
+              <ManualInstallBanner
+                entry={selectedEntry}
+                manual={manualInstallContext}
+                path={manualPath}
+                saving={savingManualPath}
+                onPathChange={setManualPath}
+                onBrowse={() => void handleBrowseManualPath()}
+                onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
+              />
+            )}
+            {selectedEntry?.status === 'needs-runtime' && (
+              <NeedsRuntimeBanner entry={selectedEntry} />
             )}
             {selectedEntry?.status === 'unavailable' && (
               <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
@@ -572,7 +662,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   agents={supportedAgents}
                   selectedEntry={selectedEntry}
                   selectedConfig={selectedConfig}
-                  disabled={isLaunching || Boolean(installingConfigId)}
+                  disabled={isLaunching || Boolean(installingConfigId) || savingManualPath}
                   installingConfigId={installingConfigId}
                   onSelectAgent={handleSelectAgent}
                 />
@@ -580,8 +670,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   selectedEntry={selectedEntry}
                   modelOption={modelOption}
                   loading={!prepareError && isPreparing && !draftSession}
-                  errorMessage={prepareError}
-                  disabled={isLaunching || Boolean(installingConfigId)}
+                  errorMessage={displayPrepareError}
+                  disabled={isLaunching || Boolean(installingConfigId) || savingManualPath}
                   onRetry={handleRetryPrepare}
                   onSelectModel={handleSetModel}
                 />
@@ -660,11 +750,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 function InstallRequiredBanner({
   entry,
   installing,
-  onInstall
+  onInstall,
+  onUseCustomPath
 }: {
   entry: SupportedAcpAgentEntry
   installing: boolean
   onInstall: () => void
+  onUseCustomPath?: () => void
 }): React.JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
@@ -674,14 +766,120 @@ function InstallRequiredBanner({
           {entry.agent.name} needs a local ACP binary before it can start chats.
         </p>
       </div>
-      <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
-        {installing ? (
-          <Loader2 size={14} className="mr-1.5 animate-spin" />
-        ) : (
-          <Download size={14} className="mr-1.5" />
+      <div className="flex shrink-0 items-center gap-2">
+        {onUseCustomPath && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={installing}
+            onClick={onUseCustomPath}
+          >
+            Custom path
+          </Button>
         )}
-        {installing ? 'Installing…' : 'Install'}
+        <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
+          {installing ? (
+            <Loader2 size={14} className="mr-1.5 animate-spin" />
+          ) : (
+            <Download size={14} className="mr-1.5" />
+          )}
+          {installing ? 'Installing…' : 'Install'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+const RUNTIME_HELP_URLS = {
+  npx: 'https://nodejs.org/en/download',
+  uvx: 'https://docs.astral.sh/uv/getting-started/installation/'
+} as const
+
+function NeedsRuntimeBanner({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element {
+  const launcher = entry.runtimeLauncher ?? 'npx'
+  const helpUrl = RUNTIME_HELP_URLS[launcher]
+  const helpLabel = launcher === 'uvx' ? 'Install uv' : 'Install Node.js'
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-foreground">Runtime required</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">{entry.unavailableReason}</p>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => void openerApi.openUrlWithSystemBrowser(helpUrl)}
+      >
+        {helpLabel}
       </Button>
+    </div>
+  )
+}
+
+function ManualInstallBanner({
+  entry,
+  manual,
+  path,
+  saving,
+  onPathChange,
+  onBrowse,
+  onSave
+}: {
+  entry: SupportedAcpAgentEntry
+  manual: SupportedAcpAgentManualInstall
+  path: string
+  saving: boolean
+  onPathChange: (value: string) => void
+  onBrowse: () => void
+  onSave: () => void
+}): React.JSX.Element {
+  const expectedCommand = `${manual.cmd}${manual.args.length > 0 ? ` ${manual.args.join(' ')}` : ''}`
+
+  return (
+    <div className="space-y-3 border-b border-border/60 px-5 py-3">
+      <div>
+        <div className="text-xs font-medium text-foreground">Manual install</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {entry.unavailableReason ??
+            `Install ${entry.agent.name} from the vendor, then point Termul at the binary.`}
+        </p>
+        {expectedCommand && (
+          <p className="mt-1 font-mono text-2xs text-muted-foreground">
+            Expected: {expectedCommand}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          value={path}
+          onChange={(event) => onPathChange(event.target.value)}
+          placeholder="Path to installed ACP binary"
+          aria-label="ACP agent executable path"
+          className="h-8 font-mono text-xs"
+          disabled={saving}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={saving}
+          onClick={onBrowse}
+          aria-label="Browse for ACP agent executable"
+        >
+          <FolderOpen size={14} />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={saving || path.trim().length === 0}
+          onClick={onSave}
+        >
+          {saving ? <Loader2 size={14} className="animate-spin" /> : 'Save'}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -701,6 +899,8 @@ function AcpAgentPicker({
   installingConfigId: string | null
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
 }): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
   const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
   return (
@@ -724,33 +924,60 @@ function AcpAgentPicker({
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           ACP Agent
         </div>
-        {agents.map((entry) => (
-          <button
-            key={entry.configId}
-            type="button"
-            onClick={() => onSelectAgent(entry)}
-            className={cn(
-              'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-              entry.configId === selectedEntry?.configId && 'bg-accent/50'
-            )}
-          >
-            <EntryGlyph config={entry.config} templateId={entry.agent.id} name={entry.agent.name} />
-            <span className="min-w-0 flex-1 truncate">
-              {entry.config?.name ?? entry.agent.name}
-            </span>
-            {entry.status === 'install-required' && (
-              <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
-              </span>
-            )}
-            {entry.status === 'unavailable' && (
-              <span className="text-3xs text-muted-foreground">Unavailable</span>
-            )}
-            {entry.configId === selectedEntry?.configId && (
-              <Check size={14} className="text-muted-foreground" />
-            )}
-          </button>
-        ))}
+        <div className="px-2 pb-1">
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search agents…"
+            aria-label="Search ACP agents"
+            className="h-7 text-xs"
+          />
+        </div>
+        <div className="max-h-64 overflow-y-auto pr-1">
+          {visibleAgents.length === 0 ? (
+            <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
+          ) : (
+            visibleAgents.map((entry) => (
+              <button
+                key={entry.configId}
+                type="button"
+                onClick={() => onSelectAgent(entry)}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
+                  entry.configId === selectedEntry?.configId && 'bg-accent/50'
+                )}
+              >
+                <EntryGlyph
+                  config={entry.config}
+                  templateId={entry.agent.id}
+                  name={entry.agent.name}
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {entry.config?.name ?? entry.agent.name}
+                </span>
+                {entry.status === 'install-required' && (
+                  <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
+                    {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+                  </span>
+                )}
+                {entry.status === 'needs-runtime' && (
+                  <span className="text-3xs text-muted-foreground">
+                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+                  </span>
+                )}
+                {entry.status === 'manual-install' && (
+                  <span className="text-3xs text-muted-foreground">Manual install</span>
+                )}
+                {entry.status === 'unavailable' && (
+                  <span className="text-3xs text-muted-foreground">Unavailable</span>
+                )}
+                {entry.configId === selectedEntry?.configId && (
+                  <Check size={14} className="text-muted-foreground" />
+                )}
+              </button>
+            ))
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   )
@@ -810,7 +1037,11 @@ function AcpModelPicker({
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {selectedEntry?.status === 'install-required'
               ? 'Install this ACP agent to load model options.'
-              : 'This ACP agent is not available on this platform.'}
+              : selectedEntry?.status === 'needs-runtime'
+                ? 'Install the required runtime before loading model options.'
+                : selectedEntry?.status === 'manual-install'
+                  ? 'Install this agent manually before loading model options.'
+                  : 'This ACP agent is not available on this platform.'}
           </div>
         ) : modelOption ? (
           <>
