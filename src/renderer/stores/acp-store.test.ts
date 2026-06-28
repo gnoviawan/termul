@@ -911,6 +911,36 @@ describe('acp-store', () => {
     )
   })
 
+  it('concurrent prewarmAgent + prepareChat for the same cwd spawn only one process', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    let resolveSpawn!: (id: string) => void
+    const spawnGate = new Promise<string>((r) => {
+      resolveSpawn = r
+    })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(spawnGate)
+      .mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    const warm = useAcpStore.getState().prewarmAgent('cfg-w', '/work')
+    useAcpStore.getState().prepareChat('cfg-w', '/work', undefined, 'p1')
+    resolveSpawn('agent-warm')
+    await warm
+    await vi.waitFor(() => {
+      expect(Object.values(useAcpStore.getState().preparedSessions).includes('sess-prep')).toBe(
+        true
+      )
+    })
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(1)
+    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-w', '/work')]).toBe(
+      'agent-warm'
+    )
+    expect(useAcpStore.getState().sessions['sess-prep'].agentId).toBe('agent-warm')
+  })
+
   it('startChat awaits an in-flight warm instead of re-spawning (GH-288 C3)', async () => {
     await useAcpStore
       .getState()

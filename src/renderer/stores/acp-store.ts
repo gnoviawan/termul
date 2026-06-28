@@ -531,6 +531,85 @@ export function prepareChatKey(
 /** In-flight `session/new` for a prepare key. */
 const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
 
+type EnsureLiveAgentOptions = {
+  /** Mirror membership in `warmingConfigs` for the prewarm UI. */
+  registerWarmUi?: boolean
+  /** When true, spawn failures resolve to `null` instead of rejecting (prewarm). */
+  silentSpawnFailure?: boolean
+}
+
+/**
+ * Return a connected agent process for `configId + cwd`, spawning at most one
+ * in-flight process per reuse key. Registers `inFlightWarms` synchronously so
+ * concurrent `prewarmAgent`, `prepareChat`, and `startChat` cannot race a
+ * second spawn.
+ */
+function ensureLiveAgent(
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
+  configId: string,
+  cwd: string,
+  options: EnsureLiveAgentOptions = {}
+): Promise<AgentId | null> {
+  const trimmedCwd = cwd.trim()
+  if (trimmedCwd.length === 0) return Promise.resolve(null)
+  const config = get().agentConfigs.find((c) => c.id === configId)
+  if (!config) return Promise.resolve(null)
+
+  const reuseKey = agentReuseKey(configId, trimmedCwd)
+  const existing = get().configToLiveAgent[reuseKey]
+  if (existing && isReusableStatus(get().agentStatus[existing])) {
+    return Promise.resolve(existing)
+  }
+
+  const inFlight = inFlightWarms.get(reuseKey)
+  if (inFlight) return inFlight
+
+  if (options.registerWarmUi) {
+    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
+  }
+
+  const spawnPromise = (async (): Promise<AgentId | null> => {
+    try {
+      const agentId = await get().spawnAgent({
+        name: config.name,
+        command: config.command,
+        args: config.args,
+        env: config.env,
+        allowTerminal: config.allowTerminal
+      })
+      if (get().agentConfigs.some((c) => c.id === configId)) {
+        set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
+        return agentId
+      }
+      try {
+        await get().killAgent(agentId)
+      } catch {
+        /* best-effort cleanup */
+      }
+      return null
+    } catch (err) {
+      if (options.silentSpawnFailure) {
+        console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)
+        return null
+      }
+      throw err
+    } finally {
+      inFlightWarms.delete(reuseKey)
+      if (options.registerWarmUi) {
+        set((s) => {
+          const warming = { ...s.warmingConfigs }
+          delete warming[reuseKey]
+          return { warmingConfigs: warming }
+        })
+      }
+    }
+  })()
+
+  inFlightWarms.set(reuseKey, spawnPromise)
+  return spawnPromise
+}
+
 function cancelPreparedChatEntry(
   key: string,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
@@ -832,59 +911,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   prewarmAgent: async (configId, cwd) => {
-    const config = get().agentConfigs.find((c) => c.id === configId)
-    if (!config) return
-    const trimmedCwd = cwd.trim()
-    if (trimmedCwd.length === 0) return
-    const reuseKey = agentReuseKey(configId, trimmedCwd)
-    // Dedupe: a warm already in flight, or a live reusable agent (connected or
-    // awaiting auth) for this config+cwd, is a no-op. Re-spawning would orphan
-    // the original and overwrite the reuse entry — matching prepareChat/startChat.
-    const inFlight = inFlightWarms.get(reuseKey)
-    if (inFlight) {
-      await inFlight
-      return
-    }
-    const existing = get().configToLiveAgent[reuseKey]
-    if (existing && isReusableStatus(get().agentStatus[existing])) return
-
-    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
-    const spawnPromise = (async (): Promise<AgentId | null> => {
-      try {
-        const agentId = await get().spawnAgent({
-          name: config.name,
-          command: config.command,
-          args: config.args,
-          env: config.env,
-          allowTerminal: config.allowTerminal
-        })
-        // Only register the warm agent if the config still exists (it may have
-        // been disabled mid-spawn); otherwise kill the orphan immediately.
-        if (get().agentConfigs.some((c) => c.id === configId)) {
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-          return agentId
-        }
-        try {
-          await get().killAgent(agentId)
-        } catch {
-          /* best-effort cleanup */
-        }
-        return null
-      } catch (err) {
-        // Silent: chat will lazy-spawn on demand if warm-up failed.
-        console.warn('[acp] prewarm failed for', reuseKey, err)
-        return null
-      } finally {
-        inFlightWarms.delete(reuseKey)
-        set((s) => {
-          const warming = { ...s.warmingConfigs }
-          delete warming[reuseKey]
-          return { warmingConfigs: warming }
-        })
-      }
-    })()
-    inFlightWarms.set(reuseKey, spawnPromise)
-    await spawnPromise
+    await ensureLiveAgent(get, set, configId, cwd, {
+      registerWarmUi: true,
+      silentSpawnFailure: true
+    })
   },
 
   cancelPreparedChat: (key) => {
@@ -922,34 +952,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
     const task = (async (): Promise<SessionId | null> => {
       try {
-        const config = get().agentConfigs.find((c) => c.id === configId)
-        if (!config) return null
-        const reuseKey = agentReuseKey(configId, trimmedCwd)
-        const warming = inFlightWarms.get(reuseKey)
-        if (warming) await warming
-        const existing = get().configToLiveAgent[reuseKey]
-        const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
-        let agentId: AgentId
-        if (reuse) {
-          agentId = reuse
-        } else {
-          agentId = await get().spawnAgent({
-            name: config.name,
-            command: config.command,
-            args: config.args,
-            env: config.env,
-            allowTerminal: config.allowTerminal
-          })
-          if (!get().agentConfigs.some((c) => c.id === configId)) {
-            try {
-              await get().killAgent(agentId)
-            } catch {
-              /* best-effort */
-            }
-            return null
-          }
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-        }
+        const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
+        if (!agentId) return null
         const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId)
         if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
           return null
@@ -1050,28 +1054,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return sessionId
       }
     }
-    // If a background pre-warm is still spawning this config+cwd, wait for it
-    // instead of racing a second spawn (which would orphan one of the processes).
-    const reuseKey = agentReuseKey(configId, trimmedCwd)
-    const warming = inFlightWarms.get(reuseKey)
-    if (warming) await warming
-    // Reuse a live connected agent for this config+cwd; else spawn.
-    // Keyed per-cwd so the same agent in another project gets its own process.
-    const existing = get().configToLiveAgent[reuseKey]
-    const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
-    let agentId: AgentId
-    if (reuse) {
-      agentId = reuse
-    } else {
-      agentId = await get().spawnAgent({
-        name: config.name,
-        command: config.command,
-        args: config.args,
-        env: config.env,
-        allowTerminal: config.allowTerminal
-      })
-      set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-    }
+    const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
+    if (!agentId) throw new Error(`failed to spawn agent for config ${configId}`)
     return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
   },
 
