@@ -69,6 +69,7 @@ import {
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
+import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -264,6 +265,17 @@ let seqCounter = 0
 function nextSeq(): number {
   seqCounter += 1
   return seqCounter
+}
+
+/**
+ * Rebase the process-wide seq counter so live events appended after a persisted
+ * session is reopened sort after the restored history. Without this, the
+ * counter (which starts at 0 on every app load) could let `nextSeq()` return a
+ * value smaller than an existing restored `seq`, and `buildTimeline` would
+ * interleave fresh chunks/tool calls ahead of older history.
+ */
+function rebaseSeqCounter(maxSeq: number): void {
+  if (maxSeq > seqCounter) seqCounter = maxSeq
 }
 
 /** Index of the last user message in a thread, or -1 if none. */
@@ -812,6 +824,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // close may fail if the agent lacks the capability; mark closed locally regardless
       }
     }
+    // Reclaim app-owned temp files (pasted screenshots) staged for this session
+    // now that no further turns can read them.
+    void deleteSessionTempFiles(sessionId)
     set((s) => {
       const sessions = { ...s.sessions }
       if (sessions[sessionId]) {
@@ -1082,6 +1097,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const capabilities = get().agents[meta.agentId]?.capabilities ?? null
     const strategy = decideResume({ connected, capabilities })
 
+    // Rebase the process-wide seq counter so live events appended after the
+    // restored transcript sort after it (nextSeq() returns > max restored seq).
+    let maxRestoredSeq = 0
+    for (const m of payload.messages) {
+      if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
+    }
+    rebaseSeqCounter(maxRestoredSeq)
+
     // Show the persisted transcript locally and register the session record so the
     // pane has content regardless of strategy.
     set((s) => ({
@@ -1143,6 +1166,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return { sessionIndex: next, sessions }
     })
+    // Reclaim any app-owned temp files staged for this session.
+    void deleteSessionTempFiles(id)
     try {
       await saveSessionIndexToDisk(next)
       await deleteSessionPayload(id)
@@ -1515,6 +1540,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   _onSessionClosed: (e) => {
+    // Reclaim app-owned temp files staged for this session (e.g. agent
+    // disconnected) so they do not linger in the OS temp dir.
+    void deleteSessionTempFiles(e.sessionId)
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)

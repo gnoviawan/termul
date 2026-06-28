@@ -1,9 +1,11 @@
 import { join, tempDir } from '@tauri-apps/api/path'
 import { readImage } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
-import { readFile, writeFile } from '@tauri-apps/plugin-fs'
-import { type ClipboardEvent, useCallback, useState } from 'react'
+import { writeFile } from '@tauri-apps/plugin-fs'
+import { type ClipboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { readAttachmentBytes } from '@/lib/attachment-api'
+import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
 import {
   basename,
   guessMimeType,
@@ -71,7 +73,7 @@ async function readImagePathAsAttachment(
   name: string,
   mimeType: string
 ): Promise<PendingAttachment> {
-  const bytes = await readFile(path)
+  const bytes = await readAttachmentBytes(path)
   if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Image too large')
   const base64 = uint8ToBase64(bytes)
   return {
@@ -91,7 +93,7 @@ async function readImagePathAsAttachment(
  */
 async function readThumbnail(path: string, mimeType: string): Promise<string | undefined> {
   try {
-    const bytes = await readFile(path)
+    const bytes = await readAttachmentBytes(path)
     if (bytes.byteLength > MAX_IMAGE_BYTES) return undefined
     return `data:${mimeType};base64,${uint8ToBase64(bytes)}`
   } catch {
@@ -121,10 +123,23 @@ async function writeImageBytesToTempLink(
   const dir = await tempDir()
   const path = await join(dir, `faizui-${crypto.randomUUID()}-${safe}`)
   await writeFile(path, bytes)
-  const previewUrl = isImageMime(mimeType)
-    ? `data:${mimeType};base64,${uint8ToBase64(bytes)}`
-    : undefined
-  return { kind: 'file-ref', id: attachmentId(), name: name || safe, mimeType, path, previewUrl }
+  // Skip the data-URL preview when the temp file is too large to thumbnail so
+  // the card falls back to an image icon instead of holding a giant base64 URL
+  // in memory. The file-ref itself is still created — the agent reads by path.
+  const tooLargeToPreview = bytes.byteLength > MAX_IMAGE_BYTES
+  const previewUrl =
+    isImageMime(mimeType) && !tooLargeToPreview
+      ? `data:${mimeType};base64,${uint8ToBase64(bytes)}`
+      : undefined
+  return {
+    kind: 'file-ref',
+    id: attachmentId(),
+    name: name || safe,
+    mimeType,
+    path,
+    previewUrl,
+    appOwnedTemp: true
+  }
 }
 
 /** Read a browser image File's bytes into a temp-file `resource_link`. */
@@ -206,6 +221,13 @@ export interface ComposerAttachments {
   handlePaste: (e: ClipboardEvent<HTMLElement>) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
+  /**
+   * Paths of currently-staged app-owned temp `file-ref` attachments (e.g.
+   * pasted screenshots). Callers register these with the session before sending
+   * so they can be deleted when the session closes; the agent reads them by
+   * path during the turn, so they must not be deleted on send.
+   */
+  appOwnedTempPaths: () => string[]
   /** Whether the OS picker affordance should be shown (resource_link, always supported). */
   canPick: boolean
   /** Whether drag/paste can produce an accepted block for this agent. */
@@ -226,6 +248,21 @@ export function useComposerAttachments(opts: {
 }): ComposerAttachments {
   const { imageCapable, embedCapable, disabled } = opts
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  // Mirror of `attachments` read by cleanup paths (remove / unmount) so they
+  // can delete app-owned temp files without side effects inside state updaters.
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
+
+  // Discard any still-staged app-owned temp files when the composer unmounts.
+  // Sent files are cleared from state by `clearAttachments` before unmount, so
+  // this only reclaims files staged but never sent (e.g. launcher closed).
+  useEffect(() => {
+    return () => {
+      for (const a of attachmentsRef.current) {
+        if (a.kind === 'file-ref' && a.appOwnedTemp) void deleteTempFile(a.path)
+      }
+    }
+  }, [])
 
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -239,9 +276,15 @@ export function useComposerAttachments(opts: {
         if (isImageMime(f.type)) {
           // Images always attach: inline base64 when the agent accepts images,
           // otherwise a temp-file resource_link the agent can read by path.
-          if (f.size > MAX_IMAGE_BYTES) tooLarge++
-          else if (imageCapable) reads.push(readImageAsAttachment(f))
-          else reads.push(fileToTempLink(f))
+          // The size cap only guards the inline base64 path — a temp-link
+          // attachment is read by path, so large images still attach (without a
+          // preview) instead of being rejected.
+          if (imageCapable) {
+            if (f.size > MAX_IMAGE_BYTES) tooLarge++
+            else reads.push(readImageAsAttachment(f))
+          } else {
+            reads.push(fileToTempLink(f))
+          }
         } else if (isTextLike(f.name, f.type)) {
           if (!embedCapable) needEmbed++
           else if (f.size > MAX_EMBED_BYTES) tooLarge++
@@ -353,16 +396,18 @@ export function useComposerAttachments(opts: {
       void (async () => {
         const att = await readClipboardImageAttachment()
         if (!att) return // empty/non-image clipboard — nothing to do
-        if ((att.base64.length * 3) / 4 > MAX_IMAGE_BYTES) {
-          toast.error('Image too large (max 10 MB)')
-          return
-        }
         if (imageCapable) {
+          if ((att.base64.length * 3) / 4 > MAX_IMAGE_BYTES) {
+            toast.error('Image too large (max 10 MB)')
+            return
+          }
           setAttachments((prev) => [...prev, att])
           return
         }
         // Agent can't take inline images but can read files by path: persist
         // the pasted bitmap to a temp file and attach it as a resource_link.
+        // No size cap here — the agent reads by path; the preview is skipped
+        // inside writeImageBytesToTempLink when the file is too large.
         try {
           const link = await writeImageBytesToTempLink(
             base64ToBytes(att.base64),
@@ -379,10 +424,26 @@ export function useComposerAttachments(opts: {
   )
 
   const removeAttachment = useCallback((id: string) => {
+    const removed = attachmentsRef.current.find((a) => a.id === id)
+    if (removed && removed.kind === 'file-ref' && removed.appOwnedTemp) {
+      void deleteTempFile(removed.path)
+    }
     setAttachments((prev) => prev.filter((a) => a.id !== id))
   }, [])
 
+  // Send-path reset: drops React state WITHOUT deleting app-owned temp files,
+  // because the agent reads them by path during the turn. Callers register the
+  // paths via `appOwnedTempPaths()` so they are deleted when the session closes.
   const clearAttachments = useCallback(() => setAttachments([]), [])
+
+  const appOwnedTempPaths = useCallback(
+    () =>
+      attachmentsRef.current
+        .filter((a): a is Extract<PendingAttachment, { kind: 'file-ref' }> => a.kind === 'file-ref')
+        .filter((a) => a.appOwnedTemp)
+        .map((a) => a.path),
+    []
+  )
 
   return {
     attachments,
@@ -392,6 +453,7 @@ export function useComposerAttachments(opts: {
     handlePaste,
     removeAttachment,
     clearAttachments,
+    appOwnedTempPaths,
     canPick: !disabled,
     // Drag/paste is always accepted while enabled: images attach (inline or as
     // a temp-file link), and addFiles surfaces per-file capability issues.

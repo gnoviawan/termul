@@ -192,4 +192,31 @@ describe('runHistoryWipeMigration', () => {
     await runHistoryWipeMigration()
     expect(persistenceApi.delete).not.toHaveBeenCalled()
   })
+
+  it('fails closed (throws) on a transient flag-read error and does not wipe', async () => {
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      success: false,
+      code: 'READ_ERROR',
+      error: 'storage unavailable'
+    })
+    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+
+    await expect(runHistoryWipeMigration()).rejects.toThrow('storage unavailable')
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
+    expect(persistenceApi.write).not.toHaveBeenCalledWith(SESSION_INDEX_KEY, [])
+    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
+
+  it('fails closed (throws) on a transient index-read error and does not wipe', async () => {
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // flag not set
+      .mockResolvedValueOnce({ success: false, code: 'READ_ERROR', error: 'storage unavailable' }) // index
+    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+
+    await expect(runHistoryWipeMigration()).rejects.toThrow('storage unavailable')
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
+    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
 })

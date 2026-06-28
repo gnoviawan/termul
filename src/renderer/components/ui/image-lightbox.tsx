@@ -7,18 +7,31 @@ interface ImageLightboxProps {
   /** Full-resolution image source shown when expanded. */
   src: string
   alt: string
-  /** The thumbnail trigger; rendered via `asChild` so it stays the DOM element. */
+  /** The thumbnail trigger; rendered inside a focusable button via `asChild`. */
   children: React.ReactNode
 }
 
 /**
  * Wraps a thumbnail trigger and opens the image full-screen on click. Click the
  * image, the close button, or press Escape to dismiss.
+ *
+ * The trigger is always a `<button>` so the lightbox is keyboard-accessible
+ * even when the thumbnail itself is a non-interactive `<img>`/`<div>` —
+ * `DialogPrimitive.Trigger asChild` preserves the child's semantics, so we
+ * supply the interactive element ourselves.
  */
 export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React.JSX.Element {
   return (
     <DialogPrimitive.Root>
-      <DialogPrimitive.Trigger asChild>{children}</DialogPrimitive.Trigger>
+      <DialogPrimitive.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Open image: ${alt}`}
+          className="inline-flex cursor-zoom-in items-center bg-transparent p-0"
+        >
+          {children}
+        </button>
+      </DialogPrimitive.Trigger>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content

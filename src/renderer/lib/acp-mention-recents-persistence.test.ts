@@ -6,6 +6,7 @@ import {
   fromStoredRecent,
   loadMentionRecents,
   MENTION_RECENTS_CAP,
+  mentionRecentsKey,
   pushRecent,
   type StoredRecent,
   saveMentionRecents,
@@ -16,13 +17,7 @@ const { mockPersistence } = vi.hoisted(() => ({
   mockPersistence: {
     read: vi.fn(),
     write: vi.fn<
-      (
-        key: string,
-        value: Record<string, StoredRecent[]>
-      ) => Promise<{
-        success: true
-        data: undefined
-      }>
+      (key: string, value: StoredRecent[]) => Promise<{ success: true; data: undefined }>
     >(async () => ({ success: true as const, data: undefined }))
   }
 }))
@@ -41,6 +36,12 @@ describe('mention recents — pure helpers', () => {
     expect(compositeKey('p1', '/work')).toBe('p1\u0000/work')
     expect(compositeKey('p1', '/work')).not.toBe(compositeKey('p1', '/work/sub'))
     expect(compositeKey('p1', '/work')).not.toBe(compositeKey('p2', '/work'))
+  })
+
+  it('mentionRecentsKey encodes the partition safely', () => {
+    expect(mentionRecentsKey('p1', '/work')).toBe(
+      `${ACP_MENTION_RECENTS_KEY}/${encodeURIComponent('p1\u0000/work')}`
+    )
   })
 
   it('round-trips a MentionMatch through stored form', () => {
@@ -70,40 +71,63 @@ describe('mention recents — persistence', () => {
     mockPersistence.write.mockResolvedValue({ success: true as const, data: undefined })
   })
 
-  it('loads recents for the active (projectId, cwd) and rebuilds absPath', async () => {
+  it('loads recents for the active partition from its per-partition key', async () => {
     mockPersistence.read.mockResolvedValue({
       success: true,
-      data: {
-        [compositeKey('p1', '/work')]: [{ relPath: 'src/a.ts', name: 'a.ts', ignored: false }]
-      }
+      data: [{ relPath: 'src/a.ts', name: 'a.ts', ignored: false }]
     })
+    const loaded = await loadMentionRecents('p1', '/work')
+    expect(loaded).toEqual([match('src/a.ts')])
+    expect(mockPersistence.read).toHaveBeenCalledWith(mentionRecentsKey('p1', '/work'))
+  })
+
+  it('returns [] when the read fails (non-missing)', async () => {
+    mockPersistence.read.mockResolvedValue({ success: false, error: 'boom', code: 'READ_ERROR' })
+    expect(await loadMentionRecents('p1', '/work')).toEqual([])
+    // No legacy fallback attempted for a non-KEY_NOT_FOUND failure.
+    expect(mockPersistence.read).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the legacy single-map layout on first miss', async () => {
+    mockPersistence.read
+      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // per-key miss
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          [compositeKey('p1', '/work')]: [{ relPath: 'src/a.ts', name: 'a.ts', ignored: false }]
+        }
+      })
     const loaded = await loadMentionRecents('p1', '/work')
     expect(loaded).toEqual([match('src/a.ts')])
   })
 
-  it('returns [] when there is no entry for the partition', async () => {
-    mockPersistence.read.mockResolvedValue({ success: true, data: {} })
+  it('returns [] when neither per-key nor legacy has the partition', async () => {
+    mockPersistence.read
+      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // per-key miss
+      .mockResolvedValueOnce({ success: true, data: {} }) // legacy map empty
     expect(await loadMentionRecents('p1', '/work')).toEqual([])
   })
 
-  it('returns [] when the read fails', async () => {
-    mockPersistence.read.mockResolvedValue({ success: false, error: 'boom' })
-    expect(await loadMentionRecents('p1', '/work')).toEqual([])
-  })
-
-  it('saves recents under the composite key without clobbering other partitions', async () => {
-    const otherKey = compositeKey('p2', '/other')
-    mockPersistence.read.mockResolvedValue({
-      success: true,
-      data: { [otherKey]: [{ relPath: 'x.ts', name: 'x.ts', ignored: false }] }
-    })
+  it('saves recents under the per-partition key without a read (no race)', async () => {
     await saveMentionRecents('p1', '/work', [match('src/a.ts', true)])
+    expect(mockPersistence.read).not.toHaveBeenCalled()
     expect(mockPersistence.write).toHaveBeenCalledTimes(1)
     const [key, value] = mockPersistence.write.mock.calls[0]
-    expect(key).toBe(ACP_MENTION_RECENTS_KEY)
-    expect(value[compositeKey('p1', '/work')]).toEqual([
-      { relPath: 'src/a.ts', name: 'a.ts', ignored: true }
+    expect(key).toBe(mentionRecentsKey('p1', '/work'))
+    expect(value).toEqual([{ relPath: 'src/a.ts', name: 'a.ts', ignored: true }])
+  })
+
+  it('concurrent saves for different partitions do not clobber each other', async () => {
+    await Promise.all([
+      saveMentionRecents('p1', '/work', [match('a.ts')]),
+      saveMentionRecents('p2', '/other', [match('b.ts')])
     ])
-    expect(value[otherKey]).toHaveLength(1)
+    expect(mockPersistence.write).toHaveBeenCalledTimes(2)
+    const keys = mockPersistence.write.mock.calls.map((c) => c[0])
+    expect(keys).toContain(mentionRecentsKey('p1', '/work'))
+    expect(keys).toContain(mentionRecentsKey('p2', '/other'))
+    const values = mockPersistence.write.mock.calls.map((c) => c[1])
+    expect(values[0]).toEqual([{ relPath: 'a.ts', name: 'a.ts', ignored: false }])
+    expect(values[1]).toEqual([{ relPath: 'b.ts', name: 'b.ts', ignored: false }])
   })
 })

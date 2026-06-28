@@ -167,8 +167,11 @@ jobs:
       - name: Format bundled ACP assets
         run: bunx biome format --write src/renderer/assets/agent-icons/acp/
 
-      - name: Verify bundled assets match CDN registry
-        run: git diff --exit-code -- src/renderer/assets/agent-icons/acp/
+      - name: Verify bundled registry artifacts match CDN registry
+        run: >
+          git diff --exit-code --
+          src/renderer/assets/agent-icons/acp/
+          src-tauri/src/acp_registry_snapshot.rs
 
   rust-checks:
     name: Rust Checks

@@ -83,7 +83,9 @@ describe('consolidateThoughtGroups', () => {
     expect(group.kind).toBe('thought-group')
     if (group.kind === 'thought-group') {
       expect(group.messages.map((m) => m.id)).toEqual(['t1', 't2'])
-      expect(group.key).toBe('t1:t2')
+      // Stable key: the first message id of the run (not the joined ids, which
+      // would change as new chunks arrive and remount the ThoughtGroup).
+      expect(group.key).toBe('t1')
     }
   })
 

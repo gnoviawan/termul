@@ -1,5 +1,5 @@
 import { SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
-import { forwardRef } from 'react'
+import { forwardRef, type RefObject } from 'react'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { SlashItem, SlashSection } from './slash-menu-model'
 
@@ -13,6 +13,8 @@ export type SlashMenuHandle = {
 interface SlashCommandMenuProps {
   sections: SlashSection[]
   onSelect: (item: SlashItem) => void
+  /** The composer textarea that owns this listbox (for aria-controls/activedescendant). */
+  inputRef?: RefObject<HTMLTextAreaElement | null>
 }
 
 function itemKey(item: SlashItem): string {
@@ -51,7 +53,7 @@ function slashItemToComposer(item: SlashItem): ComposerMenuItem {
  * SlashItem → ComposerMenuItem mapping (icon, `/<name>` label, skill wrap).
  */
 export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProps>(
-  ({ sections, onSelect }, ref) => {
+  ({ sections, onSelect, inputRef }, ref) => {
     const composerSections: ComposerMenuSection[] = sections.map((s) => ({
       id: s.id,
       heading: s.heading,
@@ -63,6 +65,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
         ref={ref}
         sections={composerSections}
         emptyLabel="No commands available."
+        inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as SlashItem)}
       />
     )

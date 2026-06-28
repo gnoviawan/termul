@@ -128,7 +128,23 @@ export async function deleteSessionPayload(id: string): Promise<void> {
 export async function runHistoryWipeMigration(): Promise<void> {
   const flagRes = await persistenceApi.read<boolean>(WIPE_MIGRATION_KEY)
   if (flagRes.success && flagRes.data === true) return
-  const index = await loadSessionIndex()
+  // Fail closed: only proceed when the wipe flag is explicitly missing. A
+  // transient storage error must NOT wipe history — combined with
+  // loadSessionIndex() returning [] on any read failure, proceeding here could
+  // write SESSION_INDEX_KEY = [] and set the flag, permanently hiding existing
+  // sessions. Throw so the caller (useAcpHistory) can skip the wipe and still
+  // load the index.
+  if (!flagRes.success && flagRes.code !== 'KEY_NOT_FOUND') {
+    throw new Error(flagRes.error ?? 'Failed to read wipe-migration flag')
+  }
+
+  const indexRes = await persistenceApi.read<SessionIndexEntry[]>(SESSION_INDEX_KEY)
+  if (!indexRes.success && indexRes.code !== 'KEY_NOT_FOUND') {
+    throw new Error(indexRes.error ?? 'Failed to read session index for wipe migration')
+  }
+  const index: SessionIndexEntry[] =
+    indexRes.success && Array.isArray(indexRes.data) ? indexRes.data : []
+
   for (const entry of index) {
     try {
       await persistenceApi.delete(sessionPayloadKey(entry.id))

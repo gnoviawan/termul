@@ -1,4 +1,3 @@
-import { readFile } from '@tauri-apps/plugin-fs'
 import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
@@ -6,6 +5,7 @@ import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
+import { readAttachmentBytes } from '@/lib/attachment-api'
 import { inlineCodeClass } from '@/lib/chat-inline-code'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { copyText } from '@/lib/copy-text'
@@ -67,7 +67,7 @@ function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): Reac
     let cancelled = false
     void (async () => {
       try {
-        const bytes = await readFile(resolvedPath)
+        const bytes = await readAttachmentBytes(resolvedPath)
         if (cancelled) return
         const mime = guessMimeType(resolvedPath)
         setData((prev) => ({ ...prev, url: `data:${mime};base64,${uint8ToBase64(bytes)}` }))
@@ -322,24 +322,30 @@ function ChatMessageComponent({
     <div className="w-full">
       <Message align="start" className={cn(showHeader ? 'py-2' : 'pb-2')}>
         <MessageContent className="min-w-0 flex-1">
-          <Bubble variant="ghost" className="w-fit max-w-full">
-            <BubbleContent>
-              <StaggerSection
-                delay={proseDelay}
-                align="start"
-                reduced={reduced}
-                animateEnter={animateEnter}
-              >
-                <AgentProse blocks={message.blocks} />
-                {message.streaming && isLast && (
-                  <span
-                    aria-hidden="true"
-                    className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
-                  />
-                )}
-              </StaggerSection>
-            </BubbleContent>
-          </Bubble>
+          {/* Skip the ghost bubble entirely for attachment-only assistant turns
+              so they don't render a blank shell above the media grid. The
+              streaming caret still needs a bubble to live in while the turn is
+              in progress, even before any text has arrived. */}
+          {(text.length > 0 || (message.streaming && isLast)) && (
+            <Bubble variant="ghost" className="w-fit max-w-full">
+              <BubbleContent>
+                <StaggerSection
+                  delay={proseDelay}
+                  align="start"
+                  reduced={reduced}
+                  animateEnter={animateEnter}
+                >
+                  {text.length > 0 && <AgentProse blocks={message.blocks} />}
+                  {message.streaming && isLast && (
+                    <span
+                      aria-hidden="true"
+                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                    />
+                  )}
+                </StaggerSection>
+              </BubbleContent>
+            </Bubble>
+          )}
           {hasMedia && mediaDelay != null && (
             <StaggerSection
               delay={mediaDelay}

@@ -113,22 +113,40 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     [setModel, sessionId]
   )
 
-  // Most recent user-turn text — drives the regenerate/retry affordances.
-  const lastUserText = useMemo(() => {
+  // Most recent user turn — drives the regenerate/retry affordances. We keep
+  // the original blocks so retrying re-sends structured attachments (images,
+  // resource/file-ref), not just the concatenated text; an attachment-only
+  // prompt (no text) is still retryable via the blocks.
+  const lastUserBlocks = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') return messageText(messages[i].blocks)
+      if (messages[i].role === 'user') return messages[i].blocks
     }
-    return ''
+    return null
   }, [messages])
+  const lastUserText = lastUserBlocks ? messageText(lastUserBlocks) : ''
+  const canRetryLastUserTurn = Boolean(
+    lastUserBlocks?.some((b) => b.type !== 'text' || (b.text ?? '').trim().length > 0)
+  )
 
   const handleRetry = useCallback(() => {
-    const text = lastUserText.trim()
-    if (!text) return
+    if (!lastUserBlocks || !canRetryLastUserTurn) return
     setDismissedError(session?.lastError ?? null)
-    void sendPrompt(sessionId, text).catch((err) => {
+    const hasStructuredBlocks = lastUserBlocks.some((b) => b.type !== 'text')
+    const task = hasStructuredBlocks
+      ? sendPromptBlocks(sessionId, lastUserBlocks)
+      : sendPrompt(sessionId, lastUserText.trim())
+    void task.catch((err) => {
       toast.error(`Failed to send: ${String(err)}`)
     })
-  }, [lastUserText, sendPrompt, sessionId, session?.lastError])
+  }, [
+    lastUserBlocks,
+    canRetryLastUserTurn,
+    lastUserText,
+    sendPrompt,
+    sendPromptBlocks,
+    sessionId,
+    session?.lastError
+  ])
 
   const timeline = useMemo(
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
@@ -155,7 +173,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     <div className="flex h-full flex-col bg-background">
       <ChatErrorNotice
         message={activeError}
-        onRetry={lastUserText.trim() && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
       <PlanPanel entries={plan} />
@@ -165,7 +183,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         agentId={session.agentId}
         showTyping={showTyping}
         onEditMessage={seedComposer}
-        onRetry={lastUserText.trim() && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />
       <ChatInputBar
         session={session}

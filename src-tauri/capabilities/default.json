@@ -23,7 +23,6 @@
     "core:webview:allow-set-webview-zoom",
     "store:default",
     "fs:allow-read-text-file",
-    "fs:allow-read-file",
     "fs:allow-write-text-file",
     "fs:allow-write-file",
     "fs:allow-read-dir",

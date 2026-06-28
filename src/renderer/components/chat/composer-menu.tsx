@@ -1,6 +1,15 @@
 import type { LucideIcon } from 'lucide-react'
 import { Check } from 'lucide-react'
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  type RefObject,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { cn } from '@/lib/utils'
 
 export interface ComposerMenuItem {
@@ -33,6 +42,12 @@ interface ComposerMenuProps {
   sections: ComposerMenuSection[]
   onSelect: (sectionId: string, item: ComposerMenuItem) => void
   emptyLabel?: string
+  /**
+   * The composer textarea that owns this listbox. When provided, the menu wires
+   * `aria-controls`/`aria-activedescendant` on it so assistive tech can track
+   * the highlighted option while keyboard focus stays in the textarea.
+   */
+  inputRef?: RefObject<HTMLTextAreaElement | null>
 }
 
 interface FlatRow {
@@ -52,10 +67,15 @@ function flatten(sections: ComposerMenuSection[]): FlatRow[] {
  * menu and the @-file mention menu. See ADR 0003.
  */
 export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
-  ({ sections, onSelect, emptyLabel }, ref) => {
+  ({ sections, onSelect, emptyLabel, inputRef }, ref) => {
     const flat = useMemo(() => flatten(sections), [sections])
     const [highlight, setHighlight] = useState(0)
     const listRef = useRef<HTMLDivElement>(null)
+    // Stable id for the listbox + each option so the owning textarea can
+    // reference the active option via `aria-activedescendant`.
+    const listboxId = useId()
+    const clampedHighlight = flat.length === 0 ? 0 : Math.min(highlight, flat.length - 1)
+    const activeOptionId = flat.length > 0 ? `${listboxId}-opt-${clampedHighlight}` : null
 
     useEffect(() => {
       setHighlight((h) => (flat.length === 0 ? 0 : Math.min(h, flat.length - 1)))
@@ -65,6 +85,25 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
       const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)
       el?.scrollIntoView?.({ block: 'nearest' })
     }, [highlight])
+
+    // Expose the listbox to the owning textarea: `aria-controls` points at the
+    // listbox and `aria-activedescendant` tracks the highlighted option. Cleared
+    // on unmount (menu closed) or when there are no options.
+    useEffect(() => {
+      const input = inputRef?.current
+      if (!input) return
+      if (activeOptionId) {
+        input.setAttribute('aria-controls', listboxId)
+        input.setAttribute('aria-activedescendant', activeOptionId)
+      } else {
+        input.removeAttribute('aria-controls')
+        input.removeAttribute('aria-activedescendant')
+      }
+      return () => {
+        input.removeAttribute('aria-controls')
+        input.removeAttribute('aria-activedescendant')
+      }
+    }, [activeOptionId, listboxId, inputRef])
 
     useImperativeHandle(
       ref,
@@ -86,7 +125,10 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
 
     if (flat.length === 0) {
       return (
-        <div className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md">
+        <div
+          id={listboxId}
+          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md"
+        >
           {emptyLabel ?? 'No items available.'}
         </div>
       )
@@ -96,6 +138,8 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
     return (
       <div
         ref={listRef}
+        id={listboxId}
+        role="listbox"
         className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md"
       >
         {sections.map((section) => (
@@ -109,7 +153,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
               return (
                 <button
                   key={item.key}
+                  id={`${listboxId}-opt-${rowIdx}`}
                   type="button"
+                  role="option"
+                  aria-selected={isHighlighted}
+                  tabIndex={-1}
                   data-idx={rowIdx}
                   // Use mousedown so the textarea doesn't blur before we handle it.
                   onMouseDown={(e) => {

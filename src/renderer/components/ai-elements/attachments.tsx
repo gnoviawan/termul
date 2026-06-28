@@ -213,6 +213,16 @@ Attachment.displayName = 'Attachment'
 // AttachmentPreview - Media preview
 // ============================================================================
 
+/**
+ * URLs safe to render automatically in an `<img>`/`<video>` preview. Remote
+ * `http(s)` URLs are intentionally excluded: auto-mounting them would fire
+ * unsolicited requests to arbitrary hosts and leak user metadata whenever a
+ * remote attachment URL appears in a chat message. Remote previews require an
+ * explicit user action; everything else falls back to the file icon.
+ */
+const isAutoPreviewableUrl = (url: string): boolean =>
+  url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('file://')
+
 export type AttachmentPreviewProps = HTMLAttributes<HTMLDivElement> & {
   fallbackIcon?: ReactNode
 }
@@ -231,11 +241,21 @@ export const AttachmentPreview = ({
   )
 
   const renderContent = () => {
-    if (mediaCategory === 'image' && data.type === 'file' && data.url) {
+    if (
+      mediaCategory === 'image' &&
+      data.type === 'file' &&
+      data.url &&
+      isAutoPreviewableUrl(data.url)
+    ) {
       return renderAttachmentImage(data.url, data.filename, variant === 'grid')
     }
 
-    if (mediaCategory === 'video' && data.type === 'file' && data.url) {
+    if (
+      mediaCategory === 'video' &&
+      data.type === 'file' &&
+      data.url &&
+      isAutoPreviewableUrl(data.url)
+    ) {
       return <video className="size-full object-cover" muted src={data.url} />
     }
 

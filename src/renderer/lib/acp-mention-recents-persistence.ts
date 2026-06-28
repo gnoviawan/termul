@@ -24,6 +24,17 @@ export function compositeKey(projectId: string, cwd: string): string {
   return `${projectId}\u0000${cwd}`
 }
 
+/**
+ * Per-partition storage key. Each `(projectId, cwd)` partition is persisted
+ * under its own key so concurrent saves can no longer race on a shared
+ * read-modify-write of the whole recents map (a later write would silently
+ * erase another partition's recents). `encodeURIComponent` keeps the null
+ * separator and path characters safe as a store key.
+ */
+export function mentionRecentsKey(projectId: string, cwd: string): string {
+  return `${ACP_MENTION_RECENTS_KEY}/${encodeURIComponent(compositeKey(projectId, cwd))}`
+}
+
 export function toStoredRecent(match: MentionMatch): StoredRecent {
   return { relPath: match.relPath, name: match.name, ignored: match.ignored }
 }
@@ -47,14 +58,27 @@ export function pushRecent(list: MentionMatch[], match: MentionMatch): MentionMa
   return [match, ...deduped].slice(0, MENTION_RECENTS_CAP)
 }
 
+/** Legacy single-map layout: `{ [compositeKey]: StoredRecent[] }`. Kept only
+ * for one-time back-compat reads in {@link loadMentionRecents}. */
 type RecentsMap = Record<string, StoredRecent[]>
 
 export async function loadMentionRecents(projectId: string, cwd: string): Promise<MentionMatch[]> {
-  const res = await persistenceApi.read<RecentsMap>(ACP_MENTION_RECENTS_KEY)
-  if (!res.success || !res.data) return []
-  const entries = res.data[compositeKey(projectId, cwd)]
-  if (!Array.isArray(entries)) return []
-  return entries.map((e) => fromStoredRecent(e, cwd))
+  const res = await persistenceApi.read<StoredRecent[]>(mentionRecentsKey(projectId, cwd))
+  if (res.success && Array.isArray(res.data)) {
+    return res.data.map((e) => fromStoredRecent(e, cwd))
+  }
+  // Back-compat: the first time the per-partition key is missing, fall back to
+  // the legacy single-map layout so recents saved before the per-key migration
+  // survive the upgrade. Subsequent saves write the per-partition key, so this
+  // legacy read runs at most once per partition.
+  if (!res.success && res.code === 'KEY_NOT_FOUND') {
+    const legacy = await persistenceApi.read<RecentsMap>(ACP_MENTION_RECENTS_KEY)
+    if (legacy.success && legacy.data) {
+      const entries = legacy.data[compositeKey(projectId, cwd)]
+      if (Array.isArray(entries)) return entries.map((e) => fromStoredRecent(e, cwd))
+    }
+  }
+  return []
 }
 
 export async function saveMentionRecents(
@@ -62,10 +86,12 @@ export async function saveMentionRecents(
   cwd: string,
   recents: MentionMatch[]
 ): Promise<void> {
-  const res = await persistenceApi.read<RecentsMap>(ACP_MENTION_RECENTS_KEY)
-  const map: RecentsMap = res.success && res.data ? res.data : {}
-  map[compositeKey(projectId, cwd)] = recents.map(toStoredRecent)
-  const write = await persistenceApi.write(ACP_MENTION_RECENTS_KEY, map)
+  // Per-partition write — no read-modify-write, so concurrent saves for
+  // different partitions cannot clobber each other.
+  const write = await persistenceApi.write(
+    mentionRecentsKey(projectId, cwd),
+    recents.map(toStoredRecent)
+  )
   if (!write.success) {
     throw new Error(write.error ?? 'Failed to persist mention recents')
   }

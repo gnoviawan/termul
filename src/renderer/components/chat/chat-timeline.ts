@@ -76,7 +76,10 @@ export function consolidateThoughtGroups(items: TimelineItem[]): TimelineItem[] 
     if (batch.length === 0) return
     out.push({
       kind: 'thought-group',
-      key: batch.map((m) => m.id).join(':'),
+      // Stable key: the first message id of the run. Using every id in the
+      // batch would change the key each time a new thought chunk arrives and
+      // remount the ThoughtGroup, dropping its local open/userOverride state.
+      key: batch[0]!.id,
       messages: batch
     })
     batch = []

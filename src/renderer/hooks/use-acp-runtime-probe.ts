@@ -11,9 +11,18 @@ export function useAcpRuntimeProbe(): AcpRuntimeAvailability | null {
 
   useEffect(() => {
     let cancelled = false
-    void acpApi.probeRuntime().then((result) => {
-      if (!cancelled) setRuntime(result)
-    })
+    void acpApi
+      .probeRuntime()
+      .then((result) => {
+        if (!cancelled) setRuntime(result)
+      })
+      .catch(() => {
+        // A rejected probe must not leave the hook stuck at `null` (which
+        // `buildSupportedAcpAgents` treats as "not yet probed" and keeps
+        // launcher-backed agents appearing available) or surface an unhandled
+        // rejection. Treat a failed probe as "no launchers available".
+        if (!cancelled) setRuntime({ npx: false, uvx: false })
+      })
     return () => {
       cancelled = true
     }

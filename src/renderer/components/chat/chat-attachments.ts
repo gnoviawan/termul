@@ -30,6 +30,14 @@ export type PendingAttachment =
       path: string
       /** Data-URL thumbnail when the linked file is an image. */
       previewUrl?: string
+      /**
+       * True when the temp file at `path` was created by the app (e.g. a pasted
+       * screenshot written via `writeImageBytesToTempLink`). These files are
+       * deleted on discard / session close so they do not linger in the OS temp
+       * dir; false (default) for user-selected OS-picker paths the app must not
+       * delete.
+       */
+      appOwnedTemp?: boolean
     }
   | { kind: 'file-embed'; id: string; name: string; mimeType: string; text: string; size: number }
 
@@ -390,7 +398,7 @@ export function pendingToAttachmentData(a: PendingAttachment): FileUIPart & { id
  * Map an incoming/own ACP content block to an AI Elements `AttachmentData` file
  * part. Inline `image` blocks (base64) and data/http URIs become a renderable
  * `url` immediately; `file://` URIs are left empty for the bubble to resolve
- * lazily via Tauri `readFile`.
+ * lazily via the brokered `readAttachmentBytes` command.
  */
 export function blockToAttachmentData(
   block: ContentBlock,

@@ -51,7 +51,16 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
     }
     setSaving(true)
     try {
-      await saveAgentConfig({ ...base, command })
+      // If the generated config was launcher-backed (npx/uvx), its args are the
+      // package-manager invocation (e.g. `-y @scope/agent`). Browsing to a real
+      // binary must clear those args or the saved command/args pair will not
+      // launch correctly.
+      const wasLauncherBacked = base.command === 'npx' || base.command === 'uvx'
+      await saveAgentConfig({
+        ...base,
+        command,
+        args: wasLauncherBacked ? [] : base.args
+      })
       toast.success(`${entry.agent.name} path updated`)
     } catch (err) {
       toast.error(String(err))
@@ -190,7 +199,10 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
                 : entry.unavailableReason}
           </p>
         )}
-        {entry.status === 'ready' && entry.config && <AgentPathEditor entry={entry} />}
+        {entry.status === 'ready' &&
+          entry.config &&
+          entry.config.command !== 'npx' &&
+          entry.config.command !== 'uvx' && <AgentPathEditor entry={entry} />}
         {entry.status === 'manual-install' && entry.manualInstall && (
           <p className="mt-1 font-mono text-2xs text-muted-foreground">
             Expected: {entry.manualInstall.cmd}
@@ -213,9 +225,12 @@ export function AcpAgentsSettings(): React.JSX.Element {
   const {
     activeRegistry,
     usingRemoteRegistry,
+    remoteAvailable,
+    advisorySummary,
     checking,
     lastCheckedAt,
     checkForUpdates,
+    applyRemoteRegistry,
     useBundledRegistry
   } = useAcpRegistryCatalog()
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
@@ -242,12 +257,22 @@ export function AcpAgentsSettings(): React.JSX.Element {
           return
         }
         toast.success(
-          `${summary.updatedCount} agent${summary.updatedCount === 1 ? '' : 's'} updated from the registry.`
+          `${summary.updatedCount} agent${summary.updatedCount === 1 ? '' : 's'} available from the registry. Review and apply to use them.`
         )
       } catch (err) {
         toast.error(String(err))
       }
     })()
+  }
+
+  const handleApplyRemote = (): void => {
+    applyRemoteRegistry()
+    const count = advisorySummary?.updatedCount ?? 0
+    toast.success(
+      count > 0
+        ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
+        : 'Using remote registry.'
+    )
   }
 
   return (
@@ -267,6 +292,11 @@ export function AcpAgentsSettings(): React.JSX.Element {
           )}
           Check for registry updates
         </Button>
+        {remoteAvailable && (
+          <Button type="button" size="sm" variant="secondary" onClick={handleApplyRemote}>
+            Apply remote registry
+          </Button>
+        )}
         {usingRemoteRegistry && (
           <Button type="button" size="sm" variant="ghost" onClick={useBundledRegistry}>
             Use bundled registry
@@ -274,7 +304,12 @@ export function AcpAgentsSettings(): React.JSX.Element {
         )}
         {lastCheckedAt && (
           <span className="text-2xs text-muted-foreground">
-            {usingRemoteRegistry ? 'Using latest registry' : 'Last checked'} · {lastCheckedAt}
+            {usingRemoteRegistry
+              ? 'Using remote registry'
+              : remoteAvailable
+                ? `${advisorySummary?.updatedCount ?? 0} update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
+                : 'Last checked'}{' '}
+            · {lastCheckedAt}
           </span>
         )}
       </div>

@@ -22,6 +22,7 @@ import type {
   SessionConfigOption,
   SessionModeState
 } from '@/lib/acp-api'
+import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
@@ -125,6 +126,7 @@ export function ChatInputBar({
     handlePaste,
     removeAttachment,
     clearAttachments,
+    appOwnedTempPaths,
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
@@ -213,6 +215,10 @@ export function ChatInputBar({
       } else {
         onSend(text)
       }
+      // Register app-owned temp files (pasted screenshots) with the session so
+      // they are deleted when the session closes; clearAttachments drops state
+      // without deleting because the agent reads them by path during the turn.
+      registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
       setLoadedSkill(null)
       clearAttachments()
@@ -231,12 +237,14 @@ export function ChatInputBar({
     disabled,
     sending,
     clearAttachments,
+    appOwnedTempPaths,
     onSend,
     onSendBlocks,
     resetHeight,
     resetMentions,
     projectRoot,
-    session.cwd
+    session.cwd,
+    session.id
   ])
 
   const handleSelect = useCallback(
@@ -337,7 +345,12 @@ export function ChatInputBar({
     <div className="px-5 pb-3.5 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
         {slashOpen && (
-          <SlashCommandMenu ref={slashMenuRef} sections={sections} onSelect={handleSelect} />
+          <SlashCommandMenu
+            ref={slashMenuRef}
+            sections={sections}
+            onSelect={handleSelect}
+            inputRef={textareaRef}
+          />
         )}
         {mentionMenuOpen && (
           <FileMentionMenu
@@ -345,6 +358,7 @@ export function ChatInputBar({
             sections={mentionSections}
             onSelect={onMentionSelect}
             emptyLabel={emptyLabel}
+            inputRef={textareaRef}
           />
         )}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}

@@ -10,7 +10,7 @@ use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTrac
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -138,6 +138,71 @@ pub struct RendererRefRequest {
 pub struct SetTerminalProtectedRequest {
     pub terminal_id: String,
     pub protected: bool,
+}
+
+// ==================== Attachment Commands ====================
+
+/// Maximum attachment image size the renderer may read through this command.
+/// Mirrors the renderer's `MAX_IMAGE_BYTES` (10 MB) so the brokered read can
+/// reject oversized files before transferring them across IPC.
+const ATTACHMENT_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Image extensions the attachment flow is allowed to read by path. The
+/// generic `fs:allow-read-file` permission was removed from the renderer
+/// capability; this command is the only binary-read path left, and it is
+/// intentionally restricted to images (the only content type the composer and
+/// chat preview need to read by path) to limit the confidentiality surface.
+const ATTACHMENT_IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg", "ico",
+];
+
+fn attachment_is_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ATTACHMENT_IMAGE_EXTENSIONS
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+
+/// Read attachment image bytes by path. Replaces direct renderer
+/// `fs:allow-read-file` access so binary reads go through one validated,
+/// size- and type-constrained command instead of the generic fs plugin.
+///
+/// Returns the raw bytes via `Response::new`, which arrives on the JS side as
+/// an `ArrayBuffer`. Rejects (throws on JS) when the path is not absolute,
+/// does not exist, is not a regular file, exceeds the size cap, or is not an
+/// image — callers fall back to a file-icon preview on rejection.
+#[tauri::command]
+pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
+    let stripped = path_validation::strip_verbatim_prefix(&path);
+    let candidate = PathBuf::from(stripped.as_ref());
+
+    if !candidate.is_absolute() {
+        return Err("Attachment path must be absolute".to_string());
+    }
+
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|e| format!("Invalid or inaccessible attachment path: {}", e))?;
+
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
+    if !metadata.is_file() {
+        return Err("Attachment path is not a regular file".to_string());
+    }
+    if metadata.len() > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
+    if !attachment_is_image_extension(&canonical) {
+        return Err("Attachment path is not an image".to_string());
+    }
+
+    let bytes =
+        std::fs::read(&canonical).map_err(|e| format!("Failed to read attachment: {}", e))?;
+    Ok(Response::new(bytes))
 }
 
 // ==================== Terminal Commands ====================
@@ -2024,6 +2089,13 @@ pub async fn search_file_names_stream(
                     let normalized =
                         path_validation::strip_verbatim_prefix(&line).replace('\\', "/");
                     if include_ignored {
+                        // Stop as soon as the non-ignored bucket is full: later
+                        // ignored hits can no longer survive `rank_search_hits`,
+                        // so walking further just wastes time in large repos.
+                        if non_ignored.len() >= max_files {
+                            broke_at_cap = true;
+                            break;
+                        }
                         if path_is_ignored(&normalized) {
                             if ignored_bucket.len() < IGNORED_CAP {
                                 ignored_bucket.push(SearchFileHit {
@@ -2033,14 +2105,11 @@ pub async fn search_file_names_stream(
                             } else {
                                 ignored_dropped += 1;
                             }
-                        } else if non_ignored.len() < max_files {
+                        } else {
                             non_ignored.push(SearchFileHit {
                                 path: normalized,
                                 ignored: false,
                             });
-                        } else {
-                            broke_at_cap = true;
-                            break;
                         }
                     } else {
                         if files.len() >= max_files {

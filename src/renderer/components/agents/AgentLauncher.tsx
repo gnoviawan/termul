@@ -53,6 +53,7 @@ import {
   type SupportedAcpAgentManualInstall
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
+import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
@@ -150,6 +151,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     handlePaste,
     removeAttachment,
     clearAttachments,
+    appOwnedTempPaths,
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
@@ -466,10 +468,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         const blocks: ContentBlock[] = []
         if (trimmed) blocks.push({ type: 'text', text })
         for (const a of attachments) blocks.push(attachmentToBlock(a))
-        void useAcpStore.getState().sendPromptBlocks(sessionId, blocks)
+        // Await the initial send so a first-turn rejection is caught by this
+        // try/catch and the composed text/attachments are preserved on failure
+        // (the state reset below only runs once the send resolves).
+        await useAcpStore.getState().sendPromptBlocks(sessionId, blocks)
       } else if (trimmed.length > 0) {
-        void useAcpStore.getState().sendPrompt(sessionId, trimmed)
+        await useAcpStore.getState().sendPrompt(sessionId, trimmed)
       }
+      // Register app-owned temp files (pasted screenshots) with the session so
+      // they are deleted when the session closes; clearAttachments drops state
+      // without deleting because the agent reads them by path during the turn.
+      registerSessionTempFiles(sessionId, appOwnedTempPaths())
       setLoadedSkill(null)
       clearAttachments()
       resetMentions()
@@ -494,6 +503,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     prompt,
     attachments,
     clearAttachments,
+    appOwnedTempPaths,
     resetMentions,
     resetHeight
   ])
@@ -557,7 +567,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       <div className="flex w-full max-w-4xl flex-col gap-4">
         <div className="relative">
           {menuOpen && (
-            <SlashCommandMenu ref={menuRef} sections={slashSections} onSelect={handleSlashSelect} />
+            <SlashCommandMenu
+              ref={menuRef}
+              sections={slashSections}
+              onSelect={handleSlashSelect}
+              inputRef={textareaRef}
+            />
           )}
           {mentionMenuOpen && (
             <FileMentionMenu
@@ -565,6 +580,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               sections={mentionSections}
               onSelect={onMentionSelect}
               emptyLabel={emptyLabel}
+              inputRef={textareaRef}
             />
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}

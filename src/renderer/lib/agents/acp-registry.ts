@@ -80,6 +80,7 @@ export function compareRegistryVersions(
   remote: readonly RegistryAgent[]
 ): { updatedCount: number; newAgentIds: string[] } {
   const bundledById = new Map(bundled.map((agent) => [agent.id, agent.version]))
+  const remoteIds = new Set(remote.map((agent) => agent.id))
   const newAgentIds: string[] = []
   let updatedCount = 0
   for (const agent of remote) {
@@ -90,6 +91,11 @@ export function compareRegistryVersions(
       continue
     }
     if (bundledVersion !== agent.version) updatedCount++
+  }
+  // Count removed agents (bundled but absent from remote) so the summary can't
+  // report "up to date" while the available agent list has actually shrunk.
+  for (const agent of bundled) {
+    if (!remoteIds.has(agent.id)) updatedCount++
   }
   return { updatedCount, newAgentIds }
 }

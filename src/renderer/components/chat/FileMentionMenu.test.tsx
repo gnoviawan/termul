@@ -20,12 +20,12 @@ describe('FileMentionMenu', () => {
     const onSelect = vi.fn()
     render(<FileMentionMenu sections={sections} onSelect={onSelect} />)
 
-    const buttons = screen.getAllByRole('button')
-    expect(buttons).toHaveLength(2)
-    expect(buttons[1].className).toContain('opacity-50')
-    expect(buttons[0].className).not.toContain('opacity-50')
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(2)
+    expect(options[1].className).toContain('opacity-50')
+    expect(options[0].className).not.toContain('opacity-50')
 
-    fireEvent.mouseDown(buttons[0])
+    fireEvent.mouseDown(options[0])
     expect(onSelect).toHaveBeenCalledWith(match('src/auth.ts', false))
   })
 
