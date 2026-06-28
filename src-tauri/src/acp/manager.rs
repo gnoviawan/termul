@@ -54,13 +54,32 @@ use crate::acp::session::DriverState;
 /// spawn as failed (and tearing the child down).
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait for `session/new` before returning an error to the caller.
-const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 60s accommodates agents whose `session/new` handler fetches a model list
+/// from a remote service on a cold start (e.g. `pi-acp`, which can exceed the
+/// former 30s budget on first launch). Overridable for diagnostics via
+/// [`session_new_timeout`].
+const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `session/new` timeout, overridable for diagnostics via
+/// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
+/// [`SESSION_NEW_TIMEOUT`]. Useful when an agent needs longer to fetch its
+/// model list on a cold start; the default stays strict so a wedged agent
+/// still fails fast in normal use.
+fn session_new_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(SESSION_NEW_TIMEOUT)
+}
 
 /// Outcome of creating a new session, returned to the command caller.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1111,8 +1130,12 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let timeout = session_new_timeout();
+                    log::debug!(
+                        "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
+                    );
                     match tokio::time::timeout(
-                        SESSION_NEW_TIMEOUT,
+                        timeout,
                         req_cx.send_request(request).block_task(),
                     )
                     .await
@@ -1146,12 +1169,16 @@ async fn run_command_loop(
                             );
                         }
                         Ok(Err(e)) => send_reply(&task_slot, Err(e.to_string())),
-                        Err(_) => send_reply(
-                            &task_slot,
-                            Err(format!(
-                                "session/new timed out after {SESSION_NEW_TIMEOUT:?}"
-                            )),
-                        ),
+                        Err(_) => {
+                            log::warn!(
+                                "[acp] {req_agent_id} session/new timed out after {timeout:?}; \
+                                 check agent stderr in RUST_LOG=debug"
+                            );
+                            send_reply(
+                                &task_slot,
+                                Err(format!("session/new timed out after {timeout:?}")),
+                            )
+                        }
                     }
                 });
             }
