@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  attachmentAriaLabel,
   attachmentToBlock,
   basename,
   blockDisplayName,
   blockMimeType,
   fileExtension,
   guessMimeType,
+  humanizeAttachmentName,
   isImageMime,
+  isOpaqueAttachmentName,
   isTextLike,
   type PendingAttachment,
   pathToFileUrl,
@@ -162,6 +165,54 @@ describe('blockDisplayName', () => {
     expect(
       blockDisplayName({ type: 'resource', resource: { uri: 'attachment:///note%20one.md' } })
     ).toBe('note one.md')
+  })
+
+  it('humanizes guid-like basenames from uris', () => {
+    expect(
+      blockDisplayName({
+        type: 'resource_link',
+        uri: 'file:///tmp/{13A24D2D-A486-4A00-B9F6-9D9DAB699BC5}.png'
+      })
+    ).toBe('Image')
+  })
+
+  it('labels bare image blocks', () => {
+    expect(blockDisplayName({ type: 'image', mimeType: 'image/png', data: 'abc' })).toBe('Image')
+  })
+})
+
+describe('humanizeAttachmentName', () => {
+  it('maps guid and generic names to Image', () => {
+    expect(humanizeAttachmentName('{13A24D2D-A486-4A00-B9F6-9D9DAB699BC5}.png')).toBe('Image')
+    expect(humanizeAttachmentName('image.png')).toBe('Image')
+    expect(isOpaqueAttachmentName('pasted-image.png')).toBe(true)
+  })
+
+  it('maps pasted-image to Screenshot', () => {
+    expect(humanizeAttachmentName('pasted-image.png')).toBe('Screenshot')
+  })
+
+  it('strips faizui temp prefix names', () => {
+    expect(humanizeAttachmentName('faizui-abc-123-photo.png')).toBe('Image')
+  })
+
+  it('keeps readable filenames', () => {
+    expect(humanizeAttachmentName('diagram-flow.png')).toBe('diagram-flow.png')
+  })
+
+  it('truncates long readable names', () => {
+    const long = 'a-very-long-filename-that-should-truncate.png'
+    expect(humanizeAttachmentName(long).endsWith('…')).toBe(true)
+  })
+})
+
+describe('attachmentAriaLabel', () => {
+  it('uses human label for opaque names', () => {
+    expect(attachmentAriaLabel('{13A24D2D-A486-4}.png')).toBe('Image')
+  })
+
+  it('includes raw basename for readable names', () => {
+    expect(attachmentAriaLabel('src/components/Foo.tsx')).toContain('Foo.tsx')
   })
 })
 

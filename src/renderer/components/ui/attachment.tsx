@@ -170,7 +170,7 @@ function AttachmentGroup({ className, ...props }: React.ComponentProps<'div'>): 
     <div
       data-slot="attachment-group"
       className={cn(
-        'flex min-w-0 gap-2 overflow-x-auto overscroll-x-contain scroll-fade-x snap-x snap-mandatory no-scrollbar [&>[data-slot=attachment]]:flex-none [&>[data-slot=attachment]]:snap-start',
+        'flex min-w-0 gap-2 overflow-x-auto overflow-y-visible overscroll-x-contain scroll-fade-x snap-x snap-mandatory no-scrollbar [&>[data-slot=attachment]]:flex-none [&>[data-slot=attachment]]:snap-start',
         className
       )}
       {...props}

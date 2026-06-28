@@ -402,7 +402,7 @@ export function ChatInputBar({
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
         <div
           className={cn(
-            'relative overflow-hidden rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+            'relative rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
             dragActive && 'border-primary/70'
           )}
           onDragEnter={handleDragEnter}

@@ -6,12 +6,10 @@ import {
   Attachment,
   AttachmentContent,
   AttachmentDescription,
-  AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle
 } from '@/components/ui/attachment'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
-import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
 import { inlineCodeClass } from '@/lib/chat-inline-code'
@@ -19,8 +17,15 @@ import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { blockDisplayName, blockMimeType, guessMimeType, uint8ToBase64 } from './chat-attachments'
+import {
+  attachmentAriaLabel,
+  blockDisplayName,
+  blockMimeType,
+  guessMimeType,
+  uint8ToBase64
+} from './chat-attachments'
 import { type BubbleAlign, staggerChild } from './chat-motion'
+import { ImageAttachmentChip } from './ImageAttachmentChip'
 import { MessageActions } from './MessageActions'
 
 /** Concatenate the text of all text blocks. */
@@ -79,18 +84,7 @@ function imageSourceForBlock(block: ContentBlock): ImageSource {
 }
 
 function ImageCard({ src, name }: { src: string; name: string }): React.JSX.Element {
-  return (
-    <Attachment orientation="vertical" className="w-44">
-      <AttachmentMedia variant="image">
-        <ImageLightbox src={src} alt={name}>
-          <img src={src} alt={name} className="cursor-zoom-in" />
-        </ImageLightbox>
-      </AttachmentMedia>
-      <AttachmentContent>
-        <AttachmentTitle>{name}</AttachmentTitle>
-      </AttachmentContent>
-    </Attachment>
-  )
+  return <ImageAttachmentChip src={src} alt={attachmentAriaLabel(name)} size="message" />
 }
 
 function FileCard({ block, name }: { block: ContentBlock; name: string }): React.JSX.Element {
@@ -140,17 +134,7 @@ function MediaBlockCard({ block }: { block: ContentBlock }): React.JSX.Element {
   const readyUrl = source && 'url' in source ? source.url : pathSrc
   if (readyUrl) return <ImageCard src={readyUrl} name={name} />
   if (path && !pathFailed) {
-    // Image file still loading — reserve the thumbnail slot.
-    return (
-      <Attachment orientation="vertical" className="w-44">
-        <AttachmentMedia variant="image">
-          <div className="size-full animate-pulse bg-muted" />
-        </AttachmentMedia>
-        <AttachmentContent>
-          <AttachmentTitle>{name}</AttachmentTitle>
-        </AttachmentContent>
-      </Attachment>
-    )
+    return <ImageAttachmentChip loading src="" alt={attachmentAriaLabel(name)} size="message" />
   }
   return <FileCard block={block} name={name} />
 }
@@ -160,11 +144,11 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
   const media = mediaBlocks(blocks)
   if (media.length === 0) return null
   return (
-    <AttachmentGroup className="max-w-full">
+    <div className="flex max-w-full flex-wrap gap-2 overflow-visible py-0.5">
       {media.map((block, i) => (
         <MediaBlockCard key={`${block.type}-${i}`} block={block} />
       ))}
-    </AttachmentGroup>
+    </div>
   )
 }
 
@@ -396,18 +380,18 @@ function ChatMessageComponent({
                   />
                 )}
               </StaggerSection>
-              {hasMedia && mediaDelay != null && (
-                <StaggerSection
-                  delay={mediaDelay}
-                  align="start"
-                  reduced={reduced}
-                  animateEnter={animateEnter}
-                >
-                  <MediaBlocks blocks={message.blocks} />
-                </StaggerSection>
-              )}
             </BubbleContent>
           </Bubble>
+          {hasMedia && mediaDelay != null && (
+            <StaggerSection
+              delay={mediaDelay}
+              align="start"
+              reduced={reduced}
+              animateEnter={animateEnter}
+            >
+              <MediaBlocks blocks={message.blocks} />
+            </StaggerSection>
+          )}
           {!message.streaming && isTurnTail && (
             <StaggerSection
               delay={actionsDelay}

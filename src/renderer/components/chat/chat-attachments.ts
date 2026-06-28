@@ -237,19 +237,75 @@ export function dedupeAttachmentBlocks(blocks: ContentBlock[]): ContentBlock[] {
   return out
 }
 
+const GUID_STEM_RE = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i
+const GUID_LIKE_STEM_RE = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-/i
+const FAIZUI_TEMP_RE = /^faizui-[0-9a-f-]+-/i
+const GENERIC_IMAGE_NAMES = new Set(['', 'image', 'image.png', 'pasted-image.png'])
+
+function stemWithoutExtension(name: string): string {
+  const base = basename(name.trim())
+  const dot = base.lastIndexOf('.')
+  if (dot > 0) return base.slice(0, dot)
+  return base
+}
+
+/** True when a filename is a GUID, temp prefix, or other non-human label. */
+export function isOpaqueAttachmentName(name: string): boolean {
+  const base = basename(name.trim())
+  if (GENERIC_IMAGE_NAMES.has(base.toLowerCase())) return true
+  if (FAIZUI_TEMP_RE.test(base)) return true
+
+  const stem = stemWithoutExtension(base)
+  if (GENERIC_IMAGE_NAMES.has(stem.toLowerCase())) return true
+  if (GUID_STEM_RE.test(stem)) return true
+  if (GUID_LIKE_STEM_RE.test(stem)) return true
+  return false
+}
+
+const DISPLAY_NAME_MAX = 24
+
+function truncateDisplayName(name: string): string {
+  if (name.length <= DISPLAY_NAME_MAX) return name
+  return `${name.slice(0, DISPLAY_NAME_MAX - 1)}…`
+}
+
+/**
+ * Friendly label for attachment UI — hides GUIDs and generic paste names.
+ */
+export function humanizeAttachmentName(name: string): string {
+  const base = basename(name.trim())
+  if (isOpaqueAttachmentName(base)) {
+    const lower = base.toLowerCase()
+    if (lower.includes('screenshot') || lower === 'pasted-image.png') return 'Screenshot'
+    return 'Image'
+  }
+  return truncateDisplayName(base)
+}
+
+/** Accessible label when the visible UI omits the raw filename. */
+export function attachmentAriaLabel(name: string): string {
+  const human = humanizeAttachmentName(name)
+  const base = basename(name.trim())
+  if (human === base || isOpaqueAttachmentName(base)) return human
+  return `${human} (${base})`
+}
+
 /** Display name for an incoming/own content block (text/image/resource/link). */
 export function blockDisplayName(block: ContentBlock): string {
   const direct = (block.name ?? block.title) as string | undefined
-  if (direct) return direct
+  if (direct) return humanizeAttachmentName(direct)
   const resource = block.resource as { uri?: string } | undefined
   const uri = (block.uri as string | undefined) ?? resource?.uri
   if (uri) {
+    let raw: string
     try {
-      return decodeURIComponent(basename(uri.replace(/[?#].*$/, '')))
+      raw = decodeURIComponent(basename(uri.replace(/[?#].*$/, '')))
     } catch {
-      return basename(uri)
+      raw = basename(uri)
     }
+    return humanizeAttachmentName(raw)
   }
+  if (block.type === 'image') return 'Image'
   return block.type
 }
 

@@ -439,7 +439,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
-            className="overflow-hidden rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
+            className="rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
             onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
             onDrop={
               canDropPaste
