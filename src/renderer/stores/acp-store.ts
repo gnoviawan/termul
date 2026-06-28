@@ -554,6 +554,66 @@ function cancelPreparedChatEntry(
   })
 }
 
+/**
+ * Shared orchestration for a user-initiated prompt turn: stage the optimistic
+ * user message, mark the turn active, persist, then dispatch to the agent and
+ * schedule turn-end. On failure, finalize any streaming markers and record the
+ * error. `sendPrompt` and `sendPromptBlocks` differ only in the blocks they
+ * stage and which IPC they invoke — captured by `userBlocks` and `dispatch`.
+ */
+async function runPromptTurn(
+  set: TurnEndSetter,
+  get: () => AcpState,
+  sessionId: SessionId,
+  userBlocks: ContentBlock[],
+  dispatch: (session: AcpSession) => Promise<StopReason>
+): Promise<void> {
+  const session = get().sessions[sessionId]
+  if (!session) throw new Error(`unknown session ${sessionId}`)
+  if (session.status === 'closed') throw new Error('session is closed')
+  if (session.openTurnId) throw new Error('a prompt turn is already in progress')
+  if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
+  const openTurnId = newId('turn')
+  // optimistic user message + mark turn active
+  const userMessage: ChatMessage = {
+    id: newId('msg'),
+    role: 'user',
+    blocks: userBlocks,
+    streaming: false,
+    timestamp: Date.now(),
+    seq: nextSeq()
+  }
+  set((s) => ({
+    messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
+    sessions: {
+      ...s.sessions,
+      [sessionId]: { ...s.sessions[sessionId], activeTurn: true, openTurnId, lastError: null }
+    }
+  }))
+  persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+  try {
+    // Command reply vs streamed chunks have no ordering guarantee; defer turn
+    // end to a macrotask so chunk listeners run first. Idempotent with
+    // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
+    const stopReason = await dispatch(session)
+    scheduleTurnEnd(set, sessionId, stopReason)
+  } catch (err) {
+    set((s) => ({
+      messages: finalizeStreaming(s.messages, sessionId),
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          ...s.sessions[sessionId],
+          activeTurn: false,
+          openTurnId: null,
+          lastError: String(err)
+        }
+      }
+    }))
+    throw err
+  }
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -1134,99 +1194,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  sendPrompt: async (sessionId, text) => {
-    const session = get().sessions[sessionId]
-    if (!session) throw new Error(`unknown session ${sessionId}`)
-    if (session.status === 'closed') throw new Error('session is closed')
-    if (session.openTurnId) throw new Error('a prompt turn is already in progress')
-    const openTurnId = newId('turn')
-    // optimistic user message + mark turn active
-    const userMessage: ChatMessage = {
-      id: newId('msg'),
-      role: 'user',
-      blocks: [{ type: 'text', text }],
-      streaming: false,
-      timestamp: Date.now(),
-      seq: nextSeq()
-    }
-    set((s) => ({
-      messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
-      sessions: {
-        ...s.sessions,
-        [sessionId]: {
-          ...s.sessions[sessionId],
-          activeTurn: true,
-          openTurnId,
-          lastError: null
-        }
-      }
-    }))
-    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
-    try {
-      const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
-      // Command reply vs streamed chunks have no ordering guarantee; defer turn
-      // end to a macrotask so chunk listeners run first. Idempotent with
-      // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
-      scheduleTurnEnd(set, sessionId, stopReason)
-    } catch (err) {
-      set((s) => ({
-        messages: finalizeStreaming(s.messages, sessionId),
-        sessions: {
-          ...s.sessions,
-          [sessionId]: {
-            ...s.sessions[sessionId],
-            activeTurn: false,
-            openTurnId: null,
-            lastError: String(err)
-          }
-        }
-      }))
-      throw err
-    }
-  },
+  sendPrompt: (sessionId, text) =>
+    runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session) =>
+      acpApi.sendPrompt(session.agentId, sessionId, text)
+    ),
 
-  sendPromptBlocks: async (sessionId, blocks) => {
-    const session = get().sessions[sessionId]
-    if (!session) throw new Error(`unknown session ${sessionId}`)
-    if (session.status === 'closed') throw new Error('session is closed')
-    if (session.openTurnId) throw new Error('a prompt turn is already in progress')
-    if (blocks.length === 0) throw new Error('prompt content must not be empty')
-    const openTurnId = newId('turn')
-    const userMessage: ChatMessage = {
-      id: newId('msg'),
-      role: 'user',
-      blocks,
-      streaming: false,
-      timestamp: Date.now(),
-      seq: nextSeq()
-    }
-    set((s) => ({
-      messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
-      sessions: {
-        ...s.sessions,
-        [sessionId]: { ...s.sessions[sessionId], activeTurn: true, openTurnId, lastError: null }
-      }
-    }))
-    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
-    try {
-      const stopReason = await acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
-      scheduleTurnEnd(set, sessionId, stopReason)
-    } catch (err) {
-      set((s) => ({
-        messages: finalizeStreaming(s.messages, sessionId),
-        sessions: {
-          ...s.sessions,
-          [sessionId]: {
-            ...s.sessions[sessionId],
-            activeTurn: false,
-            openTurnId: null,
-            lastError: String(err)
-          }
-        }
-      }))
-      throw err
-    }
-  },
+  sendPromptBlocks: (sessionId, blocks) =>
+    runPromptTurn(set, get, sessionId, blocks, (session) =>
+      acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
+    ),
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]

@@ -84,6 +84,21 @@ async function readImagePathAsAttachment(
   }
 }
 
+/**
+ * Read an image file by path and return a `data:` thumbnail URL, or undefined
+ * when it is too large or unreadable (the card then falls back to a file icon).
+ * Never throws — used for best-effort previews on the path/mention channels.
+ */
+async function readThumbnail(path: string, mimeType: string): Promise<string | undefined> {
+  try {
+    const bytes = await readFile(path)
+    if (bytes.byteLength > MAX_IMAGE_BYTES) return undefined
+    return `data:${mimeType};base64,${uint8ToBase64(bytes)}`
+  } catch {
+    return undefined
+  }
+}
+
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
@@ -278,15 +293,7 @@ export function useComposerAttachments(opts: {
           }
         } else {
           // Link the path, but read the bytes for a thumbnail preview.
-          let previewUrl: string | undefined
-          try {
-            const bytes = await readFile(path)
-            if (bytes.byteLength <= MAX_IMAGE_BYTES) {
-              previewUrl = `data:${mimeType};base64,${uint8ToBase64(bytes)}`
-            }
-          } catch {
-            // No preview; the card falls back to a file icon.
-          }
+          const previewUrl = await readThumbnail(path, mimeType)
           next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path, previewUrl })
         }
       } else if (isTextLike(name)) {
@@ -317,14 +324,9 @@ export function useComposerAttachments(opts: {
       ])
       if (isImageMime(mimeType)) {
         void (async () => {
-          try {
-            const bytes = await readFile(match.absPath)
-            if (bytes.byteLength <= MAX_IMAGE_BYTES) {
-              const previewUrl = `data:${mimeType};base64,${uint8ToBase64(bytes)}`
-              setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, previewUrl } : a)))
-            }
-          } catch {
-            // No preview; the card falls back to a file icon.
+          const previewUrl = await readThumbnail(match.absPath, mimeType)
+          if (previewUrl) {
+            setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, previewUrl } : a)))
           }
         })()
       }

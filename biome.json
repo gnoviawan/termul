@@ -19,9 +19,6 @@
       "!**/_bmad",
       "!**/_bmad-output",
       "!**/.agents",
-      "!**/agent",
-      "!**/video",
-      "!**/compositions",
       "!**/public"
     ]
   },

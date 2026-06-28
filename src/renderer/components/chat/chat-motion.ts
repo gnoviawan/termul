@@ -75,42 +75,16 @@ export function bubbleEnter(align: BubbleAlign, reduced: boolean): EnterMotion {
 
 /**
  * Staggered child enter inside a message row — prose, media, actions each fade
- * in with an incremental delay (~80ms steps).
+ * in with an incremental delay (~80ms steps). Identical to `bubbleEnter` for a
+ * given alignment, only deferred by `delay`.
  */
 export function staggerChild(
   delay: number,
   reduced: boolean,
   align: BubbleAlign = 'neutral'
 ): EnterMotion {
-  if (reduced) {
-    return {
-      initial: { opacity: 0 },
-      animate: { opacity: 1 },
-      transition: { ...REDUCED_TRANSITION, delay }
-    }
-  }
-
-  if (align === 'end') {
-    return {
-      initial: { opacity: 0, y: 8, x: 12, scale: 0.96 },
-      animate: { opacity: 1, y: 0, x: 0, scale: 1 },
-      transition: { ...CHAT_SPRING, delay }
-    }
-  }
-
-  if (align === 'start') {
-    return {
-      initial: { opacity: 0, y: 8, x: -6 },
-      animate: { opacity: 1, y: 0, x: 0 },
-      transition: { ...CHAT_SPRING_SOFT, delay }
-    }
-  }
-
-  return {
-    initial: { opacity: 0, y: 8 },
-    animate: { opacity: 1, y: 0 },
-    transition: { ...CHAT_SPRING_SOFT, delay }
-  }
+  const enter = bubbleEnter(align, reduced)
+  return { ...enter, transition: { ...enter.transition, delay } }
 }
 
 /** Pop used for icon swaps (send arrow, tool-call checkmark). */
