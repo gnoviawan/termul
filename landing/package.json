@@ -57,7 +57,7 @@
     "js-yaml": "^4.1.1",
     "postcss": "^8.5.14",
     "tailwindcss": "^4.3.0",
-    "typescript": "~6.0.2",
+    "typescript": "^7.0.1-rc",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.12",
     "wrangler": "^4.25.0"
