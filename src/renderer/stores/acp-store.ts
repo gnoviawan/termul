@@ -1206,7 +1206,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
-    if (!session || !session.activeTurn) return
+    if (!session?.activeTurn) return
     await acpApi.cancelPrompt(session.agentId, sessionId)
     // turn cleared by _onPromptComplete (cancelled) or by sendPrompt's resolution
   },
