@@ -31,10 +31,11 @@ describe('ThoughtGroup', () => {
   })
 
   it('shows Thought · N lines when settled', () => {
-    render(
+    const { container } = render(
       <ThoughtGroup messages={[thought('t1', 'Line one\nLine two', false)]} isLiveTail={false} />
     )
-    expect(screen.getByText(/Thought · 2 lines/)).toBeInTheDocument()
+    expect(screen.getByText(/Thought/)).toBeInTheDocument()
+    expect(container.querySelector('.tabular-nums')).toHaveTextContent('2 lines')
   })
 
   it('joins multiple thought chunks when expanded via trigger click', async () => {

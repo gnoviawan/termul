@@ -141,9 +141,14 @@ function ResultBlock({ text }: { text: string }): React.JSX.Element {
 
 interface ToolCallCardProps {
   toolCall: ToolCall
+  /** Play enter animation only for newly arrived tool calls. */
+  animateEnter?: boolean
 }
 
-function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Element {
+function ToolCallCardComponent({
+  toolCall,
+  animateEnter = true
+}: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const Icon = ICONS[toolIconName(toolCall)]
   const content = toolCall.content ?? []
@@ -225,8 +230,8 @@ function ToolCallCardComponent({ toolCall }: ToolCallCardProps): React.JSX.Eleme
 
   return (
     <motion.div
-      className="group/tool my-1.5 w-full overflow-hidden rounded-lg border border-border/60 bg-card/30"
-      initial={enter.initial}
+      className="group/tool my-1.5 w-full overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
+      initial={animateEnter ? enter.initial : false}
       animate={enter.animate}
       transition={enter.transition}
     >

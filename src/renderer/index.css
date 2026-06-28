@@ -143,7 +143,7 @@
     button:not(:disabled):not([data-press-feedback="off"]):active,
     [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]):active,
     summary:not([data-press-feedback="off"]):active {
-      transform: scale(0.97);
+      transform: scale(0.96);
     }
   }
 
@@ -404,6 +404,7 @@
 @layer components {
   .chat-prose {
     word-break: break-word;
+    text-wrap: pretty;
   }
   .chat-prose > :first-child {
     margin-top: 0;
@@ -419,6 +420,7 @@
     line-height: 1.3;
     margin: 0.75em 0 0.4em;
     color: hsl(var(--foreground));
+    text-wrap: balance;
   }
   .chat-prose h1 {
     font-size: 1.25em;
@@ -502,24 +504,31 @@
     padding: 0;
     font-size: inherit;
   }
-  /* Hover "Copy" button injected onto code blocks by ChatMessage. */
+  /* Icon copy button injected onto code blocks by ChatMessage. */
   .chat-code-copy {
     position: absolute;
-    top: 6px;
-    right: 6px;
-    padding: 2px 8px;
-    font-size: 0.7rem;
-    font-weight: 500;
-    line-height: 1.4;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    padding: 0;
     color: hsl(var(--muted-foreground));
     background: hsl(var(--background) / 0.85);
     border: 1px solid hsl(var(--border));
-    border-radius: 6px;
+    border-radius: 4px;
     opacity: 0;
     transition:
       opacity 150ms var(--ease-out),
       color 150ms var(--ease-out);
     cursor: pointer;
+  }
+  .chat-code-copy svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
   }
   .chat-prose pre:hover .chat-code-copy,
   .chat-code-copy:focus-visible {

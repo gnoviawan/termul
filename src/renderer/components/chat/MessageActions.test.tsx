@@ -31,6 +31,11 @@ describe('MessageActions', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
   })
 
+  it('uses 40px hit area on action buttons', () => {
+    render(<MessageActions text="hello" align="start" pinned />)
+    expect(screen.getByRole('button', { name: 'Copy' })).toHaveClass('size-10')
+  })
+
   it('renders retry when provided', () => {
     render(<MessageActions text="hello" align="start" pinned onRetry={() => {}} />)
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()

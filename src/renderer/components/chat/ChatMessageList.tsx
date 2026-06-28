@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import {
   MessageScroller,
@@ -10,7 +10,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
-import type { AgentId } from '@/lib/acp-api'
+import type { AgentId, SessionId } from '@/lib/acp-api'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { agentTurnMeta, type TimelineItem } from './chat-timeline'
@@ -28,6 +28,8 @@ function ItemCountReporter({ count }: { count: number }): null {
 
 interface ChatMessageListProps {
   items: TimelineItem[]
+  /** Active session — resets enter-animation baseline on switch. */
+  sessionId: SessionId
   /** Agent behind this session (drives the agent name/icon on replies). */
   agentId: AgentId
   /** True while a turn is in flight but no agent text has streamed yet. */
@@ -54,6 +56,35 @@ function lastMessageIndex(items: TimelineItem[]): number {
   return -1
 }
 
+/** Stable id for animate-enter tracking across message, tool, and thought rows. */
+function timelineItemId(it: TimelineItem): string {
+  if (it.kind === 'message') return it.message.id
+  if (it.kind === 'tool') return it.tool.toolCallId
+  return it.key
+}
+
+/**
+ * Returns true for timeline items that arrived after the list's first paint
+ * (or after a session switch). History loaded on open does not re-enter.
+ */
+function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: string) => boolean {
+  const sessionRef = useRef(sessionId)
+  const initialIdsRef = useRef<Set<string> | null>(null)
+
+  useEffect(() => {
+    if (sessionRef.current !== sessionId) {
+      sessionRef.current = sessionId
+      initialIdsRef.current = null
+    }
+  }, [sessionId])
+
+  if (initialIdsRef.current === null) {
+    initialIdsRef.current = new Set(items.map(timelineItemId))
+  }
+
+  return (id: string) => !initialIdsRef.current!.has(id)
+}
+
 /**
  * Scrollable message thread built on the MessageScroller engine. Auto-follows
  * the live edge only while the reader is pinned to the bottom; a jump-to-latest
@@ -61,6 +92,7 @@ function lastMessageIndex(items: TimelineItem[]): number {
  */
 export function ChatMessageList({
   items,
+  sessionId,
   agentId,
   showTyping,
   onEditMessage,
@@ -68,6 +100,7 @@ export function ChatMessageList({
 }: ChatMessageListProps): React.JSX.Element {
   const turnMeta = useMemo(() => agentTurnMeta(items), [items])
   const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
+  const shouldAnimateEnter = useAnimateEnter(sessionId, items)
 
   if (items.length === 0 && !showTyping) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
@@ -90,7 +123,10 @@ export function ChatMessageList({
                   scrollAnchor={it.kind === 'message' && it.message.role === 'user'}
                 >
                   {it.kind === 'tool' ? (
-                    <ToolCallCard toolCall={it.tool} />
+                    <ToolCallCard
+                      toolCall={it.tool}
+                      animateEnter={shouldAnimateEnter(it.tool.toolCallId)}
+                    />
                   ) : it.kind === 'thought-group' ? (
                     <ThoughtGroup messages={it.messages} isLiveTail={i === items.length - 1} />
                   ) : (
@@ -101,13 +137,16 @@ export function ChatMessageList({
                       isTurnTail={turnMeta.tail.has(it.message.id)}
                       turnText={turnMeta.text.get(it.message.id)}
                       actionsPinned={i === lastMsgIndex}
+                      animateEnter={shouldAnimateEnter(it.message.id)}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />
                   )}
                 </MessageScrollerItem>
               ))}
-              <AnimatePresence>{showTyping && <TypingIndicator key="typing" />}</AnimatePresence>
+              <AnimatePresence initial={false}>
+                {showTyping && <TypingIndicator key="typing" />}
+              </AnimatePresence>
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />

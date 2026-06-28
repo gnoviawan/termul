@@ -58,14 +58,24 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
       onOpenChange={handleOpenChange}
       className="border-b border-border/50 py-2"
     >
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1 text-left">
+      <CollapsibleTrigger
+        data-press-feedback="off"
+        className="flex min-h-10 w-full cursor-pointer items-center gap-1 text-left"
+      >
         <Marker variant="border" className="inline-flex min-w-0 flex-1 italic">
           <MarkerIcon>
             <Brain />
           </MarkerIcon>
           <MarkerContent className={cn('min-w-0 flex-1', isStreaming && 'shimmer')}>
             {isStreaming ? 'Thinking…' : 'Thought'}
-            {lines > 0 ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}
+            {lines > 0 ? (
+              <>
+                {' · '}
+                <span className="tabular-nums">
+                  {lines} line{lines === 1 ? '' : 's'}
+                </span>
+              </>
+            ) : null}
           </MarkerContent>
         </Marker>
         <motion.span

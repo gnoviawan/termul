@@ -22,6 +22,9 @@ export const CHAT_SPRING_SOFT: Transition = {
   mass: 0.9
 }
 
+/** Icon swap spring — no bounce per make-interfaces-feel-better. */
+const ICON_SPRING: Transition = { type: 'spring', duration: 0.3, bounce: 0 }
+
 /** Reduced-motion fallback: a quick opacity fade, no transform. */
 const REDUCED_TRANSITION: Transition = { duration: 0.15, ease: 'easeOut' }
 
@@ -57,8 +60,8 @@ export function bubbleEnter(align: BubbleAlign, reduced: boolean): EnterMotion {
 
   if (align === 'start') {
     return {
-      initial: { opacity: 0, y: 8, x: -6, scale: 0.98 },
-      animate: { opacity: 1, y: 0, x: 0, scale: 1 },
+      initial: { opacity: 0, y: 8, x: -6 },
+      animate: { opacity: 1, y: 0, x: 0 },
       transition: CHAT_SPRING_SOFT
     }
   }
@@ -67,6 +70,46 @@ export function bubbleEnter(align: BubbleAlign, reduced: boolean): EnterMotion {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: CHAT_SPRING_SOFT
+  }
+}
+
+/**
+ * Staggered child enter inside a message row — prose, media, actions each fade
+ * in with an incremental delay (~80ms steps).
+ */
+export function staggerChild(
+  delay: number,
+  reduced: boolean,
+  align: BubbleAlign = 'neutral'
+): EnterMotion {
+  if (reduced) {
+    return {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      transition: { ...REDUCED_TRANSITION, delay }
+    }
+  }
+
+  if (align === 'end') {
+    return {
+      initial: { opacity: 0, y: 8, x: 12, scale: 0.96 },
+      animate: { opacity: 1, y: 0, x: 0, scale: 1 },
+      transition: { ...CHAT_SPRING, delay }
+    }
+  }
+
+  if (align === 'start') {
+    return {
+      initial: { opacity: 0, y: 8, x: -6 },
+      animate: { opacity: 1, y: 0, x: 0 },
+      transition: { ...CHAT_SPRING_SOFT, delay }
+    }
+  }
+
+  return {
+    initial: { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    transition: { ...CHAT_SPRING_SOFT, delay }
   }
 }
 
@@ -80,8 +123,8 @@ export function iconPop(reduced: boolean): EnterMotion {
     }
   }
   return {
-    initial: { opacity: 0, scale: 0.6 },
-    animate: { opacity: 1, scale: 1 },
-    transition: CHAT_SPRING
+    initial: { opacity: 0, scale: 0.25, filter: 'blur(4px)' },
+    animate: { opacity: 1, scale: 1, filter: 'blur(0px)' },
+    transition: ICON_SPRING
   }
 }

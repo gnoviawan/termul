@@ -1,6 +1,7 @@
 import { Check, Copy, Pencil, RotateCcw } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 
@@ -17,7 +18,7 @@ function ActionButton({ label, onClick, children }: ActionButtonProps): React.JS
       title={label}
       aria-label={label}
       onClick={onClick}
-      className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:scale-[0.96] [&_svg]:size-3.5"
+      className="flex size-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:scale-[0.96] [&_svg]:size-3.5"
     >
       {children}
     </button>
@@ -73,7 +74,9 @@ export function MessageActions({
       )}
     >
       <ActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy}>
-        {copied ? <Check className="text-green-400" /> : <Copy />}
+        <IconSwap iconKey={copied}>
+          {copied ? <Check className="text-green-400" /> : <Copy />}
+        </IconSwap>
       </ActionButton>
       {onEdit && (
         <ActionButton label="Edit" onClick={onEdit}>

@@ -161,6 +161,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
       <PlanPanel entries={plan} />
       <ChatMessageList
         items={timeline}
+        sessionId={session.id}
         agentId={session.agentId}
         showTyping={showTyping}
         onEditMessage={seedComposer}

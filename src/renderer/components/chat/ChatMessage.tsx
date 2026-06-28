@@ -20,7 +20,7 @@ import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { blockDisplayName, blockMimeType, guessMimeType, uint8ToBase64 } from './chat-attachments'
-import { bubbleEnter } from './chat-motion'
+import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
 
 /** Concatenate the text of all text blocks. */
@@ -168,6 +168,24 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
   )
 }
 
+/** Lucide-style SVGs for the DOM-injected code-block copy control. */
+const CODE_COPY_CLIPBOARD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`
+const CODE_COPY_CHECK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`
+
+type CodeCopyIconState = 'copy' | 'copied' | 'failed'
+
+function setCodeCopyButtonIcon(btn: HTMLButtonElement, state: CodeCopyIconState): void {
+  if (state === 'copied') {
+    btn.innerHTML = CODE_COPY_CHECK_SVG
+    btn.setAttribute('aria-label', 'Copied')
+    btn.title = 'Copied'
+    return
+  }
+  btn.innerHTML = CODE_COPY_CLIPBOARD_SVG
+  btn.setAttribute('aria-label', state === 'failed' ? 'Failed to copy' : 'Copy')
+  btn.title = state === 'failed' ? 'Failed to copy' : 'Copy'
+}
+
 /**
  * Post-process sanitized prose: inline code pill classes + `<pre>` copy buttons.
  * Runs against the live DOM so it can't reintroduce markup the sanitizer stripped.
@@ -188,14 +206,14 @@ function enhanceProse(root: HTMLElement): () => void {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = 'chat-code-copy'
-    btn.textContent = 'Copy'
+    setCodeCopyButtonIcon(btn, 'copy')
     const onClick = (): void => {
       const code = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
       void copyText(code).then((ok) => {
-        btn.textContent = ok ? 'Copied' : 'Failed'
+        setCodeCopyButtonIcon(btn, ok ? 'copied' : 'failed')
         btn.classList.toggle('is-copied', ok)
         setTimeout(() => {
-          btn.textContent = 'Copy'
+          setCodeCopyButtonIcon(btn, 'copy')
           btn.classList.remove('is-copied')
         }, 1500)
       })
@@ -234,6 +252,37 @@ function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
   )
 }
 
+interface StaggerSectionProps {
+  delay: number
+  align: BubbleAlign
+  reduced: boolean
+  animateEnter: boolean
+  children: React.ReactNode
+  className?: string
+}
+
+/** Staggered enter for semantic chunks inside a message row. */
+function StaggerSection({
+  delay,
+  align,
+  reduced,
+  animateEnter,
+  children,
+  className
+}: StaggerSectionProps): React.JSX.Element {
+  const enter = staggerChild(delay, reduced, align)
+  return (
+    <motion.div
+      className={className}
+      initial={animateEnter ? enter.initial : false}
+      animate={enter.animate}
+      transition={enter.transition}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
 interface ChatMessageProps {
   message: ChatMessageType
   /** Tighter top padding when grouped under a previous same-role agent reply. */
@@ -246,6 +295,8 @@ interface ChatMessageProps {
   turnText?: string
   /** Keep message actions visible without hover (last message in thread). */
   actionsPinned?: boolean
+  /** Play enter animation for newly arrived messages (false for history on load). */
+  animateEnter?: boolean
   /** Seed the composer with this message's text for editing (user turns). */
   onEdit?: (text: string) => void
   /** Re-run the latest user turn (assistant turns). */
@@ -259,6 +310,7 @@ function ChatMessageComponent({
   isTurnTail = false,
   turnText,
   actionsPinned = false,
+  animateEnter = true,
   onEdit,
   onRetry
 }: ChatMessageProps): React.JSX.Element {
@@ -266,69 +318,114 @@ function ChatMessageComponent({
 
   const isUser = message.role === 'user'
   const text = blocksToText(message.blocks)
+  const hasMedia = mediaBlocks(message.blocks).length > 0
+  let staggerStep = 0
+  const nextDelay = (): number => {
+    const delay = staggerStep * 0.08
+    staggerStep += 1
+    return delay
+  }
 
   if (isUser) {
-    const enter = bubbleEnter('end', reduced)
     return (
-      <motion.div
-        className="w-full"
-        initial={enter.initial}
-        animate={enter.animate}
-        transition={enter.transition}
-      >
+      <div className="w-full">
         <Message align="end" className="py-2">
           <MessageContent className="max-w-[85%]">
-            <MediaBlocks blocks={message.blocks} />
-            {text.length > 0 && (
-              <Bubble variant="tinted" align="end">
-                <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
-              </Bubble>
+            {hasMedia && (
+              <StaggerSection
+                delay={nextDelay()}
+                align="end"
+                reduced={reduced}
+                animateEnter={animateEnter}
+              >
+                <MediaBlocks blocks={message.blocks} />
+              </StaggerSection>
             )}
-            <MessageActions
-              text={text}
+            {text.length > 0 && (
+              <StaggerSection
+                delay={nextDelay()}
+                align="end"
+                reduced={reduced}
+                animateEnter={animateEnter}
+              >
+                <Bubble variant="tinted" align="end">
+                  <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
+                </Bubble>
+              </StaggerSection>
+            )}
+            <StaggerSection
+              delay={nextDelay()}
               align="end"
-              pinned={actionsPinned}
-              onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
-            />
+              reduced={reduced}
+              animateEnter={animateEnter}
+            >
+              <MessageActions
+                text={text}
+                align="end"
+                pinned={actionsPinned}
+                onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
+              />
+            </StaggerSection>
           </MessageContent>
         </Message>
-      </motion.div>
+      </div>
     )
   }
 
-  const enter = bubbleEnter('start', reduced)
+  const proseDelay = nextDelay()
+  const mediaDelay = hasMedia ? nextDelay() : null
+  const actionsDelay = nextDelay()
+
   return (
-    <motion.div
-      className="w-full"
-      initial={enter.initial}
-      animate={enter.animate}
-      transition={enter.transition}
-    >
+    <div className="w-full">
       <Message align="start" className={cn(showHeader ? 'py-2' : 'pb-2')}>
         <MessageContent className="min-w-0 flex-1">
           <Bubble variant="ghost" className="w-fit max-w-full">
             <BubbleContent>
-              <AgentProse blocks={message.blocks} />
-              {message.streaming && isLast && (
-                <span
-                  aria-hidden="true"
-                  className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
-                />
+              <StaggerSection
+                delay={proseDelay}
+                align="start"
+                reduced={reduced}
+                animateEnter={animateEnter}
+              >
+                <AgentProse blocks={message.blocks} />
+                {message.streaming && isLast && (
+                  <span
+                    aria-hidden="true"
+                    className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                  />
+                )}
+              </StaggerSection>
+              {hasMedia && mediaDelay != null && (
+                <StaggerSection
+                  delay={mediaDelay}
+                  align="start"
+                  reduced={reduced}
+                  animateEnter={animateEnter}
+                >
+                  <MediaBlocks blocks={message.blocks} />
+                </StaggerSection>
               )}
-              <MediaBlocks blocks={message.blocks} />
             </BubbleContent>
           </Bubble>
           {!message.streaming && isTurnTail && (
-            <MessageActions
-              text={turnText ?? text}
+            <StaggerSection
+              delay={actionsDelay}
               align="start"
-              pinned={actionsPinned}
-              onRetry={onRetry}
-            />
+              reduced={reduced}
+              animateEnter={animateEnter}
+            >
+              <MessageActions
+                text={turnText ?? text}
+                align="start"
+                pinned={actionsPinned}
+                onRetry={onRetry}
+              />
+            </StaggerSection>
           )}
         </MessageContent>
       </Message>
-    </motion.div>
+    </div>
   )
 }
 
