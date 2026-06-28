@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/renderer/**/*.test.ts",
+    "src/renderer/**/*.test.tsx",
+    "src/renderer/**/__tests__/**/*",
+    "vitest.setup.ts"
+  ]
+}

@@ -1,4 +1,5 @@
 import type { GitCommitContext, GitStashInfo, GitStatusDetail } from '@shared/types/ipc.types'
+import { platform } from '@tauri-apps/plugin-os'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { gitApi } from '@/lib/git-api'
@@ -258,10 +259,7 @@ async function updateStoresWithBranch(cwd: string, branchName: string) {
     const normalizePath = (p?: string) => (p ? p.replace(/\\/g, '/') : '')
     const normalizedCwd = normalizePath(cwd)
 
-    const isWindows =
-      typeof process !== 'undefined'
-        ? process.platform === 'win32'
-        : navigator.platform.toLowerCase().includes('win')
+    const isWindows = platform() === 'windows'
     const matchPath = (otherPath?: string) => {
       const normalizedOther = normalizePath(otherPath)
       return isWindows
