@@ -15,7 +15,7 @@ type BubbleVariant =
 
 const BubbleContext = React.createContext<{ variant: BubbleVariant }>({ variant: 'default' })
 
-const bubbleVariants = cva('group/bubble relative flex min-w-0 flex-col', {
+const bubbleVariants = cva('group/bubble relative flex shrink-0 flex-col', {
   variants: {
     variant: {
       default: 'w-fit max-w-[80%]',
@@ -23,7 +23,7 @@ const bubbleVariants = cva('group/bubble relative flex min-w-0 flex-col', {
       muted: 'w-fit max-w-[80%]',
       tinted: 'w-fit max-w-[80%]',
       outline: 'w-fit max-w-[80%]',
-      ghost: 'w-full max-w-full',
+      ghost: 'w-full min-w-0 max-w-full shrink',
       destructive: 'w-fit max-w-[80%]'
     }
   },
@@ -68,7 +68,7 @@ function Bubble({
 }
 
 const bubbleContentVariants = cva(
-  'w-fit max-w-full min-w-0 overflow-hidden break-words text-sm leading-relaxed [&_button]:text-left [&_button]:transition-colors [&_a]:transition-colors',
+  'w-fit max-w-full shrink-0 overflow-hidden break-words text-sm leading-relaxed [&_button]:text-left [&_button]:transition-colors [&_a]:transition-colors',
   {
     variants: {
       variant: {
@@ -78,7 +78,7 @@ const bubbleContentVariants = cva(
         tinted:
           'rounded-2xl px-4 py-2.5 bg-primary/15 text-foreground shadow-[inset_0_1px_0_hsl(var(--foreground)/0.04)]',
         outline: 'rounded-2xl px-4 py-2.5 border border-border bg-background text-foreground',
-        ghost: 'w-full bg-transparent text-foreground',
+        ghost: 'w-full min-w-0 shrink bg-transparent text-foreground',
         destructive: 'rounded-2xl px-4 py-2.5 bg-destructive text-destructive-foreground'
       }
     },

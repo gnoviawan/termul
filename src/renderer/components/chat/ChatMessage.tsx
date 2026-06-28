@@ -272,7 +272,7 @@ function ChatMessageComponent({
     return (
       <div className="w-full">
         <Message align="end" className="py-2">
-          <MessageContent className="max-w-[85%]">
+          <MessageContent className="w-fit max-w-[85%]">
             {hasMedia && (
               <StaggerSection
                 delay={nextDelay()}
@@ -290,7 +290,7 @@ function ChatMessageComponent({
                 reduced={reduced}
                 animateEnter={animateEnter}
               >
-                <Bubble variant="tinted" align="end">
+                <Bubble variant="tinted" align="end" className="max-w-full">
                   <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
                 </Bubble>
               </StaggerSection>
