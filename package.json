@@ -35,7 +35,8 @@
     "test:watch": "vitest",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "bun run typecheck:node && bun run typecheck:web",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "bun run typecheck:node && bun run typecheck:web && bun run typecheck:test",
     "sync:acp-icons": "node scripts/sync-acp-icons.mjs",
     "sync:acp-icons:check": "node scripts/sync-acp-icons.mjs && bunx biome format --write src/renderer/assets/agent-icons/acp/ && git diff --exit-code -- src/renderer/assets/agent-icons/acp/",
     "dev:tauri": "tauri dev",
@@ -169,7 +170,7 @@
     "postcss": "^8.5.6",
     "shadcn": "^4.12.0",
     "tailwindcss": "^4",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.1-rc",
     "vite": "^8.0.14",
     "vitest": "^4.1.6"
   }
