@@ -9,7 +9,7 @@ use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
@@ -188,7 +188,14 @@ pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
         .canonicalize()
         .map_err(|e| format!("Invalid or inaccessible attachment path: {}", e))?;
 
-    let metadata = std::fs::metadata(&canonical)
+    if !attachment_is_image_extension(&canonical) {
+        return Err("Attachment path is not an image".to_string());
+    }
+
+    let mut file = std::fs::File::open(&canonical)
+        .map_err(|e| format!("Failed to open attachment: {}", e))?;
+    let metadata = file
+        .metadata()
         .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
     if !metadata.is_file() {
         return Err("Attachment path is not a regular file".to_string());
@@ -196,12 +203,13 @@ pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
     if metadata.len() > ATTACHMENT_MAX_IMAGE_BYTES {
         return Err("Attachment image exceeds the 10 MB limit".to_string());
     }
-    if !attachment_is_image_extension(&canonical) {
-        return Err("Attachment path is not an image".to_string());
-    }
 
-    let bytes =
-        std::fs::read(&canonical).map_err(|e| format!("Failed to read attachment: {}", e))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read attachment: {}", e))?;
+    if bytes.len() as u64 > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
     Ok(Response::new(bytes))
 }
 
@@ -1517,6 +1525,16 @@ fn path_is_ignored(rel_path: &str) -> bool {
 /// it can be unit-tested directly. The caller is expected to have already
 /// capped `non_ignored` at `cap`; this extends with ignored only into the
 /// remaining slots so ignored files can never crowd out non-ignored ones.
+/// Reap an rg child after stdout reading stops. When the reader breaks early
+/// (cap hit) stdout is no longer drained; kill first so rg cannot block on a
+/// full pipe before `wait()` returns.
+fn reap_rg_child_after_stdout(child: &mut Child, stdout_stopped_early: bool) -> Option<std::process::ExitStatus> {
+    if stdout_stopped_early {
+        let _ = child.kill();
+    }
+    child.wait().ok()
+}
+
 fn rank_search_hits(
     non_ignored: Vec<SearchFileHit>,
     ignored: Vec<SearchFileHit>,
@@ -1741,6 +1759,7 @@ pub async fn search_content_stream(
         let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
+        let mut stdout_stopped_early = false;
         let mut stream_error: Option<String> = None;
 
         let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
@@ -1820,6 +1839,7 @@ pub async fn search_content_stream(
             if !grouped.contains_key(&file_path) {
                 if grouped.len() >= max_files_with_matches {
                     truncated = true;
+                    stdout_stopped_early = true;
                     break;
                 }
                 grouped.insert(file_path.clone(), Vec::new());
@@ -1860,7 +1880,7 @@ pub async fn search_content_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = search_processes().lock() {
             guard.remove(&search_id);
@@ -2073,6 +2093,7 @@ pub async fn search_file_names_stream(
         const IGNORED_CAP: usize = 20;
         let mut ignored_dropped: usize = 0;
         let mut broke_at_cap = false;
+        let mut stdout_stopped_early = false;
         let mut last_batch_count: usize = 0;
 
         // Collect output until we hit the cap, EOF, or a pipe error. The
@@ -2094,6 +2115,7 @@ pub async fn search_file_names_stream(
                         // so walking further just wastes time in large repos.
                         if non_ignored.len() >= max_files {
                             broke_at_cap = true;
+                            stdout_stopped_early = true;
                             break;
                         }
                         if path_is_ignored(&normalized) {
@@ -2114,6 +2136,7 @@ pub async fn search_file_names_stream(
                     } else {
                         if files.len() >= max_files {
                             truncated = true;
+                            stdout_stopped_early = true;
                             break;
                         }
                         files.push(SearchFileHit {
@@ -2190,7 +2213,7 @@ pub async fn search_file_names_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = filename_search_processes().lock() {
             guard.remove(&search_id);

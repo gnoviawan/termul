@@ -254,8 +254,9 @@ export function useComposerAttachments(opts: {
   attachmentsRef.current = attachments
 
   // Discard any still-staged app-owned temp files when the composer unmounts.
-  // Sent files are cleared from state by `clearAttachments` before unmount, so
-  // this only reclaims files staged but never sent (e.g. launcher closed).
+  // `clearAttachments` clears the ref synchronously before React state updates,
+  // so sent/discarded attachments are invisible here even if unmount races the
+  // batched state flush (e.g. launcher hide right after send).
   useEffect(() => {
     return () => {
       for (const a of attachmentsRef.current) {
@@ -433,8 +434,13 @@ export function useComposerAttachments(opts: {
 
   // Send-path reset: drops React state WITHOUT deleting app-owned temp files,
   // because the agent reads them by path during the turn. Callers register the
-  // paths via `appOwnedTempPaths()` so they are deleted when the session closes.
-  const clearAttachments = useCallback(() => setAttachments([]), [])
+  // paths via `appOwnedTempPaths()` before calling this so they are deleted
+  // when the session closes. Clear the ref immediately so unmount cleanup
+  // cannot see attachments that are already being sent.
+  const clearAttachments = useCallback(() => {
+    attachmentsRef.current = []
+    setAttachments([])
+  }, [])
 
   const appOwnedTempPaths = useCallback(
     () =>
