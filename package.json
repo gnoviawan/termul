@@ -35,7 +35,8 @@
     "test:watch": "vitest",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "bun run typecheck:node && bun run typecheck:web",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "bun run typecheck:node && bun run typecheck:web && bun run typecheck:test",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build --config src-tauri/tauri.conf.prod.json",
     "build:tauri:debug": "tauri build --debug --config src-tauri/tauri.conf.prod.json",
@@ -163,7 +164,7 @@
     "jsdom": "^27.4.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.1-rc",
     "vite": "^8.0.14",
     "vitest": "^4.1.6"
   }
