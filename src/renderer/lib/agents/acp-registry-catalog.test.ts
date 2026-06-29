@@ -32,7 +32,7 @@ const catalog: AcpRegistryCatalog = {
   fetchedAt: '2026-06-01T00:00:00Z',
   entries: [
     { id: 'claude-acp', name: 'Claude Code', icon: 'https://cdn/claude.svg' },
-    { id: 'gemini', name: 'Gemini', icon: 'https://cdn/gemini.svg' }
+    { id: 'antigravity', name: 'Antigravity', icon: 'https://cdn/antigravity.svg' }
   ]
 }
 

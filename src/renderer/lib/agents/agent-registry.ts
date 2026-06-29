@@ -131,12 +131,12 @@ export const BUILT_IN_AGENTS: readonly TerminalAgentDefinition[] = [
   },
   {
     id: 'gemini-cli',
-    name: 'Gemini CLI',
-    command: 'gemini',
+    name: 'Antigravity CLI',
+    command: 'agy',
     baseArgs: [],
     promptMode: 'flag',
     promptFlag: '-i',
-    registryId: 'gemini',
+    registryId: 'antigravity',
     icon: geminiIcon as string,
     isBuiltIn: true
   },

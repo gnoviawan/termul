@@ -4,7 +4,7 @@ import { AGENT_TEMPLATES, templateById, templateIcon } from './agent-templates'
 describe('agent-templates', () => {
   it('includes the well-known ACP registry agents', () => {
     const ids = AGENT_TEMPLATES.map((t) => t.id)
-    for (const id of ['gemini', 'claude-acp', 'codex-acp', 'github-copilot-cli', 'custom']) {
+    for (const id of ['antigravity', 'claude-acp', 'codex-acp', 'github-copilot-cli', 'custom']) {
       expect(ids).toContain(id)
     }
   })
@@ -28,12 +28,12 @@ describe('agent-templates', () => {
   })
 
   it('templateById resolves a known template and returns undefined otherwise', () => {
-    expect(templateById('gemini')?.label).toBe('Gemini CLI')
+    expect(templateById('antigravity')?.label).toBe('Antigravity CLI')
     expect(templateById('does-not-exist')).toBeUndefined()
   })
 
   it('templateIcon returns a component for agents with icons and undefined otherwise', () => {
-    expect(templateIcon('gemini')).toBeTypeOf('function')
+    expect(templateIcon('antigravity')).toBeTypeOf('function')
     expect(templateIcon('codex-acp')).toBeTypeOf('function')
     // custom has no icon
     expect(templateIcon('custom')).toBeUndefined()
