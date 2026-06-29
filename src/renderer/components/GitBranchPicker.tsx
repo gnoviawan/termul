@@ -117,17 +117,16 @@ export function GitBranchPicker({
     }
   }, [open, loadBranches])
 
-  // Local branch short names — used to suppress remote duplicates
+  // Local branch short names - used to suppress remote duplicates
   const localBranchNames = useMemo(
-    () =>
-      new Set(branches.filter((b) => !b.isRemote).map((b) => b.name)),
+    () => new Set(branches.filter((b) => !b.isRemote).map((b) => b.name)),
     [branches]
   )
 
-  const filteredBranches = useMemo(() => {
-    const query = branchSearch.trim().toLowerCase()
-    return branches
-      .filter((branch) => {
+  // Branches after structural filtering (symref removal, local-duplicate suppression)
+  const visibleBranches = useMemo(
+    () =>
+      branches.filter((branch) => {
         // Skip symbolic refs like origin/HEAD
         if (branch.isRemote && branch.name.endsWith('/HEAD')) return false
         // Skip remote branches that already have a local counterpart
@@ -136,21 +135,29 @@ export function GitBranchPicker({
           const shortName = slash >= 0 ? branch.name.slice(slash + 1) : branch.name
           if (localBranchNames.has(shortName)) return false
         }
-        return !query || branch.name.toLowerCase().includes(query)
-      })
+        return true
+      }),
+    [branches, localBranchNames]
+  )
+
+  const filteredBranches = useMemo(() => {
+    const query = branchSearch.trim().toLowerCase()
+    return visibleBranches
+      .filter((branch) => !query || branch.name.toLowerCase().includes(query))
       .sort((a, b) => {
         if (a.isCurrent) return -1
         if (b.isCurrent) return 1
         return a.name.localeCompare(b.name)
       })
-  }, [branches, branchSearch, localBranchNames])
+  }, [visibleBranches, branchSearch])
 
   const emptyListMessage = useMemo((): string | null => {
     if (loadError || branchesLoading) return null
-    if (branches.length === 0) return 'No branches yet.'
-    if (branchSearch.trim()) return 'No branches match your search.'
+    if (visibleBranches.length === 0) return 'No branches yet.'
+    if (branchSearch.trim() && filteredBranches.length === 0)
+      return 'No branches match your search.'
     return null
-  }, [branchSearch, branchesLoading, loadError, branches.length])
+  }, [branchSearch, branchesLoading, loadError, visibleBranches.length, filteredBranches.length])
 
   const canCreateBranch = !branchesLoading && !loadError
 
