@@ -100,7 +100,7 @@ describe('GitBranchPicker', () => {
     expect(screen.queryByText('No branches yet.')).toBeNull()
   })
 
-  it('shows empty state when the repo has no local branches', async () => {
+  it('lists remote branches when the repo has no local branches', async () => {
     mockBranches.mockResolvedValue({
       success: true,
       data: [{ name: 'origin/main', isRemote: true, isCurrent: false, hasOtherWorktree: false }]
@@ -109,8 +109,9 @@ describe('GitBranchPicker', () => {
     render(<GitBranchPicker {...defaultProps} />)
     await openPicker()
 
-    expect(screen.getByText('No branches yet.')).toBeDefined()
-    expect(screen.queryByText('This folder is not a git repository.')).toBeNull()
+    expect(screen.getByText('origin/main')).toBeDefined()
+    expect(screen.getByText('remote')).toBeDefined()
+    expect(screen.queryByText('No branches yet.')).toBeNull()
   })
 
   it('shows search empty state when branches exist but none match', async () => {
@@ -131,6 +132,61 @@ describe('GitBranchPicker', () => {
 
     expect(screen.getByText('No branches match your search.')).toBeDefined()
     expect(screen.queryByText('No branches yet.')).toBeNull()
+  })
+
+  it('lists remote-only branches with a remote tag', async () => {
+    mockBranches.mockResolvedValue({
+      success: true,
+      data: [
+        { name: 'dev', isRemote: false, isCurrent: true, hasOtherWorktree: false },
+        {
+          name: 'origin/feat/git-history-graph',
+          isRemote: true,
+          isCurrent: false,
+          hasOtherWorktree: false
+        }
+      ]
+    })
+
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    // Remote-only branch should appear in the list alongside local branches
+    await waitFor(() => {
+      expect(screen.getByText('origin/feat/git-history-graph')).toBeDefined()
+    })
+    expect(screen.getByText('remote')).toBeDefined()
+    expect(screen.queryByText('No branches yet.')).toBeNull()
+  })
+
+  it('checks out a remote branch with isRemote=true and strips prefix in toast', async () => {
+    mockBranches.mockResolvedValue({
+      success: true,
+      data: [
+        { name: 'dev', isRemote: false, isCurrent: true, hasOtherWorktree: false },
+        {
+          name: 'origin/feature',
+          isRemote: true,
+          isCurrent: false,
+          hasOtherWorktree: false
+        }
+      ]
+    })
+
+    mockCheckout.mockResolvedValue(undefined)
+
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    await waitFor(() => {
+      expect(screen.getByText('origin/feature')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('origin/feature'))
+
+    await waitFor(() => {
+      expect(mockCheckout).toHaveBeenCalledWith('/repo', 'origin/feature', true)
+    })
   })
 
   it('ignores stale branch loads from a previous repo path', async () => {
