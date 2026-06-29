@@ -1,0 +1,2 @@
+[build]
+rustflags = ["--cfg", "async_process_force_signal_backend"]
