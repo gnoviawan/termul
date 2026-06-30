@@ -24,9 +24,12 @@ export function useAcpAgents(): void {
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   useEffect(() => {
+    let cancelled = false
     void (async () => {
       await loadAgentConfigs()
+      if (cancelled) return
       const runtime = await acpApi.probeRuntime()
+      if (cancelled) return
       const { agentConfigs, prewarmAgent } = useAcpStore.getState()
       const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
       if (cwd.trim().length === 0) return
@@ -37,6 +40,7 @@ export function useAcpAgents(): void {
         runtime
       )
       const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
+      if (cancelled) return
       const saved = persisted.success ? (persisted.data as Partial<LastSelectedAgent> | null) : null
       const selected =
         saved?.mode === 'acp' && typeof saved.agentId === 'string'
@@ -48,8 +52,16 @@ export function useAcpAgents(): void {
       if (!entry?.config) return
       if (!agentConfigs.some((config) => config.id === entry.config?.id)) {
         await saveAgentConfig(entry.config)
+        if (cancelled) return
       }
+      // `activeProjectId` is a dep, so a project switch re-runs this effect
+      // and flips `cancelled` on the previous (in-flight) run via its cleanup.
+      // Guard every await boundary so only the latest run reaches prewarmAgent.
+      if (cancelled) return
       void prewarmAgent(entry.config.id, cwd)
     })()
+    return () => {
+      cancelled = true
+    }
   }, [loadAgentConfigs, saveAgentConfig, activeProjectId])
 }

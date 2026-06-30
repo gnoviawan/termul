@@ -186,4 +186,40 @@ describe('useAcpAgents', () => {
       expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-late')
     })
   })
+
+  it('cancels the stale prewarm run when the active project switches mid-flight', async () => {
+    projectRef.current.activeProjectId = 'proj-1'
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+    // Block each in-flight run at persistenceApi.read (which runs AFTER the cwd
+    // snapshot) so a project switch can happen while run #1 is still in flight.
+    const persistResolvers: Array<() => void> = []
+    mockPersistRead.mockImplementation(
+      () =>
+        new Promise<{ success: boolean; data: unknown }>((resolve) => {
+          persistResolvers.push(() => resolve({ success: true, data: undefined }))
+        })
+    )
+
+    const { rerender } = renderHook(() => useAcpAgents())
+
+    // Run #1 (proj-1) is in flight, blocked on persistRead; cwd = '/work/proj-1'.
+    await waitFor(() => expect(persistResolvers).toHaveLength(1))
+
+    // Switch project + re-render: cleanup cancels run #1; run #2 (proj-2) starts.
+    projectRef.current.activeProjectId = 'proj-2'
+    rerender()
+    await waitFor(() => expect(persistResolvers).toHaveLength(2))
+
+    // Resume run #1 (cancelled) — it must NOT prewarm the stale proj-1 cwd.
+    persistResolvers[0]()
+    // Resume run #2 (the latest) — it prewarms the proj-2 cwd.
+    persistResolvers[1]()
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
+    })
+    expect(mockPrewarmAgent).not.toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
+  })
 })
