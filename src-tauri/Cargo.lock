@@ -5950,9 +5950,12 @@ version = "0.4.8"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
+ "async-process",
  "axum",
  "chrono",
  "flate2",
+ "futures",
+ "futures-concurrency",
  "futures-util",
  "getrandom 0.2.17",
  "keyring",

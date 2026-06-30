@@ -140,4 +140,50 @@ describe('useAcpAgents', () => {
     await waitFor(() => expect(mockLoadAgentConfigs).toHaveBeenCalled())
     expect(mockPrewarmAgent).not.toHaveBeenCalled()
   })
+
+  it('re-warms when activeProjectId changes after mount', async () => {
+    projectRef.current.activeProjectId = 'proj-1'
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+    mockPersistRead.mockResolvedValue({ success: true, data: undefined })
+
+    const { rerender } = renderHook(() => useAcpAgents())
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
+    })
+
+    const firstCallCount = mockPrewarmAgent.mock.calls.length
+
+    // Simulate project switch
+    projectRef.current.activeProjectId = 'proj-2'
+    rerender()
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
+    })
+    expect(mockPrewarmAgent.mock.calls.length).toBeGreaterThan(firstCallCount)
+  })
+
+  it('does not prewarm on mount when activeProjectId is empty, then prewarms after it resolves', async () => {
+    projectRef.current.activeProjectId = ''
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+    mockPersistRead.mockResolvedValue({ success: true, data: undefined })
+
+    const { rerender } = renderHook(() => useAcpAgents())
+
+    await waitFor(() => expect(mockLoadAgentConfigs).toHaveBeenCalled())
+    expect(mockPrewarmAgent).not.toHaveBeenCalled()
+
+    // Project resolves after mount
+    projectRef.current.activeProjectId = 'proj-late'
+    rerender()
+
+    await waitFor(() => {
+      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-late')
+    })
+  })
 })

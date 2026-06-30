@@ -22,12 +22,12 @@ import { useProjectStore } from '@/stores/project-store'
 export function useAcpAgents(): void {
   const loadAgentConfigs = useAcpStore((s) => s.loadAgentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
+  const activeProjectId = useProjectStore((s) => s.activeProjectId)
   useEffect(() => {
     void (async () => {
       await loadAgentConfigs()
       const runtime = await acpApi.probeRuntime()
       const { agentConfigs, prewarmAgent } = useAcpStore.getState()
-      const activeProjectId = useProjectStore.getState().activeProjectId
       const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
       if (cwd.trim().length === 0) return
       const supportedAgents = buildSupportedAcpAgents(
@@ -51,5 +51,5 @@ export function useAcpAgents(): void {
       }
       void prewarmAgent(entry.config.id, cwd)
     })()
-  }, [loadAgentConfigs, saveAgentConfig])
+  }, [loadAgentConfigs, saveAgentConfig, activeProjectId])
 }
