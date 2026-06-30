@@ -270,14 +270,36 @@ function nextSeq(): number {
 }
 
 /**
- * Monotonic counter for "Untitled Chat N" placeholder titles. Resets on app
- * restart; persisted sessions already have a derived title, so this only
- * applies to freshly created sessions that haven't received a message yet.
+ * Monotonic counter for "Untitled Chat N" placeholder titles. Rebased from the
+ * persisted index on load (see `rebaseUntitledCounter`) so a restart continues
+ * from the highest persisted suffix instead of restarting at 1 and colliding
+ * with existing placeholders. Only freshly created sessions without a message
+ * consume a number.
  */
 let untitledChatCounter = 0
 function nextUntitledTitle(): string {
   untitledChatCounter += 1
   return `Untitled Chat ${untitledChatCounter}`
+}
+
+/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
+const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+
+/**
+ * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
+ * found across the persisted index, so placeholders assigned after a restart
+ * never collide with ones already on disk.
+ */
+function rebaseUntitledCounter(entries: SessionIndexEntry[]): void {
+  let maxSuffix = untitledChatCounter
+  for (const entry of entries) {
+    const match = UNTITLED_CHAT_RE.exec(entry.title)
+    if (match) {
+      const n = Number.parseInt(match[1], 10)
+      if (Number.isFinite(n) && n > maxSuffix) maxSuffix = n
+    }
+  }
+  untitledChatCounter = maxSuffix
 }
 
 /**
@@ -483,10 +505,10 @@ function persistSession(
   )
   const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
   const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
-  const fallbackTitle =
-    existingEntry?.title && !existingEntry.title.startsWith('Untitled Chat ')
-      ? existingEntry.title
-      : nextUntitledTitle()
+  // Keep a placeholder stable once assigned: reuse the existing index title
+  // (including a prior `Untitled Chat N`) instead of regenerating one on every
+  // persist. `rebaseUntitledCounter` keeps fresh numbers from colliding.
+  const fallbackTitle = existingEntry?.title ?? nextUntitledTitle()
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
@@ -1097,6 +1119,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   loadSessionIndex: async () => {
     const entries = await loadSessionIndexFromDisk()
+    // Continue the placeholder counter from the highest persisted suffix so a
+    // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
+    rebaseUntitledCounter(entries)
     set({ sessionIndex: entries })
   },
 
@@ -1461,13 +1486,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onSessionInfoUpdate: (e) => {
+    // `title` is `undefined` when the field is absent (no change), `null` when
+    // the agent explicitly cleared it, or a string when set. An omitted title
+    // must leave the existing title (and the persisted index) untouched.
+    if (e.title === undefined) return
+    const nextTitle = e.title
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
-      // `title` is `undefined` when absent (no change), `null` when the agent
-      // explicitly cleared it, or a string when set.
       return {
-        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: e.title ?? null } }
+        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
       }
     })
     if (get().sessions[e.sessionId]) {

@@ -503,6 +503,19 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['unknown']).toBeUndefined()
   })
 
+  it('_onSessionInfoUpdate leaves the title untouched when the field is omitted', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Keep me' } }
+    }))
+    // title field absent => undefined => no change (must not clear to null)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Keep me')
+  })
+
   it('respondPermission is re-entrancy safe (W3): second call is a no-op', async () => {
     seedSession('s1', 'agent-1')
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
