@@ -21,6 +21,8 @@ interface SidebarEntry {
   discovered: boolean
   /** Agent id for discovered entries (used to open via load/resume). */
   agentId?: string
+  /** Owning agent display name (e.g. "Codex CLI"), for discovered entries. */
+  agentName?: string | null
   /** Cwd for discovered entries (used to open via load/resume). */
   cwd?: string
   /** Last activity timestamp (for grouping). */
@@ -48,6 +50,7 @@ export function ChatHistoryTab(): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const discoveredSessions = useAcpStore((s) => s.discoveredSessions)
   const agents = useAcpStore((s) => s.agents)
+  const agentStatus = useAcpStore((s) => s.agentStatus)
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
   const configToLiveAgent = useAcpStore((s) => s.configToLiveAgent)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
@@ -65,13 +68,14 @@ export function ChatHistoryTab(): React.JSX.Element {
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
-  // Helper: resolve templateId for an agentId via the configToLiveAgent + agentConfigs.
-  const resolveTemplateId = useCallback(
-    (agentId: string): string | null => {
+  // Helper: resolve display name + templateId for an agentId via the
+  // configToLiveAgent + agentConfigs mapping (same path as useAgentIdentity).
+  const resolveAgentIdentity = useCallback(
+    (agentId: string): { name: string | null; templateId: string | null } => {
       const reuseKey = Object.keys(configToLiveAgent).find((k) => configToLiveAgent[k] === agentId)
       const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
       const config = configId ? agentConfigs.find((c) => c.id === configId) : undefined
-      return config?.templateId ?? null
+      return { name: config?.name ?? null, templateId: config?.templateId ?? null }
     },
     [configToLiveAgent, agentConfigs]
   )
@@ -100,7 +104,7 @@ export function ChatHistoryTab(): React.JSX.Element {
   const mergedEntries = useMemo(() => {
     const mirrorIds = new Set(scopedIndex.map((e) => e.id))
     const entries: SidebarEntry[] = scopedIndex.map((e) => {
-      const templateId = resolveTemplateId(e.agentId)
+      const { templateId } = resolveAgentIdentity(e.agentId)
       const icon = templateIcon(templateId ?? undefined)
       return {
         id: e.id,
@@ -116,9 +120,13 @@ export function ChatHistoryTab(): React.JSX.Element {
 
     // Add discovered sessions not already in the local mirror.
     for (const [agentId, sessions] of Object.entries(discoveredSessions)) {
+      // Only surface discovered sessions for an agent that is still connected.
+      // A disconnected agent can't service session/load|resume, so its entries
+      // would render as un-clickable; drop them instead of showing dead rows.
+      if (agentStatus[agentId] !== 'connected') continue
       const caps = agents[agentId]?.capabilities
       const canOpen = caps?.loadSession === true || caps?.sessionCapabilities?.resume != null
-      const templateId = resolveTemplateId(agentId)
+      const { name: agentName, templateId } = resolveAgentIdentity(agentId)
       const icon = templateIcon(templateId ?? undefined)
 
       for (const info of sessions) {
@@ -138,6 +146,7 @@ export function ChatHistoryTab(): React.JSX.Element {
           icon,
           discovered: true,
           agentId,
+          agentName,
           cwd: info.cwd || activeCwd,
           lastActivityAt: info.updatedAt ? Date.parse(info.updatedAt) || Date.now() : Date.now(),
           canOpen
@@ -146,7 +155,7 @@ export function ChatHistoryTab(): React.JSX.Element {
     }
 
     return entries
-  }, [scopedIndex, discoveredSessions, agents, activeCwd, resolveTemplateId])
+  }, [scopedIndex, discoveredSessions, agents, agentStatus, activeCwd, resolveAgentIdentity])
 
   const [query, setQuery] = useState('')
 
@@ -227,7 +236,9 @@ export function ChatHistoryTab(): React.JSX.Element {
                     title={
                       entry.discovered && !entry.canOpen
                         ? 'Agent does not support loading or resuming sessions'
-                        : undefined
+                        : entry.discovered && entry.agentName
+                          ? `${entry.title} — ${entry.agentName} (resume from CLI history)`
+                          : entry.title
                     }
                     className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed"
                   >
@@ -241,7 +252,13 @@ export function ChatHistoryTab(): React.JSX.Element {
                       <Bot size={12} className="shrink-0 text-muted-foreground" />
                     )}
                     <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-                    {!entry.discovered && (
+                    {entry.discovered ? (
+                      entry.agentName ? (
+                        <span className="text-3xs text-muted-foreground/70 shrink-0">
+                          {entry.agentName}
+                        </span>
+                      ) : null
+                    ) : (
                       <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
                     )}
                   </button>

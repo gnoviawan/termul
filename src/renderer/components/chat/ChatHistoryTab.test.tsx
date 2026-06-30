@@ -41,6 +41,7 @@ vi.mock('@/stores/acp-store', () => {
       deleteHistorySession: mockDelete,
       discoveredSessions: {},
       agents: {},
+      agentStatus: {},
       agentConfigs: [],
       configToLiveAgent: {},
       discoverSessions: mockDiscover,
