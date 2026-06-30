@@ -1,16 +1,44 @@
-import { MessageSquare, Search, Trash2 } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { Bot, Search, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { configIdFromReuseKey, useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import { templateIcon } from './agent-templates'
 
-/** Sidebar tab listing persisted chat sessions, grouped by recency with search. */
+/** A unified sidebar entry: either from the local mirror or discovered via session/list. */
+interface SidebarEntry {
+  /** Session id (same as sessionId for discovered entries). */
+  id: string
+  title: string
+  messageCount: number
+  status: string
+  /** Template icon component for this entry's agent, if resolvable. */
+  icon?: ReturnType<typeof templateIcon>
+  /** True when this entry comes from agent discovery (not the local mirror). */
+  discovered: boolean
+  /** Agent id for discovered entries (used to open via load/resume). */
+  agentId?: string
+  /** Cwd for discovered entries (used to open via load/resume). */
+  cwd?: string
+  /** Last activity timestamp (for grouping). */
+  lastActivityAt: number
+  /** Whether this entry can be opened (agent has load or resume capability). */
+  canOpen: boolean
+}
+
+/** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
 export function ChatHistoryTab(): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
+  const discoveredSessions = useAcpStore((s) => s.discoveredSessions)
+  const agents = useAcpStore((s) => s.agents)
+  const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  const configToLiveAgent = useAcpStore((s) => s.configToLiveAgent)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
+  const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
+  const discoverSessions = useAcpStore((s) => s.discoverSessions)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
   // Subscribe to the full active-project record so the sidebar re-scopes when
@@ -23,6 +51,30 @@ export function ChatHistoryTab(): React.JSX.Element {
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
+  // Helper: resolve templateId for an agentId via the configToLiveAgent + agentConfigs.
+  const resolveTemplateId = useCallback(
+    (agentId: string): string | null => {
+      const reuseKey = Object.keys(configToLiveAgent).find((k) => configToLiveAgent[k] === agentId)
+      const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+      const config = configId ? agentConfigs.find((c) => c.id === configId) : undefined
+      return config?.templateId ?? null
+    },
+    [configToLiveAgent, agentConfigs]
+  )
+
+  // Trigger discovery for all connected agents with `list` capability when
+  // the active cwd changes or agents come online.
+  const agentIds = useMemo(() => Object.keys(agents), [agents])
+  useEffect(() => {
+    if (!activeCwd) return
+    for (const agentId of agentIds) {
+      const caps = agents[agentId]?.capabilities
+      if (caps?.sessionCapabilities?.list) {
+        void discoverSessions(agentId, activeCwd)
+      }
+    }
+  }, [activeCwd, agentIds, agents, discoverSessions])
+
   // Hard isolation (ADR 0002): show only sessions whose `(projectId, cwd)`
   // match the active project + its current worktree/root.
   const scopedIndex = useMemo(() => {
@@ -30,28 +82,79 @@ export function ChatHistoryTab(): React.JSX.Element {
     return sessionIndex.filter((e) => e.projectId === activeProjectId && e.cwd === activeCwd)
   }, [sessionIndex, activeProjectId, activeCwd])
 
+  // Build a unified sidebar list: local mirror + discovered sessions (deduped).
+  const mergedEntries = useMemo(() => {
+    const mirrorIds = new Set(scopedIndex.map((e) => e.id))
+    const entries: SidebarEntry[] = scopedIndex.map((e) => {
+      const templateId = resolveTemplateId(e.agentId)
+      const icon = templateIcon(templateId ?? undefined)
+      return {
+        id: e.id,
+        title: e.title,
+        messageCount: e.messageCount,
+        status: e.status,
+        icon,
+        discovered: false,
+        lastActivityAt: e.lastActivityAt,
+        canOpen: true
+      }
+    })
+
+    // Add discovered sessions not already in the local mirror.
+    for (const [agentId, sessions] of Object.entries(discoveredSessions)) {
+      const caps = agents[agentId]?.capabilities
+      const canOpen = caps?.loadSession === true || caps?.sessionCapabilities?.resume != null
+      const templateId = resolveTemplateId(agentId)
+      const icon = templateIcon(templateId ?? undefined)
+
+      for (const info of sessions) {
+        // Dedupe: skip if already in the local mirror.
+        if (mirrorIds.has(info.sessionId)) continue
+        // Filter by active cwd.
+        if (activeCwd && info.cwd && info.cwd !== activeCwd) continue
+
+        entries.push({
+          id: info.sessionId,
+          title: info.title || `Session ${info.sessionId.slice(0, 8)}`,
+          messageCount: 0,
+          status: 'active',
+          icon,
+          discovered: true,
+          agentId,
+          cwd: info.cwd || activeCwd,
+          lastActivityAt: info.updatedAt ? Date.parse(info.updatedAt) || Date.now() : Date.now(),
+          canOpen
+        })
+      }
+    }
+
+    return entries
+  }, [scopedIndex, discoveredSessions, agents, activeCwd, resolveTemplateId])
+
   const [query, setQuery] = useState('')
 
   const groups = useMemo(() => {
     const filtered =
       query.trim().length === 0
-        ? scopedIndex
-        : scopedIndex.filter((e) => e.title.toLowerCase().includes(query.trim().toLowerCase()))
+        ? mergedEntries
+        : mergedEntries.filter((e) => e.title.toLowerCase().includes(query.trim().toLowerCase()))
     return groupSessionsByRecency(filtered, Date.now())
-  }, [scopedIndex, query])
+  }, [mergedEntries, query])
 
   const handleOpen = useCallback(
-    async (id: string) => {
-      // Open the session first; only add the tab if it succeeds, so a failed
-      // load doesn't leave a dead tab behind.
+    async (entry: SidebarEntry) => {
       try {
-        await openHistorySession(id)
-        addAgentChatTab(id)
+        if (entry.discovered && entry.agentId && entry.cwd) {
+          await openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
+        } else {
+          await openHistorySession(entry.id)
+        }
+        addAgentChatTab(entry.id)
       } catch (err) {
         toast.error(`Failed to open chat: ${String(err)}`)
       }
     },
-    [addAgentChatTab, openHistorySession]
+    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId]
   )
 
   const handleDelete = useCallback(
@@ -81,7 +184,7 @@ export function ChatHistoryTab(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto py-1">
-        {scopedIndex.length === 0 ? (
+        {mergedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground opacity-70">
             No chats yet. Start one with the New Chat button.
           </div>
@@ -96,27 +199,46 @@ export function ChatHistoryTab(): React.JSX.Element {
                   key={entry.id}
                   className={cn(
                     'group flex w-full items-center gap-2 pr-2 hover:bg-sidebar-accent',
-                    entry.status === 'closed' && 'opacity-70'
+                    entry.status === 'closed' && 'opacity-70',
+                    entry.discovered && !entry.canOpen && 'opacity-50'
                   )}
                 >
                   <button
                     type="button"
-                    onClick={() => void handleOpen(entry.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
+                    disabled={entry.discovered && !entry.canOpen}
+                    onClick={() => void handleOpen(entry)}
+                    title={
+                      entry.discovered && !entry.canOpen
+                        ? 'Agent does not support loading or resuming sessions'
+                        : undefined
+                    }
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed"
                   >
-                    <MessageSquare size={12} className="shrink-0 text-muted-foreground" />
+                    {entry.icon ? (
+                      <entry.icon
+                        width={12}
+                        height={12}
+                        className="shrink-0 text-muted-foreground"
+                      />
+                    ) : (
+                      <Bot size={12} className="shrink-0 text-muted-foreground" />
+                    )}
                     <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-                    <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
+                    {!entry.discovered && (
+                      <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
+                    )}
                   </button>
-                  <button
-                    type="button"
-                    aria-label="Delete chat"
-                    title="Delete chat"
-                    onClick={() => handleDelete(entry.id)}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-background/50"
-                  >
-                    <Trash2 size={11} />
-                  </button>
+                  {!entry.discovered && (
+                    <button
+                      type="button"
+                      aria-label="Delete chat"
+                      title="Delete chat"
+                      onClick={() => handleDelete(entry.id)}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-background/50"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

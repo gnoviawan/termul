@@ -55,6 +55,8 @@ const FRESH = {
   preparingChatKeys: {},
   prepareChatErrors: {},
   sessionIndex: [],
+  discoveredSessions: {},
+  discoveringAgents: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -1543,5 +1545,140 @@ describe('acp-store multi-project isolation', () => {
       connected: false,
       warming: false
     })
+  })
+})
+
+describe('session discovery (gh-407)', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+    useAcpStore.setState({
+      ...FRESH,
+      agents: {},
+      agentStatus: {},
+      discoveredSessions: {},
+      discoveringAgents: {}
+    })
+  })
+
+  it('discoverSessions skips agents without sessionCapabilities.list', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    // invoke should not have been called for acp_list_sessions
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    // No discovered sessions stored.
+    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
+  })
+
+  it('discoverSessions calls acp_list_sessions when list capability is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue({
+      sessions: [{ sessionId: 'sess-1', cwd: '/work', title: 'Test Session' }],
+      nextCursor: null
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(1)
+    expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
+    const discovered = useAcpStore.getState().discoveredSessions['agent-1']
+    expect(discovered).toHaveLength(1)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+  })
+
+  it('discoverSessions paginates until nextCursor is absent', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          sessions: [{ sessionId: 'sess-1', cwd: '/work' }],
+          nextCursor: 'cursor-1'
+        }
+      }
+      return {
+        sessions: [{ sessionId: 'sess-2', cwd: '/work' }],
+        nextCursor: null
+      }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const discovered = useAcpStore.getState().discoveredSessions['agent-1']
+    expect(discovered).toHaveLength(2)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+    expect(discovered![1]!.sessionId).toBe('sess-2')
+  })
+
+  it('discoverSessions clears discovered entries on failure', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      discoveredSessions: { 'agent-1': [{ sessionId: 'old', cwd: '/work' }] }
+    })
+    vi.mocked(invoke).mockRejectedValue(new Error('agent error'))
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
+  })
+
+  it('_onAgentDisconnected clears discovered sessions for that agent', () => {
+    useAcpStore.setState({
+      discoveredSessions: {
+        'agent-1': [{ sessionId: 'sess-1', cwd: '/work' }],
+        'agent-2': [{ sessionId: 'sess-2', cwd: '/work' }]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
+    expect(useAcpStore.getState().discoveredSessions['agent-2']).toBeDefined()
+  })
+
+  it('openDiscoveredSession throws when agent has neither load nor resume', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    ).rejects.toThrow(/does not support loading or resuming/)
+  })
+
+  it('openDiscoveredSession calls acp_load_session when loadSession is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    const loadCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')
+    expect(loadCalls).toHaveLength(1)
   })
 })

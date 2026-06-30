@@ -57,16 +57,16 @@ export function deriveTitle(messages: ChatMessage[], agentId: string): string {
 export type RecencyGroup = 'Today' | 'Yesterday' | 'Earlier'
 
 /** Bucket sessions by lastActivityAt relative to `now`. Sorted newest-first within groups. */
-export function groupSessionsByRecency(
-  entries: SessionIndexEntry[],
+export function groupSessionsByRecency<T extends { lastActivityAt: number }>(
+  entries: T[],
   now: number
-): { group: RecencyGroup; entries: SessionIndexEntry[] }[] {
+): { group: RecencyGroup; entries: T[] }[] {
   const startOfToday = new Date(now)
   startOfToday.setHours(0, 0, 0, 0)
   const todayMs = startOfToday.getTime()
   const yesterdayMs = todayMs - 24 * 60 * 60 * 1000
 
-  const buckets: Record<RecencyGroup, SessionIndexEntry[]> = {
+  const buckets: Record<RecencyGroup, T[]> = {
     Today: [],
     Yesterday: [],
     Earlier: []

@@ -83,7 +83,7 @@ export interface SessionConfigOption {
 
 export interface AgentCapabilities {
   loadSession?: boolean
-  sessionCapabilities?: { resume?: unknown; close?: unknown } | null
+  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
   mcpCapabilities?: { http?: boolean; sse?: boolean } | null
   promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
   [k: string]: unknown
@@ -228,7 +228,18 @@ export interface NewSessionOutcome {
   configOptions?: SessionConfigOption[] | null
 }
 
+/** A session discovered via `session/list` (agent-native session). */
+export interface SessionInfo {
+  sessionId: SessionId
+  cwd: string
+  title?: string | null
+  updatedAt?: string | null
+  [k: string]: unknown
+}
+
 export interface ListSessionsResponse {
+  sessions: SessionInfo[]
+  nextCursor?: string | null
   [k: string]: unknown
 }
 
@@ -406,8 +417,12 @@ export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): P
   await invoke('acp_close_session', { agentId, sessionId })
 }
 
-export async function acpListSessions(agentId: AgentId): Promise<ListSessionsResponse> {
-  return invoke<ListSessionsResponse>('acp_list_sessions', { agentId })
+export async function acpListSessions(
+  agentId: AgentId,
+  cwd?: string,
+  cursor?: string
+): Promise<ListSessionsResponse> {
+  return invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor })
 }
 
 export async function acpSendPrompt(

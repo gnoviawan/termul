@@ -2,10 +2,20 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
 
-const { mockOpen, mockDelete, mockAddTab, sessionIndexRef, projectRef } = vi.hoisted(() => ({
+const {
+  mockOpen,
+  mockDelete,
+  mockAddTab,
+  mockDiscover,
+  mockOpenDiscovered,
+  sessionIndexRef,
+  projectRef
+} = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockDelete: vi.fn(),
   mockAddTab: vi.fn(),
+  mockDiscover: vi.fn().mockResolvedValue(undefined),
+  mockOpenDiscovered: vi.fn().mockResolvedValue(undefined),
   sessionIndexRef: { current: [] as SessionIndexEntry[] },
   projectRef: {
     current: null as {
@@ -28,13 +38,26 @@ vi.mock('@/stores/acp-store', () => {
     sel({
       sessionIndex: sessionIndexRef.current,
       openHistorySession: mockOpen,
-      deleteHistorySession: mockDelete
+      deleteHistorySession: mockDelete,
+      discoveredSessions: {},
+      agents: {},
+      agentConfigs: [],
+      configToLiveAgent: {},
+      discoverSessions: mockDiscover,
+      openDiscoveredSession: mockOpenDiscovered
     })
-  return { useAcpStore }
+  // selectAgentIdentity stub: returns nulls (no live agent config in tests).
+  const selectAgentIdentity = () => ({ name: null, templateId: null })
+  const configIdFromReuseKey = () => ''
+  return { useAcpStore, selectAgentIdentity, configIdFromReuseKey }
 })
 
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: () => mockAddTab
+}))
+
+vi.mock('./agent-templates', () => ({
+  templateIcon: () => undefined
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -70,6 +93,8 @@ describe('ChatHistoryTab scoping', () => {
     mockOpen.mockReset()
     mockDelete.mockReset()
     mockAddTab.mockReset()
+    mockDiscover.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionIndexRef.current = []
     projectRef.current = {
       id: 'p1',

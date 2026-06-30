@@ -120,6 +120,8 @@ enum AcpCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
     ListSessions {
+        cwd: Option<String>,
+        cursor: Option<String>,
         reply: oneshot::Sender<Result<ListSessionsResponse, String>>,
     },
     SendPrompt {
@@ -386,13 +388,24 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await
     }
 
-    /// List sessions on the given agent.
+    /// List sessions on the given agent. Gated on the agent's
+    /// `sessionCapabilities.list`. Pass `cwd` to filter by working directory;
+    /// pass `cursor` for pagination (opaque token from a prior response).
     pub async fn list_sessions(
         &self,
         agent_id: &AgentId,
+        cwd: Option<String>,
+        cursor: Option<String>,
     ) -> Result<ListSessionsResponse, String> {
+        let caps = self.capabilities(agent_id)?;
+        gate_list_sessions(&caps)?;
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::ListSessions { reply }).await
+        send_command(&tx, |reply| AcpCommand::ListSessions {
+            cwd,
+            cursor,
+            reply,
+        })
+        .await
     }
 
     /// Send a prompt and await the turn's stop reason. Streaming updates arrive
@@ -595,6 +608,17 @@ fn gate_close_session(caps: &AgentCapabilities) -> Result<(), String> {
         Ok(())
     } else {
         Err("agent does not support session/close".to_string())
+    }
+}
+
+/// Capability gate for `session/list`: requires `sessionCapabilities.list`.
+/// Per the ACP spec: "If `sessionCapabilities.list` is not present … Clients
+/// MUST NOT attempt to call `session/list`."
+fn gate_list_sessions(caps: &AgentCapabilities) -> Result<(), String> {
+    if caps.session_capabilities.list.is_some() {
+        Ok(())
+    } else {
+        Err("agent does not support session/list (sessionCapabilities.list)".to_string())
     }
 }
 
@@ -1253,12 +1277,22 @@ async fn run_command_loop(
                 });
             }
 
-            AcpCommand::ListSessions { reply } => {
+            AcpCommand::ListSessions {
+                cwd,
+                cursor,
+                reply,
+            } => {
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = agent_client_protocol::schema::ListSessionsRequest::new();
+                    let mut request = agent_client_protocol::schema::ListSessionsRequest::new();
+                    if let Some(cwd) = cwd {
+                        request = request.cwd(std::path::PathBuf::from(cwd));
+                    }
+                    if let Some(cursor) = cursor {
+                        request = request.cursor(cursor);
+                    }
                     let result = req_cx.send_request(request).block_task().await;
                     send_reply(&task_slot, result.map_err(|e| e.to_string()));
                 });
@@ -1554,6 +1588,10 @@ mod tests {
         assert!(
             gate_resume_session(&caps).is_err(),
             "default agent must not advertise resume"
+        );
+        assert!(
+            gate_list_sessions(&caps).is_err(),
+            "default agent must not advertise session/list"
         );
     }
 

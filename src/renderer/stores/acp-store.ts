@@ -44,6 +44,7 @@ import {
   type SessionConfigOption,
   type SessionCreatedEvent,
   type SessionId,
+  type SessionInfo,
   type SessionMode,
   type SessionModelState,
   type SessionModeState,
@@ -151,6 +152,12 @@ interface AcpState {
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
 
+  // Discovered (agent-native) sessions via `session/list` — ephemeral, not persisted.
+  // Keyed by agentId; each entry is the agent's SessionInfo[] for the active cwd.
+  discoveredSessions: Record<AgentId, SessionInfo[]>
+  /** Agents whose discovery is currently in flight (prevents duplicate requests). */
+  discoveringAgents: Record<AgentId, true>
+
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
 
@@ -214,6 +221,17 @@ interface AcpState {
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   deleteHistorySession: (id: string) => Promise<void>
+
+  // Actions — session discovery (gh-407)
+  /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
+  discoverSessions: (agentId: AgentId, cwd: string) => Promise<void>
+  /** Continue a discovered (non-mirror) session via load/resume, following the decideResume policy. */
+  openDiscoveredSession: (
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    projectId: string
+  ) => Promise<void>
 
   // Actions — MCP server registry (P6)
   loadMcpServers: () => Promise<void>
@@ -717,6 +735,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   preparingChatKeys: {},
   prepareChatErrors: {},
   sessionIndex: [],
+  discoveredSessions: {},
+  discoveringAgents: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -1176,6 +1196,105 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  // --- Session discovery (gh-407) -------------------------------------------
+
+  discoverSessions: async (agentId, cwd) => {
+    // Gate on sessionCapabilities.list — never call session/list without it.
+    const agent = get().agents[agentId]
+    if (!agent?.capabilities) return
+    if (!agent.capabilities.sessionCapabilities?.list) return
+
+    // Prevent duplicate concurrent discovery for the same agent.
+    if (get().discoveringAgents[agentId]) return
+    set((s) => ({ discoveringAgents: { ...s.discoveringAgents, [agentId]: true } }))
+
+    try {
+      const all: SessionInfo[] = []
+      let cursor: string | undefined
+      // Safety cap: 10 pages max.
+      for (let i = 0; i < 10; i++) {
+        const res = await acpApi.listSessions(agentId, cwd || undefined, cursor)
+        if (Array.isArray(res.sessions)) {
+          all.push(...res.sessions)
+        }
+        if (!res.nextCursor) break
+        cursor = res.nextCursor
+      }
+      set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [agentId]: all } }))
+    } catch (e) {
+      // Best-effort: log warning, don't toast (discovery is opportunistic).
+      console.warn('[acp] session/list failed for agent', agentId, e)
+      // Clear any stale discovered entries for this agent.
+      set((s) => {
+        const next = { ...s.discoveredSessions }
+        delete next[agentId]
+        return { discoveredSessions: next }
+      })
+    } finally {
+      set((s) => {
+        const next = { ...s.discoveringAgents }
+        delete next[agentId]
+        return { discoveringAgents: next }
+      })
+    }
+  },
+
+  openDiscoveredSession: async (agentId, sessionId, cwd, projectId) => {
+    const connected = get().agentStatus[agentId] === 'connected'
+    const capabilities = get().agents[agentId]?.capabilities ?? null
+    const strategy = decideResume({ connected, capabilities })
+
+    if (strategy === 'local') {
+      throw new Error(
+        'agent does not support loading or resuming sessions (no loadSession or sessionCapabilities.resume)'
+      )
+    }
+
+    // Create a minimal session record so streaming events (session/update)
+    // during replay have a session to attach to, mirroring openHistorySession.
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId,
+          cwd,
+          projectId,
+          status: 'closed',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: Date.now()
+        }
+      },
+      messages: { ...s.messages, [sessionId]: [] }
+    }))
+
+    if (strategy === 'load') {
+      // Agent replays history via session/update; clear local copy to avoid dupes.
+      try {
+        await acpApi.loadSession(agentId, sessionId, cwd)
+        set((s) => ({ sessions: withSessionActive(s.sessions, sessionId) }))
+      } catch (err) {
+        // Restore empty messages so the pane doesn't show stale content.
+        set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+        throw err
+      }
+    } else if (strategy === 'resume') {
+      try {
+        await acpApi.resumeSession(agentId, sessionId, cwd)
+        set((s) => ({ sessions: withSessionActive(s.sessions, sessionId) }))
+      } catch (err) {
+        set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+        throw err
+      }
+    }
+  },
+
   loadMcpServers: async () => {
     const list = await loadMcpServersFromDisk()
     set({ mcpServers: list })
@@ -1526,10 +1645,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           affected.push(id)
         }
       }
+      const discoveredSessions = { ...s.discoveredSessions }
+      delete discoveredSessions[e.agentId]
       return {
         agentStatus,
         sessions,
-        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
+        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
+        discoveredSessions
       }
     })
     // Persist the closed status for each session the disconnect affected, so the
