@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage } from '@/stores/acp-store'
 import {
+  _resetPendingIndexWriteTrackerForTesting,
   deriveTitle,
   groupSessionsByRecency,
   loadSessionIndex,
@@ -20,7 +21,9 @@ import {
   type SessionIndexEntry,
   saveSessionPayload,
   sessionPayloadKey,
-  WIPE_MIGRATION_KEY
+  trackPendingIndexWrite,
+  WIPE_MIGRATION_KEY,
+  waitForPendingSessionIndexWrite
 } from './acp-history-persistence'
 
 function msg(role: ChatMessage['role'], text: string): ChatMessage {
@@ -218,5 +221,45 @@ describe('runHistoryWipeMigration', () => {
     await expect(runHistoryWipeMigration()).rejects.toThrow('storage unavailable')
     expect(persistenceApi.delete).not.toHaveBeenCalled()
     expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
+})
+
+describe('waitForPendingSessionIndexWrite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetPendingIndexWriteTrackerForTesting()
+  })
+
+  it('resolves immediately when no pending write has been tracked', async () => {
+    await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
+  })
+
+  it('waits for an in-flight write to complete', async () => {
+    let resolveWrite: () => void
+    const pending = new Promise<void>((resolve) => {
+      resolveWrite = resolve
+    })
+    trackPendingIndexWrite(pending)
+
+    let waitDone = false
+    void waitForPendingSessionIndexWrite().then(() => {
+      waitDone = true
+    })
+
+    // Give microtasks a chance to flush
+    await Promise.resolve()
+    expect(waitDone).toBe(false)
+
+    resolveWrite!()
+    await waitForPendingSessionIndexWrite()
+    expect(waitDone).toBe(true)
+  })
+
+  it('handles write rejection without throwing', async () => {
+    const rejected = Promise.reject(new Error('write failed'))
+    trackPendingIndexWrite(rejected)
+
+    // The wait function should not throw — errors are swallowed by trackPendingIndexWrite
+    await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
   })
 })

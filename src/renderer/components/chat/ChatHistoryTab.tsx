@@ -24,10 +24,15 @@ export function ChatHistoryTab(): React.JSX.Element {
   }, [activeProject])
 
   // Hard isolation (ADR 0002): show only sessions whose `(projectId, cwd)`
-  // match the active project + its current worktree/root.
+  // match the active project + its current worktree/root. Fall back to
+  // projectId-only matching when the exact cwd filter yields nothing — the
+  // worktree/cwd may have changed since the chat was created (e.g. after
+  // restart or worktree pruning).
   const scopedIndex = useMemo(() => {
     if (!activeProjectId || !activeCwd) return []
-    return sessionIndex.filter((e) => e.projectId === activeProjectId && e.cwd === activeCwd)
+    const exact = sessionIndex.filter((e) => e.projectId === activeProjectId && e.cwd === activeCwd)
+    if (exact.length > 0) return exact
+    return sessionIndex.filter((e) => e.projectId === activeProjectId)
   }, [sessionIndex, activeProjectId, activeCwd])
 
   const [query, setQuery] = useState('')

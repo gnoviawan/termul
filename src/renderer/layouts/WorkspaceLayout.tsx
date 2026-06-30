@@ -40,6 +40,7 @@ import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import { waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -556,15 +557,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const closeAppWithPersistenceFlush = useCallback(async () => {
     try {
-      const [pendingAppSettingsResult, pendingPersistenceResult] = await Promise.allSettled([
-        waitForPendingAppSettingsPersistence(),
-        persistenceApi.flushPendingWrites()
-      ])
+      const [pendingAppSettingsResult, pendingPersistenceResult, pendingSessionIndexResult] =
+        await Promise.allSettled([
+          waitForPendingAppSettingsPersistence(),
+          persistenceApi.flushPendingWrites(),
+          waitForPendingSessionIndexWrite()
+        ])
 
       if (pendingAppSettingsResult.status === 'rejected') {
         console.error(
           'Failed to wait for app settings persistence before close:',
           pendingAppSettingsResult.reason
+        )
+      }
+
+      // Note: waitForPendingSessionIndexWrite swallows rejections internally
+      // (trackPendingIndexWrite wraps with .catch(() => undefined)), so this
+      // branch is effectively dead code — kept as a defensive guard in case the
+      // swallowing behavior changes.
+      if (pendingSessionIndexResult.status === 'rejected') {
+        console.error(
+          'Failed to wait for session index persistence before close:',
+          pendingSessionIndexResult.reason
         )
       }
 

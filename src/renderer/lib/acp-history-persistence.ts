@@ -91,6 +91,32 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   return []
 }
 
+/**
+ * Track the latest session-index write so the close path can await it before
+ * `window.destroy()`. Mirrors the `waitForPendingAppSettingsPersistence` pattern.
+ * Errors are swallowed here because they are already logged at the call site
+ * (`persistSession` in `acp-store.ts`).
+ *
+ * Writes are **chained** rather than replaced: if `persistSession` is called
+ * twice in rapid succession, the second write awaits the first before firing.
+ * This prevents concurrent writes to the same Tauri Store key from racing and
+ * potentially corrupting the session index file on disk.
+ */
+let pendingIndexWrite: Promise<void> = Promise.resolve()
+
+export function trackPendingIndexWrite(promise: Promise<void>): void {
+  pendingIndexWrite = pendingIndexWrite.then(() => promise.catch(() => undefined))
+}
+
+export async function waitForPendingSessionIndexWrite(): Promise<void> {
+  await pendingIndexWrite
+}
+
+/** Test-only: reset the tracker between tests to avoid cross-test leakage. */
+export function _resetPendingIndexWriteTrackerForTesting(): void {
+  pendingIndexWrite = Promise.resolve()
+}
+
 export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<void> {
   const res = await persistenceApi.write(SESSION_INDEX_KEY, entries)
   if (!res.success) {

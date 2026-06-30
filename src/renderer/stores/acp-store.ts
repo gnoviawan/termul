@@ -60,7 +60,8 @@ import {
   type SessionIndexEntry,
   type SessionPayload,
   saveSessionIndex as saveSessionIndexToDisk,
-  saveSessionPayload
+  saveSessionPayload,
+  trackPendingIndexWrite
 } from '@/lib/acp-history-persistence'
 import {
   loadMcpServers as loadMcpServersFromDisk,
@@ -484,9 +485,13 @@ function persistSession(
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
   const payload: SessionPayload = { metadata: entry, messages }
-  void saveSessionIndexToDisk(nextIndex).catch((e) =>
-    console.error('[acp] failed to persist session index', e)
-  )
+  const indexWrite = saveSessionIndexToDisk(nextIndex)
+  // Track the index write so the close path (closeAppWithPersistenceFlush)
+  // can await it before window.destroy(). The payload write below uses
+  // writeDebounced() and is covered by flushPendingWrites() — the index write
+  // uses write() (non-debounced) and is NOT covered, hence the explicit tracking.
+  trackPendingIndexWrite(indexWrite)
+  void indexWrite.catch((e) => console.error('[acp] failed to persist session index', e))
   void saveSessionPayload(sessionId, payload).catch((e) =>
     console.error('[acp] failed to persist session payload', e)
   )
@@ -1169,7 +1174,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // Reclaim any app-owned temp files staged for this session.
     void deleteSessionTempFiles(id)
     try {
-      await saveSessionIndexToDisk(next)
+      const indexWrite = saveSessionIndexToDisk(next)
+      trackPendingIndexWrite(indexWrite)
+      await indexWrite
       await deleteSessionPayload(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)
