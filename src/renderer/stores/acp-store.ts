@@ -153,10 +153,12 @@ interface AcpState {
   sessionIndex: SessionIndexEntry[]
 
   // Discovered (agent-native) sessions via `session/list` — ephemeral, not persisted.
-  // Keyed by agentId; each entry is the agent's SessionInfo[] for the active cwd.
-  discoveredSessions: Record<AgentId, SessionInfo[]>
-  /** Agents whose discovery is currently in flight (prevents duplicate requests). */
-  discoveringAgents: Record<AgentId, true>
+  // Keyed by `discoveryKey(agentId, cwd)` so each (agent, cwd) pair owns its own
+  // result slot; switching cwd never clobbers another cwd's results, and a slow
+  // in-flight discovery for one cwd can't overwrite a newer cwd's results.
+  discoveredSessions: Record<string, SessionInfo[]>
+  /** discoveryKeys whose discovery is currently in flight (prevents duplicate requests). */
+  discoveringKeys: Record<string, true>
 
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
@@ -546,6 +548,24 @@ export function configIdFromReuseKey(key: string): string {
   return nul === -1 ? key : key.slice(0, nul)
 }
 
+/**
+ * Normalize a filesystem path for keying/comparison: forward slashes, no
+ * trailing slash, lowercased. Windows paths are case-insensitive and may mix
+ * separators; on POSIX this is a harmless over-match for rare mixed-case dirs.
+ */
+export function normalizeCwd(cwd: string): string {
+  return cwd.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * Stable key for a discovery result/in-flight slot, scoped per (agent, cwd) so
+ * switching cwd never clobbers another cwd's results and a slow in-flight
+ * discovery can't overwrite a newer cwd's results. cwd is normalized.
+ */
+export function discoveryKey(agentId: AgentId, cwd: string): string {
+  return `${agentId}\0${normalizeCwd(cwd)}`
+}
+
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
 export function prepareChatKey(
   configId: string,
@@ -736,7 +756,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   prepareChatErrors: {},
   sessionIndex: [],
   discoveredSessions: {},
-  discoveringAgents: {},
+  discoveringKeys: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -1214,9 +1234,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return
     }
 
-    // Prevent duplicate concurrent discovery for the same agent.
-    if (get().discoveringAgents[agentId]) return
-    set((s) => ({ discoveringAgents: { ...s.discoveringAgents, [agentId]: true } }))
+    // Scope the result + in-flight slot per (agent, cwd) so switching cwd never
+    // clobbers another cwd's results, and a slow in-flight discovery for one cwd
+    // can't overwrite a newer cwd's results.
+    const key = discoveryKey(agentId, cwd)
+
+    // Prevent duplicate concurrent discovery for the same (agent, cwd).
+    if (get().discoveringKeys[key]) return
+    set((s) => ({ discoveringKeys: { ...s.discoveringKeys, [key]: true } }))
 
     try {
       const all: SessionInfo[] = []
@@ -1234,21 +1259,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         `[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s) for cwd ${cwd}`,
         all.map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, title: s.title }))
       )
-      set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [agentId]: all } }))
+      set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
     } catch (e) {
       // Best-effort: log warning, don't toast (discovery is opportunistic).
       console.warn('[acp] session/list failed for agent', agentId, e)
-      // Clear any stale discovered entries for this agent.
+      // Clear any stale discovered entries for this (agent, cwd).
       set((s) => {
         const next = { ...s.discoveredSessions }
-        delete next[agentId]
+        delete next[key]
         return { discoveredSessions: next }
       })
     } finally {
       set((s) => {
-        const next = { ...s.discoveringAgents }
-        delete next[agentId]
-        return { discoveringAgents: next }
+        const next = { ...s.discoveringKeys }
+        delete next[key]
+        return { discoveringKeys: next }
       })
     }
   },
@@ -1660,7 +1685,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
       const discoveredSessions = { ...s.discoveredSessions }
-      delete discoveredSessions[e.agentId]
+      // Keys are `discoveryKey(agentId, cwd)`; drop every cwd slot for this agent.
+      const prefix = `${e.agentId}\0`
+      for (const k of Object.keys(discoveredSessions)) {
+        if (k.startsWith(prefix)) delete discoveredSessions[k]
+      }
       return {
         agentStatus,
         sessions,

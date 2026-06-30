@@ -39,6 +39,7 @@ import {
   agentReuseKey,
   collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
+  discoveryKey,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -56,7 +57,7 @@ const FRESH = {
   prepareChatErrors: {},
   sessionIndex: [],
   discoveredSessions: {},
-  discoveringAgents: {},
+  discoveringKeys: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -1556,7 +1557,7 @@ describe('session discovery (gh-407)', () => {
       agents: {},
       agentStatus: {},
       discoveredSessions: {},
-      discoveringAgents: {}
+      discoveringKeys: {}
     })
   })
 
@@ -1572,7 +1573,9 @@ describe('session discovery (gh-407)', () => {
     const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
     expect(listCalls).toHaveLength(0)
     // No discovered sessions stored.
-    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
   })
 
   it('discoverSessions calls acp_list_sessions when list capability is advertised', async () => {
@@ -1593,7 +1596,7 @@ describe('session discovery (gh-407)', () => {
     const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
     expect(listCalls).toHaveLength(1)
     expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
-    const discovered = useAcpStore.getState().discoveredSessions['agent-1']
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
     expect(discovered).toHaveLength(1)
     expect(discovered![0]!.sessionId).toBe('sess-1')
   })
@@ -1623,7 +1626,7 @@ describe('session discovery (gh-407)', () => {
       }
     })
     await useAcpStore.getState().discoverSessions('agent-1', '/work')
-    const discovered = useAcpStore.getState().discoveredSessions['agent-1']
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
     expect(discovered).toHaveLength(2)
     expect(discovered![0]!.sessionId).toBe('sess-1')
     expect(discovered![1]!.sessionId).toBe('sess-2')
@@ -1638,23 +1641,31 @@ describe('session discovery (gh-407)', () => {
         }
       },
       agentStatus: { 'agent-1': 'connected' },
-      discoveredSessions: { 'agent-1': [{ sessionId: 'old', cwd: '/work' }] }
+      discoveredSessions: {
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'old', cwd: '/work' }]
+      }
     })
     vi.mocked(invoke).mockRejectedValue(new Error('agent error'))
     await useAcpStore.getState().discoverSessions('agent-1', '/work')
-    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
   })
 
   it('_onAgentDisconnected clears discovered sessions for that agent', () => {
     useAcpStore.setState({
       discoveredSessions: {
-        'agent-1': [{ sessionId: 'sess-1', cwd: '/work' }],
-        'agent-2': [{ sessionId: 'sess-2', cwd: '/work' }]
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'sess-1', cwd: '/work' }],
+        [discoveryKey('agent-2', '/work')]: [{ sessionId: 'sess-2', cwd: '/work' }]
       }
     })
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
-    expect(useAcpStore.getState().discoveredSessions['agent-1']).toBeUndefined()
-    expect(useAcpStore.getState().discoveredSessions['agent-2']).toBeDefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-2', '/work')]
+    ).toBeDefined()
   })
 
   it('openDiscoveredSession throws when agent has neither load nor resume', async () => {

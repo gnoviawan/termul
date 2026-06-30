@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
-import { configIdFromReuseKey, useAcpStore } from '@/stores/acp-store'
+import { configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { templateIcon } from './agent-templates'
@@ -29,20 +29,6 @@ interface SidebarEntry {
   lastActivityAt: number
   /** Whether this entry can be opened (agent has load or resume capability). */
   canOpen: boolean
-}
-
-/**
- * Normalize a filesystem path for comparison: forward slashes, no trailing
- * slash, lowercased (Windows paths are case-insensitive; on POSIX this is a
- * harmless over-match for the rare mixed-case duplicate).
- */
-function normalizeCwd(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-}
-
-/** True when two cwd strings refer to the same directory after normalization. */
-function cwdMatches(a: string, b: string): boolean {
-  return normalizeCwd(a) === normalizeCwd(b)
 }
 
 /** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
@@ -118,12 +104,16 @@ export function ChatHistoryTab(): React.JSX.Element {
       }
     })
 
-    // Add discovered sessions not already in the local mirror.
-    for (const [agentId, sessions] of Object.entries(discoveredSessions)) {
+    // Add discovered sessions not already in the local mirror. Results are keyed
+    // per (agent, cwd), so look up the active cwd's slot for each connected agent.
+    for (const agentId of Object.keys(agents)) {
       // Only surface discovered sessions for an agent that is still connected.
       // A disconnected agent can't service session/load|resume, so its entries
       // would render as un-clickable; drop them instead of showing dead rows.
       if (agentStatus[agentId] !== 'connected') continue
+      if (!activeCwd) continue
+      const sessions = discoveredSessions[discoveryKey(agentId, activeCwd)]
+      if (!sessions || sessions.length === 0) continue
       const caps = agents[agentId]?.capabilities
       const canOpen = caps?.loadSession === true || caps?.sessionCapabilities?.resume != null
       const { name: agentName, templateId } = resolveAgentIdentity(agentId)
@@ -132,11 +122,6 @@ export function ChatHistoryTab(): React.JSX.Element {
       for (const info of sessions) {
         // Dedupe: skip if already in the local mirror.
         if (mirrorIds.has(info.sessionId)) continue
-        // Filter by active cwd. The backend already passes cwd to session/list,
-        // so this is a defensive secondary filter for agents that ignore it.
-        // Compare normalized (separators + case + trailing slash) so a Windows
-        // path mismatch (E:\foo vs E:/foo/) can't wrongly hide a session.
-        if (activeCwd && info.cwd && !cwdMatches(info.cwd, activeCwd)) continue
 
         entries.push({
           id: info.sessionId,
