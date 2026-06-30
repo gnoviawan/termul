@@ -1103,11 +1103,16 @@ async fn run_command_loop(
         Ok(Ok(response)) => {
             let auth_method_ids: Vec<String> =
                 response.auth_methods.iter().map(|m| m.id().to_string()).collect();
+            let session_caps = &response.agent_capabilities.session_capabilities;
             log::info!(
-                "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} loadSession={}",
+                "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
+                 loadSession={} sessionCapabilities.list={} resume={} close={}",
                 response.protocol_version,
                 auth_method_ids,
                 response.agent_capabilities.load_session,
+                session_caps.list.is_some(),
+                session_caps.resume.is_some(),
+                session_caps.close.is_some(),
             );
 
             spawned.store(true, Ordering::Release);

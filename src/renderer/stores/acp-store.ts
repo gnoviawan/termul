@@ -1201,8 +1201,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   discoverSessions: async (agentId, cwd) => {
     // Gate on sessionCapabilities.list — never call session/list without it.
     const agent = get().agents[agentId]
-    if (!agent?.capabilities) return
-    if (!agent.capabilities.sessionCapabilities?.list) return
+    if (!agent?.capabilities) {
+      console.info('[acp] discoverSessions: no capabilities for agent', agentId)
+      return
+    }
+    if (!agent.capabilities.sessionCapabilities?.list) {
+      console.info(
+        '[acp] discoverSessions: agent does not advertise sessionCapabilities.list, skipping',
+        agentId,
+        agent.capabilities.sessionCapabilities
+      )
+      return
+    }
 
     // Prevent duplicate concurrent discovery for the same agent.
     if (get().discoveringAgents[agentId]) return
@@ -1220,6 +1230,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         if (!res.nextCursor) break
         cursor = res.nextCursor
       }
+      console.info(
+        `[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s) for cwd ${cwd}`,
+        all.map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, title: s.title }))
+      )
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [agentId]: all } }))
     } catch (e) {
       // Best-effort: log warning, don't toast (discovery is opportunistic).

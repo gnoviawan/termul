@@ -29,6 +29,20 @@ interface SidebarEntry {
   canOpen: boolean
 }
 
+/**
+ * Normalize a filesystem path for comparison: forward slashes, no trailing
+ * slash, lowercased (Windows paths are case-insensitive; on POSIX this is a
+ * harmless over-match for the rare mixed-case duplicate).
+ */
+function normalizeCwd(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/** True when two cwd strings refer to the same directory after normalization. */
+function cwdMatches(a: string, b: string): boolean {
+  return normalizeCwd(a) === normalizeCwd(b)
+}
+
 /** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
 export function ChatHistoryTab(): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
@@ -110,8 +124,11 @@ export function ChatHistoryTab(): React.JSX.Element {
       for (const info of sessions) {
         // Dedupe: skip if already in the local mirror.
         if (mirrorIds.has(info.sessionId)) continue
-        // Filter by active cwd.
-        if (activeCwd && info.cwd && info.cwd !== activeCwd) continue
+        // Filter by active cwd. The backend already passes cwd to session/list,
+        // so this is a defensive secondary filter for agents that ignore it.
+        // Compare normalized (separators + case + trailing slash) so a Windows
+        // path mismatch (E:\foo vs E:/foo/) can't wrongly hide a session.
+        if (activeCwd && info.cwd && !cwdMatches(info.cwd, activeCwd)) continue
 
         entries.push({
           id: info.sessionId,
