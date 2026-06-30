@@ -156,4 +156,45 @@ describe('ChatHistoryTab scoping', () => {
     fireEvent.click(screen.getByText('s1'))
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
+
+  it('caps the rendered rows and lazily loads more', () => {
+    // 60 sessions; page size is 50, so the first render shows 50 + a Load more.
+    sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>
+      entry(`s${i}`, {
+        projectId: 'p1',
+        cwd: '/work',
+        title: `chat-${i}`,
+        // Descending recency so newest (chat-0) sorts first and is visible.
+        lastActivityAt: 60 - i
+      })
+    )
+    render(<ChatHistoryTab />)
+    // First page is visible.
+    expect(screen.getByText('chat-0')).toBeInTheDocument()
+    expect(screen.getByText('chat-49')).toBeInTheDocument()
+    // Beyond the cap is not yet rendered.
+    expect(screen.queryByText('chat-50')).not.toBeInTheDocument()
+    // Load-more reveals the rest.
+    fireEvent.click(screen.getByText(/Load more/))
+    expect(screen.getByText('chat-50')).toBeInTheDocument()
+    expect(screen.getByText('chat-59')).toBeInTheDocument()
+  })
+
+  it('search reaches sessions beyond the rendered window', () => {
+    sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>
+      entry(`s${i}`, {
+        projectId: 'p1',
+        cwd: '/work',
+        title: `chat-${i}`,
+        lastActivityAt: 60 - i
+      })
+    )
+    render(<ChatHistoryTab />)
+    // chat-55 is past the initial cap; searching for it still finds it.
+    expect(screen.queryByText('chat-55')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Search chats…'), {
+      target: { value: 'chat-55' }
+    })
+    expect(screen.getByText('chat-55')).toBeInTheDocument()
+  })
 })

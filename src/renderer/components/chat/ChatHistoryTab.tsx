@@ -1,5 +1,5 @@
 import { Bot, Search, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
@@ -7,6 +7,9 @@ import { configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-st
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { templateIcon } from './agent-templates'
+
+/** How many sidebar rows to render per lazy-load page. */
+const SIDEBAR_PAGE_SIZE = 50
 
 /** A unified sidebar entry: either from the local mirror or discovered via session/list. */
 interface SidebarEntry {
@@ -143,14 +146,55 @@ export function ChatHistoryTab(): React.JSX.Element {
   }, [scopedIndex, discoveredSessions, agents, agentStatus, activeCwd, resolveAgentIdentity])
 
   const [query, setQuery] = useState('')
+  // Lazy rendering: keep all results in memory but only render a growing window
+  // (discovery can return hundreds of sessions; rendering all rows is the cost).
+  const [visibleCount, setVisibleCount] = useState(SIDEBAR_PAGE_SIZE)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
 
-  const groups = useMemo(() => {
-    const filtered =
-      query.trim().length === 0
+  // Filter the FULL set by query first (so search reaches every session, not
+  // just the rendered window), then sort newest-first so the visible cap keeps
+  // the most recent sessions.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const base =
+      q.length === 0
         ? mergedEntries
-        : mergedEntries.filter((e) => e.title.toLowerCase().includes(query.trim().toLowerCase()))
-    return groupSessionsByRecency(filtered, Date.now())
+        : mergedEntries.filter((e) => e.title.toLowerCase().includes(q))
+    return base.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   }, [mergedEntries, query])
+
+  // Reset the window when the query or active scope changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on scope/query change
+  useEffect(() => {
+    setVisibleCount(SIDEBAR_PAGE_SIZE)
+  }, [query, activeProjectId, activeCwd])
+
+  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+  const hasMore = filtered.length > visible.length
+
+  const groups = useMemo(() => groupSessionsByRecency(visible, Date.now()), [visible])
+
+  // Grow the window when the bottom sentinel scrolls into view (lazy load).
+  // `visibleCount` is intentionally in the deps so the observer re-arms after
+  // each growth: IntersectionObserver only fires on intersection transitions, so
+  // a sentinel already in view after a grow needs a fresh observe() to re-check.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount re-arms the observer
+  useEffect(() => {
+    if (!hasMore) return
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (obsEntries) => {
+        if (obsEntries.some((e) => e.isIntersecting)) {
+          setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)
+        }
+      },
+      { root: scrollRef.current, rootMargin: '200px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, visibleCount])
 
   const handleOpen = useCallback(
     async (entry: SidebarEntry) => {
@@ -194,12 +238,12 @@ export function ChatHistoryTab(): React.JSX.Element {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-1">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto py-1">
         {mergedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground opacity-70">
             No chats yet. Start one with the New Chat button.
           </div>
-        ) : groups.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
         ) : (
           groups.map(({ group, entries }) => (
@@ -262,6 +306,17 @@ export function ChatHistoryTab(): React.JSX.Element {
               ))}
             </div>
           ))
+        )}
+        {hasMore && (
+          <div ref={sentinelRef} className="px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
+              className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
+            >
+              Load more ({filtered.length - visible.length} more)
+            </button>
+          </div>
         )}
       </div>
     </div>
