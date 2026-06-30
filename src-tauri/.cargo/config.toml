@@ -1,2 +1,7 @@
-[build]
+# Force the signal-based reaper backend in async-process on Linux (avoids
+# pidfd availability issues on older kernels / containers). On Windows the
+# signal backend is not compiled, so applying this flag unconditionally causes
+# a panic at runtime ("neither the signal backend nor the waiter backend is
+# available") every time an ACP agent subprocess is spawned.
+[target.'cfg(not(target_os = "windows"))']
 rustflags = ["--cfg", "async_process_force_signal_backend"]
