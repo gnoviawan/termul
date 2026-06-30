@@ -1703,6 +1703,22 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
 
+/**
+ * Resolve an agent's template id by `agentConfigId` (from a history entry) when
+ * the agent isn't live. Falls back to `useAgentIdentity` for live sessions.
+ */
+export function useAgentTemplateId(agentId: AgentId | null, agentConfigId?: string): string | null {
+  return useAcpStore(
+    useShallow((s) => {
+      if (agentConfigId) {
+        const config = s.agentConfigs.find((c) => c.id === agentConfigId)
+        if (config?.templateId) return config.templateId
+      }
+      return selectAgentIdentity(s, agentId).templateId
+    })
+  )
+}
+
 /** Project IDs with at least one open agent-chat session in an active turn. */
 export function collectProjectsWithActiveAgentChat(
   sessions: Record<SessionId, AcpSession>

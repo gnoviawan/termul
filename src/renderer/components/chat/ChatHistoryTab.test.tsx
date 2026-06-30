@@ -30,7 +30,7 @@ vi.mock('@/stores/acp-store', () => {
       openHistorySession: mockOpen,
       deleteHistorySession: mockDelete
     })
-  return { useAcpStore }
+  return { useAcpStore, useAgentTemplateId: () => null }
 })
 
 vi.mock('@/stores/workspace-store', () => ({

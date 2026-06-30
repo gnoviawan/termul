@@ -646,7 +646,7 @@ function AgentChatTabInline({
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
   const connected = isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
-  const tabLabel = agentName ?? 'Agent Chat'
+  const tabLabel = session?.title ?? agentName ?? 'Agent Chat'
 
   return (
     <>
@@ -676,13 +676,19 @@ function AgentChatTabInline({
           <>
             <AgentBadge
               agentId={session.agentId}
+              showName={false}
               iconSize={12}
+              className="shrink-0"
+            />
+            <span
               className={cn(
                 'min-w-0 flex-1 truncate text-2xs font-medium',
                 isClosed && 'line-through opacity-60',
                 isActive ? 'text-foreground' : 'text-inherit'
               )}
-            />
+            >
+              {tabLabel}
+            </span>
             <AgentConnectionLamp connected={connected} />
           </>
         ) : (
