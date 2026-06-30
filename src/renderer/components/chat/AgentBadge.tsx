@@ -1,8 +1,7 @@
-import { Bot } from 'lucide-react'
 import type { AgentId } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { useAgentIdentity } from '@/stores/acp-store'
-import { templateIcon } from './agent-templates'
+import { AgentGlyph } from './AgentGlyph'
 
 interface AgentBadgeProps {
   agentId: AgentId
@@ -16,10 +15,10 @@ interface AgentBadgeProps {
 }
 
 /**
- * Resolves an ACP agent's real name (e.g. "Cursor") and template icon from the
- * configured-agent registry, rendering them together. Falls back to a generic
- * bot icon + provided fallback when the session has no matching live config
- * (e.g. opened from history).
+ * Resolves an ACP agent's real name (e.g. "Cursor") and bundled registry icon
+ * from the configured-agent registry, rendering them together. Falls back to a
+ * generic bot icon + provided fallback when the session has no matching live
+ * config (e.g. opened from history).
  */
 export function AgentBadge({
   agentId,
@@ -29,16 +28,11 @@ export function AgentBadge({
   className
 }: AgentBadgeProps): React.JSX.Element {
   const { name, templateId } = useAgentIdentity(agentId)
-  const Icon = templateIcon(templateId ?? undefined)
   const label = name ?? fallbackName ?? `Agent ${agentId.slice(0, 8)}`
 
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
-      {Icon ? (
-        <Icon width={iconSize} height={iconSize} className="shrink-0 text-foreground/80" />
-      ) : (
-        <Bot size={iconSize} className="shrink-0 text-foreground/80" />
-      )}
+      <AgentGlyph templateId={templateId} size={iconSize} />
       {showName && <span className="truncate">{label}</span>}
     </span>
   )

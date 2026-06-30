@@ -644,9 +644,15 @@ function AgentChatTabInline({
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
+  // The persisted index entry carries the effective title (agent-pushed title,
+  // first-message derivation, or "Untitled Chat N"). `session.title` stays null
+  // until an event sets it, so fall through to the index entry for the label.
+  const indexTitle = useAcpStore(
+    (s) => s.sessionIndex.find((e) => e.id === tab.sessionId)?.title ?? null
+  )
   const connected = isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
-  const tabLabel = session?.title ?? agentName ?? 'Agent Chat'
+  const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 
   return (
     <>

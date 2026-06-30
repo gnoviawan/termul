@@ -1,4 +1,4 @@
-import { Bot, Search, Trash2 } from 'lucide-react'
+import { Search, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentTemplateId } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { templateIcon } from './agent-templates'
+import { AgentGlyph } from './AgentGlyph'
 
 /** Sidebar tab listing persisted chat sessions, grouped by recency with search. */
 export function ChatHistoryTab(): React.JSX.Element {
@@ -128,7 +128,7 @@ export function ChatHistoryTab(): React.JSX.Element {
   )
 }
 
-/** Resolve the agent's template icon for a history entry, falling back to Bot. */
+/** Resolve the agent's bundled registry icon for a history entry. */
 function ChatEntryIcon({
   agentId,
   agentConfigId
@@ -137,9 +137,5 @@ function ChatEntryIcon({
   agentConfigId?: string
 }): React.JSX.Element {
   const templateId = useAgentTemplateId(agentId, agentConfigId)
-  const Icon = templateIcon(templateId ?? undefined)
-  if (Icon) {
-    return <Icon width={12} height={12} className="shrink-0 text-muted-foreground" />
-  }
-  return <Bot size={12} className="shrink-0 text-muted-foreground" />
+  return <AgentGlyph templateId={templateId} size={12} className="text-muted-foreground" />
 }
