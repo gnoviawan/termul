@@ -222,4 +222,33 @@ describe('useAcpAgents', () => {
     })
     expect(mockPrewarmAgent).not.toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
   })
+
+  it('cancels the in-flight prewarm when the component unmounts before persistRead resolves', async () => {
+    projectRef.current.activeProjectId = 'proj-1'
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+    // Block the run at persistenceApi.read (which runs AFTER the cwd snapshot)
+    // so unmount can happen while the prewarm sequence is still in flight.
+    let resolvePersistRead!: () => void
+    mockPersistRead.mockImplementation(
+      () =>
+        new Promise<{ success: boolean; data: unknown }>((resolve) => {
+          resolvePersistRead = () => resolve({ success: true, data: undefined })
+        })
+    )
+
+    const { unmount } = renderHook(() => useAcpAgents())
+
+    // The run is in flight, blocked on persistRead; cwd = '/work/proj-1'.
+    await waitFor(() => expect(mockPersistRead).toHaveBeenCalledTimes(1))
+
+    // Unmount fires the effect cleanup -> cancelled = true.
+    unmount()
+
+    // Resume the in-flight continuation; it must no-op and never prewarm.
+    resolvePersistRead()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockPrewarmAgent).not.toHaveBeenCalled()
+  })
 })
