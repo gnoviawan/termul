@@ -596,8 +596,14 @@ export function configIdFromReuseKey(key: string): string {
  */
 export function normalizeCwd(cwd: string): string {
   const trimmed = cwd.trim()
+  if (trimmed === '') return ''
   const isWindowsPath = /^[a-zA-Z]:/.test(trimmed) || trimmed.includes('\\')
-  const slashed = trimmed.replace(/\\/g, '/').replace(/\/+$/, '')
+  let slashed = trimmed.replace(/\\/g, '/').replace(/\/+$/, '')
+  // Preserve roots: stripping trailing slashes must not collapse a root like
+  // "/" (POSIX) or "C:/" (Windows drive) into "" / "C:", which would alias the
+  // no-cwd key or lose the drive root.
+  if (slashed === '') slashed = '/'
+  else if (/^[a-zA-Z]:$/.test(slashed)) slashed = `${slashed}/`
   return isWindowsPath ? slashed.toLowerCase() : slashed
 }
 
@@ -1288,6 +1294,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
     // Prevent duplicate concurrent discovery for the same (agent, cwd).
     if (get().discoveringKeys[key]) return
+    // Gate on a LIVE connection, not just capability presence: _onAgentDisconnected
+    // leaves the agent in `agents` (status 'error') but it can no longer service
+    // session/list. Skip stale agents up front.
+    if (get().agentStatus[agentId] !== 'connected') return
     set((s) => ({ discoveringKeys: { ...s.discoveringKeys, [key]: true } }))
 
     try {
@@ -1306,9 +1316,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             all.push(info)
           }
         }
-        if (!res.nextCursor) break
+        // Treat the cursor as opaque: only stop when it is absent (nullish).
+        // An empty-string cursor is a valid token and must NOT end pagination.
+        if (res.nextCursor == null) break
         cursor = res.nextCursor
       }
+      // Drop the result if the agent disconnected while the request was in
+      // flight, so a slow response can't repopulate state after teardown.
+      if (get().agentStatus[agentId] !== 'connected') return
       // Log only counts + context — never session metadata (titles/ids/cwd can
       // be sensitive). Detailed payloads stay out of the console.
       console.info(`[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s)`)

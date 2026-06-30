@@ -1625,6 +1625,52 @@ describe('session discovery (gh-407)', () => {
     ).toBeUndefined()
   })
 
+  it('discoverSessions skips agents that are not connected (stale after disconnect)', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      // _onAgentDisconnected leaves the agent present but flips status to 'error'.
+      agentStatus: { 'agent-1': 'error' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('discoverSessions treats an empty-string cursor as a valid page token', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        // Opaque empty-string cursor must NOT end pagination.
+        return { sessions: [{ sessionId: 'sess-1', cwd: '/work' }], nextCursor: '' }
+      }
+      return { sessions: [{ sessionId: 'sess-2', cwd: '/work' }], nextCursor: null }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(2)
+    expect(listCalls[1]![1]).toMatchObject({ cursor: '' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    expect(discovered).toHaveLength(2)
+  })
+
   it('discoverSessions calls acp_list_sessions when list capability is advertised', async () => {
     useAcpStore.setState({
       agents: {
