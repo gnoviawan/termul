@@ -45,6 +45,7 @@ import {
   type SessionCreatedEvent,
   type SessionId,
   type SessionInfo,
+  type SessionInfoUpdateEvent,
   type SessionMode,
   type SessionModelState,
   type SessionModeState,
@@ -264,6 +265,7 @@ interface AcpState {
   _onCommandsUpdate: (e: CommandsUpdateEvent) => void
   _onModeUpdate: (e: ModeUpdateEvent) => void
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
+  _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
@@ -285,6 +287,39 @@ let seqCounter = 0
 function nextSeq(): number {
   seqCounter += 1
   return seqCounter
+}
+
+/**
+ * Monotonic counter for "Untitled Chat N" placeholder titles. Rebased from the
+ * persisted index on load (see `rebaseUntitledCounter`) so a restart continues
+ * from the highest persisted suffix instead of restarting at 1 and colliding
+ * with existing placeholders. Only freshly created sessions without a message
+ * consume a number.
+ */
+let untitledChatCounter = 0
+function nextUntitledTitle(): string {
+  untitledChatCounter += 1
+  return `Untitled Chat ${untitledChatCounter}`
+}
+
+/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
+const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+
+/**
+ * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
+ * found across the persisted index, so placeholders assigned after a restart
+ * never collide with ones already on disk.
+ */
+function rebaseUntitledCounter(entries: SessionIndexEntry[]): void {
+  let maxSuffix = untitledChatCounter
+  for (const entry of entries) {
+    const match = UNTITLED_CHAT_RE.exec(entry.title)
+    if (match) {
+      const n = Number.parseInt(match[1], 10)
+      if (Number.isFinite(n) && n > maxSuffix) maxSuffix = n
+    }
+  }
+  untitledChatCounter = maxSuffix
 }
 
 /**
@@ -489,11 +524,16 @@ function persistSession(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
   const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+  const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
+  // Keep a placeholder stable once assigned: reuse the existing index title
+  // (including a prior `Untitled Chat N`) instead of regenerating one on every
+  // persist. `rebaseUntitledCounter` keeps fresh numbers from colliding.
+  const fallbackTitle = existingEntry?.title ?? nextUntitledTitle()
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(messages, session.agentId),
+    title: session.title ?? deriveTitle(messages, fallbackTitle),
     cwd: session.cwd,
     projectId: session.projectId,
     createdAt: session.createdAt,
@@ -549,12 +589,16 @@ export function configIdFromReuseKey(key: string): string {
 }
 
 /**
- * Normalize a filesystem path for keying/comparison: forward slashes, no
- * trailing slash, lowercased. Windows paths are case-insensitive and may mix
- * separators; on POSIX this is a harmless over-match for rare mixed-case dirs.
+ * Normalize a filesystem path for keying/comparison: forward slashes and no
+ * trailing slash. Case-folds only Windows-style paths (drive-letter or
+ * backslash-bearing), which are case-insensitive; POSIX paths keep their case
+ * since `/Work` and `/work` are distinct directories there.
  */
 export function normalizeCwd(cwd: string): string {
-  return cwd.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const trimmed = cwd.trim()
+  const isWindowsPath = /^[a-zA-Z]:/.test(trimmed) || trimmed.includes('\\')
+  const slashed = trimmed.replace(/\\/g, '/').replace(/\/+$/, '')
+  return isWindowsPath ? slashed.toLowerCase() : slashed
 }
 
 /**
@@ -1119,6 +1163,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   loadSessionIndex: async () => {
     const entries = await loadSessionIndexFromDisk()
+    // Continue the placeholder counter from the highest persisted suffix so a
+    // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
+    rebaseUntitledCounter(entries)
     set({ sessionIndex: entries })
   },
 
@@ -1245,20 +1292,26 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
     try {
       const all: SessionInfo[] = []
+      const seen = new Set<string>()
       let cursor: string | undefined
       // Safety cap: 10 pages max.
       for (let i = 0; i < 10; i++) {
         const res = await acpApi.listSessions(agentId, cwd || undefined, cursor)
         if (Array.isArray(res.sessions)) {
-          all.push(...res.sessions)
+          // De-dupe by sessionId across pages (an agent may repeat an entry
+          // when paginating) so the sidebar never renders the same chat twice.
+          for (const info of res.sessions) {
+            if (seen.has(info.sessionId)) continue
+            seen.add(info.sessionId)
+            all.push(info)
+          }
         }
         if (!res.nextCursor) break
         cursor = res.nextCursor
       }
-      console.info(
-        `[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s) for cwd ${cwd}`,
-        all.map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, title: s.title }))
-      )
+      // Log only counts + context — never session metadata (titles/ids/cwd can
+      // be sensitive). Detailed payloads stay out of the console.
+      console.info(`[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s)`)
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
     } catch (e) {
       // Best-effort: log warning, don't toast (discovery is opportunistic).
@@ -1600,6 +1653,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }),
 
+  _onSessionInfoUpdate: (e) => {
+    // `title` is `undefined` when the field is absent (no change), `null` when
+    // the agent explicitly cleared it, or a string when set. An omitted title
+    // must leave the existing title (and the persisted index) untouched.
+    if (e.title === undefined) return
+    const nextTitle = e.title
+    set((s) => {
+      const session = s.sessions[e.sessionId]
+      if (!session) return {}
+      return {
+        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
+      }
+    })
+    if (get().sessions[e.sessionId]) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
+
   _onPermissionRequest: (e) =>
     set((s) => {
       // Keep an existing pending request for this id; never silently drop it.
@@ -1771,6 +1842,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<ConfigOptionsUpdateEvent>(ACP_EVENTS.configOptionsUpdate, (e) =>
       useAcpStore.getState()._onConfigOptionsUpdate(e)
     ),
+    acpApi.onEvent<SessionInfoUpdateEvent>(ACP_EVENTS.sessionInfoUpdate, (e) =>
+      useAcpStore.getState()._onSessionInfoUpdate(e)
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)
     ),
@@ -1831,6 +1905,22 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
 
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
+
+/**
+ * Resolve an agent's template id by `agentConfigId` (from a history entry) when
+ * the agent isn't live. Falls back to `useAgentIdentity` for live sessions.
+ */
+export function useAgentTemplateId(agentId: AgentId | null, agentConfigId?: string): string | null {
+  return useAcpStore(
+    useShallow((s) => {
+      if (agentConfigId) {
+        const config = s.agentConfigs.find((c) => c.id === agentConfigId)
+        if (config?.templateId) return config.templateId
+      }
+      return selectAgentIdentity(s, agentId).templateId
+    })
+  )
+}
 
 /** Project IDs with at least one open agent-chat session in an active turn. */
 export function collectProjectsWithActiveAgentChat(

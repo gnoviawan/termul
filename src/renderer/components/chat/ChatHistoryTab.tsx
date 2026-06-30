@@ -1,12 +1,17 @@
-import { Bot, Search, Trash2 } from 'lucide-react'
+import { Search, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
-import { configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-store'
+import {
+  configIdFromReuseKey,
+  discoveryKey,
+  useAcpStore,
+  useAgentTemplateId
+} from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { templateIcon } from './agent-templates'
+import { AgentGlyph } from './AgentGlyph'
 
 /** How many sidebar rows to render per lazy-load page. */
 const SIDEBAR_PAGE_SIZE = 50
@@ -18,12 +23,12 @@ interface SidebarEntry {
   title: string
   messageCount: number
   status: string
-  /** Template icon component for this entry's agent, if resolvable. */
-  icon?: ReturnType<typeof templateIcon>
   /** True when this entry comes from agent discovery (not the local mirror). */
   discovered: boolean
-  /** Agent id for discovered entries (used to open via load/resume). */
+  /** Agent id (used to resolve the icon and, for discovered entries, to open). */
   agentId?: string
+  /** Owning agent config id, used to resolve the per-CLI icon. */
+  agentConfigId?: string
   /** Owning agent display name (e.g. "Codex CLI"), for discovered entries. */
   agentName?: string | null
   /** Cwd for discovered entries (used to open via load/resume). */
@@ -57,14 +62,13 @@ export function ChatHistoryTab(): React.JSX.Element {
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
-  // Helper: resolve display name + templateId for an agentId via the
-  // configToLiveAgent + agentConfigs mapping (same path as useAgentIdentity).
+  // Resolve display name + config id for a live agentId via configToLiveAgent.
   const resolveAgentIdentity = useCallback(
-    (agentId: string): { name: string | null; templateId: string | null } => {
+    (agentId: string): { name: string | null; configId: string | null } => {
       const reuseKey = Object.keys(configToLiveAgent).find((k) => configToLiveAgent[k] === agentId)
       const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
       const config = configId ? agentConfigs.find((c) => c.id === configId) : undefined
-      return { name: config?.name ?? null, templateId: config?.templateId ?? null }
+      return { name: config?.name ?? null, configId: configId ?? null }
     },
     [configToLiveAgent, agentConfigs]
   )
@@ -92,20 +96,17 @@ export function ChatHistoryTab(): React.JSX.Element {
   // Build a unified sidebar list: local mirror + discovered sessions (deduped).
   const mergedEntries = useMemo(() => {
     const mirrorIds = new Set(scopedIndex.map((e) => e.id))
-    const entries: SidebarEntry[] = scopedIndex.map((e) => {
-      const { templateId } = resolveAgentIdentity(e.agentId)
-      const icon = templateIcon(templateId ?? undefined)
-      return {
-        id: e.id,
-        title: e.title,
-        messageCount: e.messageCount,
-        status: e.status,
-        icon,
-        discovered: false,
-        lastActivityAt: e.lastActivityAt,
-        canOpen: true
-      }
-    })
+    const entries: SidebarEntry[] = scopedIndex.map((e) => ({
+      id: e.id,
+      title: e.title,
+      messageCount: e.messageCount,
+      status: e.status,
+      discovered: false,
+      agentId: e.agentId,
+      agentConfigId: e.agentConfigId,
+      lastActivityAt: e.lastActivityAt,
+      canOpen: true
+    }))
 
     // Add discovered sessions not already in the local mirror. Results are keyed
     // per (agent, cwd), so look up the active cwd's slot for each connected agent.
@@ -119,8 +120,7 @@ export function ChatHistoryTab(): React.JSX.Element {
       if (!sessions || sessions.length === 0) continue
       const caps = agents[agentId]?.capabilities
       const canOpen = caps?.loadSession === true || caps?.sessionCapabilities?.resume != null
-      const { name: agentName, templateId } = resolveAgentIdentity(agentId)
-      const icon = templateIcon(templateId ?? undefined)
+      const { name: agentName, configId } = resolveAgentIdentity(agentId)
 
       for (const info of sessions) {
         // Dedupe: skip if already in the local mirror.
@@ -131,9 +131,9 @@ export function ChatHistoryTab(): React.JSX.Element {
           title: info.title || `Session ${info.sessionId.slice(0, 8)}`,
           messageCount: 0,
           status: 'active',
-          icon,
           discovered: true,
           agentId,
+          agentConfigId: configId ?? undefined,
           agentName,
           cwd: info.cwd || activeCwd,
           lastActivityAt: info.updatedAt ? Date.parse(info.updatedAt) || Date.now() : Date.now(),
@@ -271,15 +271,7 @@ export function ChatHistoryTab(): React.JSX.Element {
                     }
                     className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed"
                   >
-                    {entry.icon ? (
-                      <entry.icon
-                        width={12}
-                        height={12}
-                        className="shrink-0 text-muted-foreground"
-                      />
-                    ) : (
-                      <Bot size={12} className="shrink-0 text-muted-foreground" />
-                    )}
+                    <ChatEntryIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
                     <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
                     {entry.discovered ? (
                       entry.agentName ? (
@@ -321,4 +313,16 @@ export function ChatHistoryTab(): React.JSX.Element {
       </div>
     </div>
   )
+}
+
+/** Resolve the agent's bundled registry icon for a history/discovered entry. */
+function ChatEntryIcon({
+  agentId,
+  agentConfigId
+}: {
+  agentId?: string
+  agentConfigId?: string
+}): React.JSX.Element {
+  const templateId = useAgentTemplateId(agentId ?? null, agentConfigId)
+  return <AgentGlyph templateId={templateId} size={12} className="text-muted-foreground" />
 }

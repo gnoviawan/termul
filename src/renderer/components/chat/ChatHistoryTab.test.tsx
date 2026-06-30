@@ -47,18 +47,19 @@ vi.mock('@/stores/acp-store', () => {
       discoverSessions: mockDiscover,
       openDiscoveredSession: mockOpenDiscovered
     })
-  // selectAgentIdentity stub: returns nulls (no live agent config in tests).
-  const selectAgentIdentity = () => ({ name: null, templateId: null })
+  // Stubs for the store helpers the component imports.
   const configIdFromReuseKey = () => ''
-  return { useAcpStore, selectAgentIdentity, configIdFromReuseKey }
+  const discoveryKey = (agentId: string, cwd: string) => `${agentId}\0${cwd}`
+  const useAgentTemplateId = () => null
+  return { useAcpStore, configIdFromReuseKey, discoveryKey, useAgentTemplateId }
 })
 
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: () => mockAddTab
 }))
 
-vi.mock('./agent-templates', () => ({
-  templateIcon: () => undefined
+vi.mock('./AgentGlyph', () => ({
+  AgentGlyph: () => null
 }))
 
 vi.mock('@/stores/project-store', () => ({
