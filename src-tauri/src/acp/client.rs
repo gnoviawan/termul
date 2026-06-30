@@ -20,7 +20,7 @@ use tauri::AppHandle;
 use crate::acp::config::AgentId;
 use crate::acp::events::{
     self, ChunkRole, CommandsUpdateEvent, ConfigOptionsUpdateEvent, MessageChunkEvent,
-    ModeUpdateEvent, PlanUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
+    ModeUpdateEvent, PlanUpdateEvent, SessionInfoUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
 };
 
 /// Build the client capabilities advertised to the agent during `initialize`.
@@ -293,9 +293,34 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 config_options: update.config_options,
             },
         ),
-        // SessionInfoUpdate and any future (non_exhaustive) variants have no
-        // dedicated P0 event; ignore them — but log so a silently-dropped
-        // update can be diagnosed instead of vanishing.
+        SessionUpdate::SessionInfoUpdate(update) => {
+            // `title` is `MaybeUndefined<String>`: Undefined = not sent (skip),
+            // Null = explicitly cleared (emit None), Value = set (emit Some).
+            match update.title.as_opt_ref() {
+                None => {} // Undefined — no title field sent, skip
+                Some(None) => events::emit(
+                    app,
+                    events::EVENT_SESSION_INFO_UPDATE,
+                    SessionInfoUpdateEvent {
+                        agent_id: agent_id.clone(),
+                        session_id,
+                        title: None,
+                    },
+                ),
+                Some(Some(t)) => events::emit(
+                    app,
+                    events::EVENT_SESSION_INFO_UPDATE,
+                    SessionInfoUpdateEvent {
+                        agent_id: agent_id.clone(),
+                        session_id,
+                        title: Some(t.clone()),
+                    },
+                ),
+            }
+        }
+        // Any future (non_exhaustive) variants have no dedicated event;
+        // ignore them — but log so a silently-dropped update can be diagnosed
+        // instead of vanishing.
         ref other => {
             log::debug!(
                 "[acp] agent {agent_id} sent an unhandled session/update variant: {other:?}"

@@ -308,6 +308,12 @@ export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
 }
+export interface SessionInfoUpdateEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  /** Agent-provided title; `null` when explicitly cleared, `undefined` when absent. */
+  title?: string | null
+}
 
 export const ACP_EVENTS = {
   agentSpawned: 'acp:agent_spawned',
@@ -323,7 +329,8 @@ export const ACP_EVENTS = {
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
   agentDisconnected: 'acp:agent_disconnected',
-  sessionClosed: 'acp:session_closed'
+  sessionClosed: 'acp:session_closed',
+  sessionInfoUpdate: 'acp:session_info_update'
 } as const
 
 // --- Command wrappers ------------------------------------------------------

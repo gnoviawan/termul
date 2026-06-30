@@ -44,6 +44,7 @@ import {
   type SessionConfigOption,
   type SessionCreatedEvent,
   type SessionId,
+  type SessionInfoUpdateEvent,
   type SessionMode,
   type SessionModelState,
   type SessionModeState,
@@ -244,6 +245,7 @@ interface AcpState {
   _onCommandsUpdate: (e: CommandsUpdateEvent) => void
   _onModeUpdate: (e: ModeUpdateEvent) => void
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
+  _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
@@ -265,6 +267,17 @@ let seqCounter = 0
 function nextSeq(): number {
   seqCounter += 1
   return seqCounter
+}
+
+/**
+ * Monotonic counter for "Untitled Chat N" placeholder titles. Resets on app
+ * restart; persisted sessions already have a derived title, so this only
+ * applies to freshly created sessions that haven't received a message yet.
+ */
+let untitledChatCounter = 0
+function nextUntitledTitle(): string {
+  untitledChatCounter += 1
+  return `Untitled Chat ${untitledChatCounter}`
 }
 
 /**
@@ -469,11 +482,16 @@ function persistSession(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
   const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+  const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
+  const fallbackTitle =
+    existingEntry?.title && !existingEntry.title.startsWith('Untitled Chat ')
+      ? existingEntry.title
+      : nextUntitledTitle()
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(messages, session.agentId),
+    title: session.title ?? deriveTitle(messages, fallbackTitle),
     cwd: session.cwd,
     projectId: session.projectId,
     createdAt: session.createdAt,
@@ -1442,6 +1460,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }),
 
+  _onSessionInfoUpdate: (e) => {
+    set((s) => {
+      const session = s.sessions[e.sessionId]
+      if (!session) return {}
+      // `title` is `undefined` when absent (no change), `null` when the agent
+      // explicitly cleared it, or a string when set.
+      return {
+        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: e.title ?? null } }
+      }
+    })
+    if (get().sessions[e.sessionId]) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
+
   _onPermissionRequest: (e) =>
     set((s) => {
       // Keep an existing pending request for this id; never silently drop it.
@@ -1605,6 +1638,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<ConfigOptionsUpdateEvent>(ACP_EVENTS.configOptionsUpdate, (e) =>
       useAcpStore.getState()._onConfigOptionsUpdate(e)
+    ),
+    acpApi.onEvent<SessionInfoUpdateEvent>(ACP_EVENTS.sessionInfoUpdate, (e) =>
+      useAcpStore.getState()._onSessionInfoUpdate(e)
     ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)

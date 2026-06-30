@@ -469,6 +469,40 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
   })
 
+  it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: 'Implement auth'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Implement auth')
+  })
+
+  it('_onSessionInfoUpdate reverts title to null when agent clears it', () => {
+    seedSession('s1', 'agent-1')
+    // Set a title first
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Old title' } }
+    }))
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: null
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBeNull()
+  })
+
+  it('_onSessionInfoUpdate is a no-op for unknown sessions', () => {
+    useAcpStore.setState(FRESH)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 'unknown',
+      title: 'Whatever'
+    })
+    expect(useAcpStore.getState().sessions['unknown']).toBeUndefined()
+  })
+
   it('respondPermission is re-entrancy safe (W3): second call is a no-op', async () => {
     seedSession('s1', 'agent-1')
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
