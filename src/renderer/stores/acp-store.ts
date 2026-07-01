@@ -97,7 +97,8 @@ export interface AcpSession {
   cwd: string
   /**
    * Owning `Project.id`. Persisted onto every history entry so the index can
-   * be filtered per-project + per-worktree (`(projectId, cwd)`). See ADR 0002.
+   * be scoped per-project + per-worktree (`(projectId, cwd)`, with a
+   * projectId-only fallback when the exact cwd yields nothing). See ADR 0002.
    */
   projectId: string
   status: SessionStatus
@@ -485,13 +486,15 @@ function persistSession(
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
   const payload: SessionPayload = { metadata: entry, messages }
-  const indexWrite = saveSessionIndexToDisk(nextIndex)
   // Track the index write so the close path (closeAppWithPersistenceFlush)
-  // can await it before window.destroy(). The payload write below uses
-  // writeDebounced() and is covered by flushPendingWrites() — the index write
-  // uses write() (non-debounced) and is NOT covered, hence the explicit tracking.
-  trackPendingIndexWrite(indexWrite)
-  void indexWrite.catch((e) => console.error('[acp] failed to persist session index', e))
+  // can await it before window.destroy(). trackPendingIndexWrite takes a
+  // factory so the write does not start until prior tracked writes finish —
+  // this serializes overlapping persist/delete writes to the same Tauri Store
+  // key and prevents a stale write from landing last. Errors are logged inside
+  // the tracker. The payload write below uses writeDebounced() and is covered
+  // by flushPendingWrites(); the index write uses write() (non-debounced) and
+  // is NOT covered, hence the explicit tracking.
+  void trackPendingIndexWrite(() => saveSessionIndexToDisk(nextIndex))
   void saveSessionPayload(sessionId, payload).catch((e) =>
     console.error('[acp] failed to persist session payload', e)
   )
@@ -1174,9 +1177,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // Reclaim any app-owned temp files staged for this session.
     void deleteSessionTempFiles(id)
     try {
-      const indexWrite = saveSessionIndexToDisk(next)
-      trackPendingIndexWrite(indexWrite)
-      await indexWrite
+      // Await the tracked index write (serialized with other index writes) so
+      // the index reflects the deletion before the payload is removed. The
+      // tracker swallows/logs index-write errors, so this await resolves even
+      // on failure; deleteSessionPayload failures are caught below.
+      await trackPendingIndexWrite(() => saveSessionIndexToDisk(next))
       await deleteSessionPayload(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)

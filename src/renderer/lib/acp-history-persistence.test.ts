@@ -20,6 +20,7 @@ import {
   SESSION_INDEX_KEY,
   type SessionIndexEntry,
   saveSessionPayload,
+  scopeSessionIndex,
   sessionPayloadKey,
   trackPendingIndexWrite,
   WIPE_MIGRATION_KEY,
@@ -224,11 +225,15 @@ describe('runHistoryWipeMigration', () => {
   })
 })
 
-describe('waitForPendingSessionIndexWrite', () => {
+describe('trackPendingIndexWrite / waitForPendingSessionIndexWrite', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     _resetPendingIndexWriteTrackerForTesting()
   })
+
+  // Drain the microtask queue (via one macrotask) so promise chains settle
+  // without relying on a fixed number of `await Promise.resolve()` ticks.
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
   it('resolves immediately when no pending write has been tracked', async () => {
     await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
@@ -239,15 +244,14 @@ describe('waitForPendingSessionIndexWrite', () => {
     const pending = new Promise<void>((resolve) => {
       resolveWrite = resolve
     })
-    trackPendingIndexWrite(pending)
+    void trackPendingIndexWrite(() => pending)
 
     let waitDone = false
     void waitForPendingSessionIndexWrite().then(() => {
       waitDone = true
     })
 
-    // Give microtasks a chance to flush
-    await Promise.resolve()
+    await flush()
     expect(waitDone).toBe(false)
 
     resolveWrite!()
@@ -255,11 +259,147 @@ describe('waitForPendingSessionIndexWrite', () => {
     expect(waitDone).toBe(true)
   })
 
-  it('handles write rejection without throwing', async () => {
-    const rejected = Promise.reject(new Error('write failed'))
-    trackPendingIndexWrite(rejected)
+  it('handles write rejection without throwing and logs the error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    void trackPendingIndexWrite(() => Promise.reject(new Error('write failed')))
 
-    // The wait function should not throw — errors are swallowed by trackPendingIndexWrite
+    // The wait function should not throw — errors are logged and swallowed by
+    // trackPendingIndexWrite so the chain never breaks.
     await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
+    expect(consoleError).toHaveBeenCalledWith(
+      '[acp] failed to persist session index',
+      expect.any(Error)
+    )
+    consoleError.mockRestore()
+  })
+
+  it('serializes concurrent writes so a stale write cannot land last', async () => {
+    // Regression for the persist/delete race: the second factory must not be
+    // called until the first write finishes, so writes never overlap on the
+    // same Tauri Store key.
+    const order: string[] = []
+    let resolveFirst: () => void
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve
+    })
+    const firstWrite = vi.fn(() => {
+      order.push('first-start')
+      return first.then(() => {
+        order.push('first-end')
+      })
+    })
+    const secondWrite = vi.fn(() => {
+      order.push('second-start')
+      return Promise.resolve().then(() => {
+        order.push('second-end')
+      })
+    })
+
+    void trackPendingIndexWrite(firstWrite)
+    void trackPendingIndexWrite(secondWrite)
+
+    await flush()
+    expect(firstWrite).toHaveBeenCalledTimes(1)
+    expect(secondWrite).not.toHaveBeenCalled()
+    expect(order).toEqual(['first-start'])
+
+    resolveFirst!()
+    await waitForPendingSessionIndexWrite()
+
+    expect(secondWrite).toHaveBeenCalledTimes(1)
+    // First fully finished before second started → no overlap.
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end'])
+  })
+
+  it('awaits a write queued while the close path is draining', async () => {
+    // Regression for the shutdown race: a trackPendingIndexWrite() scheduled
+    // after waitForPendingSessionIndexWrite() started must still be awaited
+    // before the wait resolves — otherwise window.destroy() loses the last
+    // history update.
+    let resolveFirst: () => void
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve
+    })
+    let resolveSecond: () => void
+    const second = new Promise<void>((resolve) => {
+      resolveSecond = resolve
+    })
+
+    void trackPendingIndexWrite(() => first)
+
+    let waitDone = false
+    void waitForPendingSessionIndexWrite().then(() => {
+      waitDone = true
+    })
+    await flush()
+    expect(waitDone).toBe(false)
+
+    // While the first write is still in flight, queue a second write (a final
+    // persistSession firing during shutdown).
+    void trackPendingIndexWrite(() => second)
+
+    // Finishing the first write must NOT release the close wait — the queued
+    // second write is still pending.
+    resolveFirst!()
+    await flush()
+    expect(waitDone).toBe(false)
+
+    resolveSecond!()
+    await waitForPendingSessionIndexWrite()
+    expect(waitDone).toBe(true)
+  })
+})
+
+describe('scopeSessionIndex', () => {
+  function entry(id: string, projectId: string, cwd: string): SessionIndexEntry {
+    return {
+      id,
+      agentId: 'a',
+      title: id,
+      cwd,
+      projectId,
+      createdAt: 0,
+      lastActivityAt: 0,
+      messageCount: 0,
+      status: 'active'
+    }
+  }
+
+  it('returns [] when projectId or cwd is empty', () => {
+    const entries = [entry('s1', 'p1', '/a')]
+    expect(scopeSessionIndex(entries, '', '/a')).toEqual([])
+    expect(scopeSessionIndex(entries, 'p1', '')).toEqual([])
+    expect(scopeSessionIndex(entries, '', '')).toEqual([])
+  })
+
+  it('returns exact (projectId, cwd) matches', () => {
+    const entries = [entry('s1', 'p1', '/a'), entry('s2', 'p1', '/b'), entry('s3', 'p2', '/a')]
+    expect(scopeSessionIndex(entries, 'p1', '/a').map((e) => e.id)).toEqual(['s1'])
+  })
+
+  it('falls back to projectId-only matching when no exact cwd match exists', () => {
+    // Regression: a chat whose worktree/cwd drifted since it was created must
+    // still be reachable instead of silently hidden.
+    const entries = [
+      entry('s1', 'p1', '/old-cwd'),
+      entry('s2', 'p1', '/also-old'),
+      entry('s3', 'p2', '/a')
+    ]
+    expect(
+      scopeSessionIndex(entries, 'p1', '/a')
+        .map((e) => e.id)
+        .sort()
+    ).toEqual(['s1', 's2'])
+  })
+
+  it('does not fall back when exact matches exist', () => {
+    const entries = [entry('s1', 'p1', '/a'), entry('s2', 'p1', '/other')]
+    // Exact match present → only the exact entry is returned (no fallback).
+    expect(scopeSessionIndex(entries, 'p1', '/a').map((e) => e.id)).toEqual(['s1'])
+  })
+
+  it('returns [] when no entry matches projectId at all', () => {
+    const entries = [entry('s1', 'p2', '/a')]
+    expect(scopeSessionIndex(entries, 'p1', '/a')).toEqual([])
   })
 })

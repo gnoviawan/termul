@@ -572,8 +572,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
 
       // Note: waitForPendingSessionIndexWrite swallows rejections internally
-      // (trackPendingIndexWrite wraps with .catch(() => undefined)), so this
-      // branch is effectively dead code — kept as a defensive guard in case the
+      // (trackPendingIndexWrite catches and logs them), so this branch is
+      // effectively dead code — kept as a defensive guard in case the
       // swallowing behavior changes.
       if (pendingSessionIndexResult.status === 'rejected') {
         console.error(

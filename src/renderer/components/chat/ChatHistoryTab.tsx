@@ -1,7 +1,7 @@
 import { MessageSquare, Search, Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { groupSessionsByRecency } from '@/lib/acp-history-persistence'
+import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
@@ -23,17 +23,15 @@ export function ChatHistoryTab(): React.JSX.Element {
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
-  // Hard isolation (ADR 0002): show only sessions whose `(projectId, cwd)`
-  // match the active project + its current worktree/root. Fall back to
-  // projectId-only matching when the exact cwd filter yields nothing — the
-  // worktree/cwd may have changed since the chat was created (e.g. after
-  // restart or worktree pruning).
-  const scopedIndex = useMemo(() => {
-    if (!activeProjectId || !activeCwd) return []
-    const exact = sessionIndex.filter((e) => e.projectId === activeProjectId && e.cwd === activeCwd)
-    if (exact.length > 0) return exact
-    return sessionIndex.filter((e) => e.projectId === activeProjectId)
-  }, [sessionIndex, activeProjectId, activeCwd])
+  // ADR 0002 scoping: show only sessions whose `(projectId, cwd)` match the
+  // active project + worktree/root, falling back to projectId-only matching
+  // when the exact cwd yields nothing (a chat whose cwd drifted since it was
+  // created is still reachable instead of silently hidden). See
+  // `scopeSessionIndex` for the contract.
+  const scopedIndex = useMemo(
+    () => scopeSessionIndex(sessionIndex, activeProjectId, activeCwd),
+    [sessionIndex, activeProjectId, activeCwd]
+  )
 
   const [query, setQuery] = useState('')
 
