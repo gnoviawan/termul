@@ -1403,9 +1403,13 @@ describe('acp-store', () => {
         ...s.agentConfigs
       ]
     }))
-    ;(invoke as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce('spawned-1') // acp_spawn_agent -> new live agent id
-      .mockResolvedValueOnce(undefined) // acp_load_session
+    // Route by command name (not call order) so any unexpected invoke call fails
+    // loudly instead of silently consuming a queued result.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') return 'spawned-1'
+      if (cmd === 'acp_load_session') return undefined
+      throw new Error(`unexpected invoke command in spawn-wait test: ${cmd}`)
+    })
     const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       metadata: {
@@ -1449,6 +1453,7 @@ describe('acp-store', () => {
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
     expect(useAcpStore.getState().sessions['s-spawn'].status).toBe('active')
+    vi.mocked(invoke).mockReset()
   })
 
   it('openHistorySession opens read-only when agentConfigId is missing', async () => {
