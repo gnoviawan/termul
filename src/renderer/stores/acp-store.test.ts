@@ -1338,6 +1338,94 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-load'].lastError).toMatch(/Resume failed/)
   })
 
+  it('openHistorySession reuses the current live agent when the persisted agentId is stale after restart', async () => {
+    // After an app restart the persisted `agentId` is a dead per-process UUID,
+    // but `agentConfigId`+cwd maps to a freshly spawned (prewarmed) live agent.
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        { id: 'cfg-1', name: 'Agent1', command: 'agent', args: [], env: {} },
+        ...s.agentConfigs
+      ],
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-1', '/w')]: 'fresh-agent'
+      },
+      agents: {
+        ...s.agents,
+        'fresh-agent': { id: 'fresh-agent', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'fresh-agent': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-reopen',
+        agentId: 'stale-dead-uuid',
+        agentConfigId: 'cfg-1',
+        title: 'Reopen me',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('s-reopen')
+    // load targets the FRESH live agent (not the stale persisted UUID) and the
+    // session becomes active so the user can continue the conversation.
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'fresh-agent',
+      sessionId: 's-reopen',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-reopen'].agentId).toBe('fresh-agent')
+    expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
+  })
+
+  it('openHistorySession opens read-only when agentConfigId is missing', async () => {
+    // Legacy persisted entries lack `agentConfigId`; we can't remap to a live
+    // agent, so the chat opens read-only (current behavior) instead of throwing.
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-legacy',
+        agentId: 'old-uuid',
+        title: 'Legacy',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'old' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('s-legacy')
+    // No live agent resolvable -> 'local' strategy: transcript shown, no IPC.
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().messages['s-legacy']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-legacy'].status).toBe('closed')
+  })
+
   it('deleteHistorySession removes the index entry (P5)', async () => {
     useAcpStore.setState({
       sessionIndex: [

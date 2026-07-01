@@ -1194,8 +1194,49 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
 
-    const connected = get().agentStatus[meta.agentId] === 'connected'
-    const capabilities = get().agents[meta.agentId]?.capabilities ?? null
+    // Resolve the CURRENT live agent for this chat's config+cwd. The persisted
+    // `meta.agentId` is a per-process UUID that is stale after an app restart
+    // (the new agent process has a different id); without this remap the
+    // `agentStatus`/`agents` lookups miss and `decideResume` falls to 'local',
+    // leaving the session closed and `sendPrompt` rejected.
+    let liveAgentId: AgentId = meta.agentId
+    // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
+    // and a missing/empty cwd can't map to a live agent anyway — fall through
+    // to read-only 'local' instead of throwing (spec: do not throw).
+    if (meta.agentConfigId && meta.cwd) {
+      const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
+        silentSpawnFailure: true
+      })
+      if (ensured) liveAgentId = ensured
+    }
+    // Capabilities arrive asynchronously via `acp:agent_spawned` for a freshly
+    // spawned agent. Wait briefly so `decideResume` sees them instead of racing
+    // to 'local'. A prewarmed agent already has them by this point.
+    if (
+      get().agentStatus[liveAgentId] === 'connected' &&
+      !get().agents[liveAgentId]?.capabilities
+    ) {
+      await new Promise<void>((resolve) => {
+        if (get().agents[liveAgentId]?.capabilities) {
+          resolve()
+          return
+        }
+        const timeout = setTimeout(() => {
+          unsubscribe()
+          resolve()
+        }, 3000)
+        const unsubscribe = useAcpStore.subscribe((state) => {
+          if (state.agents[liveAgentId]?.capabilities) {
+            clearTimeout(timeout)
+            unsubscribe()
+            resolve()
+          }
+        })
+      })
+    }
+
+    const connected = get().agentStatus[liveAgentId] === 'connected'
+    const capabilities = get().agents[liveAgentId]?.capabilities ?? null
     const strategy = decideResume({ connected, capabilities })
 
     // Rebase the process-wide seq counter so live events appended after the
@@ -1207,13 +1248,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     rebaseSeqCounter(maxRestoredSeq)
 
     // Show the persisted transcript locally and register the session record so the
-    // pane has content regardless of strategy.
+    // pane has content regardless of strategy. Use the resolved live agent id so
+    // streaming events from `session/load` route to this session.
     set((s) => ({
       sessions: {
         ...s.sessions,
         [id]: {
           id,
-          agentId: meta.agentId,
+          agentId: liveAgentId,
           cwd: meta.cwd,
           projectId: meta.projectId,
           status: 'closed',
@@ -1234,7 +1276,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Agent replays history via session/update; clear local copy to avoid dupes.
       set((s) => ({ messages: { ...s.messages, [id]: [] } }))
       try {
-        await acpApi.loadSession(meta.agentId, id, meta.cwd)
+        await acpApi.loadSession(liveAgentId, id, meta.cwd)
         set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
       } catch (err) {
         // Load failed — restore the local transcript so the user still sees history.
@@ -1246,7 +1288,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     } else if (strategy === 'resume') {
       try {
-        await acpApi.resumeSession(meta.agentId, id, meta.cwd)
+        await acpApi.resumeSession(liveAgentId, id, meta.cwd)
         set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
       } catch (err) {
         set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
