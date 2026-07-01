@@ -893,6 +893,14 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
 
 static IS_QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Claimed synchronously when we enter the async cleanup path and never reset.
+// Prevents a second ExitRequested (e.g. an OS exit signal, or the exit(0) we
+// call at the end of cleanup re-entering before the first task finishes) from
+// spawning a duplicate cleanup that races kill_all()/destroy_all()/exit(0).
+// CLEANUP_DONE still marks final completion so the trailing exit(0) re-entry
+// returns immediately via the check above.
+static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -936,8 +944,11 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
-            let _ = window.set_focus();
+            // Unminimize before focus so the restored window is reliably
+            // foregrounded on every platform (focusing a minimized window can
+            // leave it visible but not raised on some WMs).
             let _ = window.unminimize();
+            let _ = window.set_focus();
         }
     }));
 
@@ -1103,8 +1114,8 @@ pub fn run() {
                             id if id == TRAY_MENU_SHOW => {
                                 if let Some(window) = app_handle.get_webview_window("main") {
                                     let _ = window.show();
-                                    let _ = window.set_focus();
                                     let _ = window.unminimize();
+                                    let _ = window.set_focus();
                                 }
                             }
                             id if id == TRAY_MENU_QUIT => {
@@ -1125,8 +1136,8 @@ pub fn run() {
                             {
                                 if let Some(window) = app_handle.get_webview_window("main") {
                                     let _ = window.show();
-                                    let _ = window.set_focus();
                                     let _ = window.unminimize();
+                                    let _ = window.set_focus();
                                 }
                             }
                         }
@@ -1136,15 +1147,34 @@ pub fn run() {
                 // Intercept window close (X button) → sembunyikan ke tray,
                 // bukan terminate proses. User bisa quit lewat menu tray.
                 if let Some(window) = app.get_webview_window("main") {
+                    // Only needed on platforms that hide to the tray on close.
+                    #[cfg(not(target_os = "windows"))]
                     let app_handle_for_close = handle.clone();
                     window.on_window_event(move |event| {
                         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                             if IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
                                 // Allow close to proceed and terminate the app
                             } else {
-                                api.prevent_close();
-                                if let Some(w) = app_handle_for_close.get_webview_window("main") {
-                                    let _ = w.hide();
+                                // Intercepting close with prevent_close() would
+                                // also block OS shutdown/logoff on Windows
+                                // (WM_QUERYENDSESSION) and, per issue #390, Windows
+                                // users expect closing the window to fully exit the
+                                // app (not linger in Task Manager). So only hide to
+                                // the tray on non-Windows; on Windows let the window
+                                // close so cleanup runs and the process terminates.
+                                #[cfg(not(target_os = "windows"))]
+                                {
+                                    api.prevent_close();
+                                    if let Some(w) =
+                                        app_handle_for_close.get_webview_window("main")
+                                    {
+                                        let _ = w.hide();
+                                    }
+                                }
+                                #[cfg(target_os = "windows")]
+                                {
+                                    // No-op: allow close to terminate the process.
+                                    let _ = api;
                                 }
                             }
                         }
@@ -1312,7 +1342,22 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
+            // Cleanup already finished — let the app exit immediately.
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            // Atomically claim the cleanup path. If a previous ExitRequested
+            // already started the async cleanup (not yet done), short-circuit
+            // so we don't spawn a second task racing kill_all()/destroy_all().
+            if CLEANUP_IN_PROGRESS
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .is_err()
+            {
                 return;
             }
             // Prevent the default exit behavior so we can cleanup first
