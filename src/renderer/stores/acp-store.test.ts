@@ -1393,6 +1393,64 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
   })
 
+  it('openHistorySession waits for spawned-agent capabilities before resuming', async () => {
+    // No prewarmed agent for cfg-spawn+/w -> ensureLiveAgent spawns one. Its
+    // capabilities arrive asynchronously via _onAgentSpawned; the session must
+    // resume on the spawned agent only after the wait/subscribe path resolves.
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        { id: 'cfg-spawn', name: 'Spawn', command: 'spawn', args: [], env: {} },
+        ...s.agentConfigs
+      ]
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('spawned-1') // acp_spawn_agent -> new live agent id
+      .mockResolvedValueOnce(undefined) // acp_load_session
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-spawn',
+        agentId: 'stale-spawn-uuid',
+        agentConfigId: 'cfg-spawn',
+        title: 'Spawn',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    const p = useAcpStore.getState().openHistorySession('s-spawn')
+    await flushTurnEnd()
+    // Spawn completed: the new agent is connected but capabilities are still
+    // null, so openHistorySession is parked in the capability wait (no load yet).
+    expect(useAcpStore.getState().agentStatus['spawned-1']).toBe('connected')
+    expect(useAcpStore.getState().agents['spawned-1']?.capabilities).toBeNull()
+    expect(invoke).not.toHaveBeenCalledWith('acp_load_session', expect.anything())
+    // Capabilities arrive async -> subscribe resolves the wait -> session resumes.
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'spawned-1', capabilities: { loadSession: true } })
+    await p
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'spawned-1',
+      sessionId: 's-spawn',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
+    expect(useAcpStore.getState().sessions['s-spawn'].status).toBe('active')
+  })
+
   it('openHistorySession opens read-only when agentConfigId is missing', async () => {
     // Legacy persisted entries lack `agentConfigId`; we can't remap to a live
     // agent, so the chat opens read-only (current behavior) instead of throwing.
